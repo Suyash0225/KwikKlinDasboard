@@ -346,3 +346,57 @@ Deliver in this order and stop after each group so I can review:
 
 Also give me the exact commands to: start Postgres, run migrations, start the
 server, and run the tests.
+
+---
+
+# PHASE 2 — WHATSAPP SEND/RECEIVE
+# (drafted by Claude, approved by owner 2026-08-01 — original phase text was lost)
+
+PHASE 2: The bot can receive WhatsApp messages and send replies. No orders, no
+AI, no scheduler yet. After this phase: you message the test number, the bot
+stores it and sends a rule-based acknowledgment back.
+
+Build:
+
+**1.** `app/services/whatsapp.py` — the ONLY outbound door:
+- `async send_message(db, *, to_phone, text/template/buttons)` — single entry
+  point. Checks the 24h window (`last_message_at` of the customer/staff row):
+  inside → free-form allowed; outside → template required, free-form raises a
+  clear error (never silently drop).
+- Interactive buttons: max 3, each id carries context like `order:<uuid>:done`.
+- Every send: structlog line + `conversations` OUTBOUND row (with `wa_message_id`
+  from Meta's response). Failed send never crashes the caller. Retry once on
+  5xx/network, then raise.
+- Outbound to a number that is neither customer nor staff (e.g. manager):
+  log-only, no conversations row (Phase 3 order flow always creates the
+  customer first, so this stays rare).
+
+**2.** `app/services/templates.py` — template registry: name → language +
+param builder. Start with `hello_world`. Unregistered template name = error,
+so an unapproved template can never be sent.
+
+**3.** `app/services/messages.py` — first real strings: `ack_received`
+(EN + Hinglish), `error_fallback`. `get_message(key, lang)` with EN fallback.
+Ack text is a placeholder until Phase 3/4 give real replies.
+
+**4.** `app/routers/webhook.py`:
+- `GET /webhook` — Meta verification (verify_token match → echo challenge)
+- `POST /webhook` — verify `X-Hub-Signature-256` (HMAC-SHA256, app secret,
+  403 on mismatch); return 200 fast; parse text/button/status payloads;
+  dedup via `wa_message_id` unique constraint; upsert customer by phone
+  (staff phones recognized from staff table); update `last_message_at`;
+  store INBOUND conversation; reply with rule-based ack.
+
+**5.** Local webhook tunnel documented in README (ngrok/cloudflared), Meta
+webhook config + `messages` subscription.
+
+**6.** Permanent token: System User in Business Settings, token with
+`whatsapp_business_messaging` + `whatsapp_business_management`, into `.env`.
+
+**7.** Tests: webhook verify GET, signature valid/invalid/missing, sample
+payloads (text/button/status/duplicate) with WhatsApp API mocked.
+
+Deliver in this order, stop after each group:
+- **(a)** whatsapp.py + templates.py + messages.py (send path; live test)
+- **(b)** webhook.py + signature verification (receive path; live test)
+- **(c)** ack wiring + tests + permanent token + tunnel docs (full loop)

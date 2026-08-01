@@ -53,6 +53,32 @@ Check: <http://127.0.0.1:8000/health> → `{"status":"ok","db":"connected"}`
 .venv\Scripts\python.exe -m pytest
 ```
 
+## Webhook (local development)
+
+Meta must reach your laptop over HTTPS — use a cloudflared quick tunnel:
+
+```bat
+:: terminal 1 — the app
+.venv\Scripts\uvicorn.exe app.main:app --port 8000
+
+:: terminal 2 — the tunnel (prints a https://xxx.trycloudflare.com URL)
+"C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --url http://127.0.0.1:8000
+```
+
+Then in developers.facebook.com → app → WhatsApp → **Configuration**:
+
+- Callback URL: `https://<tunnel-url>/webhook`
+- Verify token: the `WHATSAPP_VERIFY_TOKEN` from `.env`
+- Webhook fields → subscribe to **`messages`**
+
+⚠️ The trycloudflare URL is random **per tunnel run** — after every tunnel
+restart, paste the new URL into Meta's Configuration again. (Production gets
+a fixed domain in Phase 6.)
+
+⚠️ The API Setup access token expires every ~24h during development —
+regenerate and update `WHATSAPP_TOKEN` in `.env`, then restart uvicorn
+(settings load at startup). A permanent System User token replaces this.
+
 ## Layout
 
 See PROJECT_SPEC.md → "PROJECT STRUCTURE". Rules that matter:

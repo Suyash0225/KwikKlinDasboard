@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.database import engine
+from app.routers.webhook import router as webhook_router
 from app.utils.logger import configure_logging
 
 configure_logging()
@@ -37,6 +38,8 @@ app = FastAPI(
     docs_url="/docs" if settings.ENVIRONMENT == "development" else None,
     redoc_url=None,
 )
+
+app.include_router(webhook_router)
 
 
 @app.get("/health")
