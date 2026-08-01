@@ -1,0 +1,58 @@
+"""Conversation log — every inbound and outbound message, one row each.
+
+Exactly one of customer_id / staff_id must be set (a message belongs to a
+customer thread OR a staff thread, never both, never neither). Enforced by a
+database check constraint, not just application code.
+"""
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.models.base import Base
+from app.models.enums import Direction
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+    __table_args__ = (
+        # XOR: one side NULL, the other NOT NULL.
+        CheckConstraint(
+            "(customer_id IS NULL) <> (staff_id IS NULL)",
+            name="exactly_one_participant",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id"), index=True
+    )
+    staff_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("staff.id"), index=True
+    )
+
+    direction: Mapped[Direction] = mapped_column(Enum(Direction, name="message_direction"))
+    message_text: Mapped[str] = mapped_column(Text)
+
+    # WhatsApp's message id (wamid...). Unique so webhook retries can't
+    # insert the same inbound message twice.
+    wa_message_id: Mapped[str | None] = mapped_column(String(120), unique=True)
+
+    # Filled by Phase 4 (intent classification). Plain string, not an enum,
+    # so adding new intents never needs a migration.
+    intent: Mapped[str | None] = mapped_column(String(50))
+    # {"model": ..., "input_tokens": ..., "output_tokens": ..., "latency_ms": ...}
+    ai_response_meta: Mapped[dict | None] = mapped_column(JSONB)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+    def __repr__(self) -> str:
+        who = f"customer={self.customer_id}" if self.customer_id else f"staff={self.staff_id}"
+        return f"<Conversation {self.direction.name} {who}>"

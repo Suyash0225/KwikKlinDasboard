@@ -1,0 +1,33 @@
+# Laundry WhatsApp Bot — pinned dependencies
+# Python 3.11+ required. Install with:  pip install -r requirements.txt
+
+# --- Web framework / server ---
+fastapi==0.141.1
+uvicorn[standard]==0.52.0
+
+# --- Database (async) ---
+# The [asyncio] extra pulls in greenlet, which SQLAlchemy needs for async.
+sqlalchemy[asyncio]==2.0.51
+asyncpg==0.31.0
+alembic==1.18.5
+
+# --- Validation / config ---
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+
+# --- HTTP client (WhatsApp Cloud API calls, Phase 2) ---
+httpx==0.28.1
+
+# --- Scheduler (daily staff check-ins, follow-ups — Phase 5) ---
+apscheduler==3.11.3
+
+# --- LLM (Phase 4 only; imported ONLY by app/services/llm_client.py) ---
+anthropic==0.120.2
+
+# --- Logging ---
+structlog==26.1.0
+
+# --- Testing ---
+pytest==9.1.1
+pytest-asyncio==1.4.0

@@ -1,0 +1,32 @@
+# Postgres for local development.
+#
+# Optional: if you already run Postgres natively, skip this file entirely and
+# just point DATABASE_URL at your own instance. The credentials below match
+# the DATABASE_URL in .env.example so either path works unchanged.
+#
+#   docker compose up -d      start
+#   docker compose down       stop (data is kept in the named volume)
+#   docker compose down -v    stop and DELETE all data
+
+services:
+  db:
+    image: postgres:15
+    container_name: laundry-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: laundry
+      POSTGRES_PASSWORD: laundry
+      POSTGRES_DB: laundry
+    ports:
+      - "5432:5432"
+    volumes:
+      - laundry_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Lets you wait for a genuinely ready DB:  docker compose up -d --wait
+      test: ["CMD-SHELL", "pg_isready -U laundry -d laundry"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  laundry_pgdata:
