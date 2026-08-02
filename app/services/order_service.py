@@ -275,14 +275,30 @@ async def record_payment(
     *,
     amount: Decimal,
     method: PaymentMethod,
+    recorded_by: str = "dashboard",
+    note: str | None = None,
 ) -> Order:
-    """Add a received payment; payment_status derives from the model rule."""
+    """Add a received payment; payment_status derives from the model rule.
+
+    Writes an append-only Payment ledger row (source of truth for reports)
+    AND updates orders.amount_paid (derived cache the rest of the app reads).
+    """
     if amount <= 0:
         raise OrderError("payment amount must be positive")
+    from app.models import Payment, PaymentStatus  # local import avoids cycle noise
+
+    db.add(
+        Payment(
+            order_id=order.id,
+            amount=amount,
+            method=method,
+            recorded_by=recorded_by[:80],
+            note=(note or None),
+        )
+    )
     order.amount_paid = (order.amount_paid or Decimal("0")) + amount
     order.payment_method = method
     order.recalculate_payment_status()  # THE one place for the rule
-    from app.models import PaymentStatus  # local import avoids cycle noise
 
     if order.payment_status is PaymentStatus.PAID and order.paid_at is None:
         order.paid_at = datetime.now(timezone.utc)

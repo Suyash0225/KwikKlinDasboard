@@ -52,6 +52,13 @@ log = structlog.get_logger()
 # Matches order numbers like KK-20260801-01 anywhere in a message.
 ORDER_NUMBER_RE = re.compile(r"\bKK-\d{8}-\d{2,}\b", re.IGNORECASE)
 
+# Opt-out phrases: English STOP + the Hinglish ways our customers say it.
+STOP_RE = re.compile(
+    r"^\s*(stop|unsubscribe|band karo|band kro|msg mat bhejo|message mat bhejo)\s*$",
+    re.IGNORECASE,
+)
+START_RE = re.compile(r"^\s*(start|shuru karo|shuru kro)\s*$", re.IGNORECASE)
+
 
 @router.get("/webhook")
 async def verify_webhook(
@@ -295,12 +302,37 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
         return
 
     # Customer replies, in strict priority order:
+    # 0. STOP -> opt out instantly; takeover-paused threads stay silent.
     # 1. Message names an order number -> deterministic status reply (no AI).
     # 2. AI agent (Phase 4) -> may answer or escalate; returns None if the
     #    LLM is down/unsure.
     # 3. Fallback: the same rule-based replies Phase 3 shipped with.
     # A failed reply must never break the webhook: log it and move on.
     if customer is not None:
+        if STOP_RE.search(text or ""):
+            customer.opted_out = True
+            customer.marketing_opt_out = True
+            await db.commit()
+            log.info("customer_opted_out", phone=phone)
+            try:
+                await send_message(db, to_phone=phone, text=get_message("stop_confirmed"))
+            except SendError:
+                log.exception("stop_confirm_send_failed", phone=phone)
+            return
+        if START_RE.search(text or "") and customer.opted_out:
+            customer.opted_out = False
+            customer.marketing_opt_out = False
+            await db.commit()
+            log.info("customer_opted_in", phone=phone)
+            try:
+                await send_message(db, to_phone=phone, text=get_message("start_confirmed"))
+            except SendError:
+                log.exception("start_confirm_send_failed", phone=phone)
+            return
+        if customer.agent_paused:
+            # Owner pressed 'Take over' in the Inbox — humans only here.
+            log.info("agent_paused_thread", phone=phone)
+            return
         try:
             if ORDER_NUMBER_RE.search(text):
                 reply = await _build_customer_reply(db, customer, text)

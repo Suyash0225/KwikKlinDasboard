@@ -33,7 +33,7 @@ from sqlalchemy import func
 
 from app.config import settings
 from app.models import Customer, Order, OrderStatus, PaymentMethod, PaymentStatus, Rate, Staff
-from app.services import llm_client
+from app.services import app_settings, audit, llm_client
 from app.services.llm_client import LLMError
 from app.services.messages import get_message, status_label
 from app.services.order_service import (
@@ -69,8 +69,22 @@ class PendingBill:
         return datetime.now(timezone.utc) - self.created_at > _DRAFT_TTL
 
 
-# sender phone -> draft awaiting 'haan'
-_PENDING: dict[str, PendingBill] = {}
+@dataclass
+class PendingPayment:
+    """A payment awaiting the manager's 'haan' — money writes are gated."""
+
+    order_number: str
+    amount: float
+    method: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def expired(self) -> bool:
+        return datetime.now(timezone.utc) - self.created_at > _DRAFT_TTL
+
+
+# sender phone -> action awaiting 'haan' (a bill draft or a payment)
+_PENDING: dict[str, PendingBill | PendingPayment] = {}
 
 _STATUS_NAMES = [s.name for s in OrderStatus]
 
@@ -79,7 +93,11 @@ _EXTRACT_SCHEMA = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["new_bill", "delay_update", "status_update", "relay", "other"],
+            "enum": [
+                "new_bill", "delay_update", "status_update", "relay",
+                "set_priority", "assign_staff", "add_note", "record_payment",
+                "other",
+            ],
         },
         "customer_name": {"type": "string"},
         "customer_phone": {"type": "string"},
@@ -105,11 +123,17 @@ _EXTRACT_SCHEMA = {
         "new_status": {"type": "string", "enum": [*_STATUS_NAMES, "NONE"]},
         "relay_to": {"type": "string"},
         "relay_message": {"type": "string"},
+        "priority": {"type": "string", "enum": ["urgent", "normal", "NONE"]},
+        "staff_name": {"type": "string"},
+        "note": {"type": "string"},
+        "amount": {"type": "number"},
+        "method": {"type": "string", "enum": ["cash", "upi", "other", "NONE"]},
     },
     "required": [
         "action", "customer_name", "customer_phone", "items", "advance",
         "expected_delivery", "order_number", "new_date", "reason", "new_status",
-        "relay_to", "relay_message",
+        "relay_to", "relay_message", "priority", "staff_name", "note",
+        "amount", "method",
     ],
     "additionalProperties": False,
 }
@@ -129,10 +153,18 @@ _EXTRACT_SYSTEM = (
     "new_date (ISO, '' if unsaid) and the internal reason.\n"
     "- status_update: they state an order's new stage (dhul gaya, ready hai, "
     "nikal gaya, deliver ho gaya...) — map to one of the status names.\n"
-    "- relay: they ask to pass a message to a person (e.g. 'Ravi ko bata do "
-    "...', 'Superman ko bolo ...', 'manager ko bhej do ...'). relay_to = the "
-    "person's name as written; relay_message = a short clear Hinglish "
-    "message carrying their full instruction.\n"
+    "- relay: they ask to pass a message to a person — staff, manager OR a "
+    "customer (e.g. 'Ravi ko bata do ...', 'Anmol ko bolo kal tak ho '"
+    "'jayega'). relay_to = the person's name as written; relay_message = a "
+    "short clear Hinglish message carrying their full instruction.\n"
+    "- set_priority: an order is urgent / no longer urgent ('Sharma ji ka "
+    "urgent hai') — order_number (if named) + customer_name + priority.\n"
+    "- assign_staff: give an order to a staff member ('ye Ravi ko de do') — "
+    "order_number + staff_name.\n"
+    "- add_note: an internal instruction about an order ('collar pe daag "
+    "hai, dhyan se') — order_number + note.\n"
+    "- record_payment: money received for an order ('KK-... ka 200 cash "
+    "mila') — order_number, amount, method (cash/upi/other).\n"
     "- other: anything else (greetings, questions, chatter).\n"
     "If a CURRENT DRAFT is provided, the message is an edit to it: return "
     "action=new_bill with the FULL corrected draft (unchanged fields kept). "
@@ -156,36 +188,59 @@ async def handle_staff_message(
         if not text or text.startswith("["):
             return None
         if pending and _CONFIRM_RE.match(text):
+            if isinstance(pending, PendingPayment):
+                return await _finalize_payment(db, sender_phone, sender_label, pending)
             return await _finalize_bill(db, sender_phone, sender_label, pending)
         if pending and _CANCEL_RE.match(text):
             _PENDING.pop(sender_phone, None)
             return get_message("bill_cancelled")
 
+    # Thread memory: the last few messages, so "haan wahi wala" makes sense.
+    history = await _sender_history(db, sender_phone)
+
     try:
         if photo is not None:
             extracted = await _extract_from_photo(
-                db, photo.group(1), photo.group(2).strip(), pending
+                db, photo.group(1), photo.group(2).strip(), _as_bill(pending)
             )
             if extracted is None:  # file missing on disk — nothing to read
                 return None
         else:
-            extracted = await _extract(db, text, pending)
+            extracted = await _extract(db, text, _as_bill(pending), history)
     except LLMError as exc:
         log.warning("staff_extract_failed", error=str(exc)[:150])
         # Never leave the MANAGER wondering — staff chatter can stay silent.
         return get_message("ai_down_staff") if sender_label == "manager" else None
 
     action = extracted["action"]
+    reply: str | None = None
     if action == "new_bill" and extracted["items"]:
         draft = await _price_draft(db, extracted)
         _PENDING[sender_phone] = PendingBill(draft=draft)
-        return _draft_summary(draft)
-    if action == "delay_update":
-        return await _apply_delay(db, sender_label, extracted)
-    if action == "status_update":
-        return await _apply_status(db, sender_label, extracted)
-    if action == "relay":
-        return await _apply_relay(db, sender_label, extracted)
+        reply = _draft_summary(draft)
+    elif action == "delay_update":
+        reply = await _apply_delay(db, sender_label, extracted)
+    elif action == "status_update":
+        reply = await _apply_status(db, sender_label, extracted)
+    elif action == "relay":
+        reply = await _apply_relay(db, sender_label, extracted)
+    elif action == "set_priority":
+        reply = await _apply_priority(db, sender_label, extracted)
+    elif action == "assign_staff":
+        reply = await _apply_assign(db, sender_label, extracted)
+    elif action == "add_note":
+        reply = await _apply_note(db, sender_label, extracted)
+    elif action == "record_payment":
+        reply = await _stage_payment(db, sender_phone, sender_label, extracted)
+    if reply is not None:
+        await audit.record(
+            actor_role="admin" if sender_label == "manager" else "staff",
+            actor=sender_label,
+            action=action,
+            args={k: v for k, v in extracted.items() if v not in ("", [], 0, "NONE")},
+            result=reply[:300],
+        )
+        return reply
 
     # 'other' from the MANAGER: probably a business question ("kitna
     # revenue?", "kitne order pending?") — answer from real DB numbers.
@@ -203,7 +258,34 @@ async def handle_staff_message(
     return None
 
 
-async def _extract(db: AsyncSession, text: str, pending: PendingBill | None) -> dict:
+def _as_bill(pending) -> PendingBill | None:
+    """Only bill drafts flow into extraction context, not pending payments."""
+    return pending if isinstance(pending, PendingBill) else None
+
+
+async def _sender_history(db: AsyncSession, sender_phone: str) -> str:
+    """Last few messages of this sender's thread — never raises."""
+    try:
+        from app.services.knowledge import thread_history
+
+        staff = (
+            await db.execute(select(Staff).where(Staff.phone == sender_phone))
+        ).scalar_one_or_none()
+        if staff is not None:
+            return await thread_history(db, staff_id=staff.id, limit=4)
+        cust = (
+            await db.execute(select(Customer).where(Customer.phone == sender_phone))
+        ).scalar_one_or_none()
+        if cust is not None:
+            return await thread_history(db, customer_id=cust.id, limit=4)
+    except Exception:
+        log.exception("sender_history_failed")
+    return ""
+
+
+async def _extract(
+    db: AsyncSession, text: str, pending: PendingBill | None, history: str = ""
+) -> dict:
     rates = (
         (await db.execute(select(Rate).where(Rate.is_active).order_by(Rate.service, Rate.garment)))
         .scalars()
@@ -214,6 +296,8 @@ async def _extract(db: AsyncSession, text: str, pending: PendingBill | None) -> 
     )
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     prompt = f"RATE CARD:\n{card}\nTODAY: {today}\n"
+    if history:
+        prompt += f"{history}\n"
     if pending:
         prompt += f"CURRENT DRAFT:\n{json.dumps(pending.draft, default=str)}\n"
     prompt += f"STAFF MESSAGE:\n{text[:1000]}"
@@ -348,6 +432,10 @@ async def _finalize_bill(
             exp = date.fromisoformat(d["expected_delivery"])
         except ValueError:
             exp = None
+    if exp is None:
+        # default = today + the shop's standard turnaround (Settings)
+        days = int(await app_settings.get(db, "turnaround_days"))
+        exp = date.today() + timedelta(days=days)
 
     total = Decimal(str(d["total"])) if d["total"] else None
     order = await create_order(
@@ -361,14 +449,36 @@ async def _finalize_bill(
     )
     if d["advance"]:
         await record_payment(
-            db, order, amount=Decimal(str(d["advance"])), method=PaymentMethod.CASH
+            db, order, amount=Decimal(str(d["advance"])), method=PaymentMethod.CASH,
+            recorded_by=sender_label, note="advance at booking",
         )
     _PENDING.pop(sender_phone, None)
+
+    # instant work order to the responsible staff member (spec 7.5a)
+    from app.services.work_orders import send_work_order
+
+    outcome = await send_work_order(db, order, headline="Naya order aaya")
+    await audit.record(
+        actor_role="admin" if sender_label == "manager" else "staff",
+        actor=sender_label,
+        action="create_bill",
+        args={"order": order.order_number, "total": d["total"], "items": len(d["items"])},
+        result=f"created; work_order={outcome}",
+    )
     log.info("bill_created_via_whatsapp", order_number=order.order_number, by=sender_label)
-    return get_message(
-        "bill_created",
-        order_number=order.order_number,
-        total=f"{d['total']:g}" if d["total"] else "—",
+    staff_note = {
+        "sent": "Staff ko work order bhej diya.",
+        "sent_template": "Staff ko work order (template se) bhej diya.",
+        "no_staff": "⚠️ Koi staff assigned nahi — Settings mein default washer set karein.",
+        "failed": "⚠️ Staff ko message nahi ja paya.",
+    }[outcome]
+    return (
+        get_message(
+            "bill_created",
+            order_number=order.order_number,
+            total=f"{d['total']:g}" if d["total"] else "—",
+        )
+        + "\n" + staff_note
     )
 
 
@@ -393,6 +503,175 @@ async def _apply_delay(db: AsyncSession, sender_label: str, extracted: dict) -> 
     )
     return get_message(
         "delay_done", order_number=number, date=new_date.strftime("%d %b %Y")
+    )
+
+
+async def _find_order_flex(
+    db: AsyncSession, extracted: dict
+) -> tuple[Order | None, str | None]:
+    """Resolve an order by number, or by customer name's single active order.
+
+    Returns (order, error_reply). Ambiguity -> ask, never guess (spec 7.4).
+    """
+    number = (extracted.get("order_number") or "").upper()
+    if number:
+        try:
+            return await get_order(db, number), None
+        except OrderNotFoundError:
+            return None, get_message("order_not_found_staff", order_number=number)
+    name = (extracted.get("customer_name") or "").strip()
+    if not name:
+        return None, get_message("staff_cmd_unknown")
+    rows = (
+        (
+            await db.execute(
+                select(Order)
+                .join(Customer, Customer.id == Order.customer_id)
+                .where(
+                    Order.status.in_(ACTIVE_STATUSES),
+                    Customer.name.ilike(f"%{name}%"),
+                )
+                .order_by(Order.created_at.desc())
+                .limit(5)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(rows) == 1:
+        return rows[0], None
+    if not rows:
+        return None, get_message("order_for_customer_not_found", name=name)
+    listing = "\n".join(f"- {o.order_number}" for o in rows)
+    return None, get_message("order_ambiguous", name=name, listing=listing)
+
+
+async def _apply_priority(db: AsyncSession, sender_label: str, extracted: dict) -> str:
+    from app.services.work_orders import send_work_order
+
+    order, err = await _find_order_flex(db, extracted)
+    if err:
+        return err
+    priority = extracted["priority"] if extracted["priority"] in ("urgent", "normal") else "urgent"
+    order.priority = priority
+    await db.commit()
+    outcome = await send_work_order(
+        db, order,
+        headline="Priority update" if priority == "urgent" else "Priority normal hui",
+        extra="Ise sabse pehle karna hai — aaj hi." if priority == "urgent" else "-",
+    )
+    key = {
+        "sent": "priority_set_notified",
+        "sent_template": "priority_set_notified",
+        "no_staff": "priority_set_no_staff",
+        "failed": "priority_set_notify_failed",
+    }[outcome]
+    return get_message(key, order_number=order.order_number, priority=priority.upper())
+
+
+async def _apply_assign(db: AsyncSession, sender_label: str, extracted: dict) -> str:
+    from app.services.work_orders import send_work_order
+
+    order, err = await _find_order_flex(db, extracted)
+    if err:
+        return err
+    target = (extracted["staff_name"] or extracted["relay_to"] or "").strip()
+    staff_rows = (await db.execute(select(Staff))).scalars().all()
+    matches = [
+        s for s in staff_rows
+        if s.name and target and (s.name.lower() in target.lower() or target.lower() in s.name.lower())
+    ]
+    if len(matches) != 1:
+        names = ", ".join(s.name for s in staff_rows if s.name) or "-"
+        return get_message("relay_target_unknown", target=target or "?", names=names)
+    staff = matches[0]
+    if staff.role.name == "DELIVERY":
+        order.assigned_delivery_id = staff.id
+    else:
+        order.assigned_washer_id = staff.id
+    await db.commit()
+    outcome = await send_work_order(db, order, headline="Naya kaam mila")
+    return get_message(
+        "assign_done", order_number=order.order_number, name=staff.name,
+        notified="✓" if outcome in ("sent", "sent_template") else "✗ (message nahi gaya)",
+    )
+
+
+async def _apply_note(db: AsyncSession, sender_label: str, extracted: dict) -> str:
+    from app.services.work_orders import send_work_order
+
+    order, err = await _find_order_flex(db, extracted)
+    if err:
+        return err
+    note = (extracted["note"] or "").strip()
+    if not note:
+        return get_message("staff_cmd_unknown")
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    line = f"[{stamp} {sender_label}] {note}"
+    order.notes = f"{order.notes}\n{line}" if order.notes else line
+    await db.commit()
+    # instructions are for the worker too — forward as a work order
+    outcome = await send_work_order(db, order, headline="Instruction", extra=note)
+    return get_message(
+        "note_done", order_number=order.order_number,
+        notified="staff ko bhej bhi diya" if outcome in ("sent", "sent_template") else "staff ko nahi bhej paya",
+    )
+
+
+async def _stage_payment(
+    db: AsyncSession, sender_phone: str, sender_label: str, extracted: dict
+) -> str:
+    """Money writes are confirm-gated: stage it, ask for 'haan'."""
+    order, err = await _find_order_flex(db, extracted)
+    if err:
+        return err
+    amount = float(extracted["amount"] or 0)
+    if amount <= 0:
+        return get_message("staff_cmd_unknown")
+    method = extracted["method"] if extracted["method"] in ("cash", "upi", "other") else "cash"
+    _PENDING[sender_phone] = PendingPayment(
+        order_number=order.order_number, amount=amount, method=method
+    )
+    due = (order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0"))
+    return get_message(
+        "payment_confirm_prompt",
+        order_number=order.order_number,
+        amount=f"{amount:g}",
+        method=method.upper(),
+        due=f"{max(due, 0)}",
+    )
+
+
+async def _finalize_payment(
+    db: AsyncSession, sender_phone: str, sender_label: str, pending: PendingPayment
+) -> str:
+    method_map = {"cash": PaymentMethod.CASH, "upi": PaymentMethod.UPI, "other": PaymentMethod.OTHER}
+    try:
+        order = await get_order(db, pending.order_number)
+    except OrderNotFoundError:
+        _PENDING.pop(sender_phone, None)
+        return get_message("order_not_found_staff", order_number=pending.order_number)
+    await record_payment(
+        db, order,
+        amount=Decimal(str(pending.amount)),
+        method=method_map[pending.method],
+        recorded_by=sender_label,
+    )
+    _PENDING.pop(sender_phone, None)
+    await audit.record(
+        actor_role="admin" if sender_label == "manager" else "staff",
+        actor=sender_label,
+        action="record_payment",
+        args={"order": pending.order_number, "amount": pending.amount, "method": pending.method},
+        result="recorded",
+    )
+    due = (order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0"))
+    return get_message(
+        "payment_done",
+        order_number=order.order_number,
+        amount=f"{pending.amount:g}",
+        due=f"{max(due, 0)}",
+        status=order.payment_status.name,
     )
 
 
@@ -482,6 +761,7 @@ async def _apply_relay(db: AsyncSession, sender_label: str, extracted: dict) -> 
     if not target or not message:
         return get_message("staff_cmd_unknown")
 
+    is_customer_target = False
     if target.lower() in ("manager", "boss", "malik"):
         to_phone, to_name = settings.MANAGER_PHONE, "Manager"
     else:
@@ -490,17 +770,41 @@ async def _apply_relay(db: AsyncSession, sender_label: str, extracted: dict) -> 
             s for s in staff_rows
             if s.name and (s.name.lower() in target.lower() or target.lower() in s.name.lower())
         ]
-        if len(matches) != 1:
+        if len(matches) == 1:
+            to_phone, to_name = matches[0].phone, matches[0].name
+        elif sender_label == "manager":
+            # Only the ADMIN may message customers through the bot.
+            cust_matches = (
+                (
+                    await db.execute(
+                        select(Customer)
+                        .where(Customer.name.ilike(f"%{target}%"), Customer.is_active)
+                        .limit(3)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if len(cust_matches) != 1:
+                names = ", ".join(s.name for s in staff_rows if s.name) or "-"
+                return get_message("relay_target_unknown", target=target, names=names)
+            to_phone, to_name = cust_matches[0].phone, cust_matches[0].name or cust_matches[0].phone
+            is_customer_target = True
+        else:
             names = ", ".join(s.name for s in staff_rows if s.name) or "-"
             return get_message("relay_target_unknown", target=target, names=names)
-        to_phone, to_name = matches[0].phone, matches[0].name
 
     try:
-        await send_message(
-            db, to_phone=to_phone,
-            text=get_message("relay_message", sender=sender_label, message=message),
+        out_text = (
+            get_message("relay_message_customer", message=message)
+            if is_customer_target
+            else get_message("relay_message", sender=sender_label, message=message)
         )
+        await send_message(db, to_phone=to_phone, text=out_text)
     except WindowClosedError:
+        if is_customer_target:
+            # the staff template is wrong for customers — be honest instead
+            return get_message("relay_window_closed", name=to_name)
         # Window shut -> fall back to the pre-approved template. If Meta
         # hasn't approved it yet this raises SendError and we say so.
         try:
@@ -518,7 +822,30 @@ async def _apply_relay(db: AsyncSession, sender_label: str, extracted: dict) -> 
     except SendError:
         log.warning("relay_send_failed", to=to_phone)
         return get_message("relay_failed", name=to_name)
-    log.info("relay_sent", to=to_phone, by=sender_label)
+
+    if is_customer_target:
+        # answering a customer closes their open question threads
+        from app.models import OpenQuestion
+
+        open_rows = (
+            (
+                await db.execute(
+                    select(OpenQuestion)
+                    .join(Customer, Customer.id == OpenQuestion.customer_id)
+                    .where(Customer.phone == to_phone, OpenQuestion.status == "open")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for oq in open_rows:
+            oq.status = "answered"
+            oq.answer = message[:2000]
+            oq.answered_at = datetime.now(timezone.utc)
+        if open_rows:
+            await db.commit()
+            log.info("open_questions_closed", count=len(open_rows), customer=to_phone)
+    log.info("relay_sent", to=to_phone, by=sender_label, kind="customer" if is_customer_target else "staff")
     return get_message("relay_done", name=to_name, message=message)
 
 

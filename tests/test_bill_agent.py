@@ -39,22 +39,20 @@ def _extract_result(**overrides) -> dict:
 @pytest.fixture(autouse=True)
 async def _setup_and_cleanup():
     _PENDING.clear()
+    from tests.conftest import purge_phones
+
+    await purge_phones(CUST_PHONE)  # crashed earlier runs must not poison this one
     async with async_session_factory() as s:
+        # idempotent: a crashed earlier run may have left the row behind
+        await s.execute(sqltext(f"DELETE FROM rate_card WHERE service = '{SERVICE}'"))
         s.add(Rate(service=SERVICE, garment="Kurta", unit="pc", rate=40))
         await s.commit()
     yield
     _PENDING.clear()
+    from tests.conftest import purge_phones
+
+    await purge_phones(CUST_PHONE)
     async with async_session_factory() as s:
-        sub = f"(SELECT id FROM customers WHERE phone = '{CUST_PHONE}')"
-        await s.execute(
-            sqltext(
-                "DELETE FROM order_status_history WHERE order_id IN "
-                f"(SELECT id FROM orders WHERE customer_id IN {sub})"
-            )
-        )
-        for table in ("conversations", "orders"):
-            await s.execute(sqltext(f"DELETE FROM {table} WHERE customer_id IN {sub}"))
-        await s.execute(sqltext(f"DELETE FROM customers WHERE phone = '{CUST_PHONE}'"))
         await s.execute(sqltext(f"DELETE FROM rate_card WHERE service = '{SERVICE}'"))
         await s.commit()
 

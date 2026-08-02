@@ -48,22 +48,9 @@ def _mock_sends(sent):
 @pytest.fixture(autouse=True)
 async def _cleanup_orders():
     yield
-    async with async_session_factory() as s:
-        await s.execute(
-            sqltext(
-                "DELETE FROM order_status_history WHERE order_id IN "
-                "(SELECT o.id FROM orders o JOIN customers c ON c.id = o.customer_id "
-                f" WHERE c.phone = '{TEST_PHONE}')"
-            )
-        )
-        await s.execute(
-            sqltext(
-                "DELETE FROM orders WHERE customer_id IN "
-                f"(SELECT id FROM customers WHERE phone = '{TEST_PHONE}')"
-            )
-        )
-        await s.execute(sqltext(f"DELETE FROM customers WHERE phone = '{TEST_PHONE}'"))
-        await s.commit()
+    from tests.conftest import purge_phones
+
+    await purge_phones(TEST_PHONE)
 
 
 # --- state machine (pure function, no DB) ---

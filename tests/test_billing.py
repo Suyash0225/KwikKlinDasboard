@@ -13,27 +13,10 @@ AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
 @pytest.fixture(autouse=True)
 async def _cleanup(sent):
     yield
+    from tests.conftest import purge_phones
+
+    await purge_phones(PHONE)
     async with async_session_factory() as s:
-        await s.execute(
-            sqltext(
-                "DELETE FROM conversations WHERE customer_id IN "
-                f"(SELECT id FROM customers WHERE phone = '{PHONE}')"
-            )
-        )
-        await s.execute(
-            sqltext(
-                "DELETE FROM order_status_history WHERE order_id IN "
-                "(SELECT o.id FROM orders o JOIN customers c ON c.id = o.customer_id "
-                f" WHERE c.phone = '{PHONE}')"
-            )
-        )
-        await s.execute(
-            sqltext(
-                "DELETE FROM orders WHERE customer_id IN "
-                f"(SELECT id FROM customers WHERE phone = '{PHONE}')"
-            )
-        )
-        await s.execute(sqltext(f"DELETE FROM customers WHERE phone = '{PHONE}'"))
         await s.execute(sqltext("DELETE FROM expenses WHERE description = 'TEST-EXPENSE'"))
         await s.commit()
 

@@ -16,20 +16,9 @@ PHONE = "+919999900123"
 
 async def _purge() -> None:
     """Remove EVERYTHING attached to the test phone, FK-safe order."""
-    async with async_session_factory() as s:
-        sub = f"(SELECT id FROM customers WHERE phone = '{PHONE}')"
-        await s.execute(
-            sqltext(
-                "DELETE FROM order_status_history WHERE order_id IN "
-                f"(SELECT id FROM orders WHERE customer_id IN {sub})"
-            )
-        )
-        for table in ("escalations", "conversations", "orders"):
-            await s.execute(
-                sqltext(f"DELETE FROM {table} WHERE customer_id IN {sub}")
-            )
-        await s.execute(sqltext(f"DELETE FROM customers WHERE phone = '{PHONE}'"))
-        await s.commit()
+    from tests.conftest import purge_phones
+
+    await purge_phones(PHONE)
 
 
 @pytest.fixture(autouse=True)

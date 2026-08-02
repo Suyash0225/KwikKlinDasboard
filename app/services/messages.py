@@ -160,6 +160,59 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "⚠️ AI agent abhi uplabdh nahi hai (API key ya network). Bill dashboard se bana lein; thodi der baad dobara try karein.",
         "en": "⚠️ The AI agent is unavailable right now (API key or network). Use the dashboard for bills; try again shortly.",
     },
+    "start_confirmed": {
+        "hi": "Wapas swagat hai! 🙏 Ab hum aapko zaroori updates bhejte rahenge. — {shop}",
+        "en": "Welcome back! 🙏 We'll keep you posted with important updates. — {shop}",
+    },
+    "stop_confirmed": {
+        "hi": "Theek hai, ab hum aapko koi message nahi bhejenge. Kabhi zaroorat ho to bas 'START' likh dijiyega 🙏 — {shop}",
+        "en": "Understood — we will not message you anymore. If you ever need us again, just send 'START' 🙏 — {shop}",
+    },
+    # --- work orders & admin power commands (Phase overnight) ---
+    "work_order": {
+        "hi": "🧺 {headline}!\nOrder: {order_number}\nCustomer: {customer_name}\nKapde: {items}\nDelivery: {delivery}\nPriority: {priority}\nInstruction: {extra}",
+        "en": "🧺 {headline}!\nOrder: {order_number}\nCustomer: {customer_name}\nItems: {items}\nDelivery: {delivery}\nPriority: {priority}\nInstruction: {extra}",
+    },
+    "relay_message_customer": {
+        "hi": "{message}\n— {shop}",
+        "en": "{message}\n— {shop}",
+    },
+    "priority_set_notified": {
+        "hi": "✅ {order_number} ab {priority} hai — staff ko saaf instruction bhej di gayi.",
+        "en": "✅ {order_number} is now {priority} — staff has been given a clear instruction.",
+    },
+    "priority_set_no_staff": {
+        "hi": "✅ {order_number} ab {priority} hai. ⚠️ Par koi staff assigned nahi — Settings mein default washer set karein.",
+        "en": "✅ {order_number} is now {priority}. ⚠️ But no staff is assigned — set a default washer in Settings.",
+    },
+    "priority_set_notify_failed": {
+        "hi": "✅ {order_number} ab {priority} hai. ⚠️ Staff ko message nahi ja paya — khud bata dein.",
+        "en": "✅ {order_number} is now {priority}. ⚠️ Could not message the staff — please tell them directly.",
+    },
+    "assign_done": {
+        "hi": "✅ {order_number} ab {name} ke paas hai. Work order: {notified}",
+        "en": "✅ {order_number} is now with {name}. Work order: {notified}",
+    },
+    "note_done": {
+        "hi": "✅ Note save ho gaya ({order_number}) aur {notified}.",
+        "en": "✅ Note saved on {order_number}; {notified}.",
+    },
+    "payment_confirm_prompt": {
+        "hi": "💰 {order_number} par ₹{amount} ({method}) record karun? Abhi baaki: ₹{due}\n'haan' → record | 'nahi' → cancel",
+        "en": "💰 Record ₹{amount} ({method}) on {order_number}? Currently due: ₹{due}\n'haan' → record | 'nahi' → cancel",
+    },
+    "payment_done": {
+        "hi": "✅ ₹{amount} record ho gaya ({order_number}). Ab baaki: ₹{due} [{status}]",
+        "en": "✅ ₹{amount} recorded on {order_number}. Remaining due: ₹{due} [{status}]",
+    },
+    "order_ambiguous": {
+        "hi": "🤔 '{name}' ke kai orders chal rahe hain — kaun sa?\n{listing}\nOrder number ke saath dobara bhejein.",
+        "en": "🤔 '{name}' has multiple active orders — which one?\n{listing}\nResend with the order number.",
+    },
+    "order_for_customer_not_found": {
+        "hi": "⚠️ '{name}' ka koi active order nahi mila.",
+        "en": "⚠️ No active order found for '{name}'.",
+    },
     "cancel_needs_dashboard": {
         "hi": "⚠️ {order_number} cancel WhatsApp se nahi hota — galti se na ho isliye dashboard se karein.",
         "en": "⚠️ Cancelling {order_number} must be done from the dashboard (safety).",

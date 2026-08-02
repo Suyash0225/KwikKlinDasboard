@@ -30,6 +30,33 @@ RAVI_PHONE_RAW = "918707093136"
 RAVI_PHONE = "+918707093136"
 
 
+async def purge_phones(*phones: str) -> None:
+    """Delete EVERYTHING attached to these customer phones, FK-safe order.
+
+    One place to maintain — when a new table references customers/orders,
+    add it here and every test file's cleanup is fixed at once.
+    """
+    if not phones:
+        return
+    in_list = ", ".join(f"'{p}'" for p in phones)
+    sub = f"(SELECT id FROM customers WHERE phone IN ({in_list}))"
+    orders_sub = f"(SELECT id FROM orders WHERE customer_id IN {sub})"
+    async with async_session_factory() as s:
+        for stmt in (
+            f"DELETE FROM payments WHERE order_id IN {orders_sub}",
+            f"DELETE FROM order_status_history WHERE order_id IN {orders_sub}",
+            f"DELETE FROM coupon_redemptions WHERE customer_id IN {sub}",
+            f"DELETE FROM campaign_recipients WHERE customer_id IN {sub}",
+            f"DELETE FROM open_questions WHERE customer_id IN {sub}",
+            f"DELETE FROM escalations WHERE customer_id IN {sub}",
+            f"DELETE FROM conversations WHERE customer_id IN {sub}",
+            f"DELETE FROM orders WHERE customer_id IN {sub}",
+            f"DELETE FROM customers WHERE phone IN ({in_list})",
+        ):
+            await s.execute(sqltext(stmt))
+        await s.commit()
+
+
 def sign_body(body: bytes) -> str:
     """Compute the X-Hub-Signature-256 header exactly like Meta does."""
     digest = hmac.new(

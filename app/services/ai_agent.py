@@ -58,10 +58,17 @@ _COMPOSE_SYSTEM = (
 async def build_ai_reply(db: AsyncSession, customer: Customer, text: str) -> str | None:
     """Return a reply for a customer message, or None to use rule-based flow.
 
-    May create an escalation as a side effect (committed inside).
+    May create an escalation + open question as side effects (committed).
     """
     # Media/button markers like "[image:...]" are not conversational text.
     if not text or text.startswith("["):
+        return None
+
+    # Global kill switch (Settings) — bot falls back to rule-based replies.
+    from app.services import app_settings, audit
+
+    if not await app_settings.get(db, "agent_enabled"):
+        log.info("ai_agent_disabled_by_switch")
         return None
 
     cls = await classify_intent(text)
@@ -70,15 +77,37 @@ async def build_ai_reply(db: AsyncSession, customer: Customer, text: str) -> str
     lang = cls["language"]
 
     # Complaints skip the compose step: deterministic apology + escalation.
+    # Complaining customers also pause the agent (spec 7.6c) — the admin
+    # takes over; the flag is released from the Inbox.
     if cls["intent"] == "COMPLAINT":
         await raise_escalation(db, question=f"COMPLAINT: {text}", customer=customer)
+        await _open_question(db, customer, text)
+        customer.agent_paused = True
+        await db.commit()
+        await audit.record(
+            actor_role="customer", actor=customer.phone, action="complaint_escalated",
+            args={"text": text[:200]}, result="agent paused on thread",
+        )
         return get_message("complaint_ack", lang)
 
+    # Memory + owner-taught knowledge go into the facts the model may use.
+    from app.services.knowledge import knowledge_block, relevant_knowledge, thread_history
+
     facts = await _build_facts(db, customer)
+    history = await thread_history(db, customer_id=customer.id, limit=6)
+    faqs, corrections = await relevant_knowledge(db, text, audience="customer")
+    kb = knowledge_block(faqs, corrections)
+    prompt = f"FACTS:\n{facts}\n"
+    if kb:
+        prompt += f"{kb}\n"
+    if history:
+        prompt += f"{history}\n"
+    prompt += f"\nCUSTOMER MESSAGE (language={lang}):\n{text[:1000]}"
+
     try:
         out = await llm_client.ask_json(
             system=_COMPOSE_SYSTEM,
-            user_text=f"FACTS:\n{facts}\n\nCUSTOMER MESSAGE (language={lang}):\n{text[:1000]}",
+            user_text=prompt,
             schema=_REPLY_SCHEMA,
             model=llm_client.MODEL_SMART,
             max_tokens=400,
@@ -90,10 +119,33 @@ async def build_ai_reply(db: AsyncSession, customer: Customer, text: str) -> str
     if out["escalate"]:
         reason = out["escalation_reason"] or "bot could not answer"
         await raise_escalation(db, question=f"{reason}: {text}", customer=customer)
+        await _open_question(db, customer, text)
+        await audit.record(
+            actor_role="customer", actor=customer.phone, action="escalated",
+            args={"reason": reason, "text": text[:200]}, result="open question created",
+        )
         return out["reply"] or get_message("escalated_ack", lang)
 
     log.info("ai_reply_composed", intent=cls["intent"], chars=len(out["reply"]))
+    await audit.record(
+        actor_role="customer", actor=customer.phone, action="ai_reply",
+        args={"intent": cls["intent"]}, result=out["reply"][:200],
+    )
     return out["reply"] or None
+
+
+async def _open_question(db: AsyncSession, customer: Customer, text: str) -> None:
+    """Track the unanswered question so the admin's reply can close it.
+
+    Feeds the 'Teach me' queue too. Never raises.
+    """
+    try:
+        from app.models import OpenQuestion
+
+        db.add(OpenQuestion(customer_id=customer.id, question=text[:2000]))
+        await db.commit()
+    except Exception:
+        log.exception("open_question_store_failed")
 
 
 async def _build_facts(db: AsyncSession, customer: Customer) -> str:
