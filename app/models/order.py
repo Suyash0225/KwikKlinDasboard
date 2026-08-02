@@ -82,6 +82,11 @@ class Order(Base):
     expected_delivery: Mapped[date | None] = mapped_column(SADate)
     actual_delivery: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # 'normal' | 'urgent' — set by the admin ("Sharma ji ka urgent hai")
+    priority: Mapped[str] = mapped_column(
+        String(10), default="normal", server_default="normal"
+    )
+
     # --- Assignment ---
     assigned_washer_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("staff.id"), index=True

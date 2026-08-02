@@ -30,8 +30,20 @@ class Customer(Base):
     last_followup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
-    # Customer sent STOP — never message them proactively again.
+    # Customer sent STOP — never message them proactively again (utility too).
     opted_out: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Marketing-only opt-out — utility messages (order updates) still allowed.
+    marketing_opt_out: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    # When we last sent them a MARKETING message — enforces the frequency cap.
+    last_marketing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Agent paused on this thread (owner pressed 'Take over' in Inbox).
+    agent_paused: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    # Optional — for birthday greetings if the owner fills it in.
+    birthday: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     def __repr__(self) -> str:
         return f"<Customer {self.phone} name={self.name!r}>"
