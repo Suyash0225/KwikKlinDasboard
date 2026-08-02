@@ -70,6 +70,72 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Maaf kijiye, ye order number humein nahi mila. Number check karke dobara bhejein 🙏 — {shop}",
         "en": "Sorry, we couldn't find that order number. Please check and resend 🙏 — {shop}",
     },
+    # --- AI agent / escalations (Phase 4) ---
+    "complaint_ack": {
+        "hi": "Maaf kijiye aapko pareshani hui 🙏 Humne aapki baat turant apne manager tak pahuncha di hai — wo jald hi aapse sampark karenge. — {shop}",
+        "en": "We're sorry for the trouble 🙏 Your message has been passed to our manager — they will contact you shortly. — {shop}",
+    },
+    "escalated_ack": {
+        "hi": "Humne aapki baat manager tak pahuncha di hai, wo jald hi aapse sampark karenge 🙏 — {shop}",
+        "en": "We've passed this to our manager — they will contact you shortly 🙏 — {shop}",
+    },
+    # Staff/manager-facing alert — internal, so quoting the message is fine.
+    "escalation_alert": {
+        "hi": "🔔 Dhyan dein: {customer_name} ({phone}) ka message bot handle nahi kar paya:\n\n\"{question}\"\n\nDashboard Inbox se jawaab dein.",
+        "en": "🔔 Attention: the bot could not handle a message from {customer_name} ({phone}):\n\n\"{question}\"\n\nReply from the dashboard Inbox.",
+    },
+    # --- staff/manager bill-by-text (Phase 4c) — all internal-facing ---
+    "bill_draft_header": {
+        "hi": "📝 Bill draft — {customer_name}:",
+        "en": "📝 Bill draft — {customer_name}:",
+    },
+    "bill_draft_total": {"hi": "Total: ₹{total}", "en": "Total: ₹{total}"},
+    "bill_draft_advance": {"hi": "Advance: ₹{advance}", "en": "Advance: ₹{advance}"},
+    "bill_draft_delivery": {
+        "hi": "Delivery: {date}",
+        "en": "Delivery: {date}",
+    },
+    "bill_draft_confirm": {
+        "hi": "Sab theek? 'haan' → bill ban jaega | badalna ho to likh dein | 'nahi' → cancel",
+        "en": "All good? 'haan' → creates the bill | describe any change | 'nahi' → cancel",
+    },
+    "bill_need_phone": {
+        "hi": "⚠️ Customer ka number nahi mila — number bhej dein, draft saved hai.",
+        "en": "⚠️ No customer number — send it, the draft is saved.",
+    },
+    "bill_created": {
+        "hi": "✅ Order {order_number} ban gaya (₹{total}). Customer ko confirmation bhej di gayi hai.",
+        "en": "✅ Order {order_number} created (₹{total}). Customer has been notified.",
+    },
+    "bill_cancelled": {"hi": "❌ Draft cancel kar diya.", "en": "❌ Draft cancelled."},
+    "staff_cmd_unknown": {
+        "hi": "🤔 Samajh nahi aaya. Bill: customer + kapde + service likhein. Delay: order number + nayi date. Status: order number + stage.",
+        "en": "🤔 Didn't understand. Bill: customer + items + service. Delay: order number + new date. Status: order number + stage.",
+    },
+    "order_not_found_staff": {
+        "hi": "⚠️ Order {order_number} nahi mila.",
+        "en": "⚠️ Order {order_number} not found.",
+    },
+    "delay_needs_date": {
+        "hi": "⚠️ {order_number} ke liye nayi date samajh nahi aayi — date ke saath dobara bhejein (jaise 'kal' ya '5 Aug').",
+        "en": "⚠️ Couldn't read the new date for {order_number} — resend with a date.",
+    },
+    "delay_done": {
+        "hi": "✅ {order_number} ki delivery ab {date}. Customer ko polite notice chala gaya (wajah sirf notes mein hai).",
+        "en": "✅ {order_number} delivery is now {date}. Customer got a polite notice (reason stays internal).",
+    },
+    "status_done": {
+        "hi": "✅ {order_number} → {status_name}",
+        "en": "✅ {order_number} → {status_name}",
+    },
+    "status_invalid": {
+        "hi": "⚠️ {order_number} abhi {old} mein hai — wahan se {new} allowed nahi.",
+        "en": "⚠️ {order_number} is in {old} — moving to {new} is not allowed.",
+    },
+    "cancel_needs_dashboard": {
+        "hi": "⚠️ {order_number} cancel WhatsApp se nahi hota — galti se na ho isliye dashboard se karein.",
+        "en": "⚠️ Cancelling {order_number} must be done from the dashboard (safety).",
+    },
 }
 
 # How each status reads in a sentence: "Aapka order KK-... <label>"

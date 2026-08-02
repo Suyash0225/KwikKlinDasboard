@@ -54,12 +54,14 @@ class Settings(BaseSettings):
     # (their panel lets you add a custom header). Requests without it -> 403.
     DOTPE_WEBHOOK_TOKEN: str = ""
 
-    # --- LLM (unused until Phase 4) ---
+    # --- LLM (Phase 4 AI agent) ---
     ANTHROPIC_API_KEY: str
 
     # --- People ---
     # Manager's WhatsApp number in E.164 form, e.g. +919876543210.
     MANAGER_PHONE: str
+    # Optional second number CC'd on every escalation alert (Ravi).
+    ESCALATION_CC_PHONE: str = ""
 
     # --- Internal admin API ---
     # Sent as the X-API-Key header on /admin and /orders endpoints.

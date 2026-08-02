@@ -35,6 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import Conversation, Customer, Direction, Staff
+from app.services.ai_agent import build_ai_reply
+from app.services.bill_agent import handle_staff_message
 from app.services.messages import get_message, status_label
 from app.services.order_service import (
     OrderNotFoundError,
@@ -270,12 +272,42 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
         phone=phone,
     )
 
-    # Customers get a rule-based reply (no AI): order status if we can tell
-    # which order they mean, generic ack otherwise. Staff get no auto-reply.
+    # Staff and the manager (whose number has a customer row from his own
+    # tests) get the command agent: bill-by-text, delay + status updates.
+    # A silent None means "not a command" — same as pre-Phase-4 behavior.
+    is_manager = phone == normalize_phone(settings.MANAGER_PHONE)
+    if staff is not None or is_manager:
+        try:
+            command_reply = await handle_staff_message(
+                db,
+                sender_phone=phone,
+                sender_label=staff.name if staff else "manager",
+                text=text,
+            )
+        except Exception:
+            log.exception("staff_command_failed", phone=phone)
+            command_reply = None
+        if command_reply:
+            try:
+                await send_message(db, to_phone=phone, text=command_reply)
+            except SendError:
+                log.exception("staff_reply_send_failed", phone=phone)
+        return
+
+    # Customer replies, in strict priority order:
+    # 1. Message names an order number -> deterministic status reply (no AI).
+    # 2. AI agent (Phase 4) -> may answer or escalate; returns None if the
+    #    LLM is down/unsure.
+    # 3. Fallback: the same rule-based replies Phase 3 shipped with.
     # A failed reply must never break the webhook: log it and move on.
     if customer is not None:
         try:
-            reply = await _build_customer_reply(db, customer, text)
+            if ORDER_NUMBER_RE.search(text):
+                reply = await _build_customer_reply(db, customer, text)
+            else:
+                reply = await build_ai_reply(db, customer, text)
+                if reply is None:
+                    reply = await _build_customer_reply(db, customer, text)
         except Exception:
             log.exception("reply_build_failed", phone=phone)
             reply = get_message("error_fallback")
