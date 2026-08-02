@@ -153,18 +153,53 @@
                     border-radius: 8px; padding: 10px; }
   .backbtn { display: none; }
   .empty { margin: auto; color: #98a2b3; font-size: 13px; text-align: center; }
+  .exp-wrap { display: grid; grid-template-columns: 380px 1fr; gap: 14px; align-items: start; }
   @media (max-width: 860px) {
+    body { font-size: 13px; }
     .shell { flex-direction: column; }
-    .side { width: 100%; height: auto; position: static; flex-direction: row; align-items: center; }
-    .logo { padding: 10px; } .dbchip { display: none; }
-    .nav { display: flex; padding: 6px; overflow-x: auto; }
-    .nav div { white-space: nowrap; }
-    .bill-wrap, .grid2, .grid3 { grid-template-columns: 1fr; }
+    .side { width: 100%; height: auto; position: sticky; top: 0; z-index: 5;
+            flex-direction: column; }
+    .logo { padding: 8px 12px; }
+    .logo .kk { width: 30px; height: 30px; font-size: 12px; }
+    .dbchip { display: none; }
+    .nav { display: flex; padding: 4px 8px 8px; overflow-x: auto; gap: 4px;
+           -webkit-overflow-scrolling: touch; }
+    .nav div { white-space: nowrap; padding: 8px 12px; font-size: 12.5px; flex-shrink: 0; }
+    .main { padding: 12px; }
+    .tophead { padding: 10px 12px; margin-bottom: 12px; }
+    .tophead h1 { font-size: 17px; }
+    .tophead .right button { padding: 7px 10px; font-size: 12px; }
+    .cards { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+    .card { padding: 12px; border-radius: 12px; }
+    .card .n { font-size: 20px; }
+    .card .ic { width: 26px; height: 26px; font-size: 12px; top: 10px; right: 10px; }
+    th, td { padding: 9px 8px; }
+    /* tables scroll sideways inside their panel instead of squishing —
+       every column keeps a readable width */
+    html, body { overflow-x: hidden; }
+    .tblwrap table { min-width: 780px; }
+    .tblwrap th, .tblwrap td { white-space: nowrap; }
+    .itemscell { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+    /* bigger tap targets; keep the action strip on ONE row (the table
+       scrolls sideways anyway — wrapping made rows tall) */
+    .act { flex-wrap: nowrap; }
+    .act button { font-size: 12px; padding: 7px 10px; }
+    .bill-wrap, .grid2, .grid3, .exp-wrap { grid-template-columns: 1fr; }
+    /* item lines scroll sideways instead of squishing */
+    #piece-items, #weight-items { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .iline { min-width: 540px; }
+    /* inbox: one pane at a time + keyboard-safe height */
+    .inbox { height: calc(100dvh - 190px); min-height: 340px; }
     .inbox.chat-open .threads { display: none; }
     .inbox:not(.chat-open) .chatpane { display: none; }
     .threads { width: 100%; }
     .backbtn { display: inline-block; }
+    .bubble { max-width: 88%; }
+    .ordchips { display: none; }  /* order chips crowd the chat header on phone */
+    .modal { padding: 14px; border-radius: 12px; }
+    .filters input, .filters select { min-width: 0; flex: 1; }
   }
+  @supports (height: 100dvh) { .side { height: auto; } }
 </style>
 </head>
 <body>
@@ -216,6 +251,7 @@
           <div class="composer" id="composer" style="display:none">
             <button class="ghost backbtn" onclick="closeThread()">←</button>
             <textarea id="msg-in" rows="1" placeholder="Message likho… (Enter = bhejo)"
+                      oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,90)+'px'"
                       onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
             <button class="green" id="send-btn" onclick="sendMsg()">➤</button>
           </div>
@@ -298,7 +334,7 @@
     <!-- EXPENSES -->
     <div id="s-expenses" style="display:none">
       <div class="cards" id="exp-cards"></div>
-      <div class="bill-wrap">
+      <div class="exp-wrap">
         <div class="panel">
           <h2>Kharcha likho</h2>
           <label>Category</label>
@@ -360,6 +396,11 @@ const TITLES = {home:['Dashboard','Aaj ka haal ek nazar mein'], inbox:['Inbox','
   reports:['Reports','Kamai, kharcha, munafa']};
 let DATA=null, CUSTOMERS=[], THREADS=[], BILLS=[], SUMMARY=null, EXPENSES=[], FILTER=null, OPEN_PHONE=null, SECTION='home';
 
+// ?key=... in the URL stores the admin key (phone/LAN access without typing);
+// it is stripped from the address bar immediately.
+(function(){const u=new URLSearchParams(location.search).get('key');
+  if(u){localStorage.setItem('kk_admin_key',u);
+        history.replaceState({},'',location.pathname+location.hash);}})();
 function getKey(force){let k=localStorage.getItem('kk_admin_key');
   if(!k||force){k=prompt('Admin API key daalo (.env ke ADMIN_API_KEY se):')||'';localStorage.setItem('kk_admin_key',k);}return k;}
 async function api(path,opts={}){opts.headers=Object.assign({'X-API-Key':getKey(false),'Content-Type':'application/json'},opts.headers||{});
@@ -376,7 +417,11 @@ function fmtDate(x){if(!x)return '—';
 function avatar(name){const i=(name||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
   const hues=['#eef2ff;color:#4338ca','#ecfdf3;color:#05603a','#fff7ed;color:#c2410c','#fdf2fa;color:#9e165f'];
   const h=hues[(name||'').length%hues.length].split(';color:');
-  return `<span class="avatar" style="background:${h[0]};color:${h[1]}">${i||'?'}</span>`;}
+  return `<span class="avatar" style="background:${h[0]};color:${h[1]}">${esc(i)||'?'}</span>`;}
+function fmtWhen(x){const d=new Date(x);
+  return d.toDateString()===new Date().toDateString()
+    ? d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})
+    : fmtDate(x);}
 function go(name){SECTION=name;
   for(const el of document.querySelectorAll('.nav div'))el.classList.toggle('on',el.dataset.s===name);
   for(const s of ['home','inbox','newbill','bills','customers','expenses','reports'])
@@ -421,9 +466,9 @@ function orderRow(o){
   const due=(+o.total_amount||0)-(+o.amount_paid||0);
   const pay=o.total_amount?`<span class="${o.payment_status}">${o.payment_status}</span><br>${due>0?'<b class="bad">Due '+rs(due)+'</b>':rs(o.total_amount)}`:o.payment_status;
   return `<tr>
-    <td><b>${esc(o.order_number)}</b><br><span class="t">${new Date(o.created_at).toLocaleDateString('en-IN')}</span></td>
+    <td><b>${esc(o.order_number)}</b><br><span class="t">${fmtDate(o.created_at)}</span></td>
     <td>${esc(o.customer)}<br><span class="t">${esc(o.phone)}</span></td>
-    <td>${items}</td>
+    <td class="itemscell" title="${esc(items)}">${items}</td>
     <td><span class="badge ${o.status}">${LABEL[o.status]||o.status}</span></td>
     <td>${pay}</td><td>${fmtDate(o.expected_delivery)}</td>
     <td><div class="act">
@@ -466,7 +511,7 @@ function renderBills(){
         <br><span class="t">${esc(o.customer_phone)}</span></div></div></td>
       <td><span class="t">Delivery:</span><br>${fmtDate(o.expected_delivery)}</td>
       <td class="num">${items} pcs</td>
-      <td class="num">${o.total_amount?rs(o.total_amount):'—'}<br><span class="${o.payment_status}">${o.payment_status}</span></td>
+      <td class="num">${o.total_amount?rs(o.total_amount):'—'} <span class="${o.payment_status}">${o.payment_status}</span></td>
       <td><span class="badge ${o.status}">${LABEL[o.status]||o.status}</span></td>
       <td><div class="act">
         <button onclick="openStatus('${o.order_number}','${o.status}')">▶ Status</button>
@@ -537,6 +582,7 @@ async function createOrder(){
     if(!phone)throw new Error('phone daalo');
     if(!items.length)throw new Error('kam se kam ek item daalo');
     const {disc,gst,total,adv}=calc();
+    if(adv>total)throw new Error(`Advance (${rs(adv)}) bill total (${rs(total)}) se zyada hai — check karo`);
     const body={customer_phone:phone,items,
       customer_name:document.getElementById('f-name').value.trim()||null,
       total_amount:total||null,
@@ -645,7 +691,7 @@ function renderThreads(){
   const q=(document.getElementById('th-search').value||'').toLowerCase();
   const rows=THREADS.filter(t=>!q||t.name.toLowerCase().includes(q)||t.phone.includes(q));
   document.getElementById('th-list').innerHTML=rows.map(t=>{
-    const time=new Date(t.last_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+    const time=fmtWhen(t.last_at);
     const arrow=t.last_direction==='INBOUND'?'':'➡️ ';
     const chip=t.kind==='staff'?'<span class="staff-chip">staff</span>':'';
     return `<div class="thread-item ${t.phone===OPEN_PHONE?'on':''}" onclick="openThread('${t.phone}')">
@@ -770,6 +816,9 @@ async function openDetail(num){
 }
 
 addPiece();
+// deep-link: /admin#bills, #newbill, #inbox ... (hash wins over default home)
+const _h=location.hash.slice(1);
+if(_h&&TITLES[_h])go(_h);
 loadHome();loadThreads();loadCustomers();
 setInterval(()=>{if(SECTION==='home')loadHome();
   if(SECTION==='inbox'){loadThreads();refreshThread(false);}},10000);
