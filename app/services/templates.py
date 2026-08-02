@@ -29,6 +29,8 @@ TEMPLATES: dict[str, dict] = {
     "kk_order_delivered": {"language": "en_US", "param_count": 1},
     # {{1}} = order number, {{2}} = new date
     "kk_delay_notice": {"language": "en_US", "param_count": 2},
+    # {{1}} = the update text (staff/manager alerts outside the 24h window)
+    "kk_staff_alert": {"language": "en_US", "param_count": 1},
 }
 
 

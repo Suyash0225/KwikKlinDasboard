@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Customer, Escalation
 from app.services.messages import get_message
-from app.services.whatsapp import SendError, send_message
+from app.services.whatsapp import SendError, WindowClosedError, send_message
 
 log = structlog.get_logger()
 
@@ -55,8 +55,18 @@ async def raise_escalation(
             continue
         try:
             await send_message(db, to_phone=to_phone, text=alert)
+        except WindowClosedError:
+            # Window shut -> pre-approved template (params must be one line).
+            try:
+                await send_message(
+                    db, to_phone=to_phone,
+                    template_name="kk_staff_alert",
+                    template_params=[" ".join(alert.split())[:600]],
+                )
+            except SendError:
+                log.warning("escalation_alert_not_sent", to=to_phone)
         except SendError:
-            # Window closed / send failed — the dashboard still shows the row.
+            # Send failed — the dashboard still shows the row.
             log.warning("escalation_alert_not_sent", to=to_phone)
         except Exception:
             log.exception("escalation_alert_failed", to=to_phone)

@@ -120,6 +120,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "✅ {name} ko bhej diya: \"{message}\"",
         "en": "✅ Sent to {name}: \"{message}\"",
     },
+    "relay_done_template": {
+        "hi": "✅ {name} ka window band tha — template se bhej diya: \"{message}\"",
+        "en": "✅ {name}'s window was closed — sent via template: \"{message}\"",
+    },
     "relay_target_unknown": {
         "hi": "⚠️ '{target}' staff list mein nahi mila. Staff: {names}",
         "en": "⚠️ '{target}' is not in the staff list. Staff: {names}",

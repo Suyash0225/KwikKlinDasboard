@@ -312,11 +312,39 @@ async def test_relay_unknown_target_lists_staff(monkeypatch) -> None:
     assert "nahi mila" in reply and "Ravi" in reply
 
 
-async def test_relay_window_closed_reports_clearly(monkeypatch) -> None:
+async def test_relay_window_closed_falls_back_to_template(monkeypatch) -> None:
     from app.services.whatsapp import WindowClosedError
 
-    async def fake_send(db, **kw):
-        raise WindowClosedError("24h window closed")
+    calls: list[dict] = []
+
+    async def fake_send(db, *, to_phone, text=None, template_name=None, template_params=None, **kw):
+        calls.append({"template_name": template_name, "template_params": template_params})
+        if template_name is None:
+            raise WindowClosedError("24h window closed")
+        return "wamid.TPL"
+
+    monkeypatch.setattr(bill_module, "send_message", fake_send)
+    _patch_extract(
+        monkeypatch,
+        _extract_result(action="relay", relay_to="Ravi", relay_message="jaldi\naao bhai"),
+    )
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager", text="Ravi ko bolo jaldi aao"
+        )
+    assert "template se bhej diya" in reply
+    assert calls[1]["template_name"] == "kk_staff_alert"
+    # params must be single-line for Meta
+    assert "\n" not in calls[1]["template_params"][0]
+
+
+async def test_relay_totally_unreachable_reports_clearly(monkeypatch) -> None:
+    from app.services.whatsapp import SendError, WindowClosedError
+
+    async def fake_send(db, *, template_name=None, **kw):
+        if template_name is None:
+            raise WindowClosedError("24h window closed")
+        raise SendError("template not approved yet")
 
     monkeypatch.setattr(bill_module, "send_message", fake_send)
     _patch_extract(
@@ -327,7 +355,7 @@ async def test_relay_window_closed_reports_clearly(monkeypatch) -> None:
         reply = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="manager", text="Ravi ko bolo jaldi aao"
         )
-    assert "window band" in reply
+    assert "pehle wo bot ko" in reply
 
 
 async def test_llm_down_notifies_manager_but_not_staff(monkeypatch) -> None:

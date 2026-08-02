@@ -353,7 +353,20 @@ async def _apply_relay(db: AsyncSession, sender_label: str, extracted: dict) -> 
             text=get_message("relay_message", sender=sender_label, message=message),
         )
     except WindowClosedError:
-        return get_message("relay_window_closed", name=to_name)
+        # Window shut -> fall back to the pre-approved template. If Meta
+        # hasn't approved it yet this raises SendError and we say so.
+        try:
+            # template params must be single-line (Meta rejects newlines)
+            await send_message(
+                db, to_phone=to_phone,
+                template_name="kk_staff_alert",
+                template_params=[" ".join(f"{sender_label}: {message}".split())[:600]],
+            )
+        except SendError:
+            log.warning("relay_template_failed", to=to_phone)
+            return get_message("relay_window_closed", name=to_name)
+        log.info("relay_sent_via_template", to=to_phone, by=sender_label)
+        return get_message("relay_done_template", name=to_name, message=message)
     except SendError:
         log.warning("relay_send_failed", to=to_phone)
         return get_message("relay_failed", name=to_name)
