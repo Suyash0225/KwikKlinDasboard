@@ -270,15 +270,17 @@ async def test_other_quiet_for_staff_loud_for_manager(monkeypatch) -> None:
         )
 
 
-async def test_llm_down_stays_silent(monkeypatch) -> None:
+async def test_llm_down_notifies_manager_but_not_staff(monkeypatch) -> None:
     async def fake_ask_json(**kw):
         raise LLMUnavailable("down")
 
     monkeypatch.setattr(bill_module.llm_client, "ask_json", fake_ask_json)
     async with async_session_factory() as db:
-        assert (
-            await handle_staff_message(
-                db, sender_phone=SENDER, sender_label="manager", text="Sharma 2 kurta"
-            )
-            is None
+        manager_reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager", text="Sharma 2 kurta"
         )
+        staff_reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="Ravi", text="Sharma 2 kurta"
+        )
+    assert manager_reply is not None and "uplabdh nahi" in manager_reply
+    assert staff_reply is None

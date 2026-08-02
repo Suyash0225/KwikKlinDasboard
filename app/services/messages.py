@@ -132,6 +132,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "⚠️ {order_number} abhi {old} mein hai — wahan se {new} allowed nahi.",
         "en": "⚠️ {order_number} is in {old} — moving to {new} is not allowed.",
     },
+    "ai_down_staff": {
+        "hi": "⚠️ AI agent abhi uplabdh nahi hai (API key ya network). Bill dashboard se bana lein; thodi der baad dobara try karein.",
+        "en": "⚠️ The AI agent is unavailable right now (API key or network). Use the dashboard for bills; try again shortly.",
+    },
     "cancel_needs_dashboard": {
         "hi": "⚠️ {order_number} cancel WhatsApp se nahi hota — galti se na ho isliye dashboard se karein.",
         "en": "⚠️ Cancelling {order_number} must be done from the dashboard (safety).",

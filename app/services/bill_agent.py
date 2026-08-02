@@ -142,9 +142,12 @@ async def handle_staff_message(
         _PENDING.pop(sender_phone, None)
         return get_message("bill_cancelled")
 
-    extracted = await _extract(db, text, pending)
-    if extracted is None:
-        return None
+    try:
+        extracted = await _extract(db, text, pending)
+    except LLMError as exc:
+        log.warning("staff_extract_failed", error=str(exc)[:150])
+        # Never leave the MANAGER wondering — staff chatter can stay silent.
+        return get_message("ai_down_staff") if sender_label == "manager" else None
 
     action = extracted["action"]
     if action == "new_bill" and extracted["items"]:
@@ -163,7 +166,7 @@ async def handle_staff_message(
     return None
 
 
-async def _extract(db: AsyncSession, text: str, pending: PendingBill | None) -> dict | None:
+async def _extract(db: AsyncSession, text: str, pending: PendingBill | None) -> dict:
     rates = (
         (await db.execute(select(Rate).where(Rate.is_active).order_by(Rate.service, Rate.garment)))
         .scalars()
@@ -177,17 +180,13 @@ async def _extract(db: AsyncSession, text: str, pending: PendingBill | None) -> 
     if pending:
         prompt += f"CURRENT DRAFT:\n{json.dumps(pending.draft, default=str)}\n"
     prompt += f"STAFF MESSAGE:\n{text[:1000]}"
-    try:
-        return await llm_client.ask_json(
-            system=_EXTRACT_SYSTEM,
-            user_text=prompt,
-            schema=_EXTRACT_SCHEMA,
-            model=llm_client.MODEL_CHEAP,
-            max_tokens=700,
-        )
-    except LLMError as exc:
-        log.warning("staff_extract_failed", error=str(exc)[:150])
-        return None
+    return await llm_client.ask_json(
+        system=_EXTRACT_SYSTEM,
+        user_text=prompt,
+        schema=_EXTRACT_SCHEMA,
+        model=llm_client.MODEL_CHEAP,
+        max_tokens=700,
+    )
 
 
 async def _price_draft(db: AsyncSession, extracted: dict) -> dict:
