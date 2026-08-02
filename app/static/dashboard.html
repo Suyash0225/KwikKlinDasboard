@@ -215,6 +215,7 @@
       <div data-s="customers" onclick="go('customers')">👥 Customers</div>
       <div data-s="expenses" onclick="go('expenses')">💸 Expenses</div>
       <div data-s="reports" onclick="go('reports')">📈 Reports</div>
+      <div data-s="settings" onclick="go('settings')">⚙️ Settings</div>
     </div>
     <div class="dbchip">🟢 Postgres DB · WhatsApp bot active</div>
   </div>
@@ -371,6 +372,45 @@
         Rozana ka asli backup Phase 6 (deploy) mein automatic hoga.</div>
       </div>
     </div>
+    <!-- SETTINGS -->
+    <div id="s-settings" style="display:none">
+      <div class="exp-wrap">
+        <div class="panel">
+          <h2>👷 Staff</h2>
+          <div class="tblwrap" style="box-shadow:none"><table>
+            <thead><tr><th>Naam</th><th>Phone</th><th>Role</th><th>Active</th></tr></thead>
+            <tbody id="staff-body"></tbody>
+          </table></div>
+          <h2 style="margin-top:14px">+ Naya staff</h2>
+          <div class="grid2">
+            <div><label>Naam</label><input id="st-name" placeholder="naam"></div>
+            <div><label>WhatsApp number</label><input id="st-phone" placeholder="98765 43210"></div>
+          </div>
+          <label>Role</label>
+          <select id="st-role"><option value="WASHER">Washer (dhulai/istri ka kaam)</option>
+            <option value="DELIVERY">Delivery (pickup/drop)</option></select>
+          <button class="green" style="width:100%;margin-top:10px" onclick="addStaff()">+ Staff jodo</button>
+        </div>
+        <div class="panel">
+          <h2>💰 Rate Card <span class="t">(New Bill isse rate uthata hai — kabhi bhi badlo)</span></h2>
+          <div class="tblwrap" style="box-shadow:none"><table>
+            <thead><tr><th>Service</th><th>Kapda</th><th class="num">Rate</th><th>Unit</th><th>Active</th><th></th></tr></thead>
+            <tbody id="rates-body"></tbody>
+          </table></div>
+          <h2 style="margin-top:14px">+ Naya rate</h2>
+          <div class="grid3">
+            <div><label>Service</label><input id="r-serv" list="serv-list" placeholder="Dry Clean">
+              <datalist id="serv-list"></datalist></div>
+            <div><label>Kapda <span class="t">(kg service = khali)</span></label>
+              <input id="r-garm" placeholder="Shirt"></div>
+            <div><label>Rate (₹)</label><input id="r-rate" type="number" min="1"></div>
+          </div>
+          <label>Unit</label>
+          <select id="r-unit"><option value="pc">Per piece</option><option value="kg">Per kg</option></select>
+          <button class="green" style="width:100%;margin-top:10px" onclick="addRate()">+ Rate jodo</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -393,8 +433,9 @@ const NEXT = {RECEIVED:['IN_WASH','READY','ON_HOLD','CANCELLED'],
 const TITLES = {home:['Dashboard','Aaj ka haal ek nazar mein'], inbox:['Inbox','WhatsApp — dekho aur khud jawaab do'],
   newbill:['New Bill','30 second mein bill + customer ko WhatsApp'], bills:['Bill History','Sab bills, dues, status'],
   customers:['Customers','Ledger — kitna business, kitna baaki'], expenses:['Expenses','Roz ka kharcha'],
-  reports:['Reports','Kamai, kharcha, munafa']};
-let DATA=null, CUSTOMERS=[], THREADS=[], BILLS=[], SUMMARY=null, EXPENSES=[], FILTER=null, OPEN_PHONE=null, SECTION='home';
+  reports:['Reports','Kamai, kharcha, munafa'], settings:['Settings','Rate card, kapde, staff']};
+let DATA=null, CUSTOMERS=[], THREADS=[], BILLS=[], SUMMARY=null, EXPENSES=[], RATES=[],
+    FILTER=null, OPEN_PHONE=null, SECTION='home';
 
 // ?key=... in the URL stores the admin key (phone/LAN access without typing);
 // it is stripped from the address bar immediately.
@@ -424,12 +465,12 @@ function fmtWhen(x){const d=new Date(x);
     : fmtDate(x);}
 function go(name){SECTION=name;
   for(const el of document.querySelectorAll('.nav div'))el.classList.toggle('on',el.dataset.s===name);
-  for(const s of ['home','inbox','newbill','bills','customers','expenses','reports'])
+  for(const s of ['home','inbox','newbill','bills','customers','expenses','reports','settings'])
     document.getElementById('s-'+s).style.display=s===name?'':'none';
   document.getElementById('head-title').textContent=TITLES[name][0];
   document.getElementById('head-sub').textContent=TITLES[name][1];
   ({home:loadHome,inbox:loadThreads,bills:loadBills,customers:loadCustomers,
-    expenses:loadExpenses,reports:loadReports}[name]||(()=>{}))();
+    expenses:loadExpenses,reports:loadReports,settings:loadSettings}[name]||(()=>{}))();
 }
 async function refreshAll(){go(SECTION);toast('Refresh ho gaya ✓');}
 
@@ -523,25 +564,118 @@ function renderBills(){
 }
 
 /* ---------- NEW BILL ---------- */
+/* fallbacks when the rate card is empty */
 const GARMENTS=['Shirt','Pant','Kurta','Saree','Suit 2pc','Suit 3pc','Jeans','T-shirt','Blazer','Sherwani','Lehenga','Chadar','Razai/Blanket','Curtain','Shoes','Aur'];
 const PSERV=['Dry Clean','Wash & Iron','Sirf Iron','Premium/Delicate'];
 const WSERV=['Wash & Fold (kg)','Wash & Iron (kg)','Household (kg)'];
+async function loadRates(){try{RATES=await api('/admin/api/rates');}catch(e){RATES=[];}}
+function pcServices(){const s=[...new Set(RATES.filter(r=>r.unit==='pc'&&r.is_active).map(r=>r.service))];
+  return s.length?s:PSERV;}
+function kgServices(){const s=[...new Set(RATES.filter(r=>r.unit==='kg'&&r.is_active).map(r=>r.service))];
+  return s.length?s:WSERV;}
+function garmentsFor(serv){const g=[...new Set(RATES.filter(r=>r.unit==='pc'&&r.is_active&&r.service===serv).map(r=>r.garment))].filter(Boolean);
+  return g.length?g:GARMENTS;}
+function findRate(serv,garm){const r=RATES.find(x=>x.is_active&&x.service===serv&&x.garment===(garm||''));
+  return r?+r.rate:null;}
+function pieceServChange(sel){const row=sel.parentElement;
+  const tsel=row.querySelector('.p-type');const cur=tsel.value;
+  tsel.innerHTML=garmentsFor(sel.value).map(g=>`<option${g===cur?' selected':''}>${esc(g)}</option>`).join('');
+  pieceTypeChange(tsel);}
+function pieceTypeChange(sel){const row=sel.parentElement;
+  const r=findRate(row.querySelector('.p-serv').value,sel.value);
+  if(r!=null)row.querySelector('.p-rate').value=r;
+  calc();}
+function weightServChange(sel){const row=sel.parentElement;
+  const r=findRate(sel.value,'');
+  if(r!=null)row.querySelector('.w-rate').value=r;
+  calc();}
 function addPiece(){const d=document.createElement('div');d.className='iline';
-  d.innerHTML=`<select class="p-serv">${PSERV.map(s=>`<option>${s}</option>`).join('')}</select>
-    <select class="p-type">${GARMENTS.map(g=>`<option>${g}</option>`).join('')}</select>
+  const servs=pcServices();
+  d.innerHTML=`<select class="p-serv" onchange="pieceServChange(this)">${servs.map(s=>`<option>${esc(s)}</option>`).join('')}</select>
+    <select class="p-type" onchange="pieceTypeChange(this)">${garmentsFor(servs[0]).map(g=>`<option>${esc(g)}</option>`).join('')}</select>
     <input type="number" class="p-qty" min="1" value="1" oninput="calc()">
     <input type="number" class="p-rate" min="0" placeholder="rate" oninput="calc()">
     <div class="amt p-amt">₹0</div>
     <button onclick="this.parentElement.remove();calc()">✕</button>`;
-  document.getElementById('piece-items').appendChild(d);}
+  document.getElementById('piece-items').appendChild(d);
+  const r=findRate(servs[0],garmentsFor(servs[0])[0]);
+  if(r!=null)d.querySelector('.p-rate').value=r;
+  calc();}
 function addWeight(){const d=document.createElement('div');d.className='iline wline';
-  d.innerHTML=`<select class="w-serv">${WSERV.map(s=>`<option>${s}</option>`).join('')}</select>
+  const servs=kgServices();
+  d.innerHTML=`<select class="w-serv" onchange="weightServChange(this)">${servs.map(s=>`<option>${esc(s)}</option>`).join('')}</select>
     <div class="t" style="text-align:center">per kg</div>
     <input type="number" class="w-kg" min="0.5" step="0.5" placeholder="kg" oninput="calc()">
     <input type="number" class="w-rate" min="0" placeholder="₹/kg" oninput="calc()">
     <div class="amt w-amt">₹0</div>
     <button onclick="this.parentElement.remove();calc()">✕</button>`;
-  document.getElementById('weight-items').appendChild(d);}
+  document.getElementById('weight-items').appendChild(d);
+  const r=findRate(servs[0],'');
+  if(r!=null)d.querySelector('.w-rate').value=r;
+  calc();}
+
+/* ---------- SETTINGS ---------- */
+async function loadSettings(){
+  try{
+    const [staff]=await Promise.all([api('/admin/api/staff'),loadRates()]);
+    document.getElementById('staff-body').innerHTML=staff.map(s=>`<tr>
+      <td><div class="whocell">${avatar(s.name)}<b>${esc(s.name)}</b></div></td>
+      <td><span class="t">${esc(s.phone)}</span></td>
+      <td><select style="width:auto" onchange="updStaff('${s.id}','role',this.value)">
+        <option value="WASHER"${s.role==='WASHER'?' selected':''}>Washer</option>
+        <option value="DELIVERY"${s.role==='DELIVERY'?' selected':''}>Delivery</option></select></td>
+      <td><input type="checkbox" style="width:auto"${s.is_active?' checked':''}
+        onchange="updStaff('${s.id}','is_active',this.checked)"></td>
+    </tr>`).join('')||'<tr><td colspan="4">Koi staff nahi.</td></tr>';
+
+    document.getElementById('rates-body').innerHTML=RATES.map(r=>`<tr${r.is_active?'':' style="opacity:.45"'}>
+      <td>${esc(r.service)}</td><td>${esc(r.garment)||'<span class="t">—</span>'}</td>
+      <td class="num"><input type="number" value="${r.rate}" min="1"
+        style="width:80px;text-align:right" onchange="updRate('${r.id}','rate',this.value)"></td>
+      <td><span class="t">/${r.unit}</span></td>
+      <td><input type="checkbox" style="width:auto"${r.is_active?' checked':''}
+        onchange="updRate('${r.id}','is_active',this.checked)"></td>
+      <td></td>
+    </tr>`).join('')||'<tr><td colspan="6">Rate card khali hai — neeche jodo.</td></tr>';
+
+    document.getElementById('serv-list').innerHTML=
+      [...new Set(RATES.map(r=>r.service))].map(s=>`<option value="${esc(s)}">`).join('');
+  }catch(e){toast(e.message,true);}
+}
+async function updRate(id,field,val){
+  try{await api('/admin/api/rates/'+id,{method:'PUT',body:JSON.stringify({[field]:val})});
+    toast('Rate update ✓');await loadRates();}
+  catch(e){toast(e.message,true);loadSettings();}
+}
+async function addRate(){
+  try{
+    const rate=document.getElementById('r-rate').value;
+    const serv=document.getElementById('r-serv').value.trim();
+    if(!serv)throw new Error('service likho');
+    if(!rate||+rate<=0)throw new Error('rate daalo');
+    await api('/admin/api/rates',{method:'POST',body:JSON.stringify({
+      service:serv,garment:document.getElementById('r-garm').value.trim(),
+      unit:document.getElementById('r-unit').value,rate})});
+    document.getElementById('r-garm').value='';document.getElementById('r-rate').value='';
+    toast('Rate jud gaya ✓');loadSettings();
+  }catch(e){toast(e.message,true);}
+}
+async function updStaff(id,field,val){
+  try{await api('/admin/api/staff/'+id,{method:'PUT',body:JSON.stringify({[field]:val})});
+    toast('Staff update ✓');}
+  catch(e){toast(e.message,true);loadSettings();}
+}
+async function addStaff(){
+  try{
+    const name=document.getElementById('st-name').value.trim();
+    const phone=document.getElementById('st-phone').value.trim();
+    if(!name||!phone)throw new Error('naam aur number dono daalo');
+    await api('/admin/api/staff',{method:'POST',body:JSON.stringify({
+      name,phone,role:document.getElementById('st-role').value})});
+    document.getElementById('st-name').value='';document.getElementById('st-phone').value='';
+    toast('Staff jud gaya ✓ (bot ab isse pehchanega)');loadSettings();
+  }catch(e){toast(e.message,true);}
+}
 function calc(){
   let sub=0;
   for(const r of document.querySelectorAll('#piece-items .iline')){
@@ -815,7 +949,8 @@ async function openDetail(num){
   }catch(e){toast(e.message,true);}
 }
 
-addPiece();
+// rates first so the first New Bill line gets auto-filled prices
+loadRates().then(()=>addPiece());
 // deep-link: /admin#bills, #newbill, #inbox ... (hash wins over default home)
 const _h=location.hash.slice(1);
 if(_h&&TITLES[_h])go(_h);

@@ -103,6 +103,65 @@ async def test_customers_ledger_fields(client) -> None:
     assert float(me["outstanding"]) >= 100
 
 
+async def test_rate_card_crud(client) -> None:
+    assert (await client.get("/admin/api/rates")).status_code == 401
+    r = await client.post(
+        "/admin/api/rates",
+        json={"service": "TEST Service", "garment": "TEST Kapda", "unit": "pc", "rate": "99"},
+        headers=AUTH,
+    )
+    assert r.status_code == 201
+    rid = r.json()["id"]
+    try:
+        # duplicate service+garment -> 409
+        dup = await client.post(
+            "/admin/api/rates",
+            json={"service": "TEST Service", "garment": "TEST Kapda", "unit": "pc", "rate": "50"},
+            headers=AUTH,
+        )
+        assert dup.status_code == 409
+        # update rate + deactivate
+        assert (
+            await client.put(f"/admin/api/rates/{rid}", json={"rate": "120", "is_active": False}, headers=AUTH)
+        ).status_code == 200
+        rows = (await client.get("/admin/api/rates", headers=AUTH)).json()
+        mine = [x for x in rows if x["id"] == rid][0]
+        assert mine["rate"] == "120.00" and mine["is_active"] is False
+    finally:
+        async with async_session_factory() as s:
+            await s.execute(sqltext("DELETE FROM rate_card WHERE service = 'TEST Service'"))
+            await s.commit()
+
+
+async def test_staff_settings_crud(client) -> None:
+    r = await client.post(
+        "/admin/api/staff",
+        json={"name": "Test Presser", "phone": "9999900098", "role": "WASHER"},
+        headers=AUTH,
+    )
+    assert r.status_code == 201
+    sid = r.json()["id"]
+    try:
+        # duplicate phone -> 409
+        assert (
+            await client.post(
+                "/admin/api/staff",
+                json={"name": "Dup", "phone": "9999900098", "role": "DELIVERY"},
+                headers=AUTH,
+            )
+        ).status_code == 409
+        assert (
+            await client.put(f"/admin/api/staff/{sid}", json={"role": "DELIVERY", "is_active": False}, headers=AUTH)
+        ).status_code == 200
+        rows = (await client.get("/admin/api/staff", headers=AUTH)).json()
+        mine = [x for x in rows if x["id"] == sid][0]
+        assert mine["role"] == "DELIVERY" and mine["is_active"] is False
+    finally:
+        async with async_session_factory() as s:
+            await s.execute(sqltext("DELETE FROM staff WHERE phone = '+919999900098'"))
+            await s.commit()
+
+
 async def test_csv_exports(client) -> None:
     assert (await client.get("/admin/api/export/orders.csv")).status_code == 401
     r = await client.get("/admin/api/export/orders.csv", headers=AUTH)

@@ -25,7 +25,17 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Conversation, Customer, Direction, Expense, Order, Staff
+from app.models import (
+    Conversation,
+    Customer,
+    Direction,
+    Expense,
+    Order,
+    Rate,
+    Staff,
+    StaffRole,
+)
+from app.utils.phone import normalize_phone as _norm_phone
 from app.routers.orders import require_admin_key
 from app.services.order_service import ACTIVE_STATUSES, get_active_orders_for_phone
 from app.services.whatsapp import SendError, WindowClosedError, send_message
@@ -262,6 +272,125 @@ async def reports_summary(db: AsyncSession = Depends(get_db)) -> dict:
         "month": await money_since(month0),
         "outstanding_total": str(outstanding),
     }
+
+
+# ---------- Settings: Rate Card ----------
+
+class RateIn(BaseModel):
+    service: str = Field(min_length=1, max_length=60)
+    garment: str = Field(default="", max_length=60)
+    unit: str = Field(default="pc", pattern="^(pc|kg)$")
+    rate: Decimal = Field(gt=0)
+
+
+class RateUpdateIn(BaseModel):
+    rate: Decimal | None = Field(default=None, gt=0)
+    is_active: bool | None = None
+
+
+@router.get("/api/rates", dependencies=[Depends(require_admin_key)])
+async def rates_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    rows = (
+        await db.execute(select(Rate).order_by(Rate.unit, Rate.service, Rate.garment))
+    ).scalars().all()
+    return [
+        {"id": str(r.id), "service": r.service, "garment": r.garment,
+         "unit": r.unit, "rate": str(r.rate), "is_active": r.is_active}
+        for r in rows
+    ]
+
+
+@router.post("/api/rates", dependencies=[Depends(require_admin_key)], status_code=201)
+async def rate_create(body: RateIn, db: AsyncSession = Depends(get_db)) -> dict:
+    rate = Rate(service=body.service.strip(), garment=body.garment.strip(),
+                unit=body.unit, rate=body.rate)
+    db.add(rate)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Ye service+kapda pehle se rate card mein hai")
+    log.info("rate_created", service=body.service, garment=body.garment, rate=str(body.rate))
+    return {"id": str(rate.id)}
+
+
+@router.put("/api/rates/{rate_id}", dependencies=[Depends(require_admin_key)])
+async def rate_update(rate_id: str, body: RateUpdateIn, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        rid = uuid_module.UUID(rate_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid rate id")
+    rate = await db.get(Rate, rid)
+    if rate is None:
+        raise HTTPException(status_code=404, detail="rate not found")
+    if body.rate is not None:
+        rate.rate = body.rate
+    if body.is_active is not None:
+        rate.is_active = body.is_active
+    await db.commit()
+    log.info("rate_updated", rate_id=rate_id, rate=str(rate.rate), active=rate.is_active)
+    return {"ok": True}
+
+
+# ---------- Settings: Staff ----------
+
+class StaffIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    phone: str
+    role: str = Field(pattern="^(WASHER|DELIVERY)$")
+
+
+class StaffUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY)$")
+    is_active: bool | None = None
+
+
+@router.get("/api/staff", dependencies=[Depends(require_admin_key)])
+async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    rows = (await db.execute(select(Staff).order_by(Staff.name))).scalars().all()
+    return [
+        {"id": str(s.id), "name": s.name, "phone": s.phone,
+         "role": s.role.name, "is_active": s.is_active}
+        for s in rows
+    ]
+
+
+@router.post("/api/staff", dependencies=[Depends(require_admin_key)], status_code=201)
+async def staff_create(body: StaffIn, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        phone = _norm_phone(body.phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    staff = Staff(name=body.name.strip(), phone=phone, role=StaffRole[body.role])
+    db.add(staff)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Ye number pehle se staff mein hai")
+    log.info("staff_created_via_settings", name=body.name, phone=phone, role=body.role)
+    return {"id": str(staff.id)}
+
+
+@router.put("/api/staff/{staff_id}", dependencies=[Depends(require_admin_key)])
+async def staff_update(staff_id: str, body: StaffUpdateIn, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        sid = uuid_module.UUID(staff_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid staff id")
+    staff = await db.get(Staff, sid)
+    if staff is None:
+        raise HTTPException(status_code=404, detail="staff not found")
+    if body.name is not None:
+        staff.name = body.name.strip()
+    if body.role is not None:
+        staff.role = StaffRole[body.role]
+    if body.is_active is not None:
+        staff.is_active = body.is_active
+    await db.commit()
+    log.info("staff_updated_via_settings", staff_id=staff_id)
+    return {"ok": True}
 
 
 # ---------- CSV exports ----------

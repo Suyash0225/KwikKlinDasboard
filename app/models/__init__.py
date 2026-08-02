@@ -18,6 +18,7 @@ from app.models.enums import (
 from app.models.escalation import Escalation
 from app.models.expense import Expense
 from app.models.order import Order, OrderStatusHistory, derive_payment_status
+from app.models.rate import Rate
 from app.models.staff import Staff
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "OrderStatusHistory",
     "PaymentMethod",
     "PaymentStatus",
+    "Rate",
     "Staff",
     "StaffRole",
     "derive_payment_status",
