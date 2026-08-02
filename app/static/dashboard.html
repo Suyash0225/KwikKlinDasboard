@@ -857,7 +857,7 @@ function renderThreads(){
   document.getElementById('th-list').innerHTML=rows.map(t=>{
     const time=fmtWhen(t.last_at);
     const arrow=t.last_direction==='INBOUND'?'':'➡️ ';
-    const chip=t.kind==='staff'?'<span class="staff-chip">staff</span>':'';
+    const chip=t.kind==='staff'?'<span class="staff-chip">staff</span>':(t.kind==='admin'?'<span class="staff-chip">👑 malik</span>':'');
     return `<div class="thread-item ${t.phone===OPEN_PHONE?'on':''}" onclick="openThread('${t.phone}')">
       <div class="whocell">${avatar(t.name)}<div style="min-width:0;flex:1">
       <div class="nm"><span>${esc(t.name)}${chip}</span><span class="t">${time}</span></div>
@@ -952,7 +952,7 @@ function openProfile(){
   const out=c?+c.outstanding:0;
   d.innerHTML=`<div style="text-align:right"><button class="ghost" onclick="document.getElementById('drawer').classList.remove('open')">✕</button></div>
     <div class="big-av">${esc((name||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase())}</div>
-    <h3>${esc(name)}</h3><div class="ph">${esc(OPEN_PHONE)} · ${t.kind==='staff'?'Staff 🧑‍🔧':'Customer'}</div>
+    <h3>${esc(name)}</h3><div class="ph">${esc(OPEN_PHONE)} · ${t.kind==='staff'?'Staff 🧑‍🔧':(t.kind==='admin'?'Malik 👑 (aap)':'Customer')}</div>
     ${c?`<div class="stat"><span>Total orders</span><b>${c.total_orders}</b></div>
     <div class="stat"><span>Chalu</span><b>${c.active_orders}</b></div>
     <div class="stat"><span>Total business</span><b>${rs(c.business)}</b></div>

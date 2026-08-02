@@ -18,6 +18,7 @@ Design rules enforced at this layer:
   the model cannot return malformed data.
 """
 
+import base64
 import json
 import time
 
@@ -104,6 +105,41 @@ async def ask_json(
         raise LLMError(f"model returned invalid JSON: {text[:100]}") from exc
 
 
+async def ask_json_image(
+    *,
+    system: str,
+    user_text: str,
+    image_bytes: bytes,
+    mime_type: str,
+    schema: dict,
+    model: str | None = None,
+    # Vision + thinking models burn output budget on internal reasoning
+    # BEFORE emitting JSON — a small cap silently truncates the answer.
+    max_tokens: int = 6000,
+) -> dict:
+    """Like ask_json, but the model also SEES an image (e.g. a bill photo)."""
+    model = model or MODEL_SMART  # reading handwriting needs the better model
+    image = (mime_type, image_bytes)
+    if PROVIDER == "gemini":
+        text = await _gemini_generate(
+            system, user_text, model, max_tokens, schema=schema, image=image
+        )
+    else:
+        text = await _anthropic_generate(
+            system,
+            user_text,
+            model,
+            max_tokens,
+            output_config={"format": {"type": "json_schema", "schema": schema}},
+            image=image,
+        )
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        log.error("llm_bad_json", provider=PROVIDER, model=model, text=text[:200])
+        raise LLMError(f"model returned invalid JSON: {text[:100]}") from exc
+
+
 # --------------------------------------------------------------------------
 # Gemini (REST via httpx — no SDK dependency)
 # --------------------------------------------------------------------------
@@ -133,7 +169,12 @@ def _gemini_schema(schema: dict) -> dict:
 
 
 async def _gemini_generate(
-    system: str, user_text: str, model: str, max_tokens: int, schema: dict | None
+    system: str,
+    user_text: str,
+    model: str,
+    max_tokens: int,
+    schema: dict | None,
+    image: tuple[str, bytes] | None = None,
 ) -> str:
     # Floor the budget: Gemini spends output tokens on internal thinking,
     # and a truncated JSON answer is worse than a slightly pricier call.
@@ -141,9 +182,16 @@ async def _gemini_generate(
     if schema is not None:
         gen["responseMimeType"] = "application/json"
         gen["responseSchema"] = _gemini_schema(schema)
+    parts: list[dict] = []
+    if image is not None:
+        mime_type, blob = image
+        parts.append(
+            {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(blob).decode()}}
+        )
+    parts.append({"text": user_text})
     payload = {
         "system_instruction": {"parts": [{"text": system}]},
-        "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+        "contents": [{"role": "user", "parts": parts}],
         "generationConfig": gen,
     }
 
@@ -195,13 +243,32 @@ async def _gemini_generate(
 
 
 async def _anthropic_generate(
-    system: str, user_text: str, model: str, max_tokens: int, output_config: dict | None
+    system: str,
+    user_text: str,
+    model: str,
+    max_tokens: int,
+    output_config: dict | None,
+    image: tuple[str, bytes] | None = None,
 ) -> str:
+    content: str | list = user_text
+    if image is not None:
+        mime_type, blob = image
+        content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime_type,
+                    "data": base64.b64encode(blob).decode(),
+                },
+            },
+            {"type": "text", "text": user_text},
+        ]
     kwargs: dict = {
         "model": model,
         "max_tokens": max_tokens,
         "system": system,
-        "messages": [{"role": "user", "content": user_text}],
+        "messages": [{"role": "user", "content": content}],
     }
     if output_config is not None:
         kwargs["output_config"] = output_config

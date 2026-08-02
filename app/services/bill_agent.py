@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import structlog
 from sqlalchemy import select
@@ -48,6 +49,9 @@ from app.utils.phone import normalize_phone
 log = structlog.get_logger()
 
 _DRAFT_TTL = timedelta(minutes=30)
+# Inbound photos land as "[image:/admin/media/<file>] optional caption"
+_IMAGE_MARKER_RE = re.compile(r"^\[image:/admin/media/([A-Za-z0-9._\-]+)\]\s*(.*)$", re.DOTALL)
+_MEDIA_DIR = Path(__file__).resolve().parent.parent / "media"
 _CONFIRM_RE = re.compile(r"^\s*(haan?|ha(n|nji)?|yes|y|ok(ay)?|theek( hai)?|confirm|✅|done)\s*$", re.I)
 _CANCEL_RE = re.compile(r"^\s*(nahi+|no|na|cancel|rehne do|❌|mat( banao)?)\s*$", re.I)
 
@@ -138,22 +142,31 @@ async def handle_staff_message(
     db: AsyncSession, *, sender_phone: str, sender_label: str, text: str
 ) -> str | None:
     """Reply for a staff/manager inbound, or None to stay silent."""
-    if not text or text.startswith("["):
-        return None
-
     pending = _PENDING.get(sender_phone)
     if pending and pending.expired:
         _PENDING.pop(sender_phone, None)
         pending = None
 
-    if pending and _CONFIRM_RE.match(text):
-        return await _finalize_bill(db, sender_phone, sender_label, pending)
-    if pending and _CANCEL_RE.match(text):
-        _PENDING.pop(sender_phone, None)
-        return get_message("bill_cancelled")
+    photo = _IMAGE_MARKER_RE.match(text or "")
+    if photo is None:
+        # Non-photo markers (buttons etc.) are not conversational text.
+        if not text or text.startswith("["):
+            return None
+        if pending and _CONFIRM_RE.match(text):
+            return await _finalize_bill(db, sender_phone, sender_label, pending)
+        if pending and _CANCEL_RE.match(text):
+            _PENDING.pop(sender_phone, None)
+            return get_message("bill_cancelled")
 
     try:
-        extracted = await _extract(db, text, pending)
+        if photo is not None:
+            extracted = await _extract_from_photo(
+                db, photo.group(1), photo.group(2).strip(), pending
+            )
+            if extracted is None:  # file missing on disk — nothing to read
+                return None
+        else:
+            extracted = await _extract(db, text, pending)
     except LLMError as exc:
         log.warning("staff_extract_failed", error=str(exc)[:150])
         # Never leave the MANAGER wondering — staff chatter can stay silent.
@@ -198,6 +211,50 @@ async def _extract(db: AsyncSession, text: str, pending: PendingBill | None) -> 
         schema=_EXTRACT_SCHEMA,
         model=llm_client.MODEL_CHEAP,
         max_tokens=700,
+    )
+
+
+_PHOTO_ADDENDUM = (
+    "\nA PHOTO of a handwritten Kwik Klin bill slip is attached. Read the "
+    "customer name, phone number (if written) and every item line (qty + "
+    "garment + service) from the slip; match items to the RATE CARD's exact "
+    "strings where possible. IGNORE any prices/amounts written on the slip — "
+    "the system prices everything from the rate card itself. The caption may "
+    "add corrections; it wins over the slip. Return action=new_bill."
+)
+
+
+async def _extract_from_photo(
+    db: AsyncSession, filename: str, caption: str, pending: PendingBill | None
+) -> dict | None:
+    """Vision extraction from a bill photo. None if the file is gone."""
+    path = _MEDIA_DIR / Path(filename).name  # traversal-safe
+    if not path.exists():
+        log.warning("bill_photo_missing", filename=filename)
+        return None
+    mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+
+    rates = (
+        (await db.execute(select(Rate).where(Rate.is_active).order_by(Rate.service, Rate.garment)))
+        .scalars()
+        .all()
+    )
+    card = "\n".join(
+        f"- service={r.service!r} garment={r.garment!r} ₹{r.rate}/{r.unit}" for r in rates
+    )
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    prompt = f"RATE CARD:\n{card}\nTODAY: {today}\n"
+    if pending:
+        prompt += f"CURRENT DRAFT:\n{json.dumps(pending.draft, default=str)}\n"
+    prompt += f"STAFF CAPTION:\n{caption or '(none)'}"
+    return await llm_client.ask_json_image(
+        system=_EXTRACT_SYSTEM + _PHOTO_ADDENDUM,
+        user_text=prompt,
+        image_bytes=path.read_bytes(),
+        mime_type=mime,
+        schema=_EXTRACT_SCHEMA,
+        model=llm_client.MODEL_SMART,
+        max_tokens=900,
     )
 
 

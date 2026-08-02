@@ -358,6 +358,51 @@ async def test_relay_totally_unreachable_reports_clearly(monkeypatch) -> None:
     assert "pehle wo bot ko" in reply
 
 
+async def test_bill_from_photo(monkeypatch) -> None:
+    media_dir = bill_module._MEDIA_DIR
+    media_dir.mkdir(exist_ok=True)
+    photo = media_dir / "test-billphoto.jpg"
+    photo.write_bytes(b"fake-jpg")
+    seen: dict = {}
+
+    async def fake_vision(**kw):
+        seen.update(kw)
+        return _extract_result(
+            action="new_bill",
+            customer_name="Photo Grahak",
+            customer_phone="9999900124",
+            items=[{"service": SERVICE, "garment": "Kurta", "qty": 3}],
+        )
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json_image", fake_vision)
+    try:
+        async with async_session_factory() as db:
+            reply = await handle_staff_message(
+                db, sender_phone=SENDER, sender_label="manager",
+                text="[image:/admin/media/test-billphoto.jpg] Bill bnao iska",
+            )
+    finally:
+        photo.unlink(missing_ok=True)
+
+    assert reply is not None and "₹120" in reply and "Photo Grahak" in reply
+    assert seen["image_bytes"] == b"fake-jpg"
+    assert "Bill bnao iska" in seen["user_text"]
+    assert SENDER in _PENDING  # confirm loop still required
+
+
+async def test_photo_missing_file_stays_silent(monkeypatch) -> None:
+    async def fake_vision(**kw):
+        raise AssertionError("must not be called for a missing file")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json_image", fake_vision)
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager",
+            text="[image:/admin/media/does-not-exist.jpg] Bill bnao",
+        )
+    assert reply is None
+
+
 async def test_llm_down_notifies_manager_but_not_staff(monkeypatch) -> None:
     async def fake_ask_json(**kw):
         raise LLMUnavailable("down")

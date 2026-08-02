@@ -489,10 +489,13 @@ async def inbox_threads(db: AsyncSession = Depends(get_db)) -> list[dict]:
             )
         )
     ).all()
+    manager_phone = normalize_phone(settings.MANAGER_PHONE)
     for cust, conv in rows:
         threads.append(
             {
-                "kind": "customer",
+                # The owner's own number has a customer row from his tests —
+                # label him as the boss, not a customer.
+                "kind": "admin" if cust.phone == manager_phone else "customer",
                 "phone": cust.phone,
                 "name": cust.name or cust.phone,
                 "last_text": conv.message_text[:80],
@@ -582,8 +585,14 @@ async def inbox_thread(
             for o in await get_active_orders_for_phone(db, phone)
         ]
 
+    if staff:
+        kind = "staff"
+    elif phone == normalize_phone(settings.MANAGER_PHONE):
+        kind = "admin"
+    else:
+        kind = "customer"
     return {
-        "kind": "staff" if staff else "customer",
+        "kind": kind,
         "phone": phone,
         "name": (staff.name if staff else (customer.name or customer.phone)),
         "window": _window_state(participant.last_message_at),
