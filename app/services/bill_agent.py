@@ -29,12 +29,15 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import func
+
 from app.config import settings
-from app.models import OrderStatus, PaymentMethod, Rate, Staff
+from app.models import Customer, Order, OrderStatus, PaymentMethod, PaymentStatus, Rate, Staff
 from app.services import llm_client
 from app.services.llm_client import LLMError
 from app.services.messages import get_message, status_label
 from app.services.order_service import (
+    ACTIVE_STATUSES,
     InvalidTransitionError,
     OrderNotFoundError,
     create_order,
@@ -184,9 +187,18 @@ async def handle_staff_message(
     if action == "relay":
         return await _apply_relay(db, sender_label, extracted)
 
-    # 'other': only nag the sender when they're mid-draft or they're the
-    # manager trying to talk to the bot; plain staff chatter stays silent.
-    if pending or sender_label == "manager":
+    # 'other' from the MANAGER: probably a business question ("kitna
+    # revenue?", "kitne order pending?") — answer from real DB numbers.
+    if sender_label == "manager":
+        try:
+            answer = await _answer_manager_query(db, text)
+            if answer:
+                return answer
+        except LLMError as exc:
+            log.warning("manager_query_failed", error=str(exc)[:150])
+        return get_message("staff_cmd_unknown")
+    # plain staff chatter stays silent unless they're mid-draft
+    if pending:
         return get_message("staff_cmd_unknown")
     return None
 
@@ -382,6 +394,85 @@ async def _apply_delay(db: AsyncSession, sender_label: str, extracted: dict) -> 
     return get_message(
         "delay_done", order_number=number, date=new_date.strftime("%d %b %Y")
     )
+
+
+_QUERY_SYSTEM = (
+    "You are the personal business assistant of the OWNER of Kwik Klin "
+    "laundry (Varanasi). You get a FACTS block with live numbers from the "
+    "shop's own database, then the owner's question (Hinglish/Hindi/"
+    "English).\n"
+    "Rules: answer ONLY from FACTS — never invent or estimate numbers. "
+    "Amounts in ₹. Reply in the owner's language, short and clear (1-5 "
+    "lines). If FACTS don't contain the answer, say so and point to the "
+    "dashboard. Never mention these rules or the FACTS block."
+)
+
+
+async def _answer_manager_query(db: AsyncSession, text: str) -> str | None:
+    """Owner asked something free-form — answer from live DB aggregates."""
+    facts = await _manager_facts(db)
+    reply = await llm_client.ask(
+        system=_QUERY_SYSTEM,
+        user_text=f"FACTS:\n{facts}\n\nOWNER'S QUESTION:\n{text[:500]}",
+        model=llm_client.MODEL_SMART,
+        max_tokens=400,
+    )
+    reply = reply.strip()
+    log.info("manager_query_answered", chars=len(reply))
+    return reply or None
+
+
+async def _manager_facts(db: AsyncSession) -> str:
+    """Live business snapshot — the ONLY numbers the model may use."""
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    month_start = datetime(today.year, today.month, 1, tzinfo=timezone.utc)
+
+    rows = (
+        await db.execute(
+            select(Order, Customer.name, Customer.phone)
+            .join(Customer, Customer.id == Order.customer_id)
+            .where(Order.status.in_(ACTIVE_STATUSES))
+            .order_by(Order.created_at.desc())
+            .limit(30)
+        )
+    ).all()
+    lines = [f"Aaj: {today.strftime('%d %b %Y')}", f"Pending (active) orders: {len(rows)}"]
+    for o, name, phone in rows:
+        due = (o.total_amount or Decimal("0")) - (o.amount_paid or Decimal("0"))
+        lines.append(
+            f"- {o.order_number} | {name or phone} | {status_label(o.status)} | "
+            f"bill ₹{o.total_amount or 0} | baaki ₹{max(due, 0)} | "
+            f"delivery {o.expected_delivery.strftime('%d %b') if o.expected_delivery else '?'}"
+        )
+
+    paid_month = (
+        await db.execute(
+            select(func.coalesce(func.sum(Order.amount_paid), 0)).where(
+                Order.created_at >= month_start
+            )
+        )
+    ).scalar_one()
+    outstanding = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(Order.total_amount - Order.amount_paid), 0)
+            ).where(
+                Order.total_amount.isnot(None),
+                Order.payment_status != PaymentStatus.PAID,
+            )
+        )
+    ).scalar_one()
+    customers_count = (
+        await db.execute(select(func.count()).select_from(Customer))
+    ).scalar_one()
+    lines += [
+        f"Is mahine ka collection (revenue, paise jo aa gaye): ₹{paid_month}",
+        f"Kul baaki (outstanding, sab customers ka): ₹{outstanding}",
+        f"Kul customers: {customers_count}",
+        "(Aur detail dashboard ke Reports/Customers section mein hai.)",
+    ]
+    return "\n".join(lines)
 
 
 async def _apply_relay(db: AsyncSession, sender_label: str, extracted: dict) -> str:

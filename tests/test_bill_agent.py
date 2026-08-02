@@ -403,6 +403,36 @@ async def test_photo_missing_file_stays_silent(monkeypatch) -> None:
     assert reply is None
 
 
+async def test_manager_business_query_answers_from_db_facts(monkeypatch, sent) -> None:
+    async with async_session_factory() as db:
+        order = await create_order(
+            db,
+            customer_phone=CUST_PHONE,
+            items=[{"type": "Kurta", "qty": 1}],
+            total_amount=100,
+            created_by="test",
+        )
+        number = order.order_number
+
+    _patch_extract(monkeypatch, _extract_result(action="other"))
+    seen: dict = {}
+
+    async def fake_ask(**kw):
+        seen.update(kw)
+        return "Abhi 1 order pending hai, ₹100 baaki. — assistant"
+
+    monkeypatch.setattr(bill_module.llm_client, "ask", fake_ask)
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager", text="kitne order pending hai?"
+        )
+    assert reply == "Abhi 1 order pending hai, ₹100 baaki. — assistant"
+    # the model only saw OUR numbers: live order + aggregates in the facts
+    assert number in seen["user_text"]
+    assert "Pending (active) orders" in seen["user_text"]
+    assert "kitne order pending hai?" in seen["user_text"]
+
+
 async def test_llm_down_notifies_manager_but_not_staff(monkeypatch) -> None:
     async def fake_ask_json(**kw):
         raise LLMUnavailable("down")
