@@ -19,3 +19,6 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Inbox media files (chat photos)
+app/media/

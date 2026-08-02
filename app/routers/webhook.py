@@ -205,6 +205,20 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
 
     text = _extract_text(msg)
 
+    # Inbound photo: pull the file from Meta so the Inbox can show it.
+    if msg.get("type") == "image":
+        from pathlib import Path
+
+        from app.services.whatsapp import download_media
+
+        media_dir = str(Path(__file__).resolve().parent.parent / "media")
+        media_id = msg.get("image", {}).get("id")
+        caption = msg.get("image", {}).get("caption", "")
+        if media_id:
+            fname = await download_media(media_id, media_dir)
+            if fname:
+                text = f"[image:/admin/media/{fname}]" + (f" {caption}" if caption else "")
+
     # Staff phone? Record against staff. Otherwise upsert customer.
     staff = (
         await db.execute(select(Staff).where(Staff.phone == phone))

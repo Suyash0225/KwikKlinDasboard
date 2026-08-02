@@ -18,12 +18,13 @@ from decimal import Decimal
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models import (
     Conversation,
@@ -38,8 +39,10 @@ from app.models import (
 from app.utils.phone import normalize_phone as _norm_phone
 from app.routers.orders import require_admin_key
 from app.services.order_service import ACTIVE_STATUSES, get_active_orders_for_phone
-from app.services.whatsapp import SendError, WindowClosedError, send_message
+from app.services.whatsapp import SendError, WindowClosedError, send_image, send_message
 from app.utils.phone import normalize_phone
+
+_MEDIA_DIR = Path(__file__).resolve().parent.parent / "media"
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 log = structlog.get_logger()
@@ -619,6 +622,67 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
     except SendError as exc:
         raise HTTPException(status_code=502, detail=f"WhatsApp send fail hua: {exc}")
     return {"wa_message_id": wa_id, "at": datetime.now(timezone.utc).isoformat()}
+
+
+@router.post("/api/inbox/send-media", dependencies=[Depends(require_admin_key)])
+async def inbox_send_media(
+    phone: str = Form(...),
+    caption: str = Form(default=""),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Manager sends a photo from the Inbox."""
+    import uuid as _uuid
+
+    if not (file.content_type or "").startswith("image/"):
+        raise HTTPException(status_code=400, detail="Sirf image bhej sakte ho abhi")
+    try:
+        to_phone = normalize_phone(phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(
+        file.content_type, ".jpg"
+    )
+    name = f"out-{_uuid.uuid4().hex}{ext}"
+    _MEDIA_DIR.mkdir(exist_ok=True)
+    dest = _MEDIA_DIR / name
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Photo 5MB se badi hai")
+    dest.write_bytes(content)
+
+    try:
+        wa_id = await send_image(
+            db,
+            to_phone=to_phone,
+            file_path=str(dest),
+            mime_type=file.content_type,
+            caption=caption.strip() or None,
+            local_url=f"/admin/media/{name}",
+            sent_by="manager",
+        )
+    except WindowClosedError:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=409, detail="24h window band hai — photo nahi ja sakti.")
+    except SendError as exc:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=502, detail=f"Photo send fail: {exc}")
+    return {"wa_message_id": wa_id}
+
+
+@router.get("/media/{name}")
+async def serve_media(name: str, key: str = Query(default="")) -> FileResponse:
+    """Serve chat media to the Inbox. <img> tags can't send headers, so auth
+    is the admin key as a query param."""
+    if key != settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=401, detail="key chahiye")
+    # basename() guard: no traversal
+    safe = Path(name).name
+    path = _MEDIA_DIR / safe
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="media nahi mila")
+    return FileResponse(path)
 
 
 @router.get("")

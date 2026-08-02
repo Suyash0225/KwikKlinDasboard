@@ -208,6 +208,98 @@ async def _record_outbound(
         log.info("outbound_not_recorded_no_participant", to=to_phone)
 
 
+async def send_image(
+    db: AsyncSession,
+    *,
+    to_phone: str,
+    file_path: str,
+    mime_type: str,
+    caption: str | None = None,
+    local_url: str,
+    sent_by: str = "manager",
+) -> str:
+    """Upload an image to Meta and send it. Free-form -> window required.
+
+    local_url is our own serving path, stored in the conversation text as
+    '[image:<local_url>] <caption>' so the Inbox can render it.
+    """
+    customer, staff = await _find_recipient(db, to_phone)
+    participant = customer or staff
+    last_inbound = participant.last_message_at if participant else None
+    if last_inbound is None or _now() - last_inbound > SERVICE_WINDOW:
+        raise WindowClosedError(f"24h window closed for {to_phone} — media needs an open window")
+
+    headers = {"Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"}
+    media_url = f"https://graph.facebook.com/v21.0/{settings.WHATSAPP_PHONE_NUMBER_ID}/media"
+    try:
+        with open(file_path, "rb") as fh:
+            async with httpx.AsyncClient(timeout=60) as client:
+                up = await client.post(
+                    media_url,
+                    headers=headers,
+                    data={"messaging_product": "whatsapp", "type": mime_type},
+                    files={"file": (file_path.rsplit("\\", 1)[-1], fh, mime_type)},
+                )
+    except (OSError, httpx.TransportError) as exc:
+        raise SendError(f"media upload failed: {exc}") from exc
+    if up.status_code >= 400:
+        raise SendError(f"media upload rejected: {up.status_code} {up.text[:150]}")
+    media_id = up.json().get("id")
+    if not media_id:
+        raise SendError("media upload: no id in response")
+
+    payload: dict = {
+        "messaging_product": "whatsapp",
+        "to": to_phone.lstrip("+"),
+        "type": "image",
+        "image": {"id": media_id, **({"caption": caption} if caption else {})},
+    }
+    data = await _post_with_retry(payload, to_phone)
+    wa_message_id: str = data["messages"][0]["id"]
+    log.info("whatsapp_image_sent", to=to_phone, wa_message_id=wa_message_id)
+    logged = f"[image:{local_url}]" + (f" {caption}" if caption else "")
+    await _record_outbound(db, customer, staff, logged, wa_message_id, to_phone, sent_by)
+    return wa_message_id
+
+
+async def download_media(media_id: str, dest_dir: str) -> str | None:
+    """Fetch an inbound media file from Meta; returns saved filename or None.
+
+    Never raises — inbound processing must survive a failed download.
+    """
+    import os
+    import uuid as _uuid
+
+    headers = {"Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"}
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            meta = await client.get(
+                f"https://graph.facebook.com/v21.0/{media_id}", headers=headers
+            )
+            if meta.status_code >= 400:
+                log.warning("media_meta_failed", media_id=media_id, status=meta.status_code)
+                return None
+            info = meta.json()
+            url = info.get("url")
+            mime = info.get("mime_type", "image/jpeg")
+            if not url:
+                return None
+            blob = await client.get(url, headers=headers)
+            if blob.status_code >= 400:
+                log.warning("media_download_failed", media_id=media_id, status=blob.status_code)
+                return None
+        ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(mime, ".bin")
+        name = f"in-{_uuid.uuid4().hex}{ext}"
+        os.makedirs(dest_dir, exist_ok=True)
+        with open(os.path.join(dest_dir, name), "wb") as fh:
+            fh.write(blob.content)
+        log.info("media_downloaded", media_id=media_id, file=name, bytes=len(blob.content))
+        return name
+    except Exception:
+        log.exception("media_download_error", media_id=media_id)
+        return None
+
+
 async def _find_recipient(
     db: AsyncSession, phone: str
 ) -> tuple[Customer | None, Staff | None]:

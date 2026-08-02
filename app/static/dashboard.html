@@ -147,10 +147,35 @@
   .bout { align-self: flex-end; background: #d9fdd3; border-top-right-radius: 4px; }
   .bout.manager { background: #d3e9fd; }
   .sending { opacity: .6; }
-  .composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #eaecf0; align-items: flex-end; }
+  .composer { display: flex; gap: 6px; padding: 10px; border-top: 1px solid #eaecf0; align-items: flex-end; }
   .composer textarea { resize: none; max-height: 90px; }
   .composer .lock { flex: 1; font-size: 12px; color: var(--bad); background: #fee4e2;
                     border-radius: 8px; padding: 10px; }
+  .icobtn { background: #fff; border: 1px solid #d0d5dd; color: var(--ink); font-size: 16px;
+            padding: 7px 10px; border-radius: 9px; }
+  .emoji-pop { position: absolute; bottom: 56px; left: 8px; background: #fff; border-radius: 12px;
+               box-shadow: 0 6px 24px rgba(16,24,40,.18); padding: 10px; display: none;
+               grid-template-columns: repeat(8, 34px); gap: 2px; z-index: 15; }
+  .emoji-pop.open { display: grid; }
+  .emoji-pop span { font-size: 20px; cursor: pointer; text-align: center; padding: 3px;
+                    border-radius: 6px; }
+  .emoji-pop span:hover { background: #f2f4f7; }
+  .chatpane { position: relative; }
+  .bubble img { max-width: 240px; max-height: 260px; border-radius: 8px; display: block;
+                margin-bottom: 4px; cursor: pointer; }
+  .drawer { position: fixed; top: 0; right: -340px; width: 330px; height: 100vh; background: #fff;
+            box-shadow: -4px 0 24px rgba(16,24,40,.15); z-index: 25; transition: right .2s;
+            padding: 18px; overflow-y: auto; }
+  .drawer.open { right: 0; }
+  .drawer .big-av { width: 74px; height: 74px; border-radius: 50%; background: #eef2ff; color: #4338ca;
+                    display: flex; align-items: center; justify-content: center; font-size: 26px;
+                    font-weight: 800; margin: 8px auto; }
+  .drawer h3 { text-align: center; }
+  .drawer .ph { text-align: center; color: var(--mut); font-size: 13px; margin-bottom: 12px; }
+  .drawer .stat { display: flex; justify-content: space-between; padding: 8px 0;
+                  border-bottom: 1px solid #f0f2f5; font-size: 13px; }
+  .drawer .actions { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+  .chat-head { cursor: pointer; }
   .backbtn { display: none; }
   .empty { margin: auto; color: #98a2b3; font-size: 13px; text-align: center; }
   .exp-wrap { display: grid; grid-template-columns: 380px 1fr; gap: 14px; align-items: start; }
@@ -249,8 +274,12 @@
         <div class="chatpane">
           <div class="chat-head" id="chat-head"><span class="t">Bayen se kisi ko chuno…</span></div>
           <div class="msgs" id="msgs"><div class="empty">💬<br>Chat yahan dikhegi</div></div>
+          <div class="emoji-pop" id="emoji-pop"></div>
           <div class="composer" id="composer" style="display:none">
             <button class="ghost backbtn" onclick="closeThread()">←</button>
+            <button class="icobtn" id="emoji-btn" onclick="toggleEmoji()" title="Emoji">😊</button>
+            <button class="icobtn" id="attach-btn" onclick="document.getElementById('file-in').click()" title="Photo bhejo">📎</button>
+            <input type="file" id="file-in" accept="image/*" style="display:none" onchange="sendMedia(this)">
             <textarea id="msg-in" rows="1" placeholder="Message likho… (Enter = bhejo)"
                       oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,90)+'px'"
                       onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
@@ -417,6 +446,7 @@
 <div class="modal-bg" id="modal-bg" onclick="if(event.target===this)closeModal()">
   <div class="modal" id="modal"></div>
 </div>
+<div class="drawer" id="drawer"></div>
 <div id="toast"></div>
 
 <script>
@@ -829,8 +859,9 @@ function renderThreads(){
     const arrow=t.last_direction==='INBOUND'?'':'➡️ ';
     const chip=t.kind==='staff'?'<span class="staff-chip">staff</span>':'';
     return `<div class="thread-item ${t.phone===OPEN_PHONE?'on':''}" onclick="openThread('${t.phone}')">
+      <div class="whocell">${avatar(t.name)}<div style="min-width:0;flex:1">
       <div class="nm"><span>${esc(t.name)}${chip}</span><span class="t">${time}</span></div>
-      <div class="pv">${arrow}${esc(t.last_text)}</div></div>`;
+      <div class="pv">${arrow}${esc(t.last_text)}</div></div></div></div>`;
   }).join('')||'<div class="thread-item">Koi baat-cheet nahi.</div>';
 }
 async function openThread(phone){OPEN_PHONE=phone;
@@ -845,17 +876,20 @@ async function refreshThread(scroll){
                            :'<span class="win closed">🔴 window band</span>';
     const chips=(d.active_orders||[]).map(o=>`<span class="ordchip">${esc(o.order_number)} · ${LABEL[o.status]||o.status}</span>`).join('');
     document.getElementById('chat-head').innerHTML=
-      `<button class="ghost backbtn" onclick="closeThread()">←</button>
-       <span class="nm">${esc(d.name)}</span><span class="t">${esc(d.phone)}</span>${win}
+      `<button class="ghost backbtn" onclick="event.stopPropagation();closeThread()">←</button>
+       ${avatar(d.name)}<span class="nm">${esc(d.name)}</span>
+       <span class="t">${esc(d.phone)} · profile dekhne ke liye click</span>${win}
        <div class="ordchips">${chips}</div>`;
+    document.getElementById('chat-head').onclick=openProfile;
     const msgs=document.getElementById('msgs');
     const nearBottom=msgs.scrollHeight-msgs.scrollTop-msgs.clientHeight<80;
     msgs.innerHTML=d.messages.map(m=>{
       const t=new Date(m.at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
-      if(m.direction==='INBOUND')return `<div class="bubble bin">${esc(m.text)}<div class="meta">${t}</div></div>`;
+      const body=renderMsgBody(m.text);
+      if(m.direction==='INBOUND')return `<div class="bubble bin">${body}<div class="meta">${t}</div></div>`;
       const who=m.sent_by==='manager'?'👤 Aap':'🤖 Bot';
       const cls=m.sent_by==='manager'?'bout manager':'bout';
-      return `<div class="bubble ${cls}">${esc(m.text)}<div class="meta">${who} · ${t}</div></div>`;
+      return `<div class="bubble ${cls}">${body}<div class="meta">${who} · ${t}</div></div>`;
     }).join('')||'<div class="empty">Abhi koi message nahi.</div>';
     if(scroll||nearBottom)msgs.scrollTop=msgs.scrollHeight;
     const composer=document.getElementById('composer');
@@ -868,6 +902,68 @@ async function refreshThread(scroll){
       lock.textContent='🔴 24h window band — customer ke message aane par khulegi.';
       composer.appendChild(lock);}else if(!locked&&lock)lock.remove();
   }catch(e){toast(e.message,true);}
+}
+function renderMsgBody(text){
+  const m=(text||'').match(/^\[image:([^\]\s]+)\]\s*(.*)$/s);
+  if(m){
+    const src=m[1]+'?key='+encodeURIComponent(getKey(false));
+    return `<img src="${src}" loading="lazy" onclick="window.open('${src}','_blank')">`+
+           (m[2]?esc(m[2]):'');
+  }
+  return esc(text);
+}
+const EMOJIS=['😊','😄','🙏','👍','❤️','🎉','✨','🧺','👔','🧼','✅','❌','⏰','📅','💰','₹','🛵','📦','🙌','😅','🤝','💯','🔥','⭐','☑️','📍','☎️','🫡','😢','🤔','⚡','🌟'];
+function toggleEmoji(){
+  const p=document.getElementById('emoji-pop');
+  if(!p.innerHTML)p.innerHTML=EMOJIS.map(e=>`<span onclick="pickEmoji('${e}')">${e}</span>`).join('');
+  p.classList.toggle('open');
+}
+function pickEmoji(e){
+  const inp=document.getElementById('msg-in');
+  const s=inp.selectionStart||inp.value.length;
+  inp.value=inp.value.slice(0,s)+e+inp.value.slice(s);
+  inp.focus();inp.selectionStart=inp.selectionEnd=s+e.length;
+}
+async function sendMedia(input){
+  const f=input.files[0];input.value='';
+  if(!f||!OPEN_PHONE)return;
+  if(f.size>5*1024*1024)return toast('Photo 5MB se chhoti rakho',true);
+  const msgs=document.getElementById('msgs');
+  const tmp=document.createElement('div');tmp.className='bubble bout manager sending';
+  tmp.innerHTML='📎 photo bhej raha hai…';msgs.appendChild(tmp);msgs.scrollTop=msgs.scrollHeight;
+  try{
+    const fd=new FormData();fd.append('phone',OPEN_PHONE);fd.append('file',f);
+    const cap=document.getElementById('msg-in').value.trim();
+    if(cap){fd.append('caption',cap);document.getElementById('msg-in').value='';}
+    const r=await fetch('/admin/api/inbox/send-media',{method:'POST',
+      headers:{'X-API-Key':getKey(false)},body:fd});
+    const b=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(b.detail||('HTTP '+r.status));
+    await refreshThread(true);loadThreads();toast('Photo chali gayi ✓');
+  }catch(e){toast(e.message,true);}
+  finally{tmp.remove();}
+}
+function openProfile(){
+  if(!OPEN_PHONE)return;
+  const c=CUSTOMERS.find(x=>x.phone===OPEN_PHONE);
+  const t=THREADS.find(x=>x.phone===OPEN_PHONE)||{};
+  const name=(c&&c.name)||t.name||OPEN_PHONE;
+  const d=document.getElementById('drawer');
+  const out=c?+c.outstanding:0;
+  d.innerHTML=`<div style="text-align:right"><button class="ghost" onclick="document.getElementById('drawer').classList.remove('open')">✕</button></div>
+    <div class="big-av">${esc((name||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase())}</div>
+    <h3>${esc(name)}</h3><div class="ph">${esc(OPEN_PHONE)} · ${t.kind==='staff'?'Staff 🧑‍🔧':'Customer'}</div>
+    ${c?`<div class="stat"><span>Total orders</span><b>${c.total_orders}</b></div>
+    <div class="stat"><span>Chalu</span><b>${c.active_orders}</b></div>
+    <div class="stat"><span>Total business</span><b>${rs(c.business)}</b></div>
+    <div class="stat"><span>Paid</span><b class="good">${rs(c.paid)}</b></div>
+    <div class="stat"><span>Baaki</span><b class="${out>0?'bad':'good'}">${rs(c.outstanding)}</b></div>`:''}
+    <div class="actions">
+      <button class="orange" onclick="document.getElementById('drawer').classList.remove('open');go('newbill');document.getElementById('f-phone').value='${OPEN_PHONE}';prefillCustomer()">➕ Naya Bill</button>
+      <button class="ghost" onclick="document.getElementById('drawer').classList.remove('open');go('bills');document.getElementById('b-search').value='${OPEN_PHONE}';renderBills()">🧾 Sab Bills</button>
+      ${out>0?`<button class="green" onclick="document.getElementById('drawer').classList.remove('open');collectFrom('${OPEN_PHONE}')">₹ Collect (${rs(out)})</button>`:''}
+    </div>`;
+  d.classList.add('open');
 }
 async function sendMsg(){
   const input=document.getElementById('msg-in');const text=input.value.trim();

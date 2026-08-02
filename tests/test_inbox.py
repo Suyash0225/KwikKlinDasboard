@@ -108,6 +108,52 @@ async def test_manager_send_records_sent_by(client, sent, monkeypatch) -> None:
         assert conv.direction is Direction.OUTBOUND
 
 
+async def test_media_serve_requires_key(client) -> None:
+    from pathlib import Path
+
+    media_dir = Path("app/media")
+    media_dir.mkdir(exist_ok=True)
+    test_file = media_dir / "test-qa.jpg"
+    test_file.write_bytes(b"fake-jpg-bytes")
+    try:
+        assert (await client.get("/admin/media/test-qa.jpg")).status_code == 401
+        r = await client.get(f"/admin/media/test-qa.jpg?key={settings.ADMIN_API_KEY}")
+        assert r.status_code == 200
+        # traversal must not escape the media dir
+        r2 = await client.get(f"/admin/media/..%2F..%2F.env?key={settings.ADMIN_API_KEY}")
+        assert r2.status_code == 404
+    finally:
+        test_file.unlink(missing_ok=True)
+
+
+async def test_send_media_endpoint_auth_and_validation(client, monkeypatch) -> None:
+    import app.routers.admin as admin_module
+
+    async def fake_send_image(db, **kw):
+        return "wamid.MEDIA-TEST"
+
+    monkeypatch.setattr(admin_module, "send_image", fake_send_image)
+    files = {"file": ("photo.jpg", b"jpg-bytes", "image/jpeg")}
+
+    # no key -> 401
+    r = await client.post("/admin/api/inbox/send-media", data={"phone": PHONE}, files=files)
+    assert r.status_code == 401
+    # non-image -> 400
+    r = await client.post(
+        "/admin/api/inbox/send-media", data={"phone": PHONE},
+        files={"file": ("x.pdf", b"pdf", "application/pdf")}, headers=AUTH,
+    )
+    assert r.status_code == 400
+    # valid -> 200 via mocked sender
+    await _seed_customer(window_open=True)
+    r = await client.post(
+        "/admin/api/inbox/send-media", data={"phone": PHONE, "caption": "bill ki photo"},
+        files=files, headers=AUTH,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["wa_message_id"] == "wamid.MEDIA-TEST"
+
+
 async def test_manager_send_blocked_outside_window(client, monkeypatch) -> None:
     import app.services.whatsapp as whatsapp_module
     import app.routers.admin as admin_module
