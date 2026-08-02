@@ -31,6 +31,8 @@ class OrderCreateIn(BaseModel):
     pickup_date: date | None = None
     expected_delivery: date | None = None
     notes: str | None = None
+    # marketing coupon — validated + redeemed server-side
+    coupon_code: str | None = None
 
 
 class StatusUpdateIn(BaseModel):

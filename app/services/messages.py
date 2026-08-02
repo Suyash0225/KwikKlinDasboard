@@ -169,6 +169,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Kaun se ho gaye? Kahin koi dikkat? Bas reply kar dein (jaise: '1 aur 2 ho gaya, 3 kal hoga').",
         "en": "Which are done, and is anything stuck? Just reply (e.g. '1 and 2 done, 3 tomorrow').",
     },
+    "standup_recorded": {
+        "hi": "Shukriya {name}! Record kar liya:",
+        "en": "Thanks {name}! Recorded:",
+    },
     "payment_reminder": {
         "hi": "Namaste! Aapke order {order_number} ka ₹{amount} baaki hai. Jab suvidha ho, de dijiyega 🙏 — {shop}",
         "en": "Hello! ₹{amount} is pending for your order {order_number}. Please pay at your convenience 🙏 — {shop}",

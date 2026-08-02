@@ -76,6 +76,20 @@ async def create_order(body: OrderCreateIn, db: AsyncSession = Depends(get_db)) 
             notes=body.notes,
             created_by="manager",
         )
+        # Coupon: validate against the order total, redeem, adjust amounts.
+        if body.coupon_code:
+            from app.services.marketing_agent import redeem_coupon, validate_coupon
+
+            coupon, discount, err = await validate_coupon(
+                db, body.coupon_code, order.customer_id, order.total_amount or 0
+            )
+            if err:
+                raise HTTPException(status_code=400, detail=f"coupon: {err}")
+            order.total_amount = (order.total_amount or 0) - discount
+            order.discount_amount = (order.discount_amount or 0) + discount
+            order.recalculate_payment_status()
+            await db.commit()
+            await redeem_coupon(db, coupon, order, discount)
         # Advance taken at the counter -> record as a real payment.
         if body.advance_amount and body.advance_amount > 0:
             from app.models import PaymentMethod as PM
@@ -87,6 +101,10 @@ async def create_order(body: OrderCreateIn, db: AsyncSession = Depends(get_db)) 
             )
     except (OrderError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # instant work order to staff — UI-created bills behave like chat bills
+    from app.services.work_orders import send_work_order
+
+    await send_work_order(db, order, headline="Naya order aaya")
     return await _order_out(db, order, include_notes=True)
 
 

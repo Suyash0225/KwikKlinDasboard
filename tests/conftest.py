@@ -127,8 +127,15 @@ def sent(monkeypatch) -> list[dict]:
         calls.append({"to": to_phone, "text": text, **kwargs})
         return "wamid.FAKE"
 
+    import app.services.bill_agent as bill_agent_module
+    import app.services.escalation as escalation_module
+    import app.services.work_orders as work_orders_module
+
     monkeypatch.setattr(webhook_module, "send_message", fake_send)
     monkeypatch.setattr(order_service_module, "send_message", fake_send)
+    monkeypatch.setattr(work_orders_module, "send_message", fake_send)
+    monkeypatch.setattr(escalation_module, "send_message", fake_send)
+    monkeypatch.setattr(bill_agent_module, "send_message", fake_send)
     return calls
 
 

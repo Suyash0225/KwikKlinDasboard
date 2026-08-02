@@ -15,6 +15,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.routers.admin import router as admin_router
+from app.routers.agent_admin import router as agent_admin_router
 from app.routers.orders import router as orders_router
 from app.routers.webhook import router as webhook_router
 from app.utils.logger import configure_logging
@@ -48,6 +49,7 @@ app = FastAPI(
 app.include_router(webhook_router)
 app.include_router(orders_router)
 app.include_router(admin_router)
+app.include_router(agent_admin_router)
 
 
 @app.get("/health")

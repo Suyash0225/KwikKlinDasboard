@@ -96,7 +96,7 @@ _EXTRACT_SCHEMA = {
             "enum": [
                 "new_bill", "delay_update", "status_update", "relay",
                 "set_priority", "assign_staff", "add_note", "record_payment",
-                "other",
+                "standup_reply", "other",
             ],
         },
         "customer_name": {"type": "string"},
@@ -128,12 +128,16 @@ _EXTRACT_SCHEMA = {
         "note": {"type": "string"},
         "amount": {"type": "number"},
         "method": {"type": "string", "enum": ["cash", "upi", "other", "NONE"]},
+        # standup replies: list positions ("1","2") or order numbers
+        "done_refs": {"type": "array", "items": {"type": "string"}},
+        "pending_refs": {"type": "array", "items": {"type": "string"}},
+        "problem": {"type": "string"},
     },
     "required": [
         "action", "customer_name", "customer_phone", "items", "advance",
         "expected_delivery", "order_number", "new_date", "reason", "new_status",
         "relay_to", "relay_message", "priority", "staff_name", "note",
-        "amount", "method",
+        "amount", "method", "done_refs", "pending_refs", "problem",
     ],
     "additionalProperties": False,
 }
@@ -165,6 +169,11 @@ _EXTRACT_SYSTEM = (
     "hai, dhyan se') — order_number + note.\n"
     "- record_payment: money received for an order ('KK-... ka 200 cash "
     "mila') — order_number, amount, method (cash/upi/other).\n"
+    "- standup_reply: a STAFF member reporting on their work list ('1 aur 2 "
+    "ho gaya, 3 ka pant pending hai, blanket kal karunga') — done_refs = "
+    "list positions or order numbers that are FINISHED, pending_refs = ones "
+    "explicitly still pending, problem = any issue mentioned (machine "
+    "kharab, paani nahi...) or ''.\n"
     "- other: anything else (greetings, questions, chatter).\n"
     "If a CURRENT DRAFT is provided, the message is an edit to it: return "
     "action=new_bill with the FULL corrected draft (unchanged fields kept). "
@@ -242,6 +251,8 @@ async def handle_staff_message(
         reply = await _apply_note(db, sender_label, extracted)
     elif action == "record_payment":
         reply = await _stage_payment(db, sender_phone, sender_label, extracted)
+    elif action == "standup_reply" and sender_label != "manager":
+        reply = await _apply_standup_reply(db, sender_phone, sender_label, extracted)
     if reply is not None:
         await audit.record(
             actor_role="admin" if sender_label == "manager" else "staff",
@@ -683,6 +694,82 @@ async def _finalize_payment(
         due=f"{max(due, 0)}",
         status=order.payment_status.name,
     )
+
+
+async def _apply_standup_reply(
+    db: AsyncSession, sender_phone: str, sender_label: str, extracted: dict
+) -> str:
+    """Map 'ho gaya' refs to real orders, update statuses, brief the admin.
+
+    Refs are list positions from the morning standup (re-derived — same
+    deterministic query) or explicit KK- numbers. The confirmation names
+    every order number, so a mis-mapped ref is immediately visible.
+    """
+    from app.services.scheduler import _pending_orders_for
+
+    staff = (
+        await db.execute(select(Staff).where(Staff.phone == sender_phone))
+    ).scalar_one_or_none()
+    if staff is None:
+        return get_message("staff_cmd_unknown")
+    default_phone = await app_settings.get(db, "default_washer_phone")
+    my_orders = await _pending_orders_for(db, staff, default_phone)
+
+    def _resolve(ref: str) -> Order | None:
+        ref = ref.strip().upper()
+        if ref.startswith("KK-"):
+            return next((o for o in my_orders if o.order_number == ref), None)
+        if ref.isdigit():
+            idx = int(ref) - 1
+            if 0 <= idx < len(my_orders):
+                return my_orders[idx]
+        return None
+
+    done_lines, unclear = [], []
+    for ref in extracted["done_refs"]:
+        order = _resolve(ref)
+        if order is None:
+            unclear.append(ref)
+            continue
+        try:
+            await update_status(db, order, OrderStatus.READY, changed_by=staff.name)
+            done_lines.append(f"{order.order_number} → READY")
+        except InvalidTransitionError:
+            done_lines.append(f"{order.order_number} (pehle se {order.status.name})")
+    pending_lines = []
+    for ref in extracted["pending_refs"]:
+        order = _resolve(ref)
+        if order is not None:
+            pending_lines.append(order.order_number)
+
+    problem = (extracted["problem"] or "").strip()
+
+    # admin ko consolidated summary — hamesha, taaki subah ka loop poora ho
+    summary = [f"📋 {staff.name} ka update:"]
+    if done_lines:
+        summary.append("Done: " + ", ".join(done_lines))
+    if pending_lines:
+        summary.append("Pending: " + ", ".join(pending_lines))
+    if problem:
+        summary.append(f"⚠️ Dikkat: {problem}")
+    if unclear:
+        summary.append(f"❓ Samajh nahi aaya: {', '.join(unclear)}")
+    try:
+        await send_message(db, to_phone=settings.MANAGER_PHONE, text="\n".join(summary))
+    except SendError:
+        log.warning("standup_summary_not_sent")
+
+    # staff ko confirmation — kya record hua, saaf-saaf
+    reply = [get_message("standup_recorded", name=staff.name)]
+    if done_lines:
+        reply.append("✅ " + " | ".join(done_lines))
+    if pending_lines:
+        reply.append("⏳ Pending note kiya: " + ", ".join(pending_lines))
+    if unclear:
+        reply.append(f"❓ '{', '.join(unclear)}' samajh nahi aaya — order number bhej dein.")
+    if problem:
+        reply.append("Dikkat manager tak pahuncha di.")
+    return "\n".join(reply)
 
 
 _QUERY_SYSTEM = (

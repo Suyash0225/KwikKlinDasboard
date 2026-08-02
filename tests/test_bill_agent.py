@@ -31,6 +31,14 @@ def _extract_result(**overrides) -> dict:
         "new_status": "NONE",
         "relay_to": "",
         "relay_message": "",
+        "priority": "NONE",
+        "staff_name": "",
+        "note": "",
+        "amount": 0,
+        "method": "NONE",
+        "done_refs": [],
+        "pending_refs": [],
+        "problem": "",
     }
     base.update(overrides)
     return base
