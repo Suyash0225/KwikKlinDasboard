@@ -26,7 +26,11 @@ log = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("startup", shop=settings.SHOP_NAME, environment=settings.ENVIRONMENT)
+    from app.services import scheduler
+
+    scheduler.start()
     yield
+    scheduler.shutdown()
     await engine.dispose()
     log.info("shutdown")
 

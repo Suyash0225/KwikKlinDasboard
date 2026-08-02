@@ -160,6 +160,27 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "⚠️ AI agent abhi uplabdh nahi hai (API key ya network). Bill dashboard se bana lein; thodi der baad dobara try karein.",
         "en": "⚠️ The AI agent is unavailable right now (API key or network). Use the dashboard for bills; try again shortly.",
     },
+    # --- scheduler: standup + reminders ---
+    "standup_header": {
+        "hi": "🌅 Good morning {name}! Aaj {count} kaam pending hain:",
+        "en": "🌅 Good morning {name}! {count} jobs pending today:",
+    },
+    "standup_footer": {
+        "hi": "Kaun se ho gaye? Kahin koi dikkat? Bas reply kar dein (jaise: '1 aur 2 ho gaya, 3 kal hoga').",
+        "en": "Which are done, and is anything stuck? Just reply (e.g. '1 and 2 done, 3 tomorrow').",
+    },
+    "payment_reminder": {
+        "hi": "Namaste! Aapke order {order_number} ka ₹{amount} baaki hai. Jab suvidha ho, de dijiyega 🙏 — {shop}",
+        "en": "Hello! ₹{amount} is pending for your order {order_number}. Please pay at your convenience 🙏 — {shop}",
+    },
+    "payment_reminder_firm": {
+        "hi": "Namaste, aapke order {order_number} ka ₹{amount} kaafi dino se baaki hai. Kripya jald bhugtaan karein — cash/UPI dono chalega. Dhanyawad 🙏 — {shop}",
+        "en": "Hello, ₹{amount} for order {order_number} has been pending for a while. Please clear it soon — cash or UPI. Thank you 🙏 — {shop}",
+    },
+    "overdue_admin_flag": {
+        "hi": "📋 Purane udhaar (15+ din):\n{listing}",
+        "en": "📋 Long-pending dues (15+ days):\n{listing}",
+    },
     "start_confirmed": {
         "hi": "Wapas swagat hai! 🙏 Ab hum aapko zaroori updates bhejte rahenge. — {shop}",
         "en": "Welcome back! 🙏 We'll keep you posted with important updates. — {shop}",

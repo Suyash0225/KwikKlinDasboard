@@ -182,6 +182,16 @@ async def handle_staff_message(
         _PENDING.pop(sender_phone, None)
         pending = None
 
+    # Campaign approvals are deterministic commands, no LLM needed.
+    if sender_label == "manager" and text:
+        m = re.match(r"^\s*campaign\s+(yes|haan|nahi|no|skip)\s*$", text, re.I)
+        if m:
+            from app.services.marketing_agent import approve_latest_suggestion
+
+            return await approve_latest_suggestion(
+                db, approved=m.group(1).lower() in ("yes", "haan")
+            )
+
     photo = _IMAGE_MARKER_RE.match(text or "")
     if photo is None:
         # Non-photo markers (buttons etc.) are not conversational text.

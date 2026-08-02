@@ -192,13 +192,21 @@ async def _process_payload(payload: dict, db: AsyncSession) -> None:
             for msg in value.get("messages", []):
                 await _handle_inbound_message(msg, db)
             for status in value.get("statuses", []):
-                # Delivery receipts: log only for now (Phase 3 may act on them).
                 log.info(
                     "whatsapp_status",
                     wa_message_id=status.get("id"),
                     status=status.get("status"),
                     recipient=status.get("recipient_id"),
                 )
+                # campaign delivered/read tracking — never breaks the webhook
+                try:
+                    from app.services.marketing import track_status_update
+
+                    await track_status_update(
+                        db, status.get("id", ""), status.get("status", "")
+                    )
+                except Exception:
+                    log.exception("campaign_status_track_failed")
 
 
 async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
@@ -309,6 +317,13 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
     # 3. Fallback: the same rule-based replies Phase 3 shipped with.
     # A failed reply must never break the webhook: log it and move on.
     if customer is not None:
+        # campaign reply tracking (best-effort, before any reply logic)
+        try:
+            from app.services.marketing import track_reply
+
+            await track_reply(db, customer.id)
+        except Exception:
+            log.exception("campaign_reply_track_failed")
         if STOP_RE.search(text or ""):
             customer.opted_out = True
             customer.marketing_opt_out = True
