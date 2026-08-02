@@ -179,6 +179,26 @@ async def test_gemini_safety_block_is_hard_error(monkeypatch) -> None:
         await ask(system="s", user_text="hi")
 
 
+def test_no_empty_enum_values_in_any_schema() -> None:
+    """Gemini's responseSchema 400s on '' inside an enum — guard every schema."""
+    from app.services.ai_agent import _REPLY_SCHEMA
+    from app.services.bill_agent import _EXTRACT_SCHEMA
+    from app.services.intent import _SCHEMA as intent_schema
+
+    def walk(node):
+        if isinstance(node, dict):
+            if "enum" in node:
+                assert "" not in node["enum"], f"empty enum value in {node}"
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    for schema in (_EXTRACT_SCHEMA, intent_schema, _REPLY_SCHEMA):
+        walk(schema)
+
+
 async def test_classify_intent_happy(monkeypatch) -> None:
     async def fake_ask_json(**kw):
         return {"intent": "ORDER_STATUS", "language": "hi"}

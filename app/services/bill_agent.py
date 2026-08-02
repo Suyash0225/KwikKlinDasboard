@@ -92,7 +92,8 @@ _EXTRACT_SCHEMA = {
         "order_number": {"type": "string"},
         "new_date": {"type": "string"},
         "reason": {"type": "string"},
-        "new_status": {"type": "string", "enum": [*_STATUS_NAMES, ""]},
+        # "NONE" = not a status update (Gemini rejects "" inside an enum)
+        "new_status": {"type": "string", "enum": [*_STATUS_NAMES, "NONE"]},
     },
     "required": [
         "action", "customer_name", "customer_phone", "items", "advance",
@@ -119,8 +120,8 @@ _EXTRACT_SYSTEM = (
     "- other: anything else (greetings, questions, chatter).\n"
     "If a CURRENT DRAFT is provided, the message is an edit to it: return "
     "action=new_bill with the FULL corrected draft (unchanged fields kept). "
-    "Fill every unused field with '' / [] / 0. Never invent items, phones or "
-    "prices."
+    "Fill every unused field with '' / [] / 0, and new_status with 'NONE' "
+    "unless it is a status_update. Never invent items, phones or prices."
 )
 
 
@@ -317,7 +318,7 @@ async def _apply_delay(db: AsyncSession, sender_label: str, extracted: dict) -> 
 
 async def _apply_status(db: AsyncSession, sender_label: str, extracted: dict) -> str:
     number = extracted["order_number"].upper()
-    if not number or not extracted["new_status"]:
+    if not number or extracted["new_status"] not in _STATUS_NAMES:
         return get_message("staff_cmd_unknown")
     new_status = OrderStatus[extracted["new_status"]]
     if new_status in (OrderStatus.CANCELLED,):
