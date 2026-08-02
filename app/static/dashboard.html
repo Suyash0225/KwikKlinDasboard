@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kwik Klin — Manager Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: system-ui, sans-serif; background: #f2f4f7; color: #1a202c; padding: 14px; }
+  h1 { font-size: 19px; }
+  .sub { color: #667085; font-size: 12px; margin: 2px 0 12px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+  .tab { padding: 7px 16px; border-radius: 8px; background: #fff; cursor: pointer; font-size: 13px;
+         border: 1px solid #e4e7ec; font-weight: 600; color: #475467; }
+  .tab.on { background: #1a202c; color: #fff; border-color: #1a202c; }
+  .cards { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .card { background: #fff; border-radius: 10px; padding: 10px 16px; min-width: 96px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.08); cursor: pointer; border: 2px solid transparent; }
+  .card.on { border-color: #1a202c; }
+  .card .n { font-size: 22px; font-weight: 700; }
+  .card .l { font-size: 11px; color: #667085; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px;
+          overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #f0f2f5; vertical-align: top; }
+  th { background: #fafbfc; color: #667085; font-size: 11px; text-transform: uppercase; }
+  .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .RECEIVED { background:#eef4ff; color:#3538cd; } .IN_WASH { background:#e0f2fe; color:#026aa2; }
+  .IN_DRY { background:#fef0c7; color:#93370d; } .IN_IRON { background:#fce7f6; color:#9e165f; }
+  .READY { background:#d1fadf; color:#05603a; } .OUT_FOR_DELIVERY { background:#e9d7fe; color:#6941c6; }
+  .DELIVERED { background:#ecfdf3; color:#054f31; } .ON_HOLD { background:#fee4e2; color:#912018; }
+  .CANCELLED { background:#f2f4f7; color:#475467; }
+  .PAID { color:#05603a; font-weight:600; } .PARTIAL { color:#93370d; font-weight:600; }
+  .UNPAID { color:#912018; font-weight:600; }
+  .act { display: flex; gap: 4px; flex-wrap: wrap; }
+  .act button { font-size: 11px; padding: 4px 8px; }
+  button { border: 0; background: #1a202c; color: #fff; padding: 7px 14px; border-radius: 8px;
+           cursor: pointer; font-size: 13px; }
+  button.ghost { background: #fff; color: #1a202c; border: 1px solid #d0d5dd; }
+  button.green { background: #05603a; }
+  input, select, textarea { padding: 8px 10px; border: 1px solid #d0d5dd; border-radius: 8px;
+                            font-size: 13px; width: 100%; font-family: inherit; }
+  label { font-size: 12px; color: #475467; font-weight: 600; display: block; margin: 10px 0 4px; }
+  .conv { background:#fff; border-radius:10px; box-shadow:0 1px 3px rgba(0,0,0,.08); padding:6px 0; font-size:13px; }
+  .conv .row { padding: 7px 12px; border-bottom: 1px solid #f0f2f5; display:flex; gap:8px; }
+  .conv .who { font-weight: 600; min-width: 130px; }
+  .IN { color:#026aa2; } .OUT { color:#05603a; }
+  .t { color:#98a2b3; font-size:11px; margin-left:auto; white-space:nowrap; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(16,24,40,.5); display: none;
+              align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .modal-bg.open { display: flex; }
+  .modal { background: #fff; border-radius: 12px; padding: 18px; width: 100%; max-width: 480px;
+           max-height: 90vh; overflow-y: auto; }
+  .modal h3 { font-size: 15px; margin-bottom: 6px; }
+  .modal .foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #1a202c;
+           color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; z-index: 20; }
+  #toast.err { background: #b42318; }
+  .itemrow { display: grid; grid-template-columns: 1fr 70px 1fr 34px; gap: 6px; margin-bottom: 6px; }
+  .itemrow button { padding: 4px; background: #fee4e2; color: #912018; }
+  .form { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+          max-width: 560px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .hist { border-left: 2px solid #e4e7ec; margin: 8px 0 8px 6px; padding-left: 14px; }
+  .hist div { margin-bottom: 8px; font-size: 12px; }
+  .hist .t2 { color: #98a2b3; font-size: 11px; }
+  .note { background: #fffaeb; border: 1px solid #fedf89; padding: 8px 10px; border-radius: 8px;
+          font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
+  .warn { font-size: 11px; color: #93370d; margin-top: 4px; }
+  .search { max-width: 300px; margin-bottom: 10px; }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <h1>🧺 Kwik Klin — Manager Dashboard</h1>
+  <div class="sub">Har action WhatsApp notification bhi bhejta hai (jab token active ho) · auto-refresh 60s
+    <button class="ghost" style="padding:3px 10px;font-size:11px" onclick="loadAll()">Refresh</button></div>
+
+  <div class="tabs">
+    <div class="tab on" data-tab="orders" onclick="showTab('orders')">📦 Orders</div>
+    <div class="tab" data-tab="new" onclick="showTab('new')">➕ Naya Order</div>
+    <div class="tab" data-tab="customers" onclick="showTab('customers')">👥 Customers</div>
+    <div class="tab" data-tab="convs" onclick="showTab('convs')">💬 Baat-cheet</div>
+  </div>
+
+  <!-- ORDERS TAB -->
+  <div id="tab-orders">
+    <div class="cards" id="cards"></div>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Status</th><th>Payment</th><th>Delivery</th><th>Action</th></tr></thead>
+      <tbody id="orders-body"></tbody>
+    </table></div>
+  </div>
+
+  <!-- NEW ORDER TAB -->
+  <div id="tab-new" style="display:none">
+    <div class="form">
+      <h3 style="margin-bottom:4px">Naya Order</h3>
+      <div class="grid2">
+        <div><label>Customer phone *</label><input id="f-phone" placeholder="98765 43210"></div>
+        <div><label>Naam</label><input id="f-name" placeholder="optional"></div>
+      </div>
+      <label>Items *</label>
+      <div id="items"></div>
+      <button class="ghost" style="font-size:12px;padding:5px 10px" onclick="addItemRow()">+ item jodo</button>
+      <div class="grid2">
+        <div><label>Total (₹)</label><input id="f-total" type="number" min="0" step="0.5"></div>
+        <div><label>Expected delivery</label><input id="f-delivery" type="date"></div>
+      </div>
+      <label>Internal note (sirf aapke liye)</label>
+      <textarea id="f-notes" rows="2"></textarea>
+      <div class="foot" style="display:flex;justify-content:flex-end;margin-top:14px">
+        <button class="green" onclick="createOrder()">Order banao ✓</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CUSTOMERS TAB -->
+  <div id="tab-customers" style="display:none">
+    <input class="search" id="cust-search" placeholder="🔍 naam ya number..." oninput="renderCustomers()">
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Customer</th><th>Phone</th><th>Chalu</th><th>Total orders</th><th>Aakhri message</th></tr></thead>
+      <tbody id="cust-body"></tbody>
+    </table></div>
+  </div>
+
+  <!-- CONVERSATIONS TAB -->
+  <div id="tab-convs" style="display:none">
+    <div class="conv" id="convs"></div>
+  </div>
+
+  <!-- MODALS -->
+  <div class="modal-bg" id="modal-bg" onclick="if(event.target===this)closeModal()">
+    <div class="modal" id="modal"></div>
+  </div>
+  <div id="toast"></div>
+
+<script>
+const LABEL = {RECEIVED:'Naya', IN_WASH:'Dhulai', IN_DRY:'Sukh raha', IN_IRON:'Istri',
+               READY:'Taiyar', OUT_FOR_DELIVERY:'Delivery pe', DELIVERED:'Ho gaya',
+               ON_HOLD:'Ruka', CANCELLED:'Cancel'};
+const NEXT = {RECEIVED:['IN_WASH','READY','ON_HOLD','CANCELLED'],
+              IN_WASH:['IN_DRY','IN_IRON','READY','ON_HOLD','CANCELLED'],
+              IN_DRY:['IN_IRON','READY','ON_HOLD','CANCELLED'],
+              IN_IRON:['READY','ON_HOLD','CANCELLED'],
+              READY:['OUT_FOR_DELIVERY','ON_HOLD','CANCELLED'],
+              OUT_FOR_DELIVERY:['DELIVERED','ON_HOLD','CANCELLED'],
+              ON_HOLD:['RECEIVED','IN_WASH','IN_DRY','IN_IRON','READY','OUT_FOR_DELIVERY','CANCELLED']};
+let DATA = null, CUSTOMERS = [], FILTER = null;
+
+function getKey(force) {
+  let k = localStorage.getItem('kk_admin_key');
+  if (!k || force) { k = prompt('Admin API key daalo (.env ke ADMIN_API_KEY se):') || '';
+                     localStorage.setItem('kk_admin_key', k); }
+  return k;
+}
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({'X-API-Key': getKey(false), 'Content-Type': 'application/json'},
+                               opts.headers || {});
+  const r = await fetch(path, opts);
+  if (r.status === 401) { getKey(true); throw new Error('key galat thi — dobara try karo'); }
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || ('HTTP ' + r.status));
+  return body;
+}
+function toast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = isErr ? 'err' : ''; t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3500);
+}
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+function showTab(name) {
+  for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t.dataset.tab === name);
+  for (const id of ['orders','new','customers','convs'])
+    document.getElementById('tab-' + id).style.display = id === name ? '' : 'none';
+  if (name === 'customers') loadCustomers();
+}
+
+/* ---------- ORDERS ---------- */
+async function loadAll() {
+  try { DATA = await api('/admin/api/dashboard'); renderOrders(); renderConvs(); }
+  catch (e) { toast(e.message, true); }
+}
+function renderOrders() {
+  const c = DATA.counts;
+  let cards = card(null, c.today_new, 'Aaj ke naye') + card('ALL', c.active_total, 'Total chalu');
+  for (const [s, n] of Object.entries(c.by_status)) cards += card(s, n, LABEL[s] || s);
+  document.getElementById('cards').innerHTML = cards;
+
+  let rows = DATA.active_orders;
+  if (FILTER && FILTER !== 'ALL') rows = rows.filter(o => o.status === FILTER);
+  document.getElementById('orders-body').innerHTML = rows.map(o => {
+    const items = (o.items || []).map(i => `${i.qty}× ${esc(i.type)}`).join(', ');
+    const pay = o.total_amount ? `${o.payment_status}<br>₹${o.amount_paid || 0}/${o.total_amount}` : o.payment_status;
+    return `<tr>
+      <td><b>${esc(o.order_number)}</b><br><span class="t">${new Date(o.created_at).toLocaleDateString('en-IN')}</span></td>
+      <td>${esc(o.customer)}<br><span class="t">${esc(o.phone)}</span></td>
+      <td>${items}</td>
+      <td><span class="badge ${o.status}">${LABEL[o.status] || o.status}</span></td>
+      <td class="${o.payment_status}">${pay}</td>
+      <td>${o.expected_delivery || '—'}</td>
+      <td><div class="act">
+        <button onclick="openStatus('${o.order_number}','${o.status}')">▶ Status</button>
+        <button class="ghost" onclick="openPayment('${o.order_number}')">₹</button>
+        <button class="ghost" onclick="openDate('${o.order_number}')">📅</button>
+        <button class="ghost" onclick="openDetail('${o.order_number}')">👁</button>
+      </div></td></tr>`;
+  }).join('') || '<tr><td colspan="7">Is filter mein koi order nahi.</td></tr>';
+}
+function card(filter, n, label) {
+  const on = FILTER === filter ? 'on' : '';
+  const click = filter === null ? '' : `onclick="FILTER=FILTER==='${filter}'?null:'${filter}';renderOrders()"`;
+  return `<div class="card ${on}" ${click}><div class="n">${n}</div><div class="l">${label}</div></div>`;
+}
+
+/* ---------- MODALS ---------- */
+function openModal(html) { document.getElementById('modal').innerHTML = html;
+                           document.getElementById('modal-bg').classList.add('open'); }
+function closeModal() { document.getElementById('modal-bg').classList.remove('open'); }
+
+function openStatus(num, current) {
+  const opts = (NEXT[current] || []).map(s => `<option value="${s}">${LABEL[s]} (${s})</option>`).join('');
+  openModal(`<h3>${num} — status badlo</h3>
+    <div class="sub">Abhi: <span class="badge ${current}">${LABEL[current]}</span></div>
+    <label>Naya status</label><select id="m-status">${opts}</select>
+    <div class="warn">READY / Delivery pe / Ho gaya → customer ko message jayega</div>
+    <div class="foot"><button class="ghost" onclick="closeModal()">Nahi</button>
+    <button class="green" onclick="doStatus('${num}')">Badlo ✓</button></div>`);
+}
+async function doStatus(num) {
+  try {
+    await api(`/orders/${num}/status`, {method:'POST',
+      body: JSON.stringify({status: document.getElementById('m-status').value, changed_by:'manager:dashboard'})});
+    closeModal(); toast(num + ' update ho gaya ✓'); loadAll();
+  } catch (e) { toast(e.message, true); }
+}
+
+function openPayment(num) {
+  openModal(`<h3>${num} — payment aayi</h3>
+    <label>Kitna (₹)</label><input id="m-amount" type="number" min="1" step="0.5">
+    <label>Kaise</label><select id="m-method"><option value="UPI">UPI</option>
+    <option value="CASH">Cash</option><option value="OTHER">Aur kuch</option></select>
+    <div class="foot"><button class="ghost" onclick="closeModal()">Nahi</button>
+    <button class="green" onclick="doPayment('${num}')">Save ✓</button></div>`);
+}
+async function doPayment(num) {
+  try {
+    const amt = document.getElementById('m-amount').value;
+    if (!amt || +amt <= 0) throw new Error('amount daalo');
+    const r = await api(`/orders/${num}/payment`, {method:'POST',
+      body: JSON.stringify({amount: amt, method: document.getElementById('m-method').value})});
+    closeModal(); toast(`${num}: ab ${r.payment_status} ✓`); loadAll();
+  } catch (e) { toast(e.message, true); }
+}
+
+function openDate(num) {
+  openModal(`<h3>${num} — delivery date badlo</h3>
+    <label>Nayi date</label><input id="m-date" type="date">
+    <label>Wajah (INTERNAL — customer ko KABHI nahi dikhegi)</label>
+    <textarea id="m-reason" rows="2" placeholder="jaise: paani nahi aaya"></textarea>
+    <div class="warn">Customer ko sirf polite delay notice jayega, nayi date ke saath</div>
+    <div class="foot"><button class="ghost" onclick="closeModal()">Nahi</button>
+    <button class="green" onclick="doDate('${num}')">Save ✓</button></div>`);
+}
+async function doDate(num) {
+  try {
+    const d = document.getElementById('m-date').value;
+    if (!d) throw new Error('date chuno');
+    await api(`/orders/${num}/delivery-date`, {method:'POST',
+      body: JSON.stringify({expected_delivery: d, internal_reason: document.getElementById('m-reason').value || null,
+                            changed_by: 'manager:dashboard'})});
+    closeModal(); toast('Date update + customer ko notice ✓'); loadAll();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function openDetail(num) {
+  try {
+    const d = await api(`/orders/${num}`);
+    const o = d.order;
+    const hist = d.history.map(h =>
+      `<div><b>${LABEL[h.new_status] || h.new_status}</b> — ${esc(h.changed_by)}
+       <div class="t2">${new Date(h.changed_at).toLocaleString('en-IN')}</div></div>`).join('');
+    const items = (o.items || []).map(i => `${i.qty}× ${esc(i.type)}${i.service ? ' (' + esc(i.service) + ')' : ''}`).join('<br>');
+    openModal(`<h3>${o.order_number}</h3>
+      <div class="sub">${esc(o.customer_name || '')} · ${esc(o.customer_phone)}</div>
+      <label>Items</label><div style="font-size:13px">${items}</div>
+      <label>Payment</label><div style="font-size:13px" class="${o.payment_status}">
+        ${o.payment_status} — ₹${o.amount_paid}${o.total_amount ? ' / ₹' + o.total_amount : ''}</div>
+      <label>History</label><div class="hist">${hist}</div>
+      ${o.notes ? `<label>Internal notes 🔒</label><div class="note">${esc(o.notes)}</div>` : ''}
+      <div class="foot"><button class="ghost" onclick="closeModal()">Band karo</button></div>`);
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ---------- NEW ORDER ---------- */
+function addItemRow(type, qty, service) {
+  const div = document.createElement('div');
+  div.className = 'itemrow';
+  div.innerHTML = `<input placeholder="kya (shirt/pant/saree...)" class="i-type" value="${type || ''}">
+    <input type="number" min="1" value="${qty || 1}" class="i-qty">
+    <select class="i-service"><option value="wash_iron">Wash+Istri</option>
+      <option value="wash">Sirf wash</option><option value="iron">Sirf istri</option>
+      <option value="dry_clean">Dry clean</option></select>
+    <button onclick="this.parentElement.remove()">✕</button>`;
+  document.getElementById('items').appendChild(div);
+}
+async function createOrder() {
+  try {
+    const items = [...document.querySelectorAll('.itemrow')].map(r => ({
+      type: r.querySelector('.i-type').value.trim(),
+      qty: +r.querySelector('.i-qty').value,
+      service: r.querySelector('.i-service').value,
+    })).filter(i => i.type);
+    const phone = document.getElementById('f-phone').value.trim();
+    if (!phone) throw new Error('phone daalo');
+    if (!items.length) throw new Error('kam se kam ek item daalo');
+    const body = {customer_phone: phone, items,
+      customer_name: document.getElementById('f-name').value.trim() || null,
+      total_amount: document.getElementById('f-total').value || null,
+      expected_delivery: document.getElementById('f-delivery').value || null,
+      notes: document.getElementById('f-notes').value.trim() || null};
+    const r = await api('/orders', {method: 'POST', body: JSON.stringify(body)});
+    toast(`Order ${r.order_number} ban gaya ✓ (customer ko confirmation jayegi)`);
+    for (const el of ['f-phone','f-name','f-total','f-delivery','f-notes'])
+      document.getElementById(el).value = '';
+    document.getElementById('items').innerHTML = ''; addItemRow();
+    showTab('orders'); loadAll();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ---------- CUSTOMERS ---------- */
+async function loadCustomers() {
+  try { CUSTOMERS = await api('/admin/api/customers'); renderCustomers(); }
+  catch (e) { toast(e.message, true); }
+}
+function renderCustomers() {
+  const q = (document.getElementById('cust-search').value || '').toLowerCase();
+  const rows = CUSTOMERS.filter(c =>
+    !q || (c.name || '').toLowerCase().includes(q) || c.phone.includes(q));
+  document.getElementById('cust-body').innerHTML = rows.map(c => `<tr>
+    <td>${esc(c.name || '—')}</td><td>${esc(c.phone)}</td>
+    <td>${c.active_orders || '—'}</td><td>${c.total_orders}</td>
+    <td>${c.last_message_at ? new Date(c.last_message_at).toLocaleString('en-IN') : '—'}</td>
+  </tr>`).join('') || '<tr><td colspan="5">Koi customer nahi mila.</td></tr>';
+}
+
+/* ---------- CONVERSATIONS ---------- */
+function renderConvs() {
+  document.getElementById('convs').innerHTML = DATA.conversations.map(c => {
+    const arrow = c.direction === 'INBOUND' ? '⬅️' : '➡️';
+    const cls = c.direction === 'INBOUND' ? 'IN' : 'OUT';
+    const t = new Date(c.at).toLocaleString('en-IN', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
+    return `<div class="row"><span class="who ${cls}">${arrow} ${esc(c.who)}</span>
+            <span>${esc(c.text)}</span><span class="t">${t}</span></div>`;
+  }).join('') || '<div class="row">Koi message nahi.</div>';
+}
+
+addItemRow();
+loadAll();
+setInterval(loadAll, 60000);
+</script>
+</body>
+</html>

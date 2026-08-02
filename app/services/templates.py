@@ -14,9 +14,21 @@ import structlog
 log = structlog.get_logger()
 
 # name -> {language code, number of body parameters}
+# The kk_* templates must be created + approved in WhatsApp Manager with
+# EXACTLY these names, languages, and {{n}} parameter counts (drafts in
+# README/Phase 3 notes). Until Meta approves one, sending it fails with a
+# 4xx which notify-code logs and survives.
 TEMPLATES: dict[str, dict] = {
     # Meta's built-in sample template on every test number. Zero params.
     "hello_world": {"language": "en_US", "param_count": 0},
+    # {{1}} = order number, {{2}} = items count
+    "kk_order_confirmed": {"language": "en_US", "param_count": 2},
+    # {{1}} = order number
+    "kk_order_ready": {"language": "en_US", "param_count": 1},
+    "kk_order_out_for_delivery": {"language": "en_US", "param_count": 1},
+    "kk_order_delivered": {"language": "en_US", "param_count": 1},
+    # {{1}} = order number, {{2}} = new date
+    "kk_delay_notice": {"language": "en_US", "param_count": 2},
 }
 
 

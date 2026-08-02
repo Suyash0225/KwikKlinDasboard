@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy import text as sqltext
 
 import app.routers.webhook as webhook_module
+import app.services.order_service as order_service_module
 from app.config import settings
 from app.database import async_session_factory, engine
 from app.main import app
@@ -63,7 +64,11 @@ async def client():
 
 @pytest.fixture
 def sent(monkeypatch) -> list[dict]:
-    """Replace the real WhatsApp send with a recorder. Returns the call list."""
+    """Replace the real WhatsApp send with a recorder. Returns the call list.
+
+    Patches BOTH import sites (webhook replies and order_service
+    notifications) — tests must never hit Meta's real API.
+    """
     calls: list[dict] = []
 
     async def fake_send(db, *, to_phone: str, text: str | None = None, **kwargs):
@@ -71,6 +76,7 @@ def sent(monkeypatch) -> list[dict]:
         return "wamid.FAKE"
 
     monkeypatch.setattr(webhook_module, "send_message", fake_send)
+    monkeypatch.setattr(order_service_module, "send_message", fake_send)
     return calls
 
 

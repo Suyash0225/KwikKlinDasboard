@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # postgresql+asyncpg://laundry:laundry@localhost:5432/laundry
     DATABASE_URL: str
 
+    # --- Provider switch ---
+    # "meta"  = direct Meta Cloud API (test number, development)
+    # "dotpe" = DotPe BSP (the real business number lives there)
+    WHATSAPP_PROVIDER: Literal["meta", "dotpe"] = "meta"
+
     # --- WhatsApp Cloud API (Meta Graph API) ---
     WHATSAPP_TOKEN: str
     WHATSAPP_PHONE_NUMBER_ID: str
@@ -38,6 +43,16 @@ class Settings(BaseSettings):
     WHATSAPP_VERIFY_TOKEN: str
     # Used to verify the X-Hub-Signature-256 header on incoming webhooks.
     WHATSAPP_APP_SECRET: str
+
+    # --- DotPe BSP (only used when WHATSAPP_PROVIDER=dotpe) ---
+    # From the DotPe merchant panel -> API section. Empty = dotpe disabled.
+    DOTPE_API_KEY: str = ""
+    # The WABA number registered with DotPe, digits with country code,
+    # e.g. "917644020285".
+    DOTPE_WABA_NUMBER: str = ""
+    # We set this as the auth header value when configuring DotPe's webhook
+    # (their panel lets you add a custom header). Requests without it -> 403.
+    DOTPE_WEBHOOK_TOKEN: str = ""
 
     # --- LLM (unused until Phase 4) ---
     ANTHROPIC_API_KEY: str

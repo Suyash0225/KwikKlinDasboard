@@ -36,7 +36,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Conversation, Customer, Direction, Staff
-from app.services.templates import build_template
+from app.services import dotpe
+from app.services.templates import TEMPLATES, build_template
 
 log = structlog.get_logger()
 
@@ -114,7 +115,34 @@ async def send_message(
                 f"24h window closed for {to_phone} — send a template instead"
             )
 
-    # --- build payload ---
+    # --- DotPe provider: delegate the actual send, keep everything else ---
+    if settings.WHATSAPP_PROVIDER == "dotpe":
+        if buttons:
+            # DotPe's API has no interactive reply buttons (their docs:
+            # text/media/location only). Callers must use numbered text
+            # options on this provider.
+            raise SendError("DotPe provider does not support interactive buttons")
+        try:
+            if template_name:
+                build_template(template_name, template_params)  # validates
+                wa_message_id = await dotpe.send_template(
+                    to_phone,
+                    template_name,
+                    TEMPLATES[template_name]["language"],
+                    template_params,
+                )
+                logged_text = f"[template:{template_name}]"
+            else:
+                assert text is not None
+                wa_message_id = await dotpe.send_text(to_phone, text)
+                logged_text = text
+        except dotpe.DotpeError as exc:
+            raise SendError(str(exc)) from exc
+        log.info("whatsapp_sent", to=to_phone, provider="dotpe", wa_message_id=wa_message_id)
+        await _record_outbound(db, customer, staff, logged_text, wa_message_id, to_phone)
+        return wa_message_id
+
+    # --- build payload (Meta direct) ---
     payload: dict = {"messaging_product": "whatsapp", "to": to_phone.lstrip("+")}
     if template_name:
         payload["type"] = "template"
@@ -148,7 +176,19 @@ async def send_message(
         wa_message_id=wa_message_id,
     )
 
-    # --- record in conversations (needs a participant row) ---
+    await _record_outbound(db, customer, staff, logged_text, wa_message_id, to_phone)
+    return wa_message_id
+
+
+async def _record_outbound(
+    db: AsyncSession,
+    customer: Customer | None,
+    staff: Staff | None,
+    logged_text: str,
+    wa_message_id: str,
+    to_phone: str,
+) -> None:
+    """Record an outbound message in conversations (needs a participant row)."""
     if customer or staff:
         db.add(
             Conversation(
@@ -163,8 +203,6 @@ async def send_message(
     else:
         # e.g. the manager's number — no customer/staff row exists.
         log.info("outbound_not_recorded_no_participant", to=to_phone)
-
-    return wa_message_id
 
 
 async def _find_recipient(

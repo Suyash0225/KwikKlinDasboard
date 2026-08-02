@@ -22,6 +22,7 @@ Behavior rules:
 import hashlib
 import hmac
 import json
+import re
 from datetime import datetime, timezone
 
 import structlog
@@ -34,12 +35,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import Conversation, Customer, Direction, Staff
-from app.services.messages import get_message
+from app.services.messages import get_message, status_label
+from app.services.order_service import (
+    OrderNotFoundError,
+    get_active_orders_for_phone,
+    get_order,
+)
 from app.services.whatsapp import SendError, send_message
 from app.utils.phone import normalize_phone
 
 router = APIRouter()
 log = structlog.get_logger()
+
+# Matches order numbers like KK-20260801-01 anywhere in a message.
+ORDER_NUMBER_RE = re.compile(r"\bKK-\d{8}-\d{2,}\b", re.IGNORECASE)
 
 
 @router.get("/webhook")
@@ -80,6 +89,80 @@ async def receive_webhook(
         log.exception("webhook_processing_failed")
 
     return JSONResponse({"status": "received"})
+
+
+@router.post("/webhook/dotpe")
+async def receive_dotpe_webhook(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> JSONResponse:
+    """Receive DotPe events (dlr statuses + inbound messages).
+
+    Auth: DotPe's panel lets us attach a custom header to every webhook call.
+    We configure header name 'Dotpe-Webhook-Token' with our secret value —
+    requests without it are rejected. Their 'verify and save' test event
+    passes the same header, so verification succeeds automatically.
+    """
+    if not settings.DOTPE_WEBHOOK_TOKEN:
+        log.warning("dotpe_webhook_disabled_no_token")
+        return JSONResponse({"error": "disabled"}, status_code=403)
+    if request.headers.get("Dotpe-Webhook-Token") != settings.DOTPE_WEBHOOK_TOKEN:
+        log.warning("dotpe_webhook_bad_token")
+        return JSONResponse({"error": "invalid token"}, status_code=403)
+
+    try:
+        payload = json.loads(await request.body())
+    except json.JSONDecodeError:
+        # Their verification test may not be JSON — 200 keeps setup working.
+        return JSONResponse({"status": "ok"})
+
+    try:
+        if "message" in payload:
+            await _handle_inbound_message(_dotpe_to_meta_shape(payload), db)
+        elif "status" in payload:
+            status = payload.get("status", {})
+            log.info(
+                "whatsapp_status",
+                provider="dotpe",
+                job_id=status.get("jobid"),
+                status=status.get("status"),
+                recipient=status.get("recipient"),
+                errors=status.get("errors"),
+            )
+        else:
+            log.info("dotpe_webhook_unknown_event", keys=list(payload.keys()))
+    except Exception:
+        log.exception("dotpe_webhook_processing_failed")
+
+    return JSONResponse({"status": "received"})
+
+
+def _dotpe_to_meta_shape(payload: dict) -> dict:
+    """Convert DotPe's inbound event to the Meta-style dict our handler eats.
+
+    DotPe events carry no per-message id, so we synthesize a stable one from
+    timestamp+sender+content — a retried delivery of the same event hashes
+    identically and dedups via the existing unique constraint.
+    """
+    msg = payload.get("message", {})
+    ts = payload.get("timestamp", 0)
+    body = msg.get("body", "")
+    button = msg.get("button") or {}
+    fingerprint = f"{ts}:{msg.get('from', '')}:{body}:{button.get('payload', '')}"
+    synth_id = "dotpe:" + hashlib.sha256(fingerprint.encode()).hexdigest()[:40]
+
+    if msg.get("type") == "button":
+        return {
+            "from": msg.get("from", ""),
+            "id": synth_id,
+            "type": "button",
+            "button": {"payload": button.get("payload"), "text": button.get("text", "")},
+        }
+    return {
+        "from": msg.get("from", ""),
+        "id": synth_id,
+        "type": "text",
+        "text": {"body": body},
+    }
 
 
 def _signature_valid(body: bytes, header: str | None) -> bool:
@@ -173,15 +256,66 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
         phone=phone,
     )
 
-    # Placeholder ack — customers only (acking staff on every reply would be
-    # noise). Their inbound just opened the 24h window, so free-form is legal.
-    # Replaced by real handling in Phases 3/4. A failed ack must never break
-    # the webhook: log it and move on (degrade, never crash).
+    # Customers get a rule-based reply (no AI): order status if we can tell
+    # which order they mean, generic ack otherwise. Staff get no auto-reply.
+    # A failed reply must never break the webhook: log it and move on.
     if customer is not None:
         try:
-            await send_message(db, to_phone=phone, text=get_message("ack_received"))
+            reply = await _build_customer_reply(db, customer, text)
+        except Exception:
+            log.exception("reply_build_failed", phone=phone)
+            reply = get_message("error_fallback")
+        try:
+            await send_message(db, to_phone=phone, text=reply)
         except SendError:
-            log.exception("ack_send_failed", phone=phone)
+            log.exception("reply_send_failed", phone=phone)
+
+
+async def _build_customer_reply(db: AsyncSession, customer: Customer, text: str) -> str:
+    """Deterministic reply logic (Phase 3 — Phase 4's agent replaces this):
+
+    1. Message contains an order number -> that order's status
+       (only the customer's OWN orders — no leaking others' orders).
+    2. Customer has exactly one active order -> its status.
+    3. Several active orders -> a short list.
+    4. Nothing to say -> the generic ack.
+    """
+    match = ORDER_NUMBER_RE.search(text)
+    if match:
+        number = match.group(0).upper()
+        try:
+            order = await get_order(db, number)
+        except OrderNotFoundError:
+            return get_message("order_not_found")
+        if order.customer_id != customer.id:
+            log.warning(
+                "order_lookup_denied_wrong_customer",
+                order_number=number,
+                asking_customer=str(customer.id),
+            )
+            return get_message("order_not_found")
+        return _status_reply(order)
+
+    active = await get_active_orders_for_phone(db, customer.phone)
+    if len(active) == 1:
+        return _status_reply(active[0])
+    if len(active) > 1:
+        lines = [get_message("orders_list_header", count=str(len(active)))]
+        lines += [f"{o.order_number} — {status_label(o.status)}" for o in active]
+        return "\n".join(lines)
+    return get_message("ack_received")
+
+
+def _status_reply(order) -> str:
+    label = status_label(order.status)
+    if order.expected_delivery:
+        return get_message(
+            "status_reply_with_date",
+            order_number=order.order_number,
+            status_label=label,
+            date=order.expected_delivery.strftime("%d %b %Y"),
+        )
+    return get_message("status_reply", order_number=order.order_number, status_label=label)
 
 
 def _extract_text(msg: dict) -> str:
