@@ -10,18 +10,22 @@ page is a client of the same API, so every business rule (state machine,
 payment derivation, notifications) applies automatically.
 """
 
-from datetime import datetime, time, timedelta, timezone
+import csv
+import io
+import uuid as uuid_module
+from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Conversation, Customer, Direction, Order, Staff
+from app.models import Conversation, Customer, Direction, Expense, Order, Staff
 from app.routers.orders import require_admin_key
 from app.services.order_service import ACTIVE_STATUSES, get_active_orders_for_phone
 from app.services.whatsapp import SendError, WindowClosedError, send_message
@@ -87,6 +91,7 @@ async def dashboard_data(db: AsyncSession = Depends(get_db)) -> dict:
                 "phone": cu.phone,
                 "items": o.items,
                 "total_amount": str(o.total_amount) if o.total_amount is not None else None,
+                "amount_paid": str(o.amount_paid),
                 "payment_status": o.payment_status.name,
                 "expected_delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
                 "created_at": o.created_at.isoformat(),
@@ -108,7 +113,7 @@ async def dashboard_data(db: AsyncSession = Depends(get_db)) -> dict:
 
 @router.get("/api/customers", dependencies=[Depends(require_admin_key)])
 async def customers_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
-    """Customers with order counts, most recently active first."""
+    """Customers with order counts + money ledger, recently active first."""
     active_count = (
         select(func.count())
         .where(Order.customer_id == Customer.id, Order.status.in_(ACTIVE_STATUSES))
@@ -117,9 +122,19 @@ async def customers_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
     total_count = (
         select(func.count()).where(Order.customer_id == Customer.id).scalar_subquery()
     )
+    business = (
+        select(func.coalesce(func.sum(Order.total_amount), 0))
+        .where(Order.customer_id == Customer.id)
+        .scalar_subquery()
+    )
+    paid = (
+        select(func.coalesce(func.sum(Order.amount_paid), 0))
+        .where(Order.customer_id == Customer.id)
+        .scalar_subquery()
+    )
     rows = (
         await db.execute(
-            select(Customer, active_count, total_count)
+            select(Customer, active_count, total_count, business, paid)
             .order_by(Customer.last_message_at.desc().nulls_last())
             .limit(300)
         )
@@ -130,11 +145,176 @@ async def customers_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
             "phone": c.phone,
             "active_orders": active,
             "total_orders": total,
+            "business": str(biz),
+            "paid": str(pd),
+            "outstanding": str(max(Decimal("0"), Decimal(biz) - Decimal(pd))),
             "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
             "opted_out": c.opted_out,
         }
-        for c, active, total in rows
+        for c, active, total, biz, pd in rows
     ]
+
+
+# ---------- Expenses ----------
+
+class ExpenseIn(BaseModel):
+    category: str = Field(min_length=1, max_length=60)
+    amount: Decimal = Field(gt=0)
+    spent_on: date
+    description: str | None = Field(default=None, max_length=300)
+
+
+@router.get("/api/expenses", dependencies=[Depends(require_admin_key)])
+async def expenses_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    rows = (
+        await db.execute(select(Expense).order_by(Expense.spent_on.desc()).limit(200))
+    ).scalars().all()
+    return [
+        {
+            "id": str(e.id),
+            "category": e.category,
+            "amount": str(e.amount),
+            "spent_on": e.spent_on.isoformat(),
+            "description": e.description,
+        }
+        for e in rows
+    ]
+
+
+@router.post("/api/expenses", dependencies=[Depends(require_admin_key)], status_code=201)
+async def expense_create(body: ExpenseIn, db: AsyncSession = Depends(get_db)) -> dict:
+    exp = Expense(
+        category=body.category,
+        amount=body.amount,
+        spent_on=body.spent_on,
+        description=body.description,
+    )
+    db.add(exp)
+    await db.commit()
+    log.info("expense_recorded", category=body.category, amount=str(body.amount))
+    return {"id": str(exp.id)}
+
+
+@router.delete("/api/expenses/{expense_id}", dependencies=[Depends(require_admin_key)])
+async def expense_delete(expense_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        eid = uuid_module.UUID(expense_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid expense id")
+    exp = await db.get(Expense, eid)
+    if exp is None:
+        raise HTTPException(status_code=404, detail="expense not found")
+    await db.delete(exp)
+    await db.commit()
+    log.info("expense_deleted", expense_id=expense_id)
+    return {"deleted": expense_id}
+
+
+# ---------- Reports ----------
+
+@router.get("/api/reports/summary", dependencies=[Depends(require_admin_key)])
+async def reports_summary(db: AsyncSession = Depends(get_db)) -> dict:
+    """Money overview. NOTE: revenue is approximated as payments recorded on
+    orders CREATED in the period (a proper payments ledger is in ROADMAP).
+    """
+    now = datetime.now(timezone.utc)
+    today0 = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
+    week0 = today0 - timedelta(days=7)
+    month0 = today0.replace(day=1)
+
+    async def money_since(since: datetime) -> dict:
+        row = (
+            await db.execute(
+                select(
+                    func.coalesce(func.sum(Order.amount_paid), 0),
+                    func.count(),
+                ).where(Order.created_at >= since)
+            )
+        ).one()
+        exp = (
+            await db.execute(
+                select(func.coalesce(func.sum(Expense.amount), 0)).where(
+                    Expense.spent_on >= since.date()
+                )
+            )
+        ).scalar_one()
+        revenue, orders_count = row
+        return {
+            "revenue": str(revenue),
+            "expenses": str(exp),
+            "profit": str(Decimal(revenue) - Decimal(exp)),
+            "orders": orders_count,
+        }
+
+    outstanding = (
+        await db.execute(
+            select(
+                func.coalesce(
+                    func.sum(Order.total_amount - Order.amount_paid), 0
+                )
+            ).where(Order.total_amount.isnot(None), Order.total_amount > Order.amount_paid)
+        )
+    ).scalar_one()
+
+    return {
+        "today": await money_since(today0),
+        "week": await money_since(week0),
+        "month": await money_since(month0),
+        "outstanding_total": str(outstanding),
+    }
+
+
+# ---------- CSV exports ----------
+
+def _csv_response(filename: str, header: list[str], rows: list[list]) -> Response:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(header)
+    w.writerows(rows)
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/api/export/orders.csv", dependencies=[Depends(require_admin_key)])
+async def export_orders(db: AsyncSession = Depends(get_db)) -> Response:
+    rows = (
+        await db.execute(
+            select(Order, Customer)
+            .join(Customer, Customer.id == Order.customer_id)
+            .order_by(Order.created_at.desc())
+        )
+    ).all()
+    return _csv_response(
+        "orders.csv",
+        ["order_number", "date", "customer", "phone", "status", "items",
+         "total", "discount", "gst", "paid", "payment_status", "expected_delivery"],
+        [
+            [o.order_number, o.created_at.date().isoformat(), cu.name or "", cu.phone,
+             o.status.name,
+             "; ".join(f"{i.get('qty', 1)}x {i.get('type', '?')}" for i in (o.items or [])),
+             o.total_amount or "", o.discount_amount or "", o.gst_amount or "",
+             o.amount_paid, o.payment_status.name,
+             o.expected_delivery.isoformat() if o.expected_delivery else ""]
+            for o, cu in rows
+        ],
+    )
+
+
+@router.get("/api/export/customers.csv", dependencies=[Depends(require_admin_key)])
+async def export_customers(db: AsyncSession = Depends(get_db)) -> Response:
+    data = await customers_list(db)  # reuse the ledger query
+    return _csv_response(
+        "customers.csv",
+        ["name", "phone", "total_orders", "business", "paid", "outstanding", "last_message"],
+        [
+            [c["name"] or "", c["phone"], c["total_orders"], c["business"],
+             c["paid"], c["outstanding"], c["last_message_at"] or ""]
+            for c in data
+        ],
+    )
 
 
 SERVICE_WINDOW = timedelta(hours=24)

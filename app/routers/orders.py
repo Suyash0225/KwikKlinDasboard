@@ -49,6 +49,8 @@ async def _order_out(db: AsyncSession, order: Order, include_notes: bool = False
         customer_name=customer.name if customer else None,
         items=order.items,
         total_amount=order.total_amount,
+        discount_amount=order.discount_amount,
+        gst_amount=order.gst_amount,
         amount_paid=order.amount_paid,
         payment_status=order.payment_status.name,
         expected_delivery=order.expected_delivery,
@@ -67,11 +69,22 @@ async def create_order(body: OrderCreateIn, db: AsyncSession = Depends(get_db)) 
             customer_name=body.customer_name,
             items=[i.model_dump(exclude_none=True) for i in body.items],
             total_amount=body.total_amount,
+            discount_amount=body.discount_amount,
+            gst_amount=body.gst_amount,
             pickup_date=body.pickup_date,
             expected_delivery=body.expected_delivery,
             notes=body.notes,
             created_by="manager",
         )
+        # Advance taken at the counter -> record as a real payment.
+        if body.advance_amount and body.advance_amount > 0:
+            from app.models import PaymentMethod as PM
+
+            await order_service.record_payment(
+                db, order,
+                amount=body.advance_amount,
+                method=body.advance_method or PM.CASH,
+            )
     except (OrderError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return await _order_out(db, order, include_notes=True)

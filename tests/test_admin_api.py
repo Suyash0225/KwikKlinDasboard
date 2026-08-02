@@ -101,8 +101,8 @@ async def test_dashboard_data_shape(client) -> None:
 async def test_dashboard_page_serves(client) -> None:
     r = await client.get("/admin")
     assert r.status_code == 200
-    assert "Manager Dashboard" in r.text
-    assert "Naya Order" in r.text  # CRM tabs present
+    assert "Laundry Pro" in r.text
+    assert "New Bill" in r.text and "Expenses" in r.text  # CRM sections present
 
 
 async def test_customers_endpoint(client) -> None:

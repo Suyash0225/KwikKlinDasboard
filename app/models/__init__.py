@@ -16,6 +16,7 @@ from app.models.enums import (
     StaffRole,
 )
 from app.models.escalation import Escalation
+from app.models.expense import Expense
 from app.models.order import Order, OrderStatusHistory, derive_payment_status
 from app.models.staff import Staff
 
@@ -26,6 +27,7 @@ __all__ = [
     "Direction",
     "Escalation",
     "EscalationStatus",
+    "Expense",
     "Order",
     "OrderStatus",
     "OrderStatusHistory",

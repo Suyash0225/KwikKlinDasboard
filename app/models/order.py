@@ -59,7 +59,11 @@ class Order(Base):
     items: Mapped[list] = mapped_column(JSONB, default=list)
 
     # --- Payments (see module docstring for the rule) ---
+    # total_amount is the FINAL billable amount (after discount, incl. GST).
+    # discount_amount / gst_amount are stored for the bill display only.
     total_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    discount_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    gst_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     amount_paid: Mapped[Decimal] = mapped_column(
         Numeric(10, 2), default=Decimal("0"), server_default="0"
     )

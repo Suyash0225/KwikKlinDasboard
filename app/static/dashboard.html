@@ -3,109 +3,142 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kwik Klin — Manager Dashboard</title>
+<title>Kwik Klin — Laundry Pro</title>
 <style>
   * { box-sizing: border-box; margin: 0; }
-  body { font-family: system-ui, -apple-system, sans-serif; background: #f2f4f7; color: #101828; padding: 14px; }
-  h1 { font-size: 19px; }
-  .sub { color: #667085; font-size: 12px; margin: 2px 0 12px; }
-  .tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
-  .tab { padding: 7px 16px; border-radius: 8px; background: #fff; cursor: pointer; font-size: 13px;
-         border: 1px solid #e4e7ec; font-weight: 600; color: #475467; }
-  .tab.on { background: #101828; color: #fff; border-color: #101828; }
-  .cards { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-  .card { background: #fff; border-radius: 10px; padding: 10px 16px; min-width: 96px;
-          box-shadow: 0 1px 3px rgba(0,0,0,.08); cursor: pointer; border: 2px solid transparent; }
-  .card.on { border-color: #101828; }
-  .card .n { font-size: 22px; font-weight: 700; }
-  .card .l { font-size: 11px; color: #667085; }
-  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px;
-          overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); font-size: 13px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #f0f2f5; vertical-align: top; }
-  th { background: #fafbfc; color: #667085; font-size: 11px; text-transform: uppercase; }
+  :root { --side:#111827; --side2:#1b2436; --acc:#f97316; --ink:#101828; --mut:#667085;
+          --bg:#f4f6fa; --ok:#05603a; --bad:#b42318; --warn:#93370d; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--ink); }
+  .shell { display: flex; min-height: 100vh; }
+  /* ---- sidebar ---- */
+  .side { width: 224px; background: var(--side); color: #cbd5e1; display: flex; flex-direction: column;
+          position: sticky; top: 0; height: 100vh; flex-shrink: 0; }
+  .logo { display: flex; gap: 10px; align-items: center; padding: 18px 16px; }
+  .logo .kk { background: var(--acc); color: #fff; font-weight: 800; border-radius: 10px;
+              width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; }
+  .logo b { color: #fff; font-size: 15px; display: block; }
+  .logo small { font-size: 10px; color: #94a3b8; letter-spacing: .1em; }
+  .nav { flex: 1; padding: 8px; overflow-y: auto; }
+  .nav div { padding: 11px 14px; border-radius: 10px; cursor: pointer; font-size: 13.5px;
+             font-weight: 600; margin-bottom: 2px; display: flex; gap: 10px; align-items: center; }
+  .nav div:hover { background: var(--side2); color: #fff; }
+  .nav div.on { background: linear-gradient(90deg, var(--acc), #fb923c); color: #fff; }
+  .dbchip { margin: 12px; padding: 8px 12px; background: var(--side2); border-radius: 8px;
+            font-size: 11px; color: #86efac; }
+  /* ---- main ---- */
+  .main { flex: 1; padding: 18px 22px; min-width: 0; }
+  .tophead { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tophead h1 { font-size: 20px; }
+  .tophead .sub { color: var(--mut); font-size: 12px; }
+  .tophead .right { margin-left: auto; display: flex; gap: 8px; }
+  h2 { font-size: 16px; margin: 4px 0 12px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px;
+           margin-bottom: 16px; }
+  .card { background: #fff; border-radius: 14px; padding: 14px 16px; box-shadow: 0 1px 3px rgba(16,24,40,.08); }
+  .card .l { font-size: 11px; color: var(--mut); text-transform: uppercase; font-weight: 700;
+             letter-spacing: .04em; display: flex; justify-content: space-between; }
+  .card .n { font-size: 24px; font-weight: 800; margin-top: 6px; }
+  .card.click { cursor: pointer; border: 2px solid transparent; }
+  .card.click.on { border-color: var(--ink); }
+  .good { color: var(--ok); } .bad { color: var(--bad); } .warncol { color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px;
+          overflow: hidden; box-shadow: 0 1px 3px rgba(16,24,40,.08); font-size: 13px; }
+  th, td { text-align: left; padding: 9px 11px; border-bottom: 1px solid #f0f2f5; vertical-align: top; }
+  th { background: #fafbfc; color: var(--mut); font-size: 11px; text-transform: uppercase; }
   .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
   .RECEIVED { background:#eef4ff; color:#3538cd; } .IN_WASH { background:#e0f2fe; color:#026aa2; }
   .IN_DRY { background:#fef0c7; color:#93370d; } .IN_IRON { background:#fce7f6; color:#9e165f; }
   .READY { background:#d1fadf; color:#05603a; } .OUT_FOR_DELIVERY { background:#e9d7fe; color:#6941c6; }
   .DELIVERED { background:#ecfdf3; color:#054f31; } .ON_HOLD { background:#fee4e2; color:#912018; }
   .CANCELLED { background:#f2f4f7; color:#475467; }
-  .PAID { color:#05603a; font-weight:600; } .PARTIAL { color:#93370d; font-weight:600; }
-  .UNPAID { color:#912018; font-weight:600; }
+  .PAID { color:var(--ok); font-weight:600; } .PARTIAL { color:var(--warn); font-weight:600; }
+  .UNPAID { color:var(--bad); font-weight:600; }
+  button { border: 0; background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 9px;
+           cursor: pointer; font-size: 13px; font-weight: 600; }
+  button.ghost { background: #fff; color: var(--ink); border: 1px solid #d0d5dd; }
+  button.green { background: #059452; }
+  button.orange { background: var(--acc); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
   .act { display: flex; gap: 4px; flex-wrap: wrap; }
   .act button { font-size: 11px; padding: 4px 8px; }
-  button { border: 0; background: #101828; color: #fff; padding: 7px 14px; border-radius: 8px;
-           cursor: pointer; font-size: 13px; }
-  button.ghost { background: #fff; color: #101828; border: 1px solid #d0d5dd; }
-  button.green { background: #05603a; }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  input, select, textarea { padding: 8px 10px; border: 1px solid #d0d5dd; border-radius: 8px;
-                            font-size: 13px; width: 100%; font-family: inherit; }
-  label { font-size: 12px; color: #475467; font-weight: 600; display: block; margin: 10px 0 4px; }
-  .modal-bg { position: fixed; inset: 0; background: rgba(16,24,40,.5); display: none;
-              align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  input, select, textarea { padding: 9px 11px; border: 1px solid #d0d5dd; border-radius: 9px;
+                            font-size: 13px; width: 100%; font-family: inherit; background: #fff; }
+  label { font-size: 12px; color: #475467; font-weight: 700; display: block; margin: 10px 0 4px; }
+  .panel { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 1px 3px rgba(16,24,40,.08); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 12px; }
+  .filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .filters input, .filters select { width: auto; min-width: 150px; }
+  .t { color:#98a2b3; font-size:11px; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink);
+           color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; z-index: 30; }
+  #toast.err { background: var(--bad); }
+  .modal-bg { position: fixed; inset: 0; background: rgba(16,24,40,.55); display: none;
+              align-items: center; justify-content: center; padding: 16px; z-index: 20; }
   .modal-bg.open { display: flex; }
-  .modal { background: #fff; border-radius: 12px; padding: 18px; width: 100%; max-width: 480px;
+  .modal { background: #fff; border-radius: 14px; padding: 18px; width: 100%; max-width: 480px;
            max-height: 90vh; overflow-y: auto; }
   .modal h3 { font-size: 15px; margin-bottom: 6px; }
   .modal .foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #101828;
-           color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; z-index: 20; }
-  #toast.err { background: #b42318; }
-  .itemrow { display: grid; grid-template-columns: 1fr 70px 1fr 34px; gap: 6px; margin-bottom: 6px; }
-  .itemrow button { padding: 4px; background: #fee4e2; color: #912018; }
-  .form { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
-          max-width: 560px; }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
   .hist { border-left: 2px solid #e4e7ec; margin: 8px 0 8px 6px; padding-left: 14px; }
   .hist div { margin-bottom: 8px; font-size: 12px; }
-  .hist .t2 { color: #98a2b3; font-size: 11px; }
   .note { background: #fffaeb; border: 1px solid #fedf89; padding: 8px 10px; border-radius: 8px;
           font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
-  .warn { font-size: 11px; color: #93370d; margin-top: 4px; }
-  .search { max-width: 300px; margin-bottom: 10px; }
-  .t { color:#98a2b3; font-size:11px; }
-  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
-
-  /* ---------- INBOX ---------- */
-  .inbox { display: flex; height: calc(100vh - 130px); min-height: 420px; background: #fff;
-           border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); overflow: hidden; }
-  .threads { width: 300px; min-width: 240px; border-right: 1px solid #eaecf0; display: flex;
-             flex-direction: column; }
+  .warn { font-size: 11px; color: var(--warn); margin-top: 4px; }
+  /* ---- new bill ---- */
+  .bill-wrap { display: grid; grid-template-columns: 1fr 320px; gap: 14px; align-items: start; }
+  .iline { display: grid; grid-template-columns: 1.2fr 1fr 64px 80px 84px 32px; gap: 6px; margin-bottom: 6px;
+           align-items: center; }
+  .iline.wline { grid-template-columns: 1.2fr 1fr 64px 80px 84px 32px; }
+  .iline .amt { font-weight: 700; text-align: right; font-size: 13px; }
+  .iline button { padding: 5px; background: #fee4e2; color: #912018; }
+  .sumrow { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; }
+  .sumrow.total { font-size: 17px; font-weight: 800; border-top: 2px solid #f0f2f5; padding-top: 10px;
+                  margin-top: 6px; color: var(--ok); }
+  /* ---- inbox ---- */
+  .inbox { display: flex; height: calc(100vh - 120px); min-height: 420px; background: #fff;
+           border-radius: 14px; box-shadow: 0 1px 3px rgba(16,24,40,.08); overflow: hidden; }
+  .threads { width: 290px; min-width: 230px; border-right: 1px solid #eaecf0; display: flex; flex-direction: column; }
   .threads .head { padding: 10px; border-bottom: 1px solid #eaecf0; }
   .threads .list { overflow-y: auto; flex: 1; }
   .thread-item { padding: 10px 12px; border-bottom: 1px solid #f5f6f8; cursor: pointer; }
   .thread-item:hover { background: #f9fafb; }
-  .thread-item.on { background: #eef4ff; }
+  .thread-item.on { background: #fff7ed; }
   .thread-item .nm { font-weight: 600; font-size: 13px; display: flex; justify-content: space-between; }
-  .thread-item .pv { font-size: 12px; color: #667085; white-space: nowrap; overflow: hidden;
+  .thread-item .pv { font-size: 12px; color: var(--mut); white-space: nowrap; overflow: hidden;
                      text-overflow: ellipsis; margin-top: 2px; }
-  .staff-chip { font-size: 10px; background: #fef0c7; color: #93370d; border-radius: 6px;
-                padding: 1px 6px; margin-left: 4px; }
+  .staff-chip { font-size: 10px; background: #fef0c7; color: #93370d; border-radius: 6px; padding: 1px 6px; margin-left: 4px; }
   .chatpane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   .chat-head { padding: 10px 14px; border-bottom: 1px solid #eaecf0; display: flex; gap: 10px;
                align-items: center; flex-wrap: wrap; }
   .chat-head .nm { font-weight: 700; font-size: 14px; }
   .win { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
-  .win.open { background: #d1fadf; color: #05603a; }
-  .win.closed { background: #fee4e2; color: #912018; }
+  .win.open { background: #d1fadf; color: var(--ok); }
+  .win.closed { background: #fee4e2; color: var(--bad); }
   .ordchips { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
   .ordchip { font-size: 11px; background: #f2f4f7; border-radius: 6px; padding: 3px 8px; }
-  .msgs { flex: 1; overflow-y: auto; padding: 14px; background: #f0f2f5;
-          display: flex; flex-direction: column; gap: 6px; }
+  .msgs { flex: 1; overflow-y: auto; padding: 14px; background: #eef1f5; display: flex;
+          flex-direction: column; gap: 6px; }
   .bubble { max-width: 75%; padding: 8px 12px; border-radius: 12px; font-size: 13px;
             white-space: pre-wrap; word-break: break-word; box-shadow: 0 1px 1px rgba(0,0,0,.06); }
   .bubble .meta { font-size: 10px; color: #98a2b3; margin-top: 3px; text-align: right; }
-  .in  { align-self: flex-start; background: #fff; border-top-left-radius: 4px; }
-  .out { align-self: flex-end; background: #d9fdd3; border-top-right-radius: 4px; }
-  .out.manager { background: #d3e9fd; }
+  .bin  { align-self: flex-start; background: #fff; border-top-left-radius: 4px; }
+  .bout { align-self: flex-end; background: #d9fdd3; border-top-right-radius: 4px; }
+  .bout.manager { background: #d3e9fd; }
   .sending { opacity: .6; }
   .composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #eaecf0; align-items: flex-end; }
   .composer textarea { resize: none; max-height: 90px; }
-  .composer .lock { flex: 1; font-size: 12px; color: #912018; background: #fee4e2;
+  .composer .lock { flex: 1; font-size: 12px; color: var(--bad); background: #fee4e2;
                     border-radius: 8px; padding: 10px; }
   .backbtn { display: none; }
   .empty { margin: auto; color: #98a2b3; font-size: 13px; text-align: center; }
-  @media (max-width: 760px) {
+  @media (max-width: 860px) {
+    .shell { flex-direction: column; }
+    .side { width: 100%; height: auto; position: static; flex-direction: row; align-items: center; }
+    .logo { padding: 10px; } .dbchip { display: none; }
+    .nav { display: flex; padding: 6px; overflow-x: auto; }
+    .nav div { white-space: nowrap; }
+    .bill-wrap, .grid2, .grid3 { grid-template-columns: 1fr; }
     .inbox.chat-open .threads { display: none; }
     .inbox:not(.chat-open) .chatpane { display: none; }
     .threads { width: 100%; }
@@ -114,82 +147,180 @@
 </style>
 </head>
 <body>
-  <h1>🧺 Kwik Klin — Manager Dashboard</h1>
-  <div class="sub">Bot 90% khud sambhalta hai · Inbox se aap khud bhi bhej sakte ho
-    <button class="ghost" style="padding:3px 10px;font-size:11px" onclick="loadAll()">Refresh</button></div>
-
-  <div class="tabs">
-    <div class="tab on" data-tab="inbox" onclick="showTab('inbox')">💬 Inbox</div>
-    <div class="tab" data-tab="orders" onclick="showTab('orders')">📦 Orders</div>
-    <div class="tab" data-tab="new" onclick="showTab('new')">➕ Naya Order</div>
-    <div class="tab" data-tab="customers" onclick="showTab('customers')">👥 Customers</div>
+<div class="shell">
+  <div class="side">
+    <div class="logo"><div class="kk">KK</div>
+      <div><b>KWIK KLIN</b><small>LAUNDRY PRO</small></div></div>
+    <div class="nav" id="nav">
+      <div data-s="home" class="on" onclick="go('home')">📊 Dashboard</div>
+      <div data-s="inbox" onclick="go('inbox')">💬 Inbox</div>
+      <div data-s="newbill" onclick="go('newbill')">➕ New Bill</div>
+      <div data-s="bills" onclick="go('bills')">🧾 Bill History</div>
+      <div data-s="customers" onclick="go('customers')">👥 Customers</div>
+      <div data-s="expenses" onclick="go('expenses')">💸 Expenses</div>
+      <div data-s="reports" onclick="go('reports')">📈 Reports</div>
+    </div>
+    <div class="dbchip">🟢 Postgres DB · WhatsApp bot active</div>
   </div>
 
-  <!-- INBOX TAB -->
-  <div id="tab-inbox">
-    <div class="inbox" id="inbox-wrap">
-      <div class="threads">
-        <div class="head"><input placeholder="🔍 naam ya number..." id="th-search" oninput="renderThreads()"></div>
-        <div class="list" id="th-list"></div>
-      </div>
-      <div class="chatpane">
-        <div class="chat-head" id="chat-head"><span class="t">Bayen se kisi ko chuno…</span></div>
-        <div class="msgs" id="msgs"><div class="empty">💬<br>Chat yahan dikhegi</div></div>
-        <div class="composer" id="composer" style="display:none">
-          <button class="ghost backbtn" onclick="closeThread()">←</button>
-          <textarea id="msg-in" rows="1" placeholder="Message likho… (Enter = bhejo)"
-                    onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
-          <button class="green" id="send-btn" onclick="sendMsg()">➤</button>
+  <div class="main">
+    <div class="tophead">
+      <div><h1 id="head-title">Dashboard</h1>
+      <div class="sub" id="head-sub">Aaj ka haal ek nazar mein</div></div>
+      <div class="right"><button class="ghost" onclick="refreshAll()">↻ Refresh</button>
+        <button class="orange" onclick="go('newbill')">+ New Bill</button></div>
+    </div>
+
+    <!-- HOME -->
+    <div id="s-home">
+      <div class="cards" id="home-cards"></div>
+      <h2>Chalu Orders</h2>
+      <div class="cards" id="cards"></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Status</th><th>Payment</th><th>Delivery</th><th>Action</th></tr></thead>
+        <tbody id="orders-body"></tbody>
+      </table></div>
+    </div>
+
+    <!-- INBOX -->
+    <div id="s-inbox" style="display:none">
+      <div class="inbox" id="inbox-wrap">
+        <div class="threads">
+          <div class="head"><input placeholder="🔍 naam ya number..." id="th-search" oninput="renderThreads()"></div>
+          <div class="list" id="th-list"></div>
+        </div>
+        <div class="chatpane">
+          <div class="chat-head" id="chat-head"><span class="t">Bayen se kisi ko chuno…</span></div>
+          <div class="msgs" id="msgs"><div class="empty">💬<br>Chat yahan dikhegi</div></div>
+          <div class="composer" id="composer" style="display:none">
+            <button class="ghost backbtn" onclick="closeThread()">←</button>
+            <textarea id="msg-in" rows="1" placeholder="Message likho… (Enter = bhejo)"
+                      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
+            <button class="green" id="send-btn" onclick="sendMsg()">➤</button>
+          </div>
         </div>
       </div>
     </div>
-  </div>
 
-  <!-- ORDERS TAB -->
-  <div id="tab-orders" style="display:none">
-    <div class="cards" id="cards"></div>
-    <div style="overflow-x:auto"><table>
-      <thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Status</th><th>Payment</th><th>Delivery</th><th>Action</th></tr></thead>
-      <tbody id="orders-body"></tbody>
-    </table></div>
-  </div>
+    <!-- NEW BILL -->
+    <div id="s-newbill" style="display:none">
+      <div class="bill-wrap">
+        <div class="panel">
+          <h2>👤 Customer</h2>
+          <div class="grid2">
+            <div><label>Mobile number *</label><input id="f-phone" placeholder="98765 43210" onblur="prefillCustomer()"></div>
+            <div><label>Naam</label><input id="f-name" placeholder="Customer ka naam"></div>
+          </div>
+          <div class="grid3">
+            <div><label>Pickup date</label><input id="f-pickup" type="date"></div>
+            <div><label>Delivery date</label><input id="f-delivery" type="date"></div>
+            <div><label>Internal note 🔒</label><input id="f-notes" placeholder="sirf aapke liye"></div>
+          </div>
+          <h2 style="margin-top:16px">🧺 Items</h2>
+          <div class="t" style="margin-bottom:6px">Service · kapda · qty · rate → amount</div>
+          <div id="piece-items"></div>
+          <button class="ghost" style="font-size:12px" onclick="addPiece()">+ Piece item</button>
+          <div class="t" style="margin:10px 0 6px">Weight-based (per kg): service · — · kg · rate/kg → amount</div>
+          <div id="weight-items"></div>
+          <button class="ghost" style="font-size:12px" onclick="addWeight()">+ Weight service</button>
+        </div>
+        <div class="panel">
+          <h2>₹ Summary</h2>
+          <div class="sumrow"><span>Subtotal</span><b id="sum-sub">₹0</b></div>
+          <div class="sumrow"><span>Discount (₹)</span>
+            <input id="f-discount" type="number" min="0" value="" style="width:90px" oninput="calc()"></div>
+          <div class="sumrow"><span><label style="display:inline;font-weight:600">
+            <input type="checkbox" id="f-gst" style="width:auto" onchange="calc()"> GST 18%</label></span>
+            <b id="sum-gst">₹0</b></div>
+          <div class="sumrow total"><span>Bill Total</span><span id="sum-total">₹0</span></div>
+          <div class="sumrow"><span>Advance liya (₹)</span>
+            <input id="f-advance" type="number" min="0" value="" style="width:90px" oninput="calc()"></div>
+          <div class="sumrow"><span>Advance kaise</span>
+            <select id="f-advmethod" style="width:110px"><option value="CASH">Cash</option>
+              <option value="UPI">UPI</option><option value="OTHER">Aur</option></select></div>
+          <div class="sumrow"><span>Baaki (Due)</span><b class="bad" id="sum-due">₹0</b></div>
+          <button class="green" style="width:100%;margin-top:12px;padding:12px" onclick="createOrder()">
+            ✓ Bill banao (customer ko WhatsApp jayega)</button>
+        </div>
+      </div>
+    </div>
 
-  <!-- NEW ORDER TAB -->
-  <div id="tab-new" style="display:none">
-    <div class="form">
-      <h3 style="margin-bottom:4px">Naya Order</h3>
-      <div class="grid2">
-        <div><label>Customer phone *</label><input id="f-phone" placeholder="98765 43210"></div>
-        <div><label>Naam</label><input id="f-name" placeholder="optional"></div>
+    <!-- BILLS -->
+    <div id="s-bills" style="display:none">
+      <div class="filters">
+        <input id="b-search" placeholder="🔍 order no / naam / phone..." oninput="renderBills()">
+        <select id="b-pay" onchange="renderBills()">
+          <option value="">Sab payments</option><option value="DUE">Baaki wale</option>
+          <option value="PAID">Paid</option><option value="PARTIAL">Partial</option>
+          <option value="UNPAID">Unpaid</option></select>
+        <select id="b-status" onchange="renderBills()">
+          <option value="">Sab status</option><option>RECEIVED</option><option>IN_WASH</option>
+          <option>IN_DRY</option><option>IN_IRON</option><option>READY</option>
+          <option>OUT_FOR_DELIVERY</option><option>DELIVERED</option><option>ON_HOLD</option>
+          <option>CANCELLED</option></select>
       </div>
-      <label>Items *</label>
-      <div id="items"></div>
-      <button class="ghost" style="font-size:12px;padding:5px 10px" onclick="addItemRow()">+ item jodo</button>
-      <div class="grid2">
-        <div><label>Total (₹)</label><input id="f-total" type="number" min="0" step="0.5"></div>
-        <div><label>Expected delivery</label><input id="f-delivery" type="date"></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>Invoice</th><th>Customer</th><th>Dates</th><th>Items</th><th>Total / Due</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="bills-body"></tbody>
+      </table></div>
+    </div>
+
+    <!-- CUSTOMERS -->
+    <div id="s-customers" style="display:none">
+      <div class="filters"><input id="cust-search" placeholder="🔍 naam ya number..." oninput="renderCustomers()"></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>Customer</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Aakhri msg</th><th>Actions</th></tr></thead>
+        <tbody id="cust-body"></tbody>
+      </table></div>
+    </div>
+
+    <!-- EXPENSES -->
+    <div id="s-expenses" style="display:none">
+      <div class="cards" id="exp-cards"></div>
+      <div class="bill-wrap">
+        <div class="panel">
+          <h2>Kharcha likho</h2>
+          <label>Category</label>
+          <select id="e-cat"><option>Detergent</option><option>Staff salary</option>
+            <option>Bijli</option><option>Kiraya</option><option>Delivery/Petrol</option>
+            <option>Machine repair</option><option>Aur kuch</option></select>
+          <div class="grid2">
+            <div><label>Date</label><input id="e-date" type="date"></div>
+            <div><label>Amount (₹)</label><input id="e-amt" type="number" min="1"></div>
+          </div>
+          <label>Detail</label><input id="e-desc" placeholder="optional">
+          <button class="green" style="width:100%;margin-top:12px" onclick="addExpense()">+ Save karcha</button>
+        </div>
+        <div class="panel" style="grid-column:span 1">
+          <h2>Kharcha log</h2>
+          <div style="overflow-x:auto"><table>
+            <thead><tr><th>Date</th><th>Category</th><th>Detail</th><th>₹</th><th></th></tr></thead>
+            <tbody id="exp-body"></tbody>
+          </table></div>
+        </div>
       </div>
-      <label>Internal note (sirf aapke liye)</label>
-      <textarea id="f-notes" rows="2"></textarea>
-      <div style="display:flex;justify-content:flex-end;margin-top:14px">
-        <button class="green" onclick="createOrder()">Order banao ✓</button>
+    </div>
+
+    <!-- REPORTS -->
+    <div id="s-reports" style="display:none">
+      <div class="cards" id="rep-cards"></div>
+      <div class="panel">
+        <h2>📤 Excel / CSV Export</h2>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="ghost" onclick="dlCsv('/admin/api/export/orders.csv','orders.csv')">🧾 Orders → CSV</button>
+          <button class="ghost" onclick="dlCsv('/admin/api/export/customers.csv','customers.csv')">👥 Customers → CSV</button>
+        </div>
+        <div class="t" style="margin-top:10px">Data Postgres mein surakshit hai — browser-backup wali tension khatam.
+        Rozana ka asli backup Phase 6 (deploy) mein automatic hoga.</div>
       </div>
     </div>
   </div>
+</div>
 
-  <!-- CUSTOMERS TAB -->
-  <div id="tab-customers" style="display:none">
-    <input class="search" id="cust-search" placeholder="🔍 naam ya number..." oninput="renderCustomers()">
-    <div style="overflow-x:auto"><table>
-      <thead><tr><th>Customer</th><th>Phone</th><th>Chalu</th><th>Total orders</th><th>Aakhri message</th><th></th></tr></thead>
-      <tbody id="cust-body"></tbody>
-    </table></div>
-  </div>
-
-  <div class="modal-bg" id="modal-bg" onclick="if(event.target===this)closeModal()">
-    <div class="modal" id="modal"></div>
-  </div>
-  <div id="toast"></div>
+<div class="modal-bg" id="modal-bg" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modal"></div>
+</div>
+<div id="toast"></div>
 
 <script>
 const LABEL = {RECEIVED:'Naya', IN_WASH:'Dhulai', IN_DRY:'Sukh raha', IN_IRON:'Istri',
@@ -202,297 +333,411 @@ const NEXT = {RECEIVED:['IN_WASH','READY','ON_HOLD','CANCELLED'],
               READY:['OUT_FOR_DELIVERY','ON_HOLD','CANCELLED'],
               OUT_FOR_DELIVERY:['DELIVERED','ON_HOLD','CANCELLED'],
               ON_HOLD:['RECEIVED','IN_WASH','IN_DRY','IN_IRON','READY','OUT_FOR_DELIVERY','CANCELLED']};
-let DATA = null, CUSTOMERS = [], THREADS = [], FILTER = null, OPEN_PHONE = null;
+const TITLES = {home:['Dashboard','Aaj ka haal ek nazar mein'], inbox:['Inbox','WhatsApp — dekho aur khud jawaab do'],
+  newbill:['New Bill','30 second mein bill + customer ko WhatsApp'], bills:['Bill History','Sab bills, dues, status'],
+  customers:['Customers','Ledger — kitna business, kitna baaki'], expenses:['Expenses','Roz ka kharcha'],
+  reports:['Reports','Kamai, kharcha, munafa']};
+let DATA=null, CUSTOMERS=[], THREADS=[], BILLS=[], SUMMARY=null, EXPENSES=[], FILTER=null, OPEN_PHONE=null, SECTION='home';
 
-function getKey(force) {
-  let k = localStorage.getItem('kk_admin_key');
-  if (!k || force) { k = prompt('Admin API key daalo (.env ke ADMIN_API_KEY se):') || '';
-                     localStorage.setItem('kk_admin_key', k); }
-  return k;
+function getKey(force){let k=localStorage.getItem('kk_admin_key');
+  if(!k||force){k=prompt('Admin API key daalo (.env ke ADMIN_API_KEY se):')||'';localStorage.setItem('kk_admin_key',k);}return k;}
+async function api(path,opts={}){opts.headers=Object.assign({'X-API-Key':getKey(false),'Content-Type':'application/json'},opts.headers||{});
+  const r=await fetch(path,opts);
+  if(r.status===401){getKey(true);throw new Error('key galat thi — dobara try karo');}
+  const b=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(b.detail||('HTTP '+r.status));return b;}
+function toast(m,e){const t=document.getElementById('toast');t.textContent=m;t.className=e?'err':'';
+  t.style.display='block';setTimeout(()=>t.style.display='none',3500);}
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML;}
+function rs(n){return '₹'+(+n||0).toLocaleString('en-IN');}
+function go(name){SECTION=name;
+  for(const el of document.querySelectorAll('.nav div'))el.classList.toggle('on',el.dataset.s===name);
+  for(const s of ['home','inbox','newbill','bills','customers','expenses','reports'])
+    document.getElementById('s-'+s).style.display=s===name?'':'none';
+  document.getElementById('head-title').textContent=TITLES[name][0];
+  document.getElementById('head-sub').textContent=TITLES[name][1];
+  ({home:loadHome,inbox:loadThreads,bills:loadBills,customers:loadCustomers,
+    expenses:loadExpenses,reports:loadReports}[name]||(()=>{}))();
 }
-async function api(path, opts = {}) {
-  opts.headers = Object.assign({'X-API-Key': getKey(false), 'Content-Type': 'application/json'},
-                               opts.headers || {});
-  const r = await fetch(path, opts);
-  if (r.status === 401) { getKey(true); throw new Error('key galat thi — dobara try karo'); }
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.detail || ('HTTP ' + r.status));
-  return body;
+async function refreshAll(){go(SECTION);toast('Refresh ho gaya ✓');}
+
+/* ---------- HOME ---------- */
+async function loadHome(){
+  try{
+    [DATA,SUMMARY]=await Promise.all([api('/admin/api/dashboard'),api('/admin/api/reports/summary')]);
+    const hc=[
+      ['Aaj ke naye',DATA.counts.today_new,''],
+      ['Aaj ka collection',rs(SUMMARY.today.revenue),'good'],
+      ['Month orders',SUMMARY.month.orders,''],
+      ['Month revenue',rs(SUMMARY.month.revenue),'good'],
+      ['Month profit',rs(SUMMARY.month.profit),(+SUMMARY.month.profit>=0?'good':'bad')],
+      ['Total udhaar',rs(SUMMARY.outstanding_total),'bad'],
+    ];
+    document.getElementById('home-cards').innerHTML=hc.map(([l,n,cls])=>
+      `<div class="card"><div class="l">${l}</div><div class="n ${cls}">${n}</div></div>`).join('');
+    renderOrders();
+  }catch(e){toast(e.message,true);}
 }
-function toast(msg, isErr) {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.className = isErr ? 'err' : ''; t.style.display = 'block';
-  setTimeout(() => t.style.display = 'none', 3500);
+function renderOrders(){
+  const c=DATA.counts;
+  let cards=card('ALL',c.active_total,'Total chalu');
+  for(const [s,n] of Object.entries(c.by_status))cards+=card(s,n,LABEL[s]||s);
+  document.getElementById('cards').innerHTML=cards;
+  let rows=DATA.active_orders;
+  if(FILTER&&FILTER!=='ALL')rows=rows.filter(o=>o.status===FILTER);
+  document.getElementById('orders-body').innerHTML=rows.map(o=>orderRow(o)).join('')
+    ||'<tr><td colspan="7">Koi chalu order nahi.</td></tr>';
 }
-function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
-function showTab(name) {
-  for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t.dataset.tab === name);
-  for (const id of ['inbox','orders','new','customers'])
-    document.getElementById('tab-' + id).style.display = id === name ? '' : 'none';
-  if (name === 'customers') loadCustomers();
-  if (name === 'inbox') loadThreads();
+function orderRow(o){
+  const items=(o.items||[]).map(i=>`${i.qty}× ${esc(i.type)}`).join(', ');
+  const due=(+o.total_amount||0)-(+o.amount_paid||0);
+  const pay=o.total_amount?`<span class="${o.payment_status}">${o.payment_status}</span><br>${due>0?'<b class="bad">Due '+rs(due)+'</b>':rs(o.total_amount)}`:o.payment_status;
+  return `<tr>
+    <td><b>${esc(o.order_number)}</b><br><span class="t">${new Date(o.created_at).toLocaleDateString('en-IN')}</span></td>
+    <td>${esc(o.customer)}<br><span class="t">${esc(o.phone)}</span></td>
+    <td>${items}</td>
+    <td><span class="badge ${o.status}">${LABEL[o.status]||o.status}</span></td>
+    <td>${pay}</td><td>${o.expected_delivery||'—'}</td>
+    <td><div class="act">
+      <button onclick="openStatus('${o.order_number}','${o.status}')">▶</button>
+      <button class="ghost" onclick="openPayment('${o.order_number}')">₹</button>
+      <button class="ghost" onclick="openDate('${o.order_number}')">📅</button>
+      <button class="ghost" onclick="openDetail('${o.order_number}')">👁</button>
+      <button class="ghost" onclick="go('inbox');openThread('${o.phone}')">💬</button>
+    </div></td></tr>`;
+}
+function card(f,n,l){const on=FILTER===f?'on':'';
+  return `<div class="card click ${on}" onclick="FILTER=FILTER==='${f}'?null:'${f}';renderOrders()">
+    <div class="l">${l}</div><div class="n">${n}</div></div>`;}
+
+/* ---------- BILLS ---------- */
+async function loadBills(){
+  try{BILLS=await api('/orders?limit=200');renderBills();}catch(e){toast(e.message,true);}
+}
+function renderBills(){
+  const q=(document.getElementById('b-search').value||'').toLowerCase();
+  const pay=document.getElementById('b-pay').value;
+  const st=document.getElementById('b-status').value;
+  const rows=BILLS.filter(o=>{
+    const due=(+o.total_amount||0)-(+o.amount_paid||0);
+    if(q&&!(o.order_number.toLowerCase().includes(q)||(o.customer_name||'').toLowerCase().includes(q)||o.customer_phone.includes(q)))return false;
+    if(pay==='DUE'&&due<=0)return false;
+    if(pay&&pay!=='DUE'&&o.payment_status!==pay)return false;
+    if(st&&o.status!==st)return false;
+    return true;});
+  document.getElementById('bills-body').innerHTML=rows.map(o=>{
+    const items=(o.items||[]).reduce((a,i)=>a+(+i.qty||1),0);
+    const due=(+o.total_amount||0)-(+o.amount_paid||0);
+    return `<tr>
+      <td><b>${esc(o.order_number)}</b></td>
+      <td>${esc(o.customer_name||o.customer_phone)}${due>0?` <span class="badge UNPAID">${rs(due)} due</span>`:''}<br><span class="t">${esc(o.customer_phone)}</span></td>
+      <td><span class="t">Order: ${new Date(o.created_at).toLocaleDateString('en-IN')}<br>Delv: ${o.expected_delivery||'—'}</span></td>
+      <td>${items} pcs</td>
+      <td>${o.total_amount?rs(o.total_amount):'—'}<br><span class="${o.payment_status}">${o.payment_status}</span></td>
+      <td><span class="badge ${o.status}">${LABEL[o.status]||o.status}</span></td>
+      <td><div class="act">
+        <button onclick="openStatus('${o.order_number}','${o.status}')">▶</button>
+        <button class="ghost" onclick="openPayment('${o.order_number}')">₹</button>
+        <button class="ghost" onclick="openDetail('${o.order_number}')">👁</button>
+        <button class="ghost" onclick="go('inbox');openThread('${o.customer_phone}')">💬</button>
+      </div></td></tr>`;
+  }).join('')||'<tr><td colspan="7">Kuch nahi mila.</td></tr>';
 }
 
-/* ---------- INBOX ---------- */
-async function loadThreads() {
-  try { THREADS = await api('/admin/api/inbox/threads'); renderThreads(); }
-  catch (e) { toast(e.message, true); }
+/* ---------- NEW BILL ---------- */
+const GARMENTS=['Shirt','Pant','Kurta','Saree','Suit 2pc','Suit 3pc','Jeans','T-shirt','Blazer','Sherwani','Lehenga','Chadar','Razai/Blanket','Curtain','Shoes','Aur'];
+const PSERV=['Dry Clean','Wash & Iron','Sirf Iron','Premium/Delicate'];
+const WSERV=['Wash & Fold (kg)','Wash & Iron (kg)','Household (kg)'];
+function addPiece(){const d=document.createElement('div');d.className='iline';
+  d.innerHTML=`<select class="p-serv">${PSERV.map(s=>`<option>${s}</option>`).join('')}</select>
+    <select class="p-type">${GARMENTS.map(g=>`<option>${g}</option>`).join('')}</select>
+    <input type="number" class="p-qty" min="1" value="1" oninput="calc()">
+    <input type="number" class="p-rate" min="0" placeholder="rate" oninput="calc()">
+    <div class="amt p-amt">₹0</div>
+    <button onclick="this.parentElement.remove();calc()">✕</button>`;
+  document.getElementById('piece-items').appendChild(d);}
+function addWeight(){const d=document.createElement('div');d.className='iline wline';
+  d.innerHTML=`<select class="w-serv">${WSERV.map(s=>`<option>${s}</option>`).join('')}</select>
+    <div class="t" style="text-align:center">per kg</div>
+    <input type="number" class="w-kg" min="0.5" step="0.5" placeholder="kg" oninput="calc()">
+    <input type="number" class="w-rate" min="0" placeholder="₹/kg" oninput="calc()">
+    <div class="amt w-amt">₹0</div>
+    <button onclick="this.parentElement.remove();calc()">✕</button>`;
+  document.getElementById('weight-items').appendChild(d);}
+function calc(){
+  let sub=0;
+  for(const r of document.querySelectorAll('#piece-items .iline')){
+    const a=(+r.querySelector('.p-qty').value||0)*(+r.querySelector('.p-rate').value||0);
+    r.querySelector('.p-amt').textContent=rs(a);sub+=a;}
+  for(const r of document.querySelectorAll('#weight-items .iline')){
+    const a=(+r.querySelector('.w-kg').value||0)*(+r.querySelector('.w-rate').value||0);
+    r.querySelector('.w-amt').textContent=rs(a);sub+=a;}
+  const disc=+document.getElementById('f-discount').value||0;
+  const gst=document.getElementById('f-gst').checked?Math.round((sub-disc)*0.18*100)/100:0;
+  const total=Math.max(0,sub-disc+gst);
+  const adv=+document.getElementById('f-advance').value||0;
+  document.getElementById('sum-sub').textContent=rs(sub);
+  document.getElementById('sum-gst').textContent=rs(gst);
+  document.getElementById('sum-total').textContent=rs(total);
+  document.getElementById('sum-due').textContent=rs(Math.max(0,total-adv));
+  return {sub,disc,gst,total,adv};
 }
-function renderThreads() {
-  const q = (document.getElementById('th-search').value || '').toLowerCase();
-  const rows = THREADS.filter(t => !q || t.name.toLowerCase().includes(q) || t.phone.includes(q));
-  document.getElementById('th-list').innerHTML = rows.map(t => {
-    const time = new Date(t.last_at).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'});
-    const arrow = t.last_direction === 'INBOUND' ? '' : '➡️ ';
-    const chip = t.kind === 'staff' ? '<span class="staff-chip">staff</span>' : '';
-    return `<div class="thread-item ${t.phone === OPEN_PHONE ? 'on' : ''}" onclick="openThread('${t.phone}')">
+function prefillCustomer(){
+  const p=document.getElementById('f-phone').value.replace(/\D/g,'').slice(-10);
+  if(p.length!==10)return;
+  const m=CUSTOMERS.find(c=>c.phone.endsWith(p));
+  if(m&&m.name&&!document.getElementById('f-name').value)document.getElementById('f-name').value=m.name;
+}
+async function createOrder(){
+  try{
+    const items=[];
+    for(const r of document.querySelectorAll('#piece-items .iline')){
+      const qty=+r.querySelector('.p-qty').value,rate=+r.querySelector('.p-rate').value||null;
+      items.push({type:r.querySelector('.p-type').value,qty,
+        service:r.querySelector('.p-serv').value,rate,amount:rate?qty*rate:null,unit:'pc'});}
+    for(const r of document.querySelectorAll('#weight-items .iline')){
+      const kg=+r.querySelector('.w-kg').value,rate=+r.querySelector('.w-rate').value||null;
+      if(!kg)continue;
+      items.push({type:r.querySelector('.w-serv').value,qty:1,service:'per_kg',
+        weight_kg:kg,rate,amount:rate?kg*rate:null,unit:'kg'});}
+    const phone=document.getElementById('f-phone').value.trim();
+    if(!phone)throw new Error('phone daalo');
+    if(!items.length)throw new Error('kam se kam ek item daalo');
+    const {disc,gst,total,adv}=calc();
+    const body={customer_phone:phone,items,
+      customer_name:document.getElementById('f-name').value.trim()||null,
+      total_amount:total||null,
+      discount_amount:disc||null,gst_amount:gst||null,
+      advance_amount:adv||null,advance_method:document.getElementById('f-advmethod').value,
+      pickup_date:document.getElementById('f-pickup').value||null,
+      expected_delivery:document.getElementById('f-delivery').value||null,
+      notes:document.getElementById('f-notes').value.trim()||null};
+    const r=await api('/orders',{method:'POST',body:JSON.stringify(body)});
+    toast(`Bill ${r.order_number} ban gaya ✓`);
+    for(const el of ['f-phone','f-name','f-pickup','f-delivery','f-notes','f-discount','f-advance'])
+      document.getElementById(el).value='';
+    document.getElementById('f-gst').checked=false;
+    document.getElementById('piece-items').innerHTML='';document.getElementById('weight-items').innerHTML='';
+    addPiece();calc();go('bills');
+  }catch(e){toast(e.message,true);}
+}
+
+/* ---------- CUSTOMERS ---------- */
+async function loadCustomers(){try{CUSTOMERS=await api('/admin/api/customers');renderCustomers();}catch(e){toast(e.message,true);}}
+function renderCustomers(){
+  const q=(document.getElementById('cust-search').value||'').toLowerCase();
+  const rows=CUSTOMERS.filter(c=>!q||(c.name||'').toLowerCase().includes(q)||c.phone.includes(q));
+  document.getElementById('cust-body').innerHTML=rows.map(c=>{
+    const out=+c.outstanding;
+    return `<tr>
+      <td>${esc(c.name||'—')}${out>0?` <span class="badge UNPAID">${rs(out)} due</span>`:''}<br><span class="t">${esc(c.phone)}</span></td>
+      <td>${c.total_orders} (${c.active_orders} chalu)</td>
+      <td>${rs(c.business)}</td><td class="good">${rs(c.paid)}</td>
+      <td class="${out>0?'bad':'good'}"><b>${rs(out)}</b></td>
+      <td><span class="t">${c.last_message_at?new Date(c.last_message_at).toLocaleDateString('en-IN'):'—'}</span></td>
+      <td><div class="act">
+        ${out>0?`<button class="green" onclick="collectFrom('${c.phone}')">₹ Collect</button>`:''}
+        <button class="ghost" onclick="go('inbox');openThread('${c.phone}')">💬</button>
+        <button class="ghost" onclick="go('bills');document.getElementById('b-search').value='${c.phone}';renderBills()">🧾</button>
+      </div></td></tr>`;
+  }).join('')||'<tr><td colspan="7">Koi customer nahi.</td></tr>';
+}
+function collectFrom(phone){go('bills');
+  document.getElementById('b-search').value=phone;
+  document.getElementById('b-pay').value='DUE';
+  setTimeout(renderBills,300);}
+
+/* ---------- EXPENSES ---------- */
+async function loadExpenses(){
+  try{EXPENSES=await api('/admin/api/expenses');
+    if(!SUMMARY)SUMMARY=await api('/admin/api/reports/summary');
+    document.getElementById('exp-cards').innerHTML=[
+      ['Aaj ka kharcha',rs(SUMMARY.today.expenses),'warncol'],
+      ['Month ka kharcha',rs(SUMMARY.month.expenses),'warncol'],
+      ['Month profit',rs(SUMMARY.month.profit),(+SUMMARY.month.profit>=0?'good':'bad')],
+    ].map(([l,n,c])=>`<div class="card"><div class="l">${l}</div><div class="n ${c}">${n}</div></div>`).join('');
+    document.getElementById('e-date').value=new Date().toISOString().slice(0,10);
+    document.getElementById('exp-body').innerHTML=EXPENSES.map(e=>`<tr>
+      <td>${e.spent_on}</td><td>${esc(e.category)}</td><td>${esc(e.description||'—')}</td>
+      <td><b>${rs(e.amount)}</b></td>
+      <td><button class="ghost" style="font-size:11px" onclick="delExpense('${e.id}')">🗑</button></td>
+    </tr>`).join('')||'<tr><td colspan="5">Abhi koi kharcha nahi likha.</td></tr>';
+  }catch(e){toast(e.message,true);}
+}
+async function addExpense(){
+  try{
+    const amt=document.getElementById('e-amt').value;
+    if(!amt||+amt<=0)throw new Error('amount daalo');
+    await api('/admin/api/expenses',{method:'POST',body:JSON.stringify({
+      category:document.getElementById('e-cat').value,
+      amount:amt,spent_on:document.getElementById('e-date').value,
+      description:document.getElementById('e-desc').value.trim()||null})});
+    document.getElementById('e-amt').value='';document.getElementById('e-desc').value='';
+    SUMMARY=null;toast('Kharcha save ✓');loadExpenses();
+  }catch(e){toast(e.message,true);}
+}
+async function delExpense(id){
+  try{await api('/admin/api/expenses/'+id,{method:'DELETE'});SUMMARY=null;loadExpenses();}
+  catch(e){toast(e.message,true);}
+}
+
+/* ---------- REPORTS ---------- */
+async function loadReports(){
+  try{SUMMARY=await api('/admin/api/reports/summary');
+    const s=SUMMARY;
+    document.getElementById('rep-cards').innerHTML=[
+      ['Aaj — kamai',rs(s.today.revenue),'good'],['Aaj — kharcha',rs(s.today.expenses),'warncol'],
+      ['Aaj — profit',rs(s.today.profit),(+s.today.profit>=0?'good':'bad')],
+      ['7 din — profit',rs(s.week.profit),(+s.week.profit>=0?'good':'bad')],
+      ['Month — kamai',rs(s.month.revenue),'good'],['Month — kharcha',rs(s.month.expenses),'warncol'],
+      ['Month — profit',rs(s.month.profit),(+s.month.profit>=0?'good':'bad')],
+      ['Total udhaar',rs(s.outstanding_total),'bad'],
+    ].map(([l,n,c])=>`<div class="card"><div class="l">${l}</div><div class="n ${c}">${n}</div></div>`).join('');
+  }catch(e){toast(e.message,true);}
+}
+async function dlCsv(path,name){
+  try{
+    const r=await fetch(path,{headers:{'X-API-Key':getKey(false)}});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const blob=await r.blob();const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href);
+  }catch(e){toast(e.message,true);}
+}
+
+/* ---------- INBOX (same engine as pehle) ---------- */
+async function loadThreads(){try{THREADS=await api('/admin/api/inbox/threads');renderThreads();}catch(e){toast(e.message,true);}}
+function renderThreads(){
+  const q=(document.getElementById('th-search').value||'').toLowerCase();
+  const rows=THREADS.filter(t=>!q||t.name.toLowerCase().includes(q)||t.phone.includes(q));
+  document.getElementById('th-list').innerHTML=rows.map(t=>{
+    const time=new Date(t.last_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+    const arrow=t.last_direction==='INBOUND'?'':'➡️ ';
+    const chip=t.kind==='staff'?'<span class="staff-chip">staff</span>':'';
+    return `<div class="thread-item ${t.phone===OPEN_PHONE?'on':''}" onclick="openThread('${t.phone}')">
       <div class="nm"><span>${esc(t.name)}${chip}</span><span class="t">${time}</span></div>
       <div class="pv">${arrow}${esc(t.last_text)}</div></div>`;
-  }).join('') || '<div class="thread-item">Koi baat-cheet nahi hui abhi.</div>';
+  }).join('')||'<div class="thread-item">Koi baat-cheet nahi.</div>';
 }
-async function openThread(phone) {
-  OPEN_PHONE = phone;
-  document.getElementById('inbox-wrap').classList.add('chat-open');
-  renderThreads();
-  await refreshThread(true);
-}
-function closeThread() {
-  OPEN_PHONE = null;
-  document.getElementById('inbox-wrap').classList.remove('chat-open');
-  renderThreads();
-}
-async function refreshThread(scroll) {
-  if (!OPEN_PHONE) return;
-  try {
-    const d = await api('/admin/api/inbox/thread?phone=' + encodeURIComponent(OPEN_PHONE));
-    const win = d.window.open
-      ? '<span class="win open">🟢 window khuli — free message OK</span>'
-      : '<span class="win closed">🔴 window band — sirf template</span>';
-    const chips = (d.active_orders || []).map(o =>
-      `<span class="ordchip">${esc(o.order_number)} · ${LABEL[o.status] || o.status}</span>`).join('');
-    document.getElementById('chat-head').innerHTML =
+async function openThread(phone){OPEN_PHONE=phone;
+  document.getElementById('inbox-wrap').classList.add('chat-open');renderThreads();await refreshThread(true);}
+function closeThread(){OPEN_PHONE=null;
+  document.getElementById('inbox-wrap').classList.remove('chat-open');renderThreads();}
+async function refreshThread(scroll){
+  if(!OPEN_PHONE)return;
+  try{
+    const d=await api('/admin/api/inbox/thread?phone='+encodeURIComponent(OPEN_PHONE));
+    const win=d.window.open?'<span class="win open">🟢 window khuli</span>'
+                           :'<span class="win closed">🔴 window band</span>';
+    const chips=(d.active_orders||[]).map(o=>`<span class="ordchip">${esc(o.order_number)} · ${LABEL[o.status]||o.status}</span>`).join('');
+    document.getElementById('chat-head').innerHTML=
       `<button class="ghost backbtn" onclick="closeThread()">←</button>
        <span class="nm">${esc(d.name)}</span><span class="t">${esc(d.phone)}</span>${win}
        <div class="ordchips">${chips}</div>`;
-
-    const msgs = document.getElementById('msgs');
-    const nearBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
-    msgs.innerHTML = d.messages.map(m => {
-      const t = new Date(m.at).toLocaleString('en-IN', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
-      if (m.direction === 'INBOUND')
-        return `<div class="bubble in">${esc(m.text)}<div class="meta">${t}</div></div>`;
-      const who = m.sent_by === 'manager' ? '👤 Aap' : '🤖 Bot';
-      const cls = m.sent_by === 'manager' ? 'out manager' : 'out';
+    const msgs=document.getElementById('msgs');
+    const nearBottom=msgs.scrollHeight-msgs.scrollTop-msgs.clientHeight<80;
+    msgs.innerHTML=d.messages.map(m=>{
+      const t=new Date(m.at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+      if(m.direction==='INBOUND')return `<div class="bubble bin">${esc(m.text)}<div class="meta">${t}</div></div>`;
+      const who=m.sent_by==='manager'?'👤 Aap':'🤖 Bot';
+      const cls=m.sent_by==='manager'?'bout manager':'bout';
       return `<div class="bubble ${cls}">${esc(m.text)}<div class="meta">${who} · ${t}</div></div>`;
-    }).join('') || '<div class="empty">Abhi koi message nahi.</div>';
-    if (scroll || nearBottom) msgs.scrollTop = msgs.scrollHeight;
-
-    const composer = document.getElementById('composer');
-    composer.style.display = 'flex';
-    const locked = !d.window.open && d.kind === 'customer';
-    document.getElementById('msg-in').style.display = locked ? 'none' : '';
-    document.getElementById('send-btn').style.display = locked ? 'none' : '';
-    let lock = composer.querySelector('.lock');
-    if (locked && !lock) {
-      lock = document.createElement('div'); lock.className = 'lock';
-      lock.textContent = '🔴 24h window band hai — customer ka message aane par khulegi. (Template bhejna Phase-templates ke baad.)';
-      composer.appendChild(lock);
-    } else if (!locked && lock) lock.remove();
-  } catch (e) { toast(e.message, true); }
+    }).join('')||'<div class="empty">Abhi koi message nahi.</div>';
+    if(scroll||nearBottom)msgs.scrollTop=msgs.scrollHeight;
+    const composer=document.getElementById('composer');
+    composer.style.display='flex';
+    const locked=!d.window.open&&d.kind==='customer';
+    document.getElementById('msg-in').style.display=locked?'none':'';
+    document.getElementById('send-btn').style.display=locked?'none':'';
+    let lock=composer.querySelector('.lock');
+    if(locked&&!lock){lock=document.createElement('div');lock.className='lock';
+      lock.textContent='🔴 24h window band — customer ke message aane par khulegi.';
+      composer.appendChild(lock);}else if(!locked&&lock)lock.remove();
+  }catch(e){toast(e.message,true);}
 }
-async function sendMsg() {
-  const input = document.getElementById('msg-in');
-  const text = input.value.trim();
-  if (!text || !OPEN_PHONE) return;
-  input.value = '';
-  const msgs = document.getElementById('msgs');
-  const tmp = document.createElement('div');
-  tmp.className = 'bubble out manager sending';
-  tmp.innerHTML = esc(text) + '<div class="meta">👤 bhej raha hai…</div>';
-  msgs.appendChild(tmp); msgs.scrollTop = msgs.scrollHeight;
-  try {
-    await api('/admin/api/inbox/send', {method:'POST',
-      body: JSON.stringify({phone: OPEN_PHONE, text})});
-    await refreshThread(true); loadThreads();
-  } catch (e) {
-    tmp.remove(); input.value = text;
-    toast(e.message, true);
-  }
+async function sendMsg(){
+  const input=document.getElementById('msg-in');const text=input.value.trim();
+  if(!text||!OPEN_PHONE)return;
+  input.value='';
+  const msgs=document.getElementById('msgs');
+  const tmp=document.createElement('div');tmp.className='bubble bout manager sending';
+  tmp.innerHTML=esc(text)+'<div class="meta">👤 bhej raha hai…</div>';
+  msgs.appendChild(tmp);msgs.scrollTop=msgs.scrollHeight;
+  try{await api('/admin/api/inbox/send',{method:'POST',body:JSON.stringify({phone:OPEN_PHONE,text})});
+    await refreshThread(true);loadThreads();}
+  catch(e){tmp.remove();input.value=text;toast(e.message,true);}
 }
 
-/* ---------- ORDERS ---------- */
-async function loadAll() {
-  try { DATA = await api('/admin/api/dashboard'); renderOrders(); }
-  catch (e) { toast(e.message, true); }
-  if (document.getElementById('tab-inbox').style.display !== 'none') {
-    loadThreads(); refreshThread(false);
-  }
-}
-function renderOrders() {
-  const c = DATA.counts;
-  let cards = card(null, c.today_new, 'Aaj ke naye') + card('ALL', c.active_total, 'Total chalu');
-  for (const [s, n] of Object.entries(c.by_status)) cards += card(s, n, LABEL[s] || s);
-  document.getElementById('cards').innerHTML = cards;
-
-  let rows = DATA.active_orders;
-  if (FILTER && FILTER !== 'ALL') rows = rows.filter(o => o.status === FILTER);
-  document.getElementById('orders-body').innerHTML = rows.map(o => {
-    const items = (o.items || []).map(i => `${i.qty}× ${esc(i.type)}`).join(', ');
-    const pay = o.total_amount ? `${o.payment_status}<br>₹${o.amount_paid || 0}/${o.total_amount}` : o.payment_status;
-    return `<tr>
-      <td><b>${esc(o.order_number)}</b><br><span class="t">${new Date(o.created_at).toLocaleDateString('en-IN')}</span></td>
-      <td>${esc(o.customer)}<br><span class="t">${esc(o.phone)}</span></td>
-      <td>${items}</td>
-      <td><span class="badge ${o.status}">${LABEL[o.status] || o.status}</span></td>
-      <td class="${o.payment_status}">${pay}</td>
-      <td>${o.expected_delivery || '—'}</td>
-      <td><div class="act">
-        <button onclick="openStatus('${o.order_number}','${o.status}')">▶ Status</button>
-        <button class="ghost" onclick="openPayment('${o.order_number}')">₹</button>
-        <button class="ghost" onclick="openDate('${o.order_number}')">📅</button>
-        <button class="ghost" onclick="openDetail('${o.order_number}')">👁</button>
-        <button class="ghost" onclick="showTab('inbox');openThread('${o.phone}')">💬</button>
-      </div></td></tr>`;
-  }).join('') || '<tr><td colspan="7">Is filter mein koi order nahi.</td></tr>';
-}
-function card(filter, n, label) {
-  const on = FILTER === filter ? 'on' : '';
-  const click = filter === null ? '' : `onclick="FILTER=FILTER==='${filter}'?null:'${filter}';renderOrders()"`;
-  return `<div class="card ${on}" ${click}><div class="n">${n}</div><div class="l">${label}</div></div>`;
-}
-
-/* ---------- MODALS (status / payment / date / detail) ---------- */
-function openModal(html) { document.getElementById('modal').innerHTML = html;
-                           document.getElementById('modal-bg').classList.add('open'); }
-function closeModal() { document.getElementById('modal-bg').classList.remove('open'); }
-function openStatus(num, current) {
-  const opts = (NEXT[current] || []).map(s => `<option value="${s}">${LABEL[s]} (${s})</option>`).join('');
+/* ---------- MODALS ---------- */
+function openModal(h){document.getElementById('modal').innerHTML=h;document.getElementById('modal-bg').classList.add('open');}
+function closeModal(){document.getElementById('modal-bg').classList.remove('open');}
+function openStatus(num,cur){
+  const opts=(NEXT[cur]||[]).map(s=>`<option value="${s}">${LABEL[s]} (${s})</option>`).join('');
   openModal(`<h3>${num} — status badlo</h3>
-    <div class="sub">Abhi: <span class="badge ${current}">${LABEL[current]}</span></div>
+    <div class="t">Abhi: <span class="badge ${cur}">${LABEL[cur]}</span></div>
     <label>Naya status</label><select id="m-status">${opts}</select>
-    <div class="warn">READY / Delivery pe / Ho gaya → customer ko message jayega</div>
+    <div class="warn">READY / Delivery pe / Ho gaya → customer ko WhatsApp jayega</div>
     <div class="foot"><button class="ghost" onclick="closeModal()">Nahi</button>
-    <button class="green" onclick="doStatus('${num}')">Badlo ✓</button></div>`);
-}
-async function doStatus(num) {
-  try {
-    await api(`/orders/${num}/status`, {method:'POST',
-      body: JSON.stringify({status: document.getElementById('m-status').value, changed_by:'manager:dashboard'})});
-    closeModal(); toast(num + ' update ho gaya ✓'); loadAll();
-  } catch (e) { toast(e.message, true); }
-}
-function openPayment(num) {
+    <button class="green" onclick="doStatus('${num}')">Badlo ✓</button></div>`);}
+async function doStatus(num){
+  try{await api(`/orders/${num}/status`,{method:'POST',
+      body:JSON.stringify({status:document.getElementById('m-status').value,changed_by:'manager:dashboard'})});
+    closeModal();toast(num+' update ✓');go(SECTION);}catch(e){toast(e.message,true);}}
+function openPayment(num){
   openModal(`<h3>${num} — payment aayi</h3>
     <label>Kitna (₹)</label><input id="m-amount" type="number" min="1" step="0.5">
     <label>Kaise</label><select id="m-method"><option value="UPI">UPI</option>
-    <option value="CASH">Cash</option><option value="OTHER">Aur kuch</option></select>
+      <option value="CASH">Cash</option><option value="OTHER">Aur</option></select>
     <div class="foot"><button class="ghost" onclick="closeModal()">Nahi</button>
-    <button class="green" onclick="doPayment('${num}')">Save ✓</button></div>`);
-}
-async function doPayment(num) {
-  try {
-    const amt = document.getElementById('m-amount').value;
-    if (!amt || +amt <= 0) throw new Error('amount daalo');
-    const r = await api(`/orders/${num}/payment`, {method:'POST',
-      body: JSON.stringify({amount: amt, method: document.getElementById('m-method').value})});
-    closeModal(); toast(`${num}: ab ${r.payment_status} ✓`); loadAll();
-  } catch (e) { toast(e.message, true); }
-}
-function openDate(num) {
+    <button class="green" onclick="doPayment('${num}')">Save ✓</button></div>`);}
+async function doPayment(num){
+  try{const amt=document.getElementById('m-amount').value;
+    if(!amt||+amt<=0)throw new Error('amount daalo');
+    const r=await api(`/orders/${num}/payment`,{method:'POST',
+      body:JSON.stringify({amount:amt,method:document.getElementById('m-method').value})});
+    closeModal();toast(`${num}: ab ${r.payment_status} ✓`);go(SECTION);}catch(e){toast(e.message,true);}}
+function openDate(num){
   openModal(`<h3>${num} — delivery date badlo</h3>
     <label>Nayi date</label><input id="m-date" type="date">
     <label>Wajah (INTERNAL — customer ko KABHI nahi dikhegi)</label>
     <textarea id="m-reason" rows="2" placeholder="jaise: paani nahi aaya"></textarea>
-    <div class="warn">Customer ko sirf polite delay notice jayega, nayi date ke saath</div>
+    <div class="warn">Customer ko sirf polite delay notice + nayi date jayegi</div>
     <div class="foot"><button class="ghost" onclick="closeModal()">Nahi</button>
-    <button class="green" onclick="doDate('${num}')">Save ✓</button></div>`);
-}
-async function doDate(num) {
-  try {
-    const d = document.getElementById('m-date').value;
-    if (!d) throw new Error('date chuno');
-    await api(`/orders/${num}/delivery-date`, {method:'POST',
-      body: JSON.stringify({expected_delivery: d, internal_reason: document.getElementById('m-reason').value || null,
-                            changed_by: 'manager:dashboard'})});
-    closeModal(); toast('Date update + customer ko notice ✓'); loadAll();
-  } catch (e) { toast(e.message, true); }
-}
-async function openDetail(num) {
-  try {
-    const d = await api(`/orders/${num}`);
-    const o = d.order;
-    const hist = d.history.map(h =>
-      `<div><b>${LABEL[h.new_status] || h.new_status}</b> — ${esc(h.changed_by)}
-       <div class="t2">${new Date(h.changed_at).toLocaleString('en-IN')}</div></div>`).join('');
-    const items = (o.items || []).map(i => `${i.qty}× ${esc(i.type)}${i.service ? ' (' + esc(i.service) + ')' : ''}`).join('<br>');
+    <button class="green" onclick="doDate('${num}')">Save ✓</button></div>`);}
+async function doDate(num){
+  try{const d=document.getElementById('m-date').value;
+    if(!d)throw new Error('date chuno');
+    await api(`/orders/${num}/delivery-date`,{method:'POST',
+      body:JSON.stringify({expected_delivery:d,internal_reason:document.getElementById('m-reason').value||null,
+                          changed_by:'manager:dashboard'})});
+    closeModal();toast('Date update + notice ✓');go(SECTION);}catch(e){toast(e.message,true);}}
+async function openDetail(num){
+  try{const d=await api(`/orders/${num}`);const o=d.order;
+    const hist=d.history.map(h=>`<div><b>${LABEL[h.new_status]||h.new_status}</b> — ${esc(h.changed_by)}
+      <div class="t">${new Date(h.changed_at).toLocaleString('en-IN')}</div></div>`).join('');
+    const items=(o.items||[]).map(i=>{
+      const base=`${i.unit==='kg'?(i.weight_kg+' kg'):(i.qty+'×')} ${esc(i.type)}`;
+      return base+(i.rate?` @₹${i.rate}${i.unit==='kg'?'/kg':''}`:'')+(i.amount?` = ${rs(i.amount)}`:'');
+    }).join('<br>');
+    const money=[];
+    if(o.total_amount){
+      if(o.discount_amount)money.push(`Discount: −${rs(o.discount_amount)}`);
+      if(o.gst_amount)money.push(`GST: +${rs(o.gst_amount)}`);
+      money.push(`<b>Total: ${rs(o.total_amount)}</b> · Paid: ${rs(o.amount_paid)} · <span class="${o.payment_status}">${o.payment_status}</span>`);
+    }
     openModal(`<h3>${o.order_number}</h3>
-      <div class="sub">${esc(o.customer_name || '')} · ${esc(o.customer_phone)}</div>
+      <div class="t">${esc(o.customer_name||'')} · ${esc(o.customer_phone)}</div>
       <label>Items</label><div style="font-size:13px">${items}</div>
-      <label>Payment</label><div style="font-size:13px" class="${o.payment_status}">
-        ${o.payment_status} — ₹${o.amount_paid}${o.total_amount ? ' / ₹' + o.total_amount : ''}</div>
+      <label>Bill</label><div style="font-size:13px">${money.join('<br>')||'—'}</div>
       <label>History</label><div class="hist">${hist}</div>
-      ${o.notes ? `<label>Internal notes 🔒</label><div class="note">${esc(o.notes)}</div>` : ''}
+      ${o.notes?`<label>Internal notes 🔒</label><div class="note">${esc(o.notes)}</div>`:''}
       <div class="foot"><button class="ghost" onclick="closeModal()">Band karo</button></div>`);
-  } catch (e) { toast(e.message, true); }
+  }catch(e){toast(e.message,true);}
 }
 
-/* ---------- NEW ORDER ---------- */
-function addItemRow(type, qty, service) {
-  const div = document.createElement('div');
-  div.className = 'itemrow';
-  div.innerHTML = `<input placeholder="kya (shirt/pant/saree...)" class="i-type" value="${type || ''}">
-    <input type="number" min="1" value="${qty || 1}" class="i-qty">
-    <select class="i-service"><option value="wash_iron">Wash+Istri</option>
-      <option value="wash">Sirf wash</option><option value="iron">Sirf istri</option>
-      <option value="dry_clean">Dry clean</option></select>
-    <button onclick="this.parentElement.remove()">✕</button>`;
-  document.getElementById('items').appendChild(div);
-}
-async function createOrder() {
-  try {
-    const items = [...document.querySelectorAll('.itemrow')].map(r => ({
-      type: r.querySelector('.i-type').value.trim(),
-      qty: +r.querySelector('.i-qty').value,
-      service: r.querySelector('.i-service').value,
-    })).filter(i => i.type);
-    const phone = document.getElementById('f-phone').value.trim();
-    if (!phone) throw new Error('phone daalo');
-    if (!items.length) throw new Error('kam se kam ek item daalo');
-    const body = {customer_phone: phone, items,
-      customer_name: document.getElementById('f-name').value.trim() || null,
-      total_amount: document.getElementById('f-total').value || null,
-      expected_delivery: document.getElementById('f-delivery').value || null,
-      notes: document.getElementById('f-notes').value.trim() || null};
-    const r = await api('/orders', {method: 'POST', body: JSON.stringify(body)});
-    toast(`Order ${r.order_number} ban gaya ✓`);
-    for (const el of ['f-phone','f-name','f-total','f-delivery','f-notes'])
-      document.getElementById(el).value = '';
-    document.getElementById('items').innerHTML = ''; addItemRow();
-    showTab('orders'); loadAll();
-  } catch (e) { toast(e.message, true); }
-}
-
-/* ---------- CUSTOMERS ---------- */
-async function loadCustomers() {
-  try { CUSTOMERS = await api('/admin/api/customers'); renderCustomers(); }
-  catch (e) { toast(e.message, true); }
-}
-function renderCustomers() {
-  const q = (document.getElementById('cust-search').value || '').toLowerCase();
-  const rows = CUSTOMERS.filter(c =>
-    !q || (c.name || '').toLowerCase().includes(q) || c.phone.includes(q));
-  document.getElementById('cust-body').innerHTML = rows.map(c => `<tr>
-    <td>${esc(c.name || '—')}</td><td>${esc(c.phone)}</td>
-    <td>${c.active_orders || '—'}</td><td>${c.total_orders}</td>
-    <td>${c.last_message_at ? new Date(c.last_message_at).toLocaleString('en-IN') : '—'}</td>
-    <td><button class="ghost" onclick="showTab('inbox');openThread('${c.phone}')">💬 Chat</button></td>
-  </tr>`).join('') || '<tr><td colspan="6">Koi customer nahi mila.</td></tr>';
-}
-
-addItemRow();
-loadAll();
-loadThreads();
-setInterval(loadAll, 10000);
+addPiece();
+loadHome();loadThreads();loadCustomers();
+setInterval(()=>{if(SECTION==='home')loadHome();
+  if(SECTION==='inbox'){loadThreads();refreshThread(false);}},10000);
 </script>
 </body>
 </html>
