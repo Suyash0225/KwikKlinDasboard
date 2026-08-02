@@ -43,6 +43,10 @@ class Conversation(Base):
     # insert the same inbound message twice.
     wa_message_id: Mapped[str | None] = mapped_column(String(120), unique=True)
 
+    # Who authored an OUTBOUND message: "bot", "manager", "system".
+    # NULL on inbound rows (sender is the participant) and on old rows.
+    sent_by: Mapped[str | None] = mapped_column(String(40))
+
     # Filled by Phase 4 (intent classification). Plain string, not an enum,
     # so adding new intents never needs a migration.
     intent: Mapped[str | None] = mapped_column(String(50))

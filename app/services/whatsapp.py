@@ -72,6 +72,7 @@ async def send_message(
     buttons: list[Button] | None = None,
     template_name: str | None = None,
     template_params: list[str] | None = None,
+    sent_by: str = "bot",
 ) -> str:
     """Send one WhatsApp message. Returns Meta's wa_message_id.
 
@@ -139,7 +140,7 @@ async def send_message(
         except dotpe.DotpeError as exc:
             raise SendError(str(exc)) from exc
         log.info("whatsapp_sent", to=to_phone, provider="dotpe", wa_message_id=wa_message_id)
-        await _record_outbound(db, customer, staff, logged_text, wa_message_id, to_phone)
+        await _record_outbound(db, customer, staff, logged_text, wa_message_id, to_phone, sent_by)
         return wa_message_id
 
     # --- build payload (Meta direct) ---
@@ -176,7 +177,7 @@ async def send_message(
         wa_message_id=wa_message_id,
     )
 
-    await _record_outbound(db, customer, staff, logged_text, wa_message_id, to_phone)
+    await _record_outbound(db, customer, staff, logged_text, wa_message_id, to_phone, sent_by)
     return wa_message_id
 
 
@@ -187,6 +188,7 @@ async def _record_outbound(
     logged_text: str,
     wa_message_id: str,
     to_phone: str,
+    sent_by: str,
 ) -> None:
     """Record an outbound message in conversations (needs a participant row)."""
     if customer or staff:
@@ -197,6 +199,7 @@ async def _record_outbound(
                 direction=Direction.OUTBOUND,
                 message_text=logged_text,
                 wa_message_id=wa_message_id,
+                sent_by=sent_by,
             )
         )
         await db.commit()

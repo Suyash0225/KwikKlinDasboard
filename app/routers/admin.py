@@ -10,19 +10,22 @@ page is a client of the same API, so every business rule (state machine,
 payment derivation, notifications) applies automatically.
 """
 
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Conversation, Customer, Order, Staff
+from app.models import Conversation, Customer, Direction, Order, Staff
 from app.routers.orders import require_admin_key
-from app.services.order_service import ACTIVE_STATUSES
+from app.services.order_service import ACTIVE_STATUSES, get_active_orders_for_phone
+from app.services.whatsapp import SendError, WindowClosedError, send_message
+from app.utils.phone import normalize_phone
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 log = structlog.get_logger()
@@ -132,6 +135,181 @@ async def customers_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
         }
         for c, active, total in rows
     ]
+
+
+SERVICE_WINDOW = timedelta(hours=24)
+
+
+def _window_state(last_inbound: datetime | None) -> dict:
+    """24h customer-service-window state for the UI."""
+    if last_inbound is None:
+        return {"open": False, "expires_at": None}
+    expires = last_inbound + SERVICE_WINDOW
+    return {
+        "open": datetime.now(timezone.utc) < expires,
+        "expires_at": expires.isoformat(),
+    }
+
+
+@router.get("/api/inbox/threads", dependencies=[Depends(require_admin_key)])
+async def inbox_threads(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    """Every participant with conversation history, newest activity first."""
+    threads: list[dict] = []
+
+    # last message per customer
+    last_at = (
+        select(
+            Conversation.customer_id,
+            func.max(Conversation.created_at).label("last_at"),
+        )
+        .where(Conversation.customer_id.isnot(None))
+        .group_by(Conversation.customer_id)
+        .subquery()
+    )
+    rows = (
+        await db.execute(
+            select(Customer, Conversation)
+            .join(last_at, last_at.c.customer_id == Customer.id)
+            .join(
+                Conversation,
+                (Conversation.customer_id == Customer.id)
+                & (Conversation.created_at == last_at.c.last_at),
+            )
+        )
+    ).all()
+    for cust, conv in rows:
+        threads.append(
+            {
+                "kind": "customer",
+                "phone": cust.phone,
+                "name": cust.name or cust.phone,
+                "last_text": conv.message_text[:80],
+                "last_at": conv.created_at.isoformat(),
+                "last_direction": conv.direction.name,
+                "window": _window_state(cust.last_message_at),
+            }
+        )
+
+    last_at_s = (
+        select(
+            Conversation.staff_id,
+            func.max(Conversation.created_at).label("last_at"),
+        )
+        .where(Conversation.staff_id.isnot(None))
+        .group_by(Conversation.staff_id)
+        .subquery()
+    )
+    rows_s = (
+        await db.execute(
+            select(Staff, Conversation)
+            .join(last_at_s, last_at_s.c.staff_id == Staff.id)
+            .join(
+                Conversation,
+                (Conversation.staff_id == Staff.id)
+                & (Conversation.created_at == last_at_s.c.last_at),
+            )
+        )
+    ).all()
+    for st, conv in rows_s:
+        threads.append(
+            {
+                "kind": "staff",
+                "phone": st.phone,
+                "name": st.name,
+                "last_text": conv.message_text[:80],
+                "last_at": conv.created_at.isoformat(),
+                "last_direction": conv.direction.name,
+                "window": _window_state(st.last_message_at),
+            }
+        )
+
+    threads.sort(key=lambda t: t["last_at"], reverse=True)
+    return threads
+
+
+@router.get("/api/inbox/thread", dependencies=[Depends(require_admin_key)])
+async def inbox_thread(
+    phone: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=60, ge=1, le=200),
+) -> dict:
+    """One participant's messages (latest `limit`, oldest-first for display)."""
+    # '+' in a query string decodes to a space — canonicalize whatever came in.
+    try:
+        phone = normalize_phone(phone)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"invalid phone {phone!r}")
+    staff = (
+        await db.execute(select(Staff).where(Staff.phone == phone))
+    ).scalar_one_or_none()
+    customer = None
+    if staff is None:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == phone))
+        ).scalar_one_or_none()
+        if customer is None:
+            raise HTTPException(status_code=404, detail=f"no thread for {phone}")
+
+    participant = staff or customer
+    cond = (
+        Conversation.staff_id == staff.id
+        if staff
+        else Conversation.customer_id == customer.id
+    )
+    msgs = (
+        await db.execute(
+            select(Conversation).where(cond).order_by(Conversation.created_at.desc()).limit(limit)
+        )
+    ).scalars().all()
+
+    active_orders = []
+    if customer:
+        active_orders = [
+            {"order_number": o.order_number, "status": o.status.name,
+             "expected_delivery": o.expected_delivery.isoformat() if o.expected_delivery else None}
+            for o in await get_active_orders_for_phone(db, phone)
+        ]
+
+    return {
+        "kind": "staff" if staff else "customer",
+        "phone": phone,
+        "name": (staff.name if staff else (customer.name or customer.phone)),
+        "window": _window_state(participant.last_message_at),
+        "active_orders": active_orders,
+        "messages": [
+            {
+                "direction": m.direction.name,
+                "text": m.message_text,
+                "sent_by": m.sent_by,
+                "at": m.created_at.isoformat(),
+            }
+            for m in reversed(msgs)
+        ],
+    }
+
+
+class InboxSendIn(BaseModel):
+    phone: str
+    text: str = Field(min_length=1, max_length=4000)
+
+
+@router.post("/api/inbox/send", dependencies=[Depends(require_admin_key)])
+async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Manager sends a free-form message from the Inbox."""
+    try:
+        to_phone = normalize_phone(body.phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        wa_id = await send_message(db, to_phone=to_phone, text=body.text, sent_by="manager")
+    except WindowClosedError:
+        raise HTTPException(
+            status_code=409,
+            detail="24h window band hai — free-form nahi ja sakta. Template bhejo ya customer ke message ka intezaar karo.",
+        )
+    except SendError as exc:
+        raise HTTPException(status_code=502, detail=f"WhatsApp send fail hua: {exc}")
+    return {"wa_message_id": wa_id, "at": datetime.now(timezone.utc).isoformat()}
 
 
 @router.get("")
