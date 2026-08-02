@@ -109,8 +109,28 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "bill_cancelled": {"hi": "❌ Draft cancel kar diya.", "en": "❌ Draft cancelled."},
     "staff_cmd_unknown": {
-        "hi": "🤔 Samajh nahi aaya. Bill: customer + kapde + service likhein. Delay: order number + nayi date. Status: order number + stage.",
-        "en": "🤔 Didn't understand. Bill: customer + items + service. Delay: order number + new date. Status: order number + stage.",
+        "hi": "🤔 Samajh nahi aaya. Bill: customer + kapde + service. Delay: order number + nayi date. Status: order number + stage. Message bhejna: 'Ravi ko bolo ...'",
+        "en": "🤔 Didn't understand. Bill: customer + items + service. Delay: order number + new date. Status: order number + stage. Relay: 'Ravi ko bolo ...'",
+    },
+    "relay_message": {
+        "hi": "📨 {sender} ki taraf se: {message}",
+        "en": "📨 From {sender}: {message}",
+    },
+    "relay_done": {
+        "hi": "✅ {name} ko bhej diya: \"{message}\"",
+        "en": "✅ Sent to {name}: \"{message}\"",
+    },
+    "relay_target_unknown": {
+        "hi": "⚠️ '{target}' staff list mein nahi mila. Staff: {names}",
+        "en": "⚠️ '{target}' is not in the staff list. Staff: {names}",
+    },
+    "relay_window_closed": {
+        "hi": "⚠️ {name} ka 24h WhatsApp window band hai — pehle wo bot ko koi bhi message bhejein, phir bhej paunga.",
+        "en": "⚠️ {name}'s 24h WhatsApp window is closed — they must message the bot first.",
+    },
+    "relay_failed": {
+        "hi": "⚠️ {name} ko bhejna fail ho gaya — thodi der baad try karein.",
+        "en": "⚠️ Sending to {name} failed — try again shortly.",
     },
     "order_not_found_staff": {
         "hi": "⚠️ Order {order_number} nahi mila.",

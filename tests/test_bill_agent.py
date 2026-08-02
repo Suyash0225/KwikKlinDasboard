@@ -28,7 +28,9 @@ def _extract_result(**overrides) -> dict:
         "order_number": "",
         "new_date": "",
         "reason": "",
-        "new_status": "",
+        "new_status": "NONE",
+        "relay_to": "",
+        "relay_message": "",
     }
     base.update(overrides)
     return base
@@ -268,6 +270,64 @@ async def test_other_quiet_for_staff_loud_for_manager(monkeypatch) -> None:
             )
             is not None
         )
+
+
+async def test_relay_to_known_staff(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    async def fake_send(db, *, to_phone, text=None, **kw):
+        calls.append({"to": to_phone, "text": text})
+        return "wamid.RELAY"
+
+    monkeypatch.setattr(bill_module, "send_message", fake_send)
+    _patch_extract(
+        monkeypatch,
+        _extract_result(
+            action="relay", relay_to="Ravi", relay_message="naya order aya hai, ready ho jao"
+        ),
+    )
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager", text="Ravi ko bata do order aya"
+        )
+    assert reply.startswith("✅") and "Ravi" in reply
+    assert calls and calls[0]["to"] == "+918707093136"  # Ravi's seeded number
+    assert "naya order aya hai" in calls[0]["text"]
+    assert "manager ki taraf se" in calls[0]["text"]
+
+
+async def test_relay_unknown_target_lists_staff(monkeypatch) -> None:
+    async def fake_send(db, **kw):
+        raise AssertionError("must not send")
+
+    monkeypatch.setattr(bill_module, "send_message", fake_send)
+    _patch_extract(
+        monkeypatch,
+        _extract_result(action="relay", relay_to="Chintu", relay_message="kuch bhi"),
+    )
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager", text="Chintu ko bolo"
+        )
+    assert "nahi mila" in reply and "Ravi" in reply
+
+
+async def test_relay_window_closed_reports_clearly(monkeypatch) -> None:
+    from app.services.whatsapp import WindowClosedError
+
+    async def fake_send(db, **kw):
+        raise WindowClosedError("24h window closed")
+
+    monkeypatch.setattr(bill_module, "send_message", fake_send)
+    _patch_extract(
+        monkeypatch,
+        _extract_result(action="relay", relay_to="Ravi", relay_message="jaldi aao"),
+    )
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager", text="Ravi ko bolo jaldi aao"
+        )
+    assert "window band" in reply
 
 
 async def test_llm_down_notifies_manager_but_not_staff(monkeypatch) -> None:

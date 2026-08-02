@@ -28,7 +28,8 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import OrderStatus, PaymentMethod, Rate
+from app.config import settings
+from app.models import OrderStatus, PaymentMethod, Rate, Staff
 from app.services import llm_client
 from app.services.llm_client import LLMError
 from app.services.messages import get_message, status_label
@@ -41,6 +42,7 @@ from app.services.order_service import (
     set_expected_delivery,
     update_status,
 )
+from app.services.whatsapp import SendError, WindowClosedError, send_message
 from app.utils.phone import normalize_phone
 
 log = structlog.get_logger()
@@ -70,7 +72,7 @@ _EXTRACT_SCHEMA = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["new_bill", "delay_update", "status_update", "other"],
+            "enum": ["new_bill", "delay_update", "status_update", "relay", "other"],
         },
         "customer_name": {"type": "string"},
         "customer_phone": {"type": "string"},
@@ -94,10 +96,13 @@ _EXTRACT_SCHEMA = {
         "reason": {"type": "string"},
         # "NONE" = not a status update (Gemini rejects "" inside an enum)
         "new_status": {"type": "string", "enum": [*_STATUS_NAMES, "NONE"]},
+        "relay_to": {"type": "string"},
+        "relay_message": {"type": "string"},
     },
     "required": [
         "action", "customer_name", "customer_phone", "items", "advance",
         "expected_delivery", "order_number", "new_date", "reason", "new_status",
+        "relay_to", "relay_message",
     ],
     "additionalProperties": False,
 }
@@ -117,6 +122,10 @@ _EXTRACT_SYSTEM = (
     "new_date (ISO, '' if unsaid) and the internal reason.\n"
     "- status_update: they state an order's new stage (dhul gaya, ready hai, "
     "nikal gaya, deliver ho gaya...) — map to one of the status names.\n"
+    "- relay: they ask to pass a message to a person (e.g. 'Ravi ko bata do "
+    "...', 'Superman ko bolo ...', 'manager ko bhej do ...'). relay_to = the "
+    "person's name as written; relay_message = a short clear Hinglish "
+    "message carrying their full instruction.\n"
     "- other: anything else (greetings, questions, chatter).\n"
     "If a CURRENT DRAFT is provided, the message is an edit to it: return "
     "action=new_bill with the FULL corrected draft (unchanged fields kept). "
@@ -159,6 +168,8 @@ async def handle_staff_message(
         return await _apply_delay(db, sender_label, extracted)
     if action == "status_update":
         return await _apply_status(db, sender_label, extracted)
+    if action == "relay":
+        return await _apply_relay(db, sender_label, extracted)
 
     # 'other': only nag the sender when they're mid-draft or they're the
     # manager trying to talk to the bot; plain staff chatter stays silent.
@@ -314,6 +325,40 @@ async def _apply_delay(db: AsyncSession, sender_label: str, extracted: dict) -> 
     return get_message(
         "delay_done", order_number=number, date=new_date.strftime("%d %b %Y")
     )
+
+
+async def _apply_relay(db: AsyncSession, sender_label: str, extracted: dict) -> str:
+    """Forward a message to a staff member or the manager — known phones only."""
+    target = extracted["relay_to"].strip()
+    message = extracted["relay_message"].strip()
+    if not target or not message:
+        return get_message("staff_cmd_unknown")
+
+    if target.lower() in ("manager", "boss", "malik"):
+        to_phone, to_name = settings.MANAGER_PHONE, "Manager"
+    else:
+        staff_rows = (await db.execute(select(Staff))).scalars().all()
+        matches = [
+            s for s in staff_rows
+            if s.name and (s.name.lower() in target.lower() or target.lower() in s.name.lower())
+        ]
+        if len(matches) != 1:
+            names = ", ".join(s.name for s in staff_rows if s.name) or "-"
+            return get_message("relay_target_unknown", target=target, names=names)
+        to_phone, to_name = matches[0].phone, matches[0].name
+
+    try:
+        await send_message(
+            db, to_phone=to_phone,
+            text=get_message("relay_message", sender=sender_label, message=message),
+        )
+    except WindowClosedError:
+        return get_message("relay_window_closed", name=to_name)
+    except SendError:
+        log.warning("relay_send_failed", to=to_phone)
+        return get_message("relay_failed", name=to_name)
+    log.info("relay_sent", to=to_phone, by=sender_label)
+    return get_message("relay_done", name=to_name, message=message)
 
 
 async def _apply_status(db: AsyncSession, sender_label: str, extracted: dict) -> str:
