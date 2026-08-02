@@ -12,11 +12,13 @@ import hashlib
 import hmac
 import json
 
+import anthropic
 import httpx
 import pytest
 from sqlalchemy import text as sqltext
 
 import app.routers.webhook as webhook_module
+import app.services.llm_client as llm_module
 import app.services.order_service as order_service_module
 from app.config import settings
 from app.database import async_session_factory, engine
@@ -52,6 +54,29 @@ def meta_payload(messages: list | None = None, statuses: list | None = None) -> 
             "entry": [{"id": "ent1", "changes": [{"field": "messages", "value": value}]}],
         }
     ).encode()
+
+
+@pytest.fixture(autouse=True)
+def _no_live_llm(monkeypatch):
+    """No test may reach a real LLM — block at the HTTP/SDK boundary.
+
+    Everything above (ask_json, classify_intent, ...) runs for real and sees
+    a 'network outage', so the degrade paths behave exactly like production
+    without a connection. Tests that want LLM behavior patch a higher layer
+    (ask_json / build_ai_reply / _gemini_post) and their patch wins.
+    """
+
+    async def _gemini_down(model, payload):
+        raise httpx.ConnectError("live LLM blocked in tests")
+
+    monkeypatch.setattr(llm_module, "_gemini_post", _gemini_down)
+
+    async def _anthropic_down(**kwargs):
+        raise anthropic.APIConnectionError(
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        )
+
+    monkeypatch.setattr(llm_module._client.messages, "create", _anthropic_down)
 
 
 @pytest.fixture
@@ -91,6 +116,13 @@ async def _cleanup_test_rows():
     async with async_session_factory() as s:
         await s.execute(
             sqltext("DELETE FROM conversations WHERE wa_message_id LIKE 'wamid.TEST%'")
+        )
+        # live-LLM accidents may have raised escalations on the test customer
+        await s.execute(
+            sqltext(
+                "DELETE FROM escalations WHERE customer_id IN "
+                f"(SELECT id FROM customers WHERE phone = '{TEST_CUSTOMER_PHONE}')"
+            )
         )
         await s.execute(
             sqltext(f"DELETE FROM customers WHERE phone = '{TEST_CUSTOMER_PHONE}'")

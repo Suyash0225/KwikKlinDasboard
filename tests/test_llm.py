@@ -168,6 +168,25 @@ async def test_gemini_errors_map_correctly(monkeypatch) -> None:
         await ask(system="s", user_text="hi")
 
 
+async def test_smart_rate_limited_falls_back_to_cheap(monkeypatch) -> None:
+    """429 on the SMART model must retry once on CHEAP, not fail."""
+    monkeypatch.setattr(llm, "PROVIDER", "gemini")
+    models_called: list[str] = []
+
+    async def fake_post(model, payload):
+        models_called.append(model)
+        if model == llm.MODEL_SMART:
+            return _gemini_response(429, {"error": {"message": "quota"}})
+        return _gemini_response(200, _gemini_ok('{"reply": "sasta jawaab"}'))
+
+    monkeypatch.setattr(llm, "_gemini_post", fake_post)
+    out = await ask_json(
+        system="s", user_text="hi", schema={"type": "object"}, model=llm.MODEL_SMART
+    )
+    assert out == {"reply": "sasta jawaab"}
+    assert models_called == [llm.MODEL_SMART, llm.MODEL_CHEAP]
+
+
 async def test_gemini_safety_block_is_hard_error(monkeypatch) -> None:
     monkeypatch.setattr(llm, "PROVIDER", "gemini")
 

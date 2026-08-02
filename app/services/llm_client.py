@@ -61,6 +61,55 @@ class LLMUnavailable(LLMError):
     """
 
 
+async def _generate(
+    system: str,
+    user_text: str,
+    model: str,
+    max_tokens: int,
+    schema: dict | None = None,
+    image: tuple[str, bytes] | None = None,
+) -> str:
+    """Provider dispatch — one place, so fallback logic stays tiny."""
+    if PROVIDER == "gemini":
+        return await _gemini_generate(system, user_text, model, max_tokens, schema, image)
+    output_config = (
+        {"format": {"type": "json_schema", "schema": schema}} if schema is not None else None
+    )
+    return await _anthropic_generate(
+        system, user_text, model, max_tokens, output_config, image
+    )
+
+
+async def _generate_with_fallback(
+    system: str,
+    user_text: str,
+    model: str,
+    max_tokens: int,
+    schema: dict | None = None,
+    image: tuple[str, bytes] | None = None,
+) -> str:
+    """SMART model down/rate-limited -> one retry on CHEAP before giving up.
+
+    Free tiers throttle the bigger model first; a slightly dumber answer
+    beats no answer (ground rule #5).
+    """
+    try:
+        return await _generate(system, user_text, model, max_tokens, schema, image)
+    except LLMUnavailable:
+        if model == MODEL_CHEAP:
+            raise
+        log.warning("llm_smart_unavailable_trying_cheap", from_model=model)
+        return await _generate(system, user_text, MODEL_CHEAP, max_tokens, schema, image)
+
+
+def _parse_json(text: str, model: str) -> dict:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        log.error("llm_bad_json", provider=PROVIDER, model=model, text=text[:200])
+        raise LLMError(f"model returned invalid JSON: {text[:100]}") from exc
+
+
 async def ask(
     *,
     system: str,
@@ -70,9 +119,7 @@ async def ask(
 ) -> str:
     """Plain text completion. Raises LLMUnavailable / LLMError."""
     model = model or MODEL_CHEAP
-    if PROVIDER == "gemini":
-        return await _gemini_generate(system, user_text, model, max_tokens, schema=None)
-    return await _anthropic_generate(system, user_text, model, max_tokens, output_config=None)
+    return await _generate_with_fallback(system, user_text, model, max_tokens)
 
 
 async def ask_json(
@@ -88,21 +135,8 @@ async def ask_json(
     Returns the parsed dict. Raises LLMUnavailable / LLMError.
     """
     model = model or MODEL_CHEAP
-    if PROVIDER == "gemini":
-        text = await _gemini_generate(system, user_text, model, max_tokens, schema=schema)
-    else:
-        text = await _anthropic_generate(
-            system,
-            user_text,
-            model,
-            max_tokens,
-            output_config={"format": {"type": "json_schema", "schema": schema}},
-        )
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        log.error("llm_bad_json", provider=PROVIDER, model=model, text=text[:200])
-        raise LLMError(f"model returned invalid JSON: {text[:100]}") from exc
+    text = await _generate_with_fallback(system, user_text, model, max_tokens, schema=schema)
+    return _parse_json(text, model)
 
 
 async def ask_json_image(
@@ -118,26 +152,11 @@ async def ask_json_image(
     max_tokens: int = 6000,
 ) -> dict:
     """Like ask_json, but the model also SEES an image (e.g. a bill photo)."""
-    model = model or MODEL_SMART  # reading handwriting needs the better model
-    image = (mime_type, image_bytes)
-    if PROVIDER == "gemini":
-        text = await _gemini_generate(
-            system, user_text, model, max_tokens, schema=schema, image=image
-        )
-    else:
-        text = await _anthropic_generate(
-            system,
-            user_text,
-            model,
-            max_tokens,
-            output_config={"format": {"type": "json_schema", "schema": schema}},
-            image=image,
-        )
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        log.error("llm_bad_json", provider=PROVIDER, model=model, text=text[:200])
-        raise LLMError(f"model returned invalid JSON: {text[:100]}") from exc
+    model = model or MODEL_SMART  # reading handwriting prefers the better model
+    text = await _generate_with_fallback(
+        system, user_text, model, max_tokens, schema=schema, image=(mime_type, image_bytes)
+    )
+    return _parse_json(text, model)
 
 
 # --------------------------------------------------------------------------
