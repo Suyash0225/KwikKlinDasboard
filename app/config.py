@@ -55,7 +55,11 @@ class Settings(BaseSettings):
     DOTPE_WEBHOOK_TOKEN: str = ""
 
     # --- LLM (Phase 4 AI agent) ---
+    # anthropic = Claude (sk-ant-... key) | gemini = Google (AIza... key).
+    # Only app/services/llm_client.py reads these.
+    LLM_PROVIDER: Literal["anthropic", "gemini"] = "anthropic"
     ANTHROPIC_API_KEY: str
+    GEMINI_API_KEY: str = ""
 
     # --- People ---
     # Manager's WhatsApp number in E.164 form, e.g. +919876543210.

@@ -12,6 +12,13 @@ from app.services.intent import classify_intent
 from app.services.llm_client import LLMError, LLMUnavailable, ask, ask_json
 
 
+@pytest.fixture(autouse=True)
+def _force_anthropic(monkeypatch):
+    """These first tests exercise the Claude path regardless of .env;
+    Gemini-path tests re-patch PROVIDER themselves."""
+    monkeypatch.setattr(llm, "PROVIDER", "anthropic")
+
+
 def _fake_response(text: str):
     return SimpleNamespace(
         content=[SimpleNamespace(type="text", text=text)],
@@ -90,6 +97,85 @@ async def test_bad_key_is_unavailable(monkeypatch) -> None:
 
     monkeypatch.setattr(llm._client.messages, "create", fake_create)
     with pytest.raises(LLMUnavailable):
+        await ask(system="s", user_text="hi")
+
+
+def _gemini_response(status: int, body: dict) -> httpx.Response:
+    req = httpx.Request("POST", "https://generativelanguage.googleapis.com/x")
+    return httpx.Response(status, request=req, json=body)
+
+
+def _gemini_ok(text: str) -> dict:
+    return {
+        "candidates": [{"content": {"parts": [{"text": text}]}}],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
+    }
+
+
+async def test_gemini_ask_json_and_schema_stripping(monkeypatch) -> None:
+    monkeypatch.setattr(llm, "PROVIDER", "gemini")
+    seen: dict = {}
+
+    async def fake_post(model, payload):
+        seen.update(payload)
+        return _gemini_response(200, _gemini_ok('{"intent": "GREETING", "language": "hi"}'))
+
+    monkeypatch.setattr(llm, "_gemini_post", fake_post)
+    out = await ask_json(
+        system="s",
+        user_text="hi",
+        schema={
+            "type": "object",
+            "properties": {"intent": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    )
+    assert out["intent"] == "GREETING"
+    # Gemini rejects additionalProperties — must be stripped from the payload
+    assert "additionalProperties" not in str(seen["generationConfig"]["responseSchema"])
+    assert seen["generationConfig"]["responseMimeType"] == "application/json"
+
+
+async def test_gemini_errors_map_correctly(monkeypatch) -> None:
+    monkeypatch.setattr(llm, "PROVIDER", "gemini")
+
+    async def post_403(model, payload):
+        return _gemini_response(403, {"error": {"message": "bad key"}})
+
+    monkeypatch.setattr(llm, "_gemini_post", post_403)
+    with pytest.raises(LLMUnavailable):
+        await ask(system="s", user_text="hi")
+
+    async def post_429(model, payload):
+        return _gemini_response(429, {"error": {"message": "quota"}})
+
+    monkeypatch.setattr(llm, "_gemini_post", post_429)
+    with pytest.raises(LLMUnavailable):
+        await ask(system="s", user_text="hi")
+
+    async def post_400(model, payload):
+        return _gemini_response(400, {"error": {"message": "bad request"}})
+
+    monkeypatch.setattr(llm, "_gemini_post", post_400)
+    with pytest.raises(LLMError):
+        await ask(system="s", user_text="hi")
+
+    async def post_network(model, payload):
+        raise httpx.ConnectError("no internet")
+
+    monkeypatch.setattr(llm, "_gemini_post", post_network)
+    with pytest.raises(LLMUnavailable):
+        await ask(system="s", user_text="hi")
+
+
+async def test_gemini_safety_block_is_hard_error(monkeypatch) -> None:
+    monkeypatch.setattr(llm, "PROVIDER", "gemini")
+
+    async def post_empty(model, payload):
+        return _gemini_response(200, {"candidates": []})
+
+    monkeypatch.setattr(llm, "_gemini_post", post_empty)
+    with pytest.raises(LLMError):
         await ask(system="s", user_text="hi")
 
 
