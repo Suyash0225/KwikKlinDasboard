@@ -7,8 +7,9 @@
 <style>
   * { box-sizing: border-box; margin: 0; }
   :root { --side:#111827; --side2:#1b2436; --acc:#f97316; --ink:#101828; --mut:#667085;
-          --bg:#f4f6fa; --ok:#05603a; --bad:#b42318; --warn:#93370d; }
-  body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--ink); }
+          --bg:#eef1f6; --ok:#05603a; --bad:#b42318; --warn:#93370d; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg);
+         color: var(--ink); font-size: 14px; }
   .shell { display: flex; min-height: 100vh; }
   /* ---- sidebar ---- */
   .side { width: 224px; background: var(--side); color: #cbd5e1; display: flex; flex-direction: column;
@@ -26,25 +27,45 @@
   .dbchip { margin: 12px; padding: 8px 12px; background: var(--side2); border-radius: 8px;
             font-size: 11px; color: #86efac; }
   /* ---- main ---- */
-  .main { flex: 1; padding: 18px 22px; min-width: 0; }
-  .tophead { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-  .tophead h1 { font-size: 20px; }
-  .tophead .sub { color: var(--mut); font-size: 12px; }
+  .main { flex: 1; padding: 18px 24px; min-width: 0; max-width: 1280px; }
+  .tophead { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap;
+             background: #fff; border-radius: 14px; padding: 14px 18px;
+             box-shadow: 0 1px 3px rgba(16,24,40,.07); }
+  .tophead h1 { font-size: 20px; font-weight: 800; letter-spacing: -.01em; }
+  .tophead .sub { color: var(--mut); font-size: 12px; margin-top: 2px; }
   .tophead .right { margin-left: auto; display: flex; gap: 8px; }
-  h2 { font-size: 16px; margin: 4px 0 12px; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px;
-           margin-bottom: 16px; }
-  .card { background: #fff; border-radius: 14px; padding: 14px 16px; box-shadow: 0 1px 3px rgba(16,24,40,.08); }
-  .card .l { font-size: 11px; color: var(--mut); text-transform: uppercase; font-weight: 700;
-             letter-spacing: .04em; display: flex; justify-content: space-between; }
-  .card .n { font-size: 24px; font-weight: 800; margin-top: 6px; }
-  .card.click { cursor: pointer; border: 2px solid transparent; }
-  .card.click.on { border-color: var(--ink); }
+  h2 { font-size: 15px; margin: 6px 0 10px; font-weight: 700; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px;
+           margin-bottom: 18px; }
+  .card { background: #fff; border-radius: 16px; padding: 16px; position: relative;
+          box-shadow: 0 1px 3px rgba(16,24,40,.07); }
+  .card .l { font-size: 10.5px; color: var(--mut); text-transform: uppercase; font-weight: 700;
+             letter-spacing: .06em; padding-right: 34px; }
+  .card .n { font-size: 25px; font-weight: 800; margin-top: 8px; letter-spacing: -.02em; }
+  .card .ic { position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; border-radius: 10px;
+              display: flex; align-items: center; justify-content: center; font-size: 15px;
+              background: #f2f4f7; }
+  .card.click { cursor: pointer; border: 2px solid transparent; transition: transform .08s; }
+  .card.click:hover { transform: translateY(-1px); }
+  .card.click.on { border-color: var(--acc); }
   .good { color: var(--ok); } .bad { color: var(--bad); } .warncol { color: var(--warn); }
-  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px;
-          overflow: hidden; box-shadow: 0 1px 3px rgba(16,24,40,.08); font-size: 13px; }
-  th, td { text-align: left; padding: 9px 11px; border-bottom: 1px solid #f0f2f5; vertical-align: top; }
-  th { background: #fafbfc; color: var(--mut); font-size: 11px; text-transform: uppercase; }
+  .tblwrap { background: #fff; border-radius: 14px; box-shadow: 0 1px 3px rgba(16,24,40,.07);
+             overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: 13px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid #f0f2f5; vertical-align: middle; }
+  th { color: var(--mut); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+       background: #fafbfc; }
+  tbody tr:hover { background: #fafbff; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; }
+  .avatar { width: 34px; height: 34px; border-radius: 50%; background: #eef2ff; color: #4338ca;
+            display: inline-flex; align-items: center; justify-content: center; font-weight: 700;
+            font-size: 13px; margin-right: 9px; flex-shrink: 0; }
+  .whocell { display: flex; align-items: center; }
+  .pill-search { position: relative; }
+  .pill-search input { border-radius: 999px; padding-left: 34px; }
+  .pill-search::before { content: '🔍'; position: absolute; left: 12px; top: 50%;
+                         transform: translateY(-50%); font-size: 12px; opacity: .6; }
   .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
   .RECEIVED { background:#eef4ff; color:#3538cd; } .IN_WASH { background:#e0f2fe; color:#026aa2; }
   .IN_DRY { background:#fef0c7; color:#93370d; } .IN_IRON { background:#fce7f6; color:#9e165f; }
@@ -176,7 +197,7 @@
       <div class="cards" id="home-cards"></div>
       <h2>Chalu Orders</h2>
       <div class="cards" id="cards"></div>
-      <div style="overflow-x:auto"><table>
+      <div class="tblwrap"><table>
         <thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Status</th><th>Payment</th><th>Delivery</th><th>Action</th></tr></thead>
         <tbody id="orders-body"></tbody>
       </table></div>
@@ -186,7 +207,7 @@
     <div id="s-inbox" style="display:none">
       <div class="inbox" id="inbox-wrap">
         <div class="threads">
-          <div class="head"><input placeholder="🔍 naam ya number..." id="th-search" oninput="renderThreads()"></div>
+          <div class="head"><div class="pill-search"><input placeholder="naam ya number..." id="th-search" oninput="renderThreads()"></div></div>
           <div class="list" id="th-list"></div>
         </div>
         <div class="chatpane">
@@ -248,7 +269,7 @@
     <!-- BILLS -->
     <div id="s-bills" style="display:none">
       <div class="filters">
-        <input id="b-search" placeholder="🔍 order no / naam / phone..." oninput="renderBills()">
+        <div class="pill-search"><input id="b-search" placeholder="order no / naam / phone..." oninput="renderBills()"></div>
         <select id="b-pay" onchange="renderBills()">
           <option value="">Sab payments</option><option value="DUE">Baaki wale</option>
           <option value="PAID">Paid</option><option value="PARTIAL">Partial</option>
@@ -259,7 +280,7 @@
           <option>OUT_FOR_DELIVERY</option><option>DELIVERED</option><option>ON_HOLD</option>
           <option>CANCELLED</option></select>
       </div>
-      <div style="overflow-x:auto"><table>
+      <div class="tblwrap"><table>
         <thead><tr><th>Invoice</th><th>Customer</th><th>Dates</th><th>Items</th><th>Total / Due</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody id="bills-body"></tbody>
       </table></div>
@@ -267,8 +288,8 @@
 
     <!-- CUSTOMERS -->
     <div id="s-customers" style="display:none">
-      <div class="filters"><input id="cust-search" placeholder="🔍 naam ya number..." oninput="renderCustomers()"></div>
-      <div style="overflow-x:auto"><table>
+      <div class="filters"><div class="pill-search"><input id="cust-search" placeholder="naam ya number..." oninput="renderCustomers()"></div></div>
+      <div class="tblwrap"><table>
         <thead><tr><th>Customer</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Aakhri msg</th><th>Actions</th></tr></thead>
         <tbody id="cust-body"></tbody>
       </table></div>
@@ -293,7 +314,7 @@
         </div>
         <div class="panel" style="grid-column:span 1">
           <h2>Kharcha log</h2>
-          <div style="overflow-x:auto"><table>
+          <div class="tblwrap"><table>
             <thead><tr><th>Date</th><th>Category</th><th>Detail</th><th>₹</th><th></th></tr></thead>
             <tbody id="exp-body"></tbody>
           </table></div>
@@ -350,6 +371,12 @@ function toast(m,e){const t=document.getElementById('toast');t.textContent=m;t.c
   t.style.display='block';setTimeout(()=>t.style.display='none',3500);}
 function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML;}
 function rs(n){return '₹'+(+n||0).toLocaleString('en-IN');}
+function fmtDate(x){if(!x)return '—';
+  return new Date(x).toLocaleDateString('en-IN',{day:'2-digit',month:'short'});}
+function avatar(name){const i=(name||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
+  const hues=['#eef2ff;color:#4338ca','#ecfdf3;color:#05603a','#fff7ed;color:#c2410c','#fdf2fa;color:#9e165f'];
+  const h=hues[(name||'').length%hues.length].split(';color:');
+  return `<span class="avatar" style="background:${h[0]};color:${h[1]}">${i||'?'}</span>`;}
 function go(name){SECTION=name;
   for(const el of document.querySelectorAll('.nav div'))el.classList.toggle('on',el.dataset.s===name);
   for(const s of ['home','inbox','newbill','bills','customers','expenses','reports'])
@@ -366,15 +393,16 @@ async function loadHome(){
   try{
     [DATA,SUMMARY]=await Promise.all([api('/admin/api/dashboard'),api('/admin/api/reports/summary')]);
     const hc=[
-      ['Aaj ke naye',DATA.counts.today_new,''],
-      ['Aaj ka collection',rs(SUMMARY.today.revenue),'good'],
-      ['Month orders',SUMMARY.month.orders,''],
-      ['Month revenue',rs(SUMMARY.month.revenue),'good'],
-      ['Month profit',rs(SUMMARY.month.profit),(+SUMMARY.month.profit>=0?'good':'bad')],
-      ['Total udhaar',rs(SUMMARY.outstanding_total),'bad'],
+      ['Aaj ke naye',DATA.counts.today_new,'','🧺','#eef4ff'],
+      ['Aaj ka collection',rs(SUMMARY.today.revenue),'good','💰','#ecfdf3'],
+      ['Month orders',SUMMARY.month.orders,'','📦','#f5f3ff'],
+      ['Month revenue',rs(SUMMARY.month.revenue),'good','📈','#ecfdf3'],
+      ['Month profit',rs(SUMMARY.month.profit),(+SUMMARY.month.profit>=0?'good':'bad'),'🏆','#fff7ed'],
+      ['Total udhaar',rs(SUMMARY.outstanding_total),'bad','🏦','#fef3f2'],
     ];
-    document.getElementById('home-cards').innerHTML=hc.map(([l,n,cls])=>
-      `<div class="card"><div class="l">${l}</div><div class="n ${cls}">${n}</div></div>`).join('');
+    document.getElementById('home-cards').innerHTML=hc.map(([l,n,cls,ic,bg])=>
+      `<div class="card"><div class="l">${l}</div><div class="n ${cls}">${n}</div>
+       <div class="ic" style="background:${bg}">${ic}</div></div>`).join('');
     renderOrders();
   }catch(e){toast(e.message,true);}
 }
@@ -397,18 +425,21 @@ function orderRow(o){
     <td>${esc(o.customer)}<br><span class="t">${esc(o.phone)}</span></td>
     <td>${items}</td>
     <td><span class="badge ${o.status}">${LABEL[o.status]||o.status}</span></td>
-    <td>${pay}</td><td>${o.expected_delivery||'—'}</td>
+    <td>${pay}</td><td>${fmtDate(o.expected_delivery)}</td>
     <td><div class="act">
-      <button onclick="openStatus('${o.order_number}','${o.status}')">▶</button>
-      <button class="ghost" onclick="openPayment('${o.order_number}')">₹</button>
-      <button class="ghost" onclick="openDate('${o.order_number}')">📅</button>
+      <button onclick="openStatus('${o.order_number}','${o.status}')">▶ Status</button>
+      <button class="ghost" onclick="openPayment('${o.order_number}')">₹ Paisa</button>
+      <button class="ghost" onclick="openDate('${o.order_number}')">📅 Date</button>
       <button class="ghost" onclick="openDetail('${o.order_number}')">👁</button>
       <button class="ghost" onclick="go('inbox');openThread('${o.phone}')">💬</button>
     </div></td></tr>`;
 }
+const CARD_IC={ALL:'📦',RECEIVED:'🧺',IN_WASH:'🧼',IN_DRY:'🌬️',IN_IRON:'👔',
+  READY:'✨',OUT_FOR_DELIVERY:'🛵',ON_HOLD:'⏸️'};
 function card(f,n,l){const on=FILTER===f?'on':'';
   return `<div class="card click ${on}" onclick="FILTER=FILTER==='${f}'?null:'${f}';renderOrders()">
-    <div class="l">${l}</div><div class="n">${n}</div></div>`;}
+    <div class="l">${l}</div><div class="n">${n}</div>
+    <div class="ic">${CARD_IC[f]||'🧺'}</div></div>`;}
 
 /* ---------- BILLS ---------- */
 async function loadBills(){
@@ -429,15 +460,17 @@ function renderBills(){
     const items=(o.items||[]).reduce((a,i)=>a+(+i.qty||1),0);
     const due=(+o.total_amount||0)-(+o.amount_paid||0);
     return `<tr>
-      <td><b>${esc(o.order_number)}</b></td>
-      <td>${esc(o.customer_name||o.customer_phone)}${due>0?` <span class="badge UNPAID">${rs(due)} due</span>`:''}<br><span class="t">${esc(o.customer_phone)}</span></td>
-      <td><span class="t">Order: ${new Date(o.created_at).toLocaleDateString('en-IN')}<br>Delv: ${o.expected_delivery||'—'}</span></td>
-      <td>${items} pcs</td>
-      <td>${o.total_amount?rs(o.total_amount):'—'}<br><span class="${o.payment_status}">${o.payment_status}</span></td>
+      <td><b>${esc(o.order_number)}</b><br><span class="t">${fmtDate(o.created_at)}</span></td>
+      <td><div class="whocell">${avatar(o.customer_name||o.customer_phone)}<div>
+        <b>${esc(o.customer_name||'—')}</b>${due>0?` <span class="badge UNPAID">${rs(due)} due</span>`:''}
+        <br><span class="t">${esc(o.customer_phone)}</span></div></div></td>
+      <td><span class="t">Delivery:</span><br>${fmtDate(o.expected_delivery)}</td>
+      <td class="num">${items} pcs</td>
+      <td class="num">${o.total_amount?rs(o.total_amount):'—'}<br><span class="${o.payment_status}">${o.payment_status}</span></td>
       <td><span class="badge ${o.status}">${LABEL[o.status]||o.status}</span></td>
       <td><div class="act">
-        <button onclick="openStatus('${o.order_number}','${o.status}')">▶</button>
-        <button class="ghost" onclick="openPayment('${o.order_number}')">₹</button>
+        <button onclick="openStatus('${o.order_number}','${o.status}')">▶ Status</button>
+        <button class="ghost" onclick="openPayment('${o.order_number}')">₹ Paisa</button>
         <button class="ghost" onclick="openDetail('${o.order_number}')">👁</button>
         <button class="ghost" onclick="go('inbox');openThread('${o.customer_phone}')">💬</button>
       </div></td></tr>`;
@@ -530,15 +563,17 @@ function renderCustomers(){
   document.getElementById('cust-body').innerHTML=rows.map(c=>{
     const out=+c.outstanding;
     return `<tr>
-      <td>${esc(c.name||'—')}${out>0?` <span class="badge UNPAID">${rs(out)} due</span>`:''}<br><span class="t">${esc(c.phone)}</span></td>
-      <td>${c.total_orders} (${c.active_orders} chalu)</td>
-      <td>${rs(c.business)}</td><td class="good">${rs(c.paid)}</td>
-      <td class="${out>0?'bad':'good'}"><b>${rs(out)}</b></td>
-      <td><span class="t">${c.last_message_at?new Date(c.last_message_at).toLocaleDateString('en-IN'):'—'}</span></td>
+      <td><div class="whocell">${avatar(c.name||c.phone)}<div>
+        <b>${esc(c.name||'—')}</b>${out>0?` <span class="badge UNPAID">${rs(out)} due</span>`:''}
+        <br><span class="t">${esc(c.phone)}</span></div></div></td>
+      <td>${c.total_orders} <span class="t">(${c.active_orders} chalu)</span></td>
+      <td class="num">${rs(c.business)}</td><td class="num good">${rs(c.paid)}</td>
+      <td class="num ${out>0?'bad':'good'}"><b>${rs(out)}</b></td>
+      <td><span class="t">${fmtDate(c.last_message_at)}</span></td>
       <td><div class="act">
         ${out>0?`<button class="green" onclick="collectFrom('${c.phone}')">₹ Collect</button>`:''}
-        <button class="ghost" onclick="go('inbox');openThread('${c.phone}')">💬</button>
-        <button class="ghost" onclick="go('bills');document.getElementById('b-search').value='${c.phone}';renderBills()">🧾</button>
+        <button class="ghost" onclick="go('inbox');openThread('${c.phone}')">💬 Chat</button>
+        <button class="ghost" onclick="go('bills');document.getElementById('b-search').value='${c.phone}';renderBills()">🧾 Bills</button>
       </div></td></tr>`;
   }).join('')||'<tr><td colspan="7">Koi customer nahi.</td></tr>';
 }
