@@ -35,6 +35,8 @@ TEMPLATES: dict[str, dict] = {
     "kk_bill_details": {"language": "en_US", "param_count": 7},
     # {{1}} = order number (has rating quick-reply buttons)
     "kk_thankyou_rating": {"language": "en_US", "param_count": 1},
+    # {{1}} order {{2}} delivery date
+    "kk_picked_up": {"language": "en_US", "param_count": 2},
 }
 
 

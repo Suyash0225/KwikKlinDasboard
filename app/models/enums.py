@@ -12,6 +12,9 @@ class OrderStatus(enum.Enum):
     """Order lifecycle, in this exact order (plus two terminal states)."""
 
     RECEIVED = "RECEIVED"
+    # home-pickup flow (owner's Order Agent spec, Aug 2026)
+    PICKUP_ASSIGNED = "PICKUP_ASSIGNED"
+    PICKED_UP = "PICKED_UP"
     IN_WASH = "IN_WASH"
     IN_DRY = "IN_DRY"
     IN_IRON = "IN_IRON"

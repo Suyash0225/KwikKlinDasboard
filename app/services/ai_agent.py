@@ -32,8 +32,22 @@ _REPLY_SCHEMA = {
         "escalation_reason": {"type": "string"},
         # FYI to the owner — the agent handled it, the owner just gets told
         "admin_note": {"type": "string"},
+        # pickup order intake: fill from the WHOLE conversation (memory);
+        # ready=true ONLY when all four are known
+        "intake": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "address": {"type": "string"},
+                "items_text": {"type": "string"},
+                "pickup_date": {"type": "string"},
+                "ready": {"type": "boolean"},
+            },
+            "required": ["name", "address", "items_text", "pickup_date", "ready"],
+            "additionalProperties": False,
+        },
     },
-    "required": ["reply", "escalate", "escalation_reason", "admin_note"],
+    "required": ["reply", "escalate", "escalation_reason", "admin_note", "intake"],
     "additionalProperties": False,
 }
 
@@ -47,10 +61,13 @@ _COMPOSE_SYSTEM = (
     "come ONLY from FACTS. Never invent numbers, dates, discounts or offers.\n"
     "2. Handle routine service yourself, confidently:\n"
     "   - Rate/timing/policy questions -> answer from FACTS.\n"
-    "   - New order / pickup requests -> say YES warmly, collect what's "
-    "missing (address / when to pick up / what clothes), tell them the shop "
-    "will collect as discussed, and write an admin_note (in Hinglish) telling "
-    "the owner exactly what was agreed so the team follows up.\n"
+    "   - New order / pickup requests -> collect exactly FOUR things across "
+    "the conversation: (a) name, (b) full address+landmark, (c) which "
+    "clothes (note heavy items like blanket/curtain/saree), (d) pickup day "
+    "(aaj/kal). Ask ONLY for what's missing. Fill the intake object from "
+    "everything known so far (use the conversation history); set "
+    "intake.ready=true ONLY when all four are known — the system then "
+    "creates the order and arranges pickup itself.\n"
     "   - 'Kab milega' with a delivery date in FACTS -> tell them the date.\n"
     "3. admin_note: any time the owner should KNOW something (new order "
     "inquiry, pickup arranged, customer promised something from FACTS, "
@@ -154,6 +171,21 @@ async def build_ai_reply(
         )
         return out.get("reply") or get_message("escalated_ack", lang)
 
+    # Pickup intake complete -> the agent CREATES the order itself
+    intake = out.get("intake") or {}
+    if intake.get("ready") and all(
+        (intake.get(k) or "").strip() for k in ("name", "address", "items_text", "pickup_date")
+    ):
+        if sandbox:
+            return (out.get("reply") or "") + (
+                f"\n🧪 (real mein: order ban jata — {intake['name']}, "
+                f"{intake['items_text'][:40]}, pickup {intake['pickup_date']} — "
+                "delivery boy ko assignment jata)"
+            )
+        created = await _create_pickup_order(db, customer, intake)
+        if created:
+            return created  # deterministic confirmation, not model text
+
     # Agent handled it itself — if the owner should know, send a quiet FYI
     # (no open question, nothing waits on the owner).
     admin_note = (out.get("admin_note") or "").strip()
@@ -169,6 +201,92 @@ async def build_ai_reply(
             args={"intent": cls["intent"], "fyi": bool(admin_note)}, result=out["reply"][:200],
         )
     return out.get("reply") or None
+
+
+async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dict) -> str | None:
+    """All four intake slots known -> real order + pickup assignment.
+
+    Returns the customer confirmation text, or None on any failure (the
+    model's own reply then goes out instead — degrade, never block).
+    """
+    try:
+        from sqlalchemy import select as _sel
+
+        from app.models import Order, OrderStatus, Staff
+        from app.services import app_settings
+        from app.services.order_service import ACTIVE_STATUSES, create_order, update_status
+
+        # duplicate guard: an active pre-wash order already exists -> don't stack
+        existing = (
+            await db.execute(
+                _sel(Order).where(
+                    Order.customer_id == customer.id,
+                    Order.status.in_(
+                        (OrderStatus.RECEIVED, OrderStatus.PICKUP_ASSIGNED, OrderStatus.PICKED_UP)
+                    ),
+                )
+            )
+        ).scalars().first()
+        if existing is not None:
+            return get_message(
+                "status_reply", order_number=existing.order_number,
+                status_label=status_label(existing.status),
+            )
+
+        if not customer.address:
+            customer.address = intake["address"][:500]
+        order = await create_order(
+            db,
+            customer_phone=customer.phone,
+            customer_name=intake["name"][:120],
+            items=[{"type": intake["items_text"][:100], "qty": 1}],
+            notes=f"Pickup: {intake['pickup_date']} | Address: {intake['address'][:300]}",
+            created_by="agent",
+        )
+        # assign the default delivery boy and mark pickup assigned
+        dphone = await app_settings.get(db, "default_delivery_phone")
+        if dphone:
+            dstaff = (
+                await db.execute(_sel(Staff).where(Staff.phone == dphone))
+            ).scalar_one_or_none()
+            if dstaff:
+                order.assigned_delivery_id = dstaff.id
+                await db.commit()
+                from app.services.whatsapp import SendError, send_message
+
+                try:
+                    await send_message(
+                        db, to_phone=dstaff.phone,
+                        text=get_message(
+                            "work_order", headline="PICKUP",
+                            order_number=order.order_number,
+                            customer_name=f"{intake['name']} ({customer.phone})",
+                            items=intake["items_text"][:120],
+                            delivery=f"pickup {intake['pickup_date']}",
+                            priority="normal",
+                            extra=intake["address"][:200],
+                        ),
+                    )
+                except SendError:
+                    log.info("pickup_workorder_not_sent")
+        await update_status(db, order, OrderStatus.PICKUP_ASSIGNED, changed_by="agent")
+        await _notify_admin_fyi(
+            db, customer,
+            f"Naya pickup order {order.order_number}: {intake['name']}, "
+            f"{intake['items_text'][:60]}, pickup {intake['pickup_date']}, "
+            f"address: {intake['address'][:80]}",
+        )
+        sla = await app_settings.get(db, "sla_normal_days")
+        return get_message(
+            "pickup_confirmed_customer",
+            name=intake["name"].split()[0] if intake["name"].split() else "ji",
+            order_number=order.order_number,
+            pickup=intake["pickup_date"],
+            sla=str(sla),
+        )
+    except Exception:
+        log.exception("pickup_order_create_failed")
+        return None
 
 
 async def _notify_admin_fyi(db: AsyncSession, customer: Customer, note: str) -> None:

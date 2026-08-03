@@ -195,6 +195,12 @@ async def handle_staff_message(
         _PENDING.pop(sender_phone, None)
         pending = None
 
+    # "done KK-20260803-01" — staff quick-confirm, zero LLM (owner's spec)
+    if text:
+        m_done = re.match(r"^\s*done\s+(KK-\S+)\s*$", text, re.I)
+        if m_done and sender_label != "manager":
+            return await _apply_done(db, sender_phone, sender_label, m_done.group(1).upper())
+
     # Campaign approvals are deterministic commands, no LLM needed.
     if sender_label == "manager" and text:
         m = re.match(r"^\s*campaign\s+(yes|haan|nahi|no|skip)\s*$", text, re.I)
@@ -248,7 +254,7 @@ async def handle_staff_message(
     elif action == "delay_update":
         reply = await _apply_delay(db, sender_label, extracted)
     elif action == "status_update":
-        reply = await _apply_status(db, sender_label, extracted)
+        reply = await _apply_status(db, sender_label, extracted, sender_phone)
     elif action == "relay":
         reply = await _apply_relay(db, sender_label, extracted)
     elif action == "set_priority":
@@ -1036,13 +1042,74 @@ async def _apply_relay(db: AsyncSession, sender_label: str, extracted: dict) -> 
     return get_message("relay_done", name=to_name, message=message)
 
 
-async def _apply_status(db: AsyncSession, sender_label: str, extracted: dict) -> str:
+# Role scoping (owner's spec): washerman delivery ka status nahi badal
+# sakta, delivery boy dhulai ka nahi. Manager sab kuch.
+_ROLE_STATUSES = {
+    "WASHER": {
+        OrderStatus.IN_WASH, OrderStatus.IN_DRY, OrderStatus.IN_IRON,
+        OrderStatus.READY,
+    },
+    "DELIVERY": {
+        OrderStatus.PICKUP_ASSIGNED, OrderStatus.PICKED_UP,
+        OrderStatus.OUT_FOR_DELIVERY, OrderStatus.DELIVERED,
+    },
+}
+
+
+async def _sender_role(db: AsyncSession, sender_phone: str) -> str:
+    st = (
+        await db.execute(select(Staff).where(Staff.phone == sender_phone))
+    ).scalar_one_or_none()
+    return st.role.name if st else "manager"
+
+
+async def _apply_done(
+    db: AsyncSession, sender_phone: str, sender_label: str, number: str
+) -> str:
+    """'done KK-x': the role decides what 'done' means."""
+    try:
+        order = await get_order(db, number)
+    except OrderNotFoundError:
+        return get_message("order_not_found_staff", order_number=number)
+    role = await _sender_role(db, sender_phone)
+    if role == "DELIVERY":
+        target = (
+            OrderStatus.DELIVERED
+            if order.status is OrderStatus.OUT_FOR_DELIVERY
+            else OrderStatus.PICKED_UP
+        )
+    elif role == "WASHER":
+        target = OrderStatus.READY
+    else:
+        return get_message("staff_cmd_unknown")
+    try:
+        await update_status(db, order, target, changed_by=sender_label)
+    except InvalidTransitionError:
+        return get_message(
+            "status_invalid", order_number=number,
+            old=order.status.name, new=target.name,
+        )
+    await audit.record(
+        actor_role="staff", actor=sender_label, action="done_command",
+        args={"order": number}, result=target.name,
+    )
+    return get_message("status_done", order_number=number, status_name=target.name)
+
+
+async def _apply_status(
+    db: AsyncSession, sender_label: str, extracted: dict, sender_phone: str = ""
+) -> str:
     number = extracted["order_number"].upper()
     if not number or extracted["new_status"] not in _STATUS_NAMES:
         return get_message("staff_cmd_unknown")
     new_status = OrderStatus[extracted["new_status"]]
     if new_status in (OrderStatus.CANCELLED,):
         return get_message("cancel_needs_dashboard", order_number=number)
+    if sender_label != "manager" and sender_phone:
+        role = await _sender_role(db, sender_phone)
+        allowed = _ROLE_STATUSES.get(role, set())
+        if allowed and new_status not in allowed:
+            return get_message("role_not_allowed", status_name=new_status.name)
     try:
         order = await get_order(db, number)
     except OrderNotFoundError:

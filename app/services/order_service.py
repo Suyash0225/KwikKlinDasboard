@@ -20,7 +20,7 @@ DATES: expected_delivery is written to the DB *before* any message quotes it
 (ground rule #4). Internal reasons go to orders.notes only (rule #3).
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import structlog
@@ -48,6 +48,8 @@ _ORDER_NUMBER_LOCK_KEY = 834712
 
 _SEQUENCE = [
     OrderStatus.RECEIVED,
+    OrderStatus.PICKUP_ASSIGNED,
+    OrderStatus.PICKED_UP,
     OrderStatus.IN_WASH,
     OrderStatus.IN_DRY,
     OrderStatus.IN_IRON,
@@ -241,6 +243,38 @@ async def update_status(
         new=new_status.name,
         changed_by=changed_by,
     )
+
+    if new_status is OrderStatus.PICKED_UP:
+        # SLA clock starts at pickup (owner's Order Agent spec): 4 din
+        # normal, 7 din heavy items — computed here, never promised early.
+        from app.services import app_settings
+
+        heavy_words = [
+            w.strip().lower()
+            for w in str(await app_settings.get(db, "heavy_items")).split(",")
+            if w.strip()
+        ]
+        items_blob = " ".join(
+            str(i.get("type", "")) + " " + str(i.get("service", ""))
+            for i in (order.items or [])
+        ).lower()
+        heavy = any(w in items_blob for w in heavy_words)
+        days = int(
+            await app_settings.get(
+                db, "sla_heavy_days" if heavy else "sla_normal_days"
+            )
+        )
+        order.expected_delivery = date.today() + timedelta(days=days)
+        await db.commit()
+        await _notify_customer(
+            db, order,
+            message_key="pickup_done",
+            template_name="kk_picked_up",
+            template_params=[order.order_number, _fmt_date(order.expected_delivery)],
+            count=str(sum(int(i.get("qty", 1)) for i in (order.items or []))),
+            date=_fmt_date(order.expected_delivery),
+        )
+        return order
 
     if new_status is OrderStatus.DELIVERED:
         # thank-you + rating buttons (owner's policy 03 Aug)

@@ -80,8 +80,16 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
     from app.services import audit
 
     reply_key = {"good": "rate_good_reply", "mid": "rate_mid_reply", "bad": "rate_bad_reply"}[kind]
+    reply_text = get_message(reply_key)
+    if kind == "good":
+        # Google review link ONLY on happy ratings (owner's spec)
+        from app.services import app_settings
+
+        link = (await app_settings.get(db, "google_review_link") or "").strip()
+        if link:
+            reply_text += f"\n\nEk minute ho to Google par review kar dijiye 🙏\n{link}"
     try:
-        await send_message(db, to_phone=phone, text=get_message(reply_key))
+        await send_message(db, to_phone=phone, text=reply_text)
     except SendError:
         log.exception("rating_reply_failed", phone=phone)
     if kind == "bad":

@@ -27,7 +27,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.database import async_session_factory
-from app.models import Customer, Order, PaymentStatus, SentEvent, Staff
+from app.models import Customer, Order, OrderStatus, PaymentStatus, SentEvent, Staff
 from app.services import app_settings, audit
 from app.services.messages import get_message, status_label
 from app.services.order_service import ACTIVE_STATUSES
@@ -104,6 +104,23 @@ async def _hourly_tick() -> None:
             await run_payment_reminders()
     except Exception:
         log.exception("reminder_jobs_failed")
+    # every 2 hours 08-20: stale-order follow-up pings (owner's spec)
+    try:
+        if 8 <= now_ist.hour <= 20 and now_ist.hour % 2 == 0:
+            await run_follow_up_pings()
+    except Exception:
+        log.exception("follow_up_pings_failed")
+    # 18:00 evening washer status round; 21:00 owner summary
+    try:
+        if now_ist.hour == 18:
+            await run_standup(force=True, key_prefix="standup-eve")
+    except Exception:
+        log.exception("evening_standup_failed")
+    try:
+        if now_ist.hour == 21:
+            await run_daily_summary()
+    except Exception:
+        log.exception("daily_summary_failed")
     # daily social poster (Instagram + owner's GMB pack)
     try:
         async with async_session_factory() as db:
@@ -149,6 +166,134 @@ async def _tunnel_tick() -> None:
         log.exception("tunnel_guard_failed")
 
 
+# Owner's Order Agent spec: stale thresholds (hours) per status, and who
+# to ping. 6h stale -> manager escalation.
+_PING_RULES = {
+    OrderStatus.PICKUP_ASSIGNED: (2, "DELIVERY", "Pickup hua ya nahi?"),
+    OrderStatus.PICKED_UP: (3, "WASHER", "Lot mila? Washing shuru?"),
+    OrderStatus.READY: (2, "DELIVERY", "Packed hai — delivery pe kab nikal rahe ho?"),
+    OrderStatus.OUT_FOR_DELIVERY: (2, "DELIVERY", "Deliver hua ya nahi?"),
+}
+
+
+async def run_follow_up_pings() -> int:
+    """Every 2h (08-21 IST): ping the responsible person on stale orders;
+    6h+ stale -> manager escalation. Idempotent per 2h window."""
+    from app.models import OrderStatusHistory
+    from app.services.work_orders import send_work_order
+
+    now = datetime.now(timezone.utc)
+    now_ist = datetime.now(IST)
+    if _in_quiet_hours(now_ist):
+        return 0
+    window_key = now_ist.strftime("%Y-%m-%d-%H")
+    sends = 0
+    async with async_session_factory() as db:
+        for status, (stale_h, _role, question) in _PING_RULES.items():
+            rows = (
+                (await db.execute(select(Order).where(Order.status == status)))
+                .scalars()
+                .all()
+            )
+            for o in rows:
+                last_change = (
+                    await db.execute(
+                        select(func.max(OrderStatusHistory.changed_at)).where(
+                            OrderStatusHistory.order_id == o.id
+                        )
+                    )
+                ).scalar_one() or o.created_at
+                stale_hours = (now - last_change).total_seconds() / 3600
+                if stale_hours < stale_h:
+                    continue
+                if stale_hours >= 6:
+                    if await _claim(f"esc6h:{o.order_number}:{now_ist.strftime('%Y-%m-%d')}"):
+                        try:
+                            await send_message(
+                                db, to_phone=settings.MANAGER_PHONE,
+                                text=(
+                                    f"🚨 ESCALATION — {o.order_number}\n"
+                                    f"Status: {o.status.name}, {int(stale_hours)} ghante se atka hai.\n"
+                                    f"Staff jawab nahi de raha — khud dekh lein."
+                                ),
+                            )
+                        except SendError:
+                            log.info("esc6h_not_sent")
+                if not await _claim(f"ping:{o.order_number}:{window_key}"):
+                    continue
+                outcome = await send_work_order(
+                    db, o, headline=f"⏰ Reminder: {question}",
+                    extra="Ho gaya to reply karein: done " + o.order_number,
+                )
+                if outcome in ("sent", "sent_template"):
+                    sends += 1
+        if sends:
+            await audit.record(
+                actor_role="system", actor="scheduler", action="follow_up_pings",
+                args={"window": window_key}, result=f"pinged {sends}",
+            )
+    return sends
+
+
+async def run_daily_summary() -> None:
+    """21:00 IST: owner's one-look day summary (internal — quiet-hour exempt)."""
+    now_ist = datetime.now(IST)
+    day_key = now_ist.strftime("%Y-%m-%d")
+    if not await _claim(f"daysum:{day_key}"):
+        return
+    today_start = now_ist.replace(hour=0, minute=0, second=0).astimezone(timezone.utc)
+    async with async_session_factory() as db:
+        new_n = (
+            await db.execute(
+                select(func.count()).select_from(Order).where(Order.created_at >= today_start)
+            )
+        ).scalar_one()
+        delivered_n = (
+            await db.execute(
+                select(func.count()).select_from(Order).where(
+                    Order.actual_delivery >= today_start
+                )
+            )
+        ).scalar_one()
+        by_status = (
+            await db.execute(
+                select(Order.status, func.count())
+                .where(Order.status.in_(ACTIVE_STATUSES))
+                .group_by(Order.status)
+            )
+        ).all()
+        late = (
+            (
+                await db.execute(
+                    select(Order).where(
+                        Order.expected_delivery < date.today(),
+                        Order.status.notin_(
+                            (OrderStatus.DELIVERED, OrderStatus.CANCELLED)
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        status_line = " | ".join(f"{s.name}: {c}" for s, c in by_status) or "koi active nahi"
+        late_line = "\n".join(f"- {o.order_number} (tha {o.expected_delivery})" for o in late[:10]) or "koi nahi 🎉"
+        text = (
+            f"🌙 Aaj ka summary ({now_ist.strftime('%d %b')}):\n"
+            f"Naye order: {new_n} | Deliver hue: {delivered_n}\n"
+            f"Active: {status_line}\n"
+            f"LATE ORDERS:\n{late_line}"
+        )
+        try:
+            await send_message(db, to_phone=settings.MANAGER_PHONE, text=text)
+        except SendError:
+            log.info("daily_summary_not_sent")
+        await audit.record(
+            actor_role="system", actor="scheduler", action="daily_summary",
+            args={"date": day_key}, result=f"new={new_n} late={len(late)}",
+        )
+
+
 async def _nightly_tick() -> None:
     try:
         from app.services.marketing import recompute_segments
@@ -167,7 +312,7 @@ async def _nightly_tick() -> None:
         log.exception("weekly_suggestion_failed")
 
 
-async def run_standup(force: bool = False) -> int:
+async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
     """Message each active staff member their pending list. Returns sends."""
     now_ist = datetime.now(IST)
     if not force and _in_quiet_hours(now_ist):
@@ -184,7 +329,7 @@ async def run_standup(force: bool = False) -> int:
             orders = await _pending_orders_for(db, st, default_phone)
             if not orders:
                 continue
-            if not await _claim(f"standup:{today_key}:{st.phone}"):
+            if not await _claim(f"{key_prefix}:{today_key}:{st.phone}"):
                 continue
             lines = [get_message("standup_header", name=st.name, count=str(len(orders)))]
             for i, o in enumerate(orders[:10], 1):

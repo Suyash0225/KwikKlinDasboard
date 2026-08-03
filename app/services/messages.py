@@ -41,6 +41,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Baaki: ₹{due}\nDelivery: {date}\n— {shop}",
         "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Due: ₹{due}\nDelivery: {date}\n— {shop}",
     },
+    "pickup_done": {
+        "hi": "Namaste! Aapke {count} kapde pickup ho gaye hain ✅ Delivery {date} tak ho jayegi. Order: {order_number} — {shop}",
+        "en": "Hello! Your {count} clothes have been picked up ✅ Delivery by {date}. Order: {order_number} — {shop}",
+    },
+    "pickup_confirmed_customer": {
+        "hi": "Namaste {name} ji! Aapka order {order_number} confirm ho gaya 🧺 Pickup: {pickup}. Delivery pickup ke baad {sla} din mein. — {shop}",
+        "en": "Hello {name}! Your order {order_number} is confirmed 🧺 Pickup: {pickup}. Delivery within {sla} days of pickup. — {shop}",
+    },
     "thankyou_rating": {
         "hi": "Aapka order {order_number} deliver ho gaya ✅ Dhanyawad, {shop} ko mauka dene ke liye! 🙏\nHamari seva kaisi lagi?",
         "en": "Your order {order_number} has been delivered ✅ Thank you for choosing {shop}! 🙏\nHow was our service?",
@@ -262,6 +270,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "⚠️ '{name}' ka koi active order nahi mila.",
         "en": "⚠️ No active order found for '{name}'.",
     },
+    "role_not_allowed": {
+        "hi": "⚠️ {status_name} aapke role ka kaam nahi hai — manager ko batayein.",
+        "en": "⚠️ {status_name} is not your role's job — please tell the manager.",
+    },
     "cancel_needs_dashboard": {
         "hi": "⚠️ {order_number} cancel WhatsApp se nahi hota — galti se na ho isliye dashboard se karein.",
         "en": "⚠️ Cancelling {order_number} must be done from the dashboard (safety).",
@@ -272,6 +284,8 @@ MESSAGES: dict[str, dict[str, str]] = {
 STATUS_LABELS: dict[str, dict[OrderStatus, str]] = {
     "hi": {
         OrderStatus.RECEIVED: "mil gaya hai, jald kaam shuru hoga 🧺.",
+        OrderStatus.PICKUP_ASSIGNED: "ke liye pickup lagaya gaya hai 🛵.",
+        OrderStatus.PICKED_UP: "ke kapde utha liye gaye hain ✅.",
         OrderStatus.IN_WASH: "abhi dhulai mein hai 🧼.",
         OrderStatus.IN_DRY: "dhul chuka hai, sukh raha hai.",
         OrderStatus.IN_IRON: "istri ho rahi hai 👔.",
@@ -283,6 +297,8 @@ STATUS_LABELS: dict[str, dict[OrderStatus, str]] = {
     },
     "en": {
         OrderStatus.RECEIVED: "has been received 🧺.",
+        OrderStatus.PICKUP_ASSIGNED: "has a pickup assigned 🛵.",
+        OrderStatus.PICKED_UP: "has been picked up ✅.",
         OrderStatus.IN_WASH: "is being washed 🧼.",
         OrderStatus.IN_DRY: "is drying.",
         OrderStatus.IN_IRON: "is being ironed 👔.",

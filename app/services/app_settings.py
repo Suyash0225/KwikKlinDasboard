@@ -54,6 +54,11 @@ DEFAULTS: dict[str, Any] = {
     "default_delivery_phone": "",
     # named discount presets for New Bill [{name, type: percent|flat, value}]
     "discount_presets": [],
+    # Order Agent SLA (owner's spec): pickup se ginke
+    "sla_normal_days": 4,
+    "sla_heavy_days": 7,
+    "heavy_items": "blanket,kambal,razai,quilt,curtain,parda,saree,carpet,sofa,jacket,coat,sherwani,lehenga",
+    "google_review_link": "",   # bheja jata hai sirf 4-5 star par
     "tone": "friendly",               # formal | professional | friendly | casual
     "emoji_level": "minimal",         # off | minimal | expressive
 }
