@@ -131,6 +131,32 @@ async def _hourly_tick() -> None:
             await run_daily_social()
     except Exception:
         log.exception("daily_social_failed")
+    # Meta block watcher: probe hourly; the moment access returns, tell
+    # the owner (the send itself only works once unblocked — perfect signal)
+    try:
+        import httpx as _hx
+
+        async with _hx.AsyncClient(timeout=15) as _c:
+            _r = await _c.get(
+                f"https://graph.facebook.com/v21.0/{settings.WHATSAPP_PHONE_NUMBER_ID}",
+                headers={"Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"},
+                params={"fields": "display_phone_number"},
+            )
+        if _r.status_code == 200 and await _claim(
+            f"meta-unblocked:{now_ist.strftime('%Y-%m-%d')}"
+        ):
+            async with async_session_factory() as db:
+                try:
+                    await send_message(
+                        db, to_phone=settings.MANAGER_PHONE,
+                        text="🎉 Meta ka block hat gaya! Bot wapas zinda hai — "
+                             "templates/messages sab chalu. Kuch karna nahi hai.",
+                    )
+                except SendError:
+                    pass
+    except Exception:
+        pass  # probe must never disturb the tick
+
     # resume campaigns that paused for quiet hours / restarts
     try:
         if not _in_quiet_hours(now_ist):
