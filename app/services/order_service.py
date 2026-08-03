@@ -100,6 +100,9 @@ async def create_order(
     expected_delivery: date | None = None,
     notes: str | None = None,
     created_by: str = "system",
+    # callers record the advance AFTER create; this makes the confirmation
+    # message show the right advance/due numbers anyway (display only).
+    advance_hint: Decimal | None = None,
 ) -> Order:
     """Create an order (upserting the customer) and log RECEIVED in history.
 
@@ -163,24 +166,30 @@ async def create_order(
         created_by=created_by,
     )
 
-    items_count = str(sum(int(i.get("qty", 1)) for i in items))
-    if expected_delivery:
-        await _notify_customer(
-            db, order,
-            message_key="order_confirmed_with_date",
-            template_name="kk_order_confirmed",
-            template_params=[order_number, items_count],
-            items_count=items_count,
-            date=_fmt_date(expected_delivery),
-        )
-    else:
-        await _notify_customer(
-            db, order,
-            message_key="order_confirmed",
-            template_name="kk_order_confirmed",
-            template_params=[order_number, items_count],
-            items_count=items_count,
-        )
+    # Pickup confirmation WITH the bill details (owner's policy 03 Aug).
+    from app.services.work_orders import items_summary
+
+    items_text = items_summary(order)
+    advance_amt = advance_hint if advance_hint is not None else (order.amount_paid or Decimal("0"))
+    total_s = f"{order.total_amount}" if order.total_amount is not None else "—"
+    advance_s = f"{advance_amt}"
+    due = (order.total_amount or Decimal("0")) - advance_amt
+    due_s = f"{max(due, 0)}" if order.total_amount is not None else "—"
+    date_s = _fmt_date(expected_delivery) if expected_delivery else "jald batayenge"
+    await _notify_customer(
+        db, order,
+        message_key="order_confirmed_bill",
+        template_name="kk_bill_details",
+        template_params=[
+            customer_name or "ji", order_number, items_text[:120],
+            total_s, advance_s, due_s, date_s,
+        ],
+        items=items_text,
+        total=total_s,
+        advance=advance_s,
+        due=due_s,
+        date=date_s,
+    )
     return order
 
 
@@ -233,6 +242,22 @@ async def update_status(
         changed_by=changed_by,
     )
 
+    if new_status is OrderStatus.DELIVERED:
+        # thank-you + rating buttons (owner's policy 03 Aug)
+        from app.services.whatsapp import Button
+
+        await _notify_customer(
+            db, order,
+            message_key="thankyou_rating",
+            template_name="kk_thankyou_rating",
+            template_params=[order.order_number],
+            buttons=[
+                Button("rate_good", "⭐ Bahut badhiya"),
+                Button("rate_mid", "🙂 Theek thi"),
+                Button("rate_bad", "😞 Sudhar chahiye"),
+            ],
+        )
+        return order
     notification = _STATUS_NOTIFICATIONS.get(new_status)
     if notification:
         message_key, template_name = notification
@@ -383,6 +408,7 @@ async def _notify_customer(
     message_key: str,
     template_name: str,
     template_params: list[str],
+    buttons: list | None = None,
     **fmt: str,
 ) -> None:
     """Send a notification, degrading gracefully — NEVER raises.
@@ -402,7 +428,9 @@ async def _notify_customer(
             return
         text_body = get_message(message_key, order_number=order.order_number, **fmt)
         try:
-            await send_message(db, to_phone=customer.phone, text=text_body)
+            await send_message(
+                db, to_phone=customer.phone, text=text_body, buttons=buttons
+            )
         except WindowClosedError:
             await send_message(
                 db,

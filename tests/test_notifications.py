@@ -65,6 +65,61 @@ async def test_milestones_notify_but_wash_stages_silent(sent) -> None:
         assert "Dhanyawad" in sent[-1]["text"]
 
 
+async def test_create_notification_has_bill_details(sent) -> None:
+    from decimal import Decimal
+
+    async with async_session_factory() as db:
+        await create_order(
+            db, customer_phone=PHONE, items=ITEMS, created_by="test",
+            total_amount=Decimal("350"), advance_hint=Decimal("100"),
+        )
+    assert len(sent) == 1
+    text = sent[0]["text"]
+    assert "350" in text and "100" in text and "250" in text  # total/advance/due
+
+
+async def test_delivered_sends_rating_buttons(sent) -> None:
+    from app.models import OrderStatus as S2
+
+    async with async_session_factory() as db:
+        order = await create_order(db, customer_phone=PHONE, items=ITEMS, created_by="test")
+        await update_status(db, order, S2.READY, changed_by="test")
+        sent.clear()
+        await update_status(db, order, S2.DELIVERED, changed_by="test")
+    assert len(sent) == 1
+    assert "Dhanyawad" in sent[0]["text"]
+    btns = sent[0].get("buttons") or []
+    assert len(btns) == 3 and btns[0].id == "rate_good"
+
+
+async def test_rating_button_bad_pauses_and_alerts(client, sent) -> None:
+    from tests.conftest import meta_payload, sign_body
+
+    async with async_session_factory() as db:
+        await create_order(db, customer_phone=PHONE, items=ITEMS, created_by="test")
+    sent.clear()
+    body = meta_payload(
+        messages=[{
+            "from": PHONE.removeprefix("+"), "id": "wamid.TESTN-RATE1",
+            "type": "interactive",
+            "interactive": {"type": "button_reply",
+                            "button_reply": {"id": "rate_bad", "title": "😞 Sudhar chahiye"}},
+        }]
+    )
+    r = await client.post("/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)})
+    assert r.status_code == 200
+    texts = [c["text"] or "" for c in sent]
+    assert any("Maaf" in t for t in texts)          # apology to customer
+    assert any("KHARAB RATING" in t for t in texts)  # owner alerted
+    async with async_session_factory() as s:
+        from sqlalchemy import select as _sel
+
+        from app.models import Customer as _C
+
+        cust = (await s.execute(_sel(_C).where(_C.phone == PHONE))).scalar_one()
+        assert cust.agent_paused is True
+
+
 async def test_date_revision_notifies_without_internal_reason(sent) -> None:
     async with async_session_factory() as db:
         order = await create_order(db, customer_phone=PHONE, items=ITEMS, created_by="test")
@@ -102,8 +157,8 @@ async def test_window_closed_falls_back_to_template(monkeypatch) -> None:
     async with async_session_factory() as db:
         order = await create_order(db, customer_phone=PHONE, items=ITEMS, created_by="test")
     assert len(calls) == 1
-    assert calls[0]["template"] == "kk_order_confirmed"
-    assert calls[0]["template_params"][0] == order.order_number
+    assert calls[0]["template"] == "kk_bill_details"
+    assert calls[0]["template_params"][1] == order.order_number  # {{2}} = order
 
 
 # --- webhook rule-based replies ---

@@ -31,6 +31,10 @@ TEMPLATES: dict[str, dict] = {
     "kk_delay_notice": {"language": "en_US", "param_count": 2},
     # {{1}} = the update text (staff/manager alerts outside the 24h window)
     "kk_staff_alert": {"language": "en_US", "param_count": 1},
+    # {{1}} name {{2}} order {{3}} items {{4}} total {{5}} advance {{6}} due {{7}} delivery
+    "kk_bill_details": {"language": "en_US", "param_count": 7},
+    # {{1}} = order number (has rating quick-reply buttons)
+    "kk_thankyou_rating": {"language": "en_US", "param_count": 1},
 }
 
 

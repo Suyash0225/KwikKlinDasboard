@@ -75,6 +75,7 @@ async def create_order(body: OrderCreateIn, db: AsyncSession = Depends(get_db)) 
             expected_delivery=body.expected_delivery,
             notes=body.notes,
             created_by="manager",
+            advance_hint=body.advance_amount,
         )
         # Coupon: validate against the order total, redeem, adjust amounts.
         if body.coupon_code:

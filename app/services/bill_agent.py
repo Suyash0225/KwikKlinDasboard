@@ -475,6 +475,7 @@ async def _finalize_bill(
         total_amount=total,
         expected_delivery=exp,
         created_by=sender_label,
+        advance_hint=Decimal(str(d["advance"])) if d["advance"] else None,
     )
     if d["advance"]:
         await record_payment(

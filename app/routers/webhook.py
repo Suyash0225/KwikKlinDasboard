@@ -59,6 +59,51 @@ STOP_RE = re.compile(
 )
 START_RE = re.compile(r"^\s*(start|shuru karo|shuru kro)\s*$", re.IGNORECASE)
 
+# Rating button replies: interactive ids (window sends) or the template
+# quick-reply payload texts (template sends carry the text, not an id).
+_RATING_MAP = {
+    "rate_good": "good", "⭐ bahut badhiya": "good", "bahut badhiya": "good",
+    "rate_mid": "mid", "🙂 theek thi": "mid", "theek thi": "mid",
+    "rate_bad": "bad", "😞 sudhar chahiye": "bad", "sudhar chahiye": "bad",
+}
+
+
+def _match_rating(text: str) -> str | None:
+    m = re.match(r"^\[button:([^\]]+)\]", text)
+    if not m:
+        return None
+    return _RATING_MAP.get(m.group(1).strip().lower())
+
+
+async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind: str) -> None:
+    """Deterministic rating handling: thank/apologise; bad -> admin + pause."""
+    from app.services import audit
+
+    reply_key = {"good": "rate_good_reply", "mid": "rate_mid_reply", "bad": "rate_bad_reply"}[kind]
+    try:
+        await send_message(db, to_phone=phone, text=get_message(reply_key))
+    except SendError:
+        log.exception("rating_reply_failed", phone=phone)
+    if kind == "bad":
+        # unhappy customer: humans take over, owner alerted immediately
+        customer.agent_paused = True
+        await db.commit()
+        try:
+            await send_message(
+                db, to_phone=settings.MANAGER_PHONE,
+                text=get_message(
+                    "rate_bad_admin_alert",
+                    customer_name=customer.name or "naam nahi pata",
+                    phone=phone, rating="Sudhar chahiye",
+                ),
+            )
+        except SendError:
+            log.exception("rate_bad_alert_failed")
+    await audit.record(
+        actor_role="customer", actor=phone, action="rating",
+        args={"rating": kind}, result="agent paused" if kind == "bad" else "thanked",
+    )
+
 
 @router.get("/webhook")
 async def verify_webhook(
@@ -324,6 +369,10 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
             await track_reply(db, customer.id)
         except Exception:
             log.exception("campaign_reply_track_failed")
+        rating = _match_rating(text or "")
+        if rating:
+            await _handle_rating(db, customer, phone, rating)
+            return
         if STOP_RE.search(text or ""):
             customer.opted_out = True
             customer.marketing_opt_out = True

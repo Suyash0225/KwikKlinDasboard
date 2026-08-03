@@ -37,6 +37,30 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste! Aapka order {order_number} humein mil gaya 🧺 ({items_count} items). Expected delivery: {date}. — {shop}",
         "en": "Hello! Your order {order_number} is received ({items_count} items). Expected delivery: {date}. — {shop}",
     },
+    "order_confirmed_bill": {
+        "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Baaki: ₹{due}\nDelivery: {date}\n— {shop}",
+        "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Due: ₹{due}\nDelivery: {date}\n— {shop}",
+    },
+    "thankyou_rating": {
+        "hi": "Aapka order {order_number} deliver ho gaya ✅ Dhanyawad, {shop} ko mauka dene ke liye! 🙏\nHamari seva kaisi lagi?",
+        "en": "Your order {order_number} has been delivered ✅ Thank you for choosing {shop}! 🙏\nHow was our service?",
+    },
+    "rate_good_reply": {
+        "hi": "Bahut-bahut dhanyawad! ⭐ Aap jaise customers se hi {shop} chalta hai. Agli baar bhi yaad kijiyega 🙏",
+        "en": "Thank you so much! ⭐ Customers like you keep {shop} going. See you next time 🙏",
+    },
+    "rate_mid_reply": {
+        "hi": "Dhanyawad! Hum aur behtar karne ki koshish karenge 🙏 — {shop}",
+        "en": "Thank you! We'll keep working to do better 🙏 — {shop}",
+    },
+    "rate_bad_reply": {
+        "hi": "Maaf kijiye aapko achha anubhav nahi mila 🙏 Humne manager ko turant bataya hai — wo aapse baat karenge. — {shop}",
+        "en": "We're sorry you had a poor experience 🙏 Our manager has been informed and will contact you. — {shop}",
+    },
+    "rate_bad_admin_alert": {
+        "hi": "😞 KHARAB RATING: {customer_name} ({phone}) ne '{rating}' diya. Turant baat kar lein — Inbox se.",
+        "en": "😞 BAD RATING: {customer_name} ({phone}) rated '{rating}'. Please reach out — via Inbox.",
+    },
     "order_ready": {
         "hi": "Khushkhabri! Aapka order {order_number} taiyar hai ✨ Jald hi delivery hogi. — {shop}",
         "en": "Good news! Your order {order_number} is ready ✨ Delivery soon. — {shop}",
