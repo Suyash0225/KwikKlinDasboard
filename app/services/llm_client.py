@@ -195,9 +195,10 @@ async def _gemini_generate(
     schema: dict | None,
     image: tuple[str, bytes] | None = None,
 ) -> str:
-    # Floor the budget: Gemini spends output tokens on internal thinking,
-    # and a truncated JSON answer is worse than a slightly pricier call.
-    gen: dict = {"maxOutputTokens": max(max_tokens, 512)}
+    # Floor the budget: Gemini spends output tokens on internal thinking
+    # BEFORE emitting the answer — a low cap truncates mid-JSON. 2048 has
+    # headroom for the thinking burst; tokens on the free tier cost nothing.
+    gen: dict = {"maxOutputTokens": max(max_tokens, 2048)}
     if schema is not None:
         gen["responseMimeType"] = "application/json"
         gen["responseSchema"] = _gemini_schema(schema)

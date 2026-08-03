@@ -147,6 +147,40 @@ async def test_compose_escalate_creates_row(monkeypatch, esc_sent) -> None:
     assert esc_sent  # alerts attempted
 
 
+async def test_agent_handles_inquiry_itself_and_fyis_admin(monkeypatch) -> None:
+    """New-order inquiry: agent deals with it, owner gets an FYI, NO waiting."""
+
+    async def fake_classify(text):
+        return {"intent": "NEW_ORDER", "language": "hi"}
+
+    async def fake_ask_json(**kw):
+        return {
+            "reply": "Ji bilkul! Address bhej dijiye, kal subah utha lenge 😊 — Kwik Klin",
+            "escalate": False,
+            "escalation_reason": "",
+            "admin_note": "Naya pickup — AI Grahak, kal subah, address aana baaki",
+        }
+
+    fyi_calls: list[dict] = []
+
+    async def fake_send(db, *, to_phone, text=None, **kw):
+        fyi_calls.append({"to": to_phone, "text": text})
+        return "wamid.FYI"
+
+    monkeypatch.setattr(agent_module, "classify_intent", fake_classify)
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    monkeypatch.setattr("app.services.whatsapp.send_message", fake_send)
+
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        reply = await build_ai_reply(db, cust, "kal kapde lene aa sakte ho?")
+
+    assert "Ji bilkul" in reply
+    # owner got an FYI, and NOTHING went into the waiting queue
+    assert fyi_calls and "Naya pickup" in fyi_calls[0]["text"]
+    assert await _escalations_for(cust.id) == []
+
+
 async def test_compose_llm_down_falls_back(monkeypatch) -> None:
     async def fake_classify(text):
         return {"intent": "GREETING", "language": "hi"}
