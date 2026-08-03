@@ -89,3 +89,32 @@ See PROJECT_SPEC.md → "PROJECT STRUCTURE". Rules that matter:
 - All human-facing strings live in `app/services/messages.py`.
 - `orders.notes` is internal-only — never sent to a customer.
 - Payment status is derived in exactly one place: `app/models/order.py`.
+
+## Overnight build (03 Aug 2026) — agents + marketing + English UI
+
+**What runs now**
+- **Service agent (WhatsApp)**: owner/staff commands — bill by text or *photo*
+  (draft → 'haan' confirm), delay/status updates, relay ("Ravi ko bolo…",
+  works for customers too and closes their open questions), set priority /
+  assign staff / add note / record payment (confirm-gated), business Q&A from
+  live DB aggregates, standup reply parsing ("1 aur 2 ho gaya" → statuses).
+- **Customer agent**: answers only from DB facts + owner-taught FAQ/corrections
+  (AI training page), remembers the thread, escalates unknowns into the
+  Teach-me queue, pauses itself when a customer complains (owner takes over).
+- **Scheduler** (Asia/Kolkata): 10AM staff standup with real pending lists,
+  delivery-day nudges, payment reminders (3d polite / 15d firm + admin flag),
+  nightly RFM segments, Monday campaign suggestion. Quiet hours + idempotent.
+- **Marketing**: segments, campaign engine (opted-in only, STOP/"band karo"
+  honored instantly, frequency cap, monthly budget, 1 msg/sec), delivered/
+  read/replied tracking, revenue attribution, coupons redeemable on New Bill.
+- **Dashboard** (127.0.0.1:8000/admin): full English, mobile-first, sign-in
+  required; new pages: Campaigns, AI training, Activity (audit trail).
+
+**Env**: see `.env` — `LLM_PROVIDER=gemini` + `GEMINI_API_KEY` (Claude path
+kept: set `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`).
+`ESCALATION_CC_PHONE` CCs escalations to Ravi.
+
+**Migrations**: `alembic upgrade head` (latest: payments ledger, audit_log,
+campaigns/coupons, open_questions, faq/corrections, settings_kv).
+
+**Tests**: `.venv\Scripts\python -m pytest` — 137, all LLM/WhatsApp mocked.
