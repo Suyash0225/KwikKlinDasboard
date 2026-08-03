@@ -54,6 +54,9 @@ def start() -> None:
     _scheduler.add_job(
         _nightly_tick, CronTrigger(hour=21, minute=30, timezone=IST), id="nightly"
     )
+    _scheduler.add_job(
+        _tunnel_tick, CronTrigger(minute="*/10", timezone=IST), id="tunnel-guard"
+    )
     _scheduler.start()
     log.info("scheduler_started", jobs=["hourly", "nightly"])
 
@@ -135,6 +138,15 @@ async def _hourly_tick() -> None:
                 asyncio.create_task(send_campaign(c.id))
     except Exception:
         log.exception("campaign_resume_failed")
+
+
+async def _tunnel_tick() -> None:
+    try:
+        from app.services.tunnel_guard import check_and_heal
+
+        await check_and_heal()
+    except Exception:
+        log.exception("tunnel_guard_failed")
 
 
 async def _nightly_tick() -> None:

@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     MANAGER_PHONE: str
     # WhatsApp Business Account id — template management via Graph API
     WHATSAPP_WABA_ID: str = ""
+    # Meta app id — webhook subscription self-healing needs it
+    WHATSAPP_APP_ID: str = ""
     # Optional second number CC'd on every escalation alert (Ravi).
     ESCALATION_CC_PHONE: str = ""
 
