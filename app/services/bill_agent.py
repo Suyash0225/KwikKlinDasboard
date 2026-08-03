@@ -570,28 +570,32 @@ async def _handle_test_mode(db: AsyncSession, phone: str, text: str) -> str | No
     if state is None:
         return None
 
-    # teaching: 'sikhao: <right answer>' -> Correction on the last question
+    # teaching: 'sikhao: <right answer>' after a question -> Correction+FAQ;
+    # 'sikhao: <policy/rule>' on its own -> straight knowledge (FAQ). Both
+    # land in the TRUSTED facts block, so taught prices/times actually stick.
     m = re.match(r"^(sikhao|sikho|teach)\s*[:\-]\s*(.+)$", t, re.I | re.S)
     if m:
-        if not state.get("last_q"):
-            return "🧪 Pehle koi sawal pucho, phir 'sikhao:' se sahi jawaab batao."
-        from app.models import Correction
+        taught = m.group(2).strip()[:2000]
+        from app.models import Correction, FaqEntry
 
-        db.add(
-            Correction(
-                question=state["last_q"][:2000],
-                correct_reply=m.group(2).strip()[:2000],
-            )
-        )
+        last_q = (state.get("last_q") or "").strip()
+        if last_q and last_q.lower() != taught.lower():
+            db.add(Correction(question=last_q[:2000], correct_reply=taught))
+            db.add(FaqEntry(question=last_q[:2000], answer=taught))
+            what = f"'{last_q[:80]}' ka jawaab"
+        else:
+            # no paired question — treat it as a shop rule / knowledge note
+            db.add(FaqEntry(question=taught[:300], answer=taught))
+            what = "naya niyam"
         await db.commit()
         await audit.record(
             actor_role="admin", actor="manager", action="taught_via_whatsapp",
-            args={"question": state["last_q"][:150]}, result=m.group(2)[:150],
+            args={"question": last_q[:150] or "(rule)"}, result=taught[:150],
         )
         return (
-            "✅ Seekh liya! Ab isi sawal pe aisa hi jawaab dunga. "
-            "(Dashboard → AI training → Corrections mein dikh jayega.)\n"
-            "Wahi sawal dobara puch ke check kar lo. 🧪"
+            f"✅ Seekh liya ({what})! Ab yahi jawaab dunga.\n"
+            "(Dashboard → AI training mein dikh jayega.)\n"
+            "Dobara puch ke check kar lo. 🧪"
         )
 
     # anything else in test mode = a customer question -> sandboxed brain

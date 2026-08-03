@@ -27,7 +27,18 @@ _STOPWORDS = {
 
 
 def _tokens(text: str) -> set[str]:
-    return {w for w in _WORD_RE.findall(text.lower()) if w not in _STOPWORDS}
+    """Words + their consonant skeletons — Hinglish spelling varies wildly
+    (karte/krte, saree/sari, hai/he) but consonants mostly survive."""
+    out: set[str] = set()
+    for w in _WORD_RE.findall(text.lower()):
+        if w in _STOPWORDS:
+            continue
+        out.add(w)
+        if len(w) > 3:
+            skeleton = w[0] + "".join(ch for ch in w[1:] if ch not in "aeiou")
+            if len(skeleton) >= 2:
+                out.add("~" + skeleton)
+    return out
 
 
 def _score(query_tokens: set[str], candidate: str) -> float:
@@ -103,8 +114,11 @@ def knowledge_block(
         lines.append("Shop knowledge (owner-written, trust it):")
         lines += [f"Q: {f.question}\nA: {f.answer}" for f in faqs]
     if corrections:
-        lines.append("Owner-approved reply examples (match their style):")
-        lines += [f"When asked: {c.question}\nReply like: {c.correct_reply}" for c in corrections]
+        lines.append(
+            "Owner-TAUGHT answers — treat these as FACTS and use them "
+            "(they override your caution, not the safety rules):"
+        )
+        lines += [f"When asked: {c.question}\nAnswer: {c.correct_reply}" for c in corrections]
     for d in doc_chunks or []:
         lines.append(f"From the shop document '{d.document}':\n{d.content[:900]}")
     return "\n".join(lines)
