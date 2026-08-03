@@ -113,6 +113,7 @@
         <div class="card">
           <b>💰 Totals</b>
           <div class="sumrow" style="margin-top:8px"><span>Subtotal</span><span class="money" id="nb-sub">₹0</span></div>
+          <div class="sumrow"><span>Discount preset</span><span style="max-width:150px"><select id="nb-preset" onchange="applyPreset()"><option value="">No discount</option></select></span></div>
           <div class="sumrow"><span>Discount (₹)</span><span style="max-width:110px"><input id="nb-disc" type="number" min="0" oninput="calcBill()"></span></div>
           <div class="sumrow"><span><label style="display:inline"><input type="checkbox" id="nb-gst" onchange="calcBill()" style="width:auto"> GST 18%</label></span><span class="money" id="nb-gstamt">₹0</span></div>
           <div class="sumrow"><span>Coupon code</span><span style="max-width:130px"><input id="nb-coupon" placeholder="e.g. OFF10"></span></div>
@@ -333,7 +334,66 @@
 
     <!-- Settings -->
     <section id="sec-settings" style="display:none">
-      <div class="pagehead"><div><h2>Settings</h2><p>Rates, staff, shop and agent behaviour</p></div></div>
+      <div class="pagehead"><div><h2>System Configuration Settings</h2><p>Business profile, pricing, messages and agent behaviour</p></div></div>
+      <div class="chips" style="margin-bottom:16px">
+        <span class="chip on" data-st="profile" onclick="stTab('profile')">🏪 Business Profile & Invoices</span>
+        <span class="chip" data-st="pricing" onclick="stTab('pricing')">🔥 Pricing rates matrix</span>
+        <span class="chip" data-st="messages" onclick="stTab('messages')">✉️ Message formats</span>
+        <span class="chip" data-st="ops" onclick="stTab('ops')">⚙️ Operations & Agents</span>
+      </div>
+
+      <div id="st-profile">
+        <div class="card" style="margin-bottom:14px">
+          <b>🏪 Business profile</b>
+          <div class="split2" style="margin-top:10px">
+            <div><label>Business name</label><input id="bp-name" disabled title="Set via .env SHOP_NAME"></div>
+            <div><label>GST identification number (GSTIN)</label><input id="bp-gstin" placeholder="09AAAAA0000A1Z5"></div>
+            <div><label>Contact phone number</label><input id="bp-phone" placeholder="9696856069"></div>
+            <div><label>Default delivery boy</label><select id="set-delivery"></select></div>
+          </div>
+          <div style="margin-top:10px"><label>Physical shop address (prints on receipts)</label>
+            <textarea id="bp-address" rows="2" placeholder="Shop no., road, Varanasi"></textarea></div>
+          <div class="split2" style="margin-top:10px">
+            <div><label>UPI VPA ID (scan-to-pay on bills)</label><input id="bp-upi" placeholder="yourname@okaxis"></div>
+            <div><label>UPI payee name</label><input id="bp-payee" placeholder="Kwik Klin"></div>
+          </div>
+          <div style="margin-top:10px"><label>Invoice footer banner message</label>
+            <input id="bp-footer" placeholder="Thank you for choosing Kwik Klin!"></div>
+          <div class="filters" style="margin-top:10px">
+            <div><label>Standard GST (%)</label><input id="bp-gstpct" type="number" min="0" max="28" style="width:90px"></div>
+            <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:13px;margin-top:14px">
+              <input type="checkbox" id="bp-gstdef" style="width:auto"> Enable GST by default on new bills</label>
+          </div>
+          <button class="btn" style="margin-top:12px" onclick="saveProfile(this)">Save profile configurations</button>
+        </div>
+        <div class="card">
+          <b>🏷️ Discount offers setup</b>
+          <div class="filters" style="margin-top:10px">
+            <input id="dp-name" placeholder="Offer name (e.g. Welcome 10% Off)" style="min-width:190px">
+            <select id="dp-type" style="min-width:120px"><option value="percent">Percentage (%)</option><option value="flat">Flat ₹</option></select>
+            <input id="dp-val" type="number" min="1" placeholder="Value" style="width:90px">
+            <button class="btn sm orange" onclick="addPreset(this)">+ Add offer</button>
+          </div>
+          <div id="dp-list" style="margin-top:10px"></div>
+        </div>
+      </div>
+
+      <div id="st-pricing" style="display:none">
+        <div class="card" style="margin-bottom:14px">
+          <b>🔥 Piece-based pricing rate matrix</b>
+          <p class="muted" style="margin-top:4px">Har kapde ka rate, har service mein — cell mein likho, apne aap save. New bills use these rates, never old ones.</p>
+          <div class="filters" style="margin-top:8px">
+            <input id="rm-garment" placeholder="New garment name" style="min-width:150px">
+            <button class="btn sm orange" onclick="rmAddGarment()">+ Add item</button>
+            <input id="rm-service" placeholder="New service name" style="min-width:150px">
+            <button class="btn sm ghost" onclick="rmAddService()">+ Add service</button>
+          </div>
+          <div id="rate-matrix" style="margin-top:10px;overflow-x:auto"></div>
+        </div>
+        <div class="card"><b>⚖️ Weight-based (per kg) rates</b><div id="rate-kg" style="margin-top:10px"></div></div>
+      </div>
+
+      <div id="st-ops" style="display:none">
       <div class="card" style="margin-bottom:14px">
         <b>🏪 Operations</b>
         <div class="filters" style="margin-top:8px">
@@ -363,6 +423,24 @@
         </div>
       </div>
       <div class="card" style="margin-bottom:14px">
+        <b>🧑‍🔧 Staff</b>
+        <div class="filters" style="margin-top:8px">
+          <input id="sf-name" placeholder="Name" style="min-width:110px">
+          <input id="sf-phone" placeholder="10-digit phone" style="min-width:120px">
+          <select id="sf-role"><option value="WASHER">Washer (washing & ironing)</option><option value="DELIVERY">Delivery</option></select>
+          <button class="btn sm" onclick="addStaff(this)">Add staff</button>
+        </div>
+        <div id="staff-list" style="margin-top:10px"></div>
+      </div>
+      <div class="card">
+        <b>💾 Backups</b>
+        <p class="muted" style="margin-top:4px">Poore business ka JSON backup — customers, bills, payments, rates, gyaan, sab.</p>
+        <button class="btn ghost" style="margin-top:8px" onclick="dlServer('/admin/api/backup.json','kwikklin-backup.json')">⬇ Download backup (.json)</button>
+      </div>
+      </div>
+
+      <div id="st-messages" style="display:none">
+      <div class="card" style="margin-bottom:14px">
         <b>✉️ Message formats — likho apne andaaz mein</b>
         <p class="muted" style="margin-top:4px">Ye messages customers ko free-form (window open) mein jate hain. Edit karo — turant lagoo, koi approval nahi chahiye. <b>{placeholders}</b> apni jagah asli value ban jate hain.</p>
         <div class="filters" style="margin-top:8px">
@@ -378,28 +456,6 @@
           </div>
         </div>
       </div>
-      <div class="split2">
-        <div class="card">
-          <b>💲 Rate card — new bills use these rates, never old ones</b>
-          <div class="filters" style="margin-top:8px">
-            <input id="rt-svc" placeholder="Service (e.g. Dry Clean)" style="min-width:120px">
-            <input id="rt-item" placeholder="Item (e.g. Kurta)" style="min-width:110px">
-            <select id="rt-unit" style="min-width:70px"><option value="pc">pc</option><option value="kg">kg</option></select>
-            <input id="rt-rate" type="number" placeholder="₹" style="width:80px">
-            <button class="btn sm" onclick="addRate(this)">Add</button>
-          </div>
-          <div id="rates-list" style="margin-top:8px"></div>
-        </div>
-        <div class="card">
-          <b>🧑‍🔧 Staff</b>
-          <div class="filters" style="margin-top:8px">
-            <input id="sf-name" placeholder="Name" style="min-width:110px">
-            <input id="sf-phone" placeholder="10-digit phone" style="min-width:120px">
-            <select id="sf-role"><option value="WASHER">Washer (washing & ironing)</option><option value="DELIVERY">Delivery</option></select>
-            <button class="btn sm" onclick="addStaff(this)">Add staff</button>
-          </div>
-          <div id="staff-list" style="margin-top:10px"></div>
-        </div>
       </div>
     </section>
 

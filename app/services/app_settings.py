@@ -42,6 +42,18 @@ DEFAULTS: dict[str, Any] = {
     "public_base_url": "",            # current tunnel URL (IG fetches images from here)
     # owner-edited customer message formats {message_key: text}
     "message_overrides": {},
+    # business profile (Settings -> Business Profile & Invoices)
+    "shop_address": "",
+    "shop_gstin": "",
+    "shop_contact_phone": "",
+    "invoice_footer": "Thank you for choosing Kwik Klin! 🙏",
+    "upi_vpa": "",                    # scan-to-pay on bills when set
+    "upi_payee": "",
+    "gst_percent": 18,
+    "gst_default_on": False,          # New Bill GST checkbox default
+    "default_delivery_phone": "",
+    # named discount presets for New Bill [{name, type: percent|flat, value}]
+    "discount_presets": [],
     "tone": "friendly",               # formal | professional | friendly | casual
     "emoji_level": "minimal",         # off | minimal | expressive
 }

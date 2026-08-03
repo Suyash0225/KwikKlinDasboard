@@ -889,6 +889,61 @@ async def toggle_agent(body: AgentToggleIn, db: AsyncSession = Depends(get_db)) 
     return {"phone": phone, "agent_paused": cust.agent_paused}
 
 
+@router.get("/backup.json")
+async def backup_json(db: AsyncSession = Depends(get_db)) -> dict:
+    """One-click business backup: every business table as plain JSON.
+
+    (Full binary-safe backups: pg_dump. This is the owner-friendly export.)
+    """
+    from app.models import (
+        Coupon as _Cp,
+        Customer as _C,
+        Expense as _E,
+        FaqEntry as _F,
+        Order as _O,
+        Payment as _P,
+        Rate as _R,
+    )
+
+    import enum as _enum
+
+    def _row(obj, cols):
+        out = {}
+        for col in cols:
+            v = getattr(obj, col)
+            if isinstance(v, _enum.Enum):
+                v = v.name
+            elif v is not None and not isinstance(v, (int, float, bool, str, list, dict)):
+                v = str(v)
+            out[col] = v
+        return out
+
+    customers = (await db.execute(select(_C))).scalars().all()
+    orders = (await db.execute(select(_O))).scalars().all()
+    payments = (await db.execute(select(_P))).scalars().all()
+    rates = (await db.execute(select(_R))).scalars().all()
+    expenses = (await db.execute(select(_E))).scalars().all()
+    coupons = (await db.execute(select(_Cp))).scalars().all()
+    faqs = (await db.execute(select(_F))).scalars().all()
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "customers": [_row(c, ["phone", "name", "address", "opted_out", "created_at"]) for c in customers],
+        "orders": [
+            _row(o, ["order_number", "status", "items", "total_amount", "discount_amount",
+                     "gst_amount", "amount_paid", "payment_status", "expected_delivery",
+                     "priority", "notes", "created_at"])
+            | {"customer_phone": next((c.phone for c in customers if c.id == o.customer_id), None)}
+            for o in orders
+        ],
+        "payments": [_row(p, ["amount", "method", "recorded_by", "received_at"]) for p in payments],
+        "rates": [_row(r, ["service", "garment", "unit", "rate", "is_active"]) for r in rates],
+        "expenses": [_row(e, ["category", "amount", "spent_on", "description"]) for e in expenses],
+        "coupons": [_row(c, ["code", "discount_type", "value", "active"]) for c in coupons],
+        "faq": [_row(f, ["question", "answer", "audience", "enabled"]) for f in faqs],
+        "settings": await app_settings.all_settings(db),
+    }
+
+
 @router.post("/jobs/standup")
 async def trigger_standup() -> dict:
     """Manual standup trigger — for testing and 'bhej do abhi' moments."""

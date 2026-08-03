@@ -336,11 +336,29 @@ function jumpChat(phone) { go("inbox"); setTimeout(() => openThread(phone), 250)
 let RATES = [], CUSTOMERS_CACHE = null, LINES = [];
 
 async function initNewBill() {
-  try { RATES = await api("/admin/api/rates"); } catch (e) { toast(e.message, true); }
+  try {
+    [RATES, SETTINGS_CACHE] = await Promise.all([api("/admin/api/rates"), api("/admin/api/settings")]);
+  } catch (e) { toast(e.message, true); }
   if (!CUSTOMERS_CACHE) loadCustomers(true);
   if (!LINES.length) addLine();
   renderLines();
-  $("nb-date").value = new Date(Date.now() + 2 * 864e5).toISOString().slice(0, 10);
+  const days = parseInt(SETTINGS_CACHE.turnaround_days) || 2;
+  $("nb-date").value = new Date(Date.now() + days * 864e5).toISOString().slice(0, 10);
+  $("nb-gst").checked = !!SETTINGS_CACHE.gst_default_on;
+  $("nb-preset").innerHTML = '<option value="">No discount</option>' +
+    (SETTINGS_CACHE.discount_presets || []).map((p, i) =>
+      `<option value="${i}">${esc(p.name)} (${p.type === "percent" ? p.value + "%" : "₹" + p.value})</option>`).join("");
+  calcBill();
+}
+function applyPreset() {
+  const i = $("nb-preset").value;
+  if (i === "") { $("nb-disc").value = ""; calcBill(); return; }
+  const p = (SETTINGS_CACHE.discount_presets || [])[parseInt(i)];
+  if (!p) return;
+  let sub = 0;
+  LINES.forEach((l) => { sub += (parseFloat(l.rate) || 0) * (parseFloat(l.qty) || 0); });
+  $("nb-disc").value = p.type === "percent" ? Math.round(sub * p.value) / 100 : p.value;
+  calcBill();
 }
 function addLine() { LINES.push({ service: "", garment: "", qty: 1, rate: "", amount: 0 }); renderLines(); }
 function delLine(i) { LINES.splice(i, 1); if (!LINES.length) addLine(); renderLines(); }
@@ -379,7 +397,8 @@ function calcBill() {
     const el = $("nb-amt-" + i); if (el) el.textContent = money(l.amount);
   });
   const disc = parseFloat($("nb-disc").value) || 0;
-  const gst = $("nb-gst").checked ? Math.round((sub - disc) * 0.18 * 100) / 100 : 0;
+  const pct = (parseFloat(SETTINGS_CACHE.gst_percent) || 18) / 100;
+  const gst = $("nb-gst").checked ? Math.round((sub - disc) * pct * 100) / 100 : 0;
   const total = Math.max(0, sub - disc + gst);
   const adv = parseFloat($("nb-adv").value) || 0;
   $("nb-sub").textContent = money(sub);
@@ -432,8 +451,16 @@ function showBillSuccess(o) {
     </div>`);
 }
 function receiptText(o) {
+  const s = SETTINGS_CACHE || {};
   const lines = (o.items || []).map((i) => ` ${i.qty} x ${i.type}  ${i.amount != null ? money(i.amount) : ""}`);
-  return `KWIK KLIN — Laundry Pro\n------------------------------\nBill: ${o.order_number}\nCustomer: ${o.customer_name || o.customer_phone}\nDate: ${fmtDate(o.created_at || new Date().toISOString())}\n------------------------------\n${lines.join("\n")}\n------------------------------\nTotal: ${o.total_amount ? money(o.total_amount) : "—"}\nPaid: ${money(o.amount_paid || 0)}\nDue: ${o.total_amount ? money(o.total_amount - (o.amount_paid || 0)) : "—"}\nDelivery: ${fmtDate(o.expected_delivery)}\n------------------------------\nThank you! 🙏`;
+  let out = `KWIK KLIN — Laundry Pro`;
+  if (s.shop_address) out += `\n${s.shop_address}`;
+  if (s.shop_contact_phone) out += `\nPh: ${s.shop_contact_phone}`;
+  if (s.shop_gstin) out += `\nGSTIN: ${s.shop_gstin}`;
+  out += `\n------------------------------\nBill: ${o.order_number}\nCustomer: ${o.customer_name || o.customer_phone}\nDate: ${fmtDate(o.created_at || new Date().toISOString())}\n------------------------------\n${lines.join("\n")}\n------------------------------\nTotal: ${o.total_amount ? money(o.total_amount) : "—"}\nPaid: ${money(o.amount_paid || 0)}\nDue: ${o.total_amount ? money(o.total_amount - (o.amount_paid || 0)) : "—"}\nDelivery: ${fmtDate(o.expected_delivery)}\n------------------------------`;
+  if (s.upi_vpa) out += `\nPay via UPI: ${s.upi_vpa}${s.upi_payee ? " (" + s.upi_payee + ")" : ""}`;
+  out += `\n${s.invoice_footer || "Thank you! 🙏"}`;
+  return out;
 }
 function printReceipt(o) { $("receipt").textContent = receiptText(o); window.print(); }
 async function printReceiptFromOrder(number) {
@@ -1012,16 +1039,23 @@ async function loadActivity() {
 }
 
 /* ============================= settings ============================= */
-let STAFF = [];
+let STAFF = [], SETTINGS_CACHE = {}, RM_RATES = [], RM_EXTRA_G = [], RM_EXTRA_S = [];
+
+function stTab(t) {
+  ["profile", "pricing", "messages", "ops"].forEach((x) => {
+    const el = $("st-" + x); if (el) el.style.display = x === t ? "" : "none";
+  });
+  document.querySelectorAll("[data-st]").forEach((el) => el.classList.toggle("on", el.dataset.st === t));
+}
+
 async function loadSettings() {
-  $("rates-list").innerHTML = skeleton(4);
   mfLoad();
   try {
     const [rates, staff, s] = await Promise.all([
       api("/admin/api/rates"), api("/admin/api/staff"), api("/admin/api/settings"),
     ]);
-    STAFF = staff;
-    renderRates(rates); renderStaff();
+    STAFF = staff; SETTINGS_CACHE = s; RM_RATES = rates;
+    renderRateMatrix(); renderStaff(); renderPresets();
     $("set-standup").value = s.standup_hour;
     $("set-turnaround").value = s.turnaround_days;
     $("set-freqcap").value = s.marketing_freq_cap_per_month;
@@ -1031,23 +1065,115 @@ async function loadSettings() {
     $("set-socialhour").value = s.social_post_hour;
     $("set-igid").value = s.ig_user_id || "";
     $("set-igtoken").value = s.ig_access_token || "";
-    $("set-washer").innerHTML = '<option value="">— none —</option>' +
-      staff.filter((x) => x.is_active).map((x) => `<option value="${x.phone}" ${s.default_washer_phone === x.phone ? "selected" : ""}>${esc(x.name)}</option>`).join("");
-  } catch (e) { $("rates-list").innerHTML = errBox(e.message, "loadSettings"); }
+    const staffOpts = (sel) => '<option value="">— none —</option>' +
+      staff.filter((x) => x.is_active).map((x) => `<option value="${x.phone}" ${sel === x.phone ? "selected" : ""}>${esc(x.name)}</option>`).join("");
+    $("set-washer").innerHTML = staffOpts(s.default_washer_phone);
+    $("set-delivery").innerHTML = staffOpts(s.default_delivery_phone);
+    // business profile
+    $("bp-name").value = "Kwik Klin";
+    $("bp-gstin").value = s.shop_gstin || "";
+    $("bp-phone").value = s.shop_contact_phone || "";
+    $("bp-address").value = s.shop_address || "";
+    $("bp-upi").value = s.upi_vpa || "";
+    $("bp-payee").value = s.upi_payee || "";
+    $("bp-footer").value = s.invoice_footer || "";
+    $("bp-gstpct").value = s.gst_percent;
+    $("bp-gstdef").checked = !!s.gst_default_on;
+  } catch (e) { toast(e.message, true); }
 }
-function renderRates(rates) {
-  $("rates-list").innerHTML = `
-    <table class="tbl"><thead><tr><th>Service</th><th>Item</th><th>Rate</th><th>Unit</th><th>Active</th></tr></thead>
-    <tbody>${rates.map((r) => `
-      <tr><td>${esc(r.service)}</td><td>${esc(r.garment || "—")}</td>
-      <td style="max-width:90px"><input type="number" value="${r.rate}" step="0.5" onchange="updRate('${r.id}', this.value, null)"></td>
-      <td>${r.unit}</td>
-      <td><input type="checkbox" ${r.is_active ? "checked" : ""} onchange="updRate('${r.id}', null, this.checked)"></td></tr>`).join("")}
-    </tbody></table>
-    <div class="rowcards">${rates.map((r) => `
-      <div class="rowcard"><div class="r1"><b>${esc(r.service)} · ${esc(r.garment || "per kg")}</b>
-      <input type="checkbox" ${r.is_active ? "checked" : ""} onchange="updRate('${r.id}', null, this.checked)"></div>
-      <div class="kv"><span>Rate (₹/${r.unit})</span><span style="max-width:110px"><input type="number" value="${r.rate}" step="0.5" onchange="updRate('${r.id}', this.value, null)"></span></div></div>`).join("")}</div>`;
+
+async function saveProfile(btn) {
+  await busy(btn, async () => {
+    const pairs = [
+      ["shop_gstin", $("bp-gstin").value.trim()],
+      ["shop_contact_phone", $("bp-phone").value.trim()],
+      ["shop_address", $("bp-address").value.trim()],
+      ["upi_vpa", $("bp-upi").value.trim()],
+      ["upi_payee", $("bp-payee").value.trim()],
+      ["invoice_footer", $("bp-footer").value.trim()],
+      ["gst_percent", parseFloat($("bp-gstpct").value) || 18],
+      ["gst_default_on", $("bp-gstdef").checked],
+      ["default_delivery_phone", $("set-delivery").value],
+    ];
+    for (const [key, value] of pairs) await api("/admin/api/settings", { method: "PUT", body: { key, value } });
+    toast("Profile saved — receipts & bills use it now");
+    loadSettings();
+  });
+}
+
+/* discount presets */
+function renderPresets() {
+  const list = SETTINGS_CACHE.discount_presets || [];
+  $("dp-list").innerHTML = list.length ? list.map((p, i) => `
+    <div class="sumrow"><span><b>${esc(p.name)}</b> — ${p.type === "percent" ? p.value + "%" : money(p.value)} off</span>
+      <button class="btn sm danger" onclick="delPreset(${i})">✕</button></div>`).join("")
+    : `<p class="muted">No offers yet — they appear in New Bill's discount dropdown.</p>`;
+}
+async function addPreset(btn) {
+  await busy(btn, async () => {
+    const name = $("dp-name").value.trim(), val = parseFloat($("dp-val").value);
+    if (!name || !(val > 0)) throw new Error("Offer name and value required");
+    const list = [...(SETTINGS_CACHE.discount_presets || []), { name, type: $("dp-type").value, value: val }];
+    await api("/admin/api/settings", { method: "PUT", body: { key: "discount_presets", value: list } });
+    $("dp-name").value = ""; $("dp-val").value = "";
+    toast("Offer added"); loadSettings();
+  });
+}
+async function delPreset(i) {
+  const list = [...(SETTINGS_CACHE.discount_presets || [])];
+  list.splice(i, 1);
+  await api("/admin/api/settings", { method: "PUT", body: { key: "discount_presets", value: list } });
+  loadSettings();
+}
+
+/* pricing matrix (legacy-style: garment rows x service columns) */
+function renderRateMatrix() {
+  const pc = RM_RATES.filter((r) => r.unit === "pc");
+  const kg = RM_RATES.filter((r) => r.unit === "kg");
+  const services = [...new Set([...pc.map((r) => r.service), ...RM_EXTRA_S])];
+  const garments = [...new Set([...pc.map((r) => r.garment), ...RM_EXTRA_G])].filter(Boolean).sort();
+  const cell = (g, s) => {
+    const r = pc.find((x) => x.garment === g && x.service === s);
+    return `<td><input type="number" step="0.5" style="max-width:86px" value="${r ? r.rate : ""}"
+      placeholder="—" onchange="rmCell('${esc(g)}','${esc(s)}',this.value,'${r ? r.id : ""}')"></td>`;
+  };
+  $("rate-matrix").innerHTML = `
+    <table class="tbl" style="min-width:${180 + services.length * 110}px"><thead><tr>
+      <th>Laundry garment name</th>${services.map((s) => `<th>${esc(s)} (₹)</th>`).join("")}
+    </tr></thead><tbody>
+      ${garments.map((g) => `<tr><td><b style="font-size:13px;text-transform:none;letter-spacing:0">${esc(g)}</b></td>${services.map((s) => cell(g, s)).join("")}</tr>`).join("")}
+    </tbody></table>`;
+  $("rate-kg").innerHTML = kg.map((r) => `
+    <div class="sumrow"><span>${esc(r.service)}</span>
+      <span style="max-width:110px"><input type="number" step="0.5" value="${r.rate}" onchange="updRate('${r.id}', this.value, null)"></span></div>`).join("")
+    || `<p class="muted">No per-kg services yet.</p>`;
+}
+async function rmCell(garment, service, value, id) {
+  const v = parseFloat(value);
+  try {
+    if (id) {
+      if (!(v > 0)) { await api(`/admin/api/rates/${id}`, { method: "PUT", body: { is_active: false } }); toast("Rate disabled"); }
+      else { await api(`/admin/api/rates/${id}`, { method: "PUT", body: { rate: v, is_active: true } }); toast("Rate saved — new bills only"); }
+    } else if (v > 0) {
+      await api("/admin/api/rates", { method: "POST", body: { service, garment, unit: "pc", rate: v } });
+      toast("Rate added");
+    }
+    RM_RATES = await api("/admin/api/rates");
+    renderRateMatrix();
+  } catch (e) { toast(e.message, true); }
+}
+function rmAddGarment() {
+  const g = $("rm-garment").value.trim();
+  if (!g) return;
+  RM_EXTRA_G.push(g); $("rm-garment").value = "";
+  renderRateMatrix();
+  toast("Ab kisi bhi service ke cell mein rate likho — save ho jayega");
+}
+function rmAddService() {
+  const s = $("rm-service").value.trim();
+  if (!s) return;
+  RM_EXTRA_S.push(s); $("rm-service").value = "";
+  renderRateMatrix();
 }
 let rateTimer = {};
 function updRate(id, rate, active) {
