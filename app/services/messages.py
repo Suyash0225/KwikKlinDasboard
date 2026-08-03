@@ -295,18 +295,64 @@ STATUS_LABELS: dict[str, dict[OrderStatus, str]] = {
 }
 
 
+# Owner-edited formats (Settings -> Message formats). Kept in module cache
+# for sync access everywhere; persisted in settings_kv, loaded at startup.
+_OVERRIDES: dict[str, str] = {}
+
+# Keys the owner may safely rewrite from the UI (customer-facing copy).
+EDITABLE_KEYS = [
+    "order_confirmed_bill", "thankyou_rating", "order_ready",
+    "order_out_for_delivery", "delay_notice", "payment_reminder",
+    "payment_reminder_firm", "ack_received", "complaint_ack",
+    "escalated_ack", "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
+    "stop_confirmed", "start_confirmed",
+]
+
+
+def allowed_placeholders(key: str) -> set[str]:
+    """Placeholders the default text uses (+{shop}) — the editable set."""
+    import string
+
+    names: set[str] = {"shop"}
+    for text in MESSAGES.get(key, {}).values():
+        for _, field, _, _ in string.Formatter().parse(text):
+            if field:
+                names.add(field)
+    return names
+
+
+def set_override(key: str, text: str | None) -> None:
+    """Install/remove an owner override in the live cache (hot reload)."""
+    if text:
+        _OVERRIDES[key] = text
+    else:
+        _OVERRIDES.pop(key, None)
+
+
+def load_overrides(data: dict[str, str]) -> None:
+    _OVERRIDES.clear()
+    _OVERRIDES.update({k: v for k, v in (data or {}).items() if k in MESSAGES and v})
+    if _OVERRIDES:
+        log.info("message_overrides_loaded", count=len(_OVERRIDES))
+
+
+def get_override(key: str) -> str | None:
+    return _OVERRIDES.get(key)
+
+
 def get_message(key: str, lang: str = DEFAULT_LANG, **fmt: str) -> str:
     """Return the string for `key` in `lang`, formatted.
 
-    {shop} is always available in format placeholders. Raises KeyError for an
-    unknown key — that is a programming error we want to hear about loudly.
+    Owner overrides (any language) win over the built-in copy. {shop} is
+    always available. Raises KeyError for an unknown key — that is a
+    programming error we want to hear about loudly.
     """
     try:
         by_lang = MESSAGES[key]
     except KeyError:
         log.error("unknown_message_key", key=key)
         raise
-    text = by_lang.get(lang) or by_lang.get(DEFAULT_LANG) or by_lang["en"]
+    text = _OVERRIDES.get(key) or by_lang.get(lang) or by_lang.get(DEFAULT_LANG) or by_lang["en"]
     fmt.setdefault("shop", settings.SHOP_NAME)
     return text.format(**fmt)
 

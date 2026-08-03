@@ -40,6 +40,8 @@ DEFAULTS: dict[str, Any] = {
     "ig_user_id": "",                 # Instagram Business user id (empty = off)
     "ig_access_token": "",            # token with instagram_content_publish
     "public_base_url": "",            # current tunnel URL (IG fetches images from here)
+    # owner-edited customer message formats {message_key: text}
+    "message_overrides": {},
     "tone": "friendly",               # formal | professional | friendly | casual
     "emoji_level": "minimal",         # off | minimal | expressive
 }

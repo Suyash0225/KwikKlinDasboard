@@ -358,6 +358,22 @@
           <button class="btn ghost" onclick="testStandup(this)">▶ Send standup now</button>
         </div>
       </div>
+      <div class="card" style="margin-bottom:14px">
+        <b>✉️ Message formats — likho apne andaaz mein</b>
+        <p class="muted" style="margin-top:4px">Ye messages customers ko free-form (window open) mein jate hain. Edit karo — turant lagoo, koi approval nahi chahiye. <b>{placeholders}</b> apni jagah asli value ban jate hain.</p>
+        <div class="filters" style="margin-top:8px">
+          <select id="mf-key" style="min-width:240px" onchange="mfPick()"></select>
+          <span id="mf-flag"></span>
+        </div>
+        <div class="frm">
+          <textarea id="mf-text" rows="4"></textarea>
+          <div class="muted" id="mf-ph" style="font-size:11.5px"></div>
+          <div class="act">
+            <button class="btn sm" onclick="mfSave(this)">Save</button>
+            <button class="btn sm ghost" onclick="mfReset(this)">Reset to default</button>
+          </div>
+        </div>
+      </div>
       <div class="split2">
         <div class="card">
           <b>💲 Rate card — new bills use these rates, never old ones</b>

@@ -30,6 +30,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.services import scheduler
 
     scheduler.start()
+    # owner's edited message formats survive restarts
+    try:
+        from app.database import async_session_factory
+        from app.services import app_settings as _as
+        from app.services.messages import load_overrides
+
+        async with async_session_factory() as db:
+            load_overrides(await _as.get(db, "message_overrides"))
+    except Exception:
+        log.exception("message_overrides_load_failed")
     yield
     scheduler.shutdown()
     await engine.dispose()

@@ -1008,6 +1008,7 @@ async function loadActivity() {
 let STAFF = [];
 async function loadSettings() {
   $("rates-list").innerHTML = skeleton(4);
+  mfLoad();
   try {
     const [rates, staff, s] = await Promise.all([
       api("/admin/api/rates"), api("/admin/api/staff"), api("/admin/api/settings"),
@@ -1117,6 +1118,38 @@ async function testStandup(btn) {
   await busy(btn, async () => {
     const r = await api("/admin/api/jobs/standup", { method: "POST" });
     toast(`Standup sent to ${r.sent_to} staff member(s)`);
+  });
+}
+
+/* ============================= message formats ============================= */
+let MSG_FORMATS = [];
+async function mfLoad() {
+  try {
+    MSG_FORMATS = await api("/admin/api/message-formats");
+    $("mf-key").innerHTML = MSG_FORMATS.map((m, i) =>
+      `<option value="${i}">${m.overridden ? "✏️ " : ""}${esc(m.label)}</option>`).join("");
+    mfPick();
+  } catch (e) { toast(e.message, true); }
+}
+function mfPick() {
+  const m = MSG_FORMATS[parseInt($("mf-key").value) || 0];
+  if (!m) return;
+  $("mf-text").value = m.current;
+  $("mf-ph").textContent = "Placeholders: " + m.placeholders.map((p) => `{${p}}`).join("  ");
+  $("mf-flag").innerHTML = m.overridden ? '<span class="tag">customised</span>' : '<span class="tag">default</span>';
+}
+async function mfSave(btn) {
+  const m = MSG_FORMATS[parseInt($("mf-key").value) || 0];
+  await busy(btn, async () => {
+    await api("/admin/api/message-formats", { method: "PUT", body: { key: m.key, text: $("mf-text").value } });
+    toast("Saved — live immediately"); mfLoad();
+  });
+}
+async function mfReset(btn) {
+  const m = MSG_FORMATS[parseInt($("mf-key").value) || 0];
+  await busy(btn, async () => {
+    await api("/admin/api/message-formats", { method: "PUT", body: { key: m.key, text: "" } });
+    toast("Back to default"); mfLoad();
   });
 }
 

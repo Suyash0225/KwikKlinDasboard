@@ -499,6 +499,97 @@ async def answer_teachme(qid: str, body: TeachIn, db: AsyncSession = Depends(get
 
 
 # ---------------------------------------------------------------------------
+# Message formats (owner-edited copy for free-form sends, hot-reloaded)
+# ---------------------------------------------------------------------------
+
+_MSG_LABELS = {
+    "order_confirmed_bill": "New order — bill details",
+    "thankyou_rating": "After delivery — thank you + rating",
+    "order_ready": "Order ready",
+    "order_out_for_delivery": "Out for delivery",
+    "delay_notice": "Delivery date changed",
+    "payment_reminder": "Payment reminder (polite)",
+    "payment_reminder_firm": "Payment reminder (firm)",
+    "ack_received": "Fallback acknowledgement",
+    "complaint_ack": "Complaint apology",
+    "escalated_ack": "Escalated to manager",
+    "rate_good_reply": "Rating reply — great",
+    "rate_mid_reply": "Rating reply — okay",
+    "rate_bad_reply": "Rating reply — bad",
+    "stop_confirmed": "STOP confirmation",
+    "start_confirmed": "START welcome back",
+}
+
+
+@router.get("/message-formats")
+async def message_formats() -> list[dict]:
+    from app.services.messages import (
+        DEFAULT_LANG,
+        EDITABLE_KEYS,
+        MESSAGES,
+        allowed_placeholders,
+        get_override,
+    )
+
+    out = []
+    for key in EDITABLE_KEYS:
+        default = MESSAGES[key].get(DEFAULT_LANG) or MESSAGES[key]["en"]
+        out.append(
+            {
+                "key": key,
+                "label": _MSG_LABELS.get(key, key),
+                "default": default,
+                "current": get_override(key) or default,
+                "overridden": get_override(key) is not None,
+                "placeholders": sorted(allowed_placeholders(key)),
+            }
+        )
+    return out
+
+
+class MsgFormatIn(BaseModel):
+    key: str
+    text: str = ""  # empty = reset to default
+
+
+@router.put("/message-formats")
+async def put_message_format(body: MsgFormatIn, db: AsyncSession = Depends(get_db)) -> dict:
+    import string
+
+    from app.services.messages import EDITABLE_KEYS, allowed_placeholders, set_override
+
+    if body.key not in EDITABLE_KEYS:
+        raise HTTPException(status_code=400, detail="This message is not editable")
+    text = body.text.strip()
+    if text:
+        allowed = allowed_placeholders(body.key)
+        used = {
+            f for _, f, _, _ in string.Formatter().parse(text) if f
+        }
+        bad = used - allowed
+        if bad:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown placeholder(s): {', '.join(sorted(bad))}. "
+                f"Allowed: {', '.join(sorted('{' + a + '}' for a in allowed))}",
+            )
+    # persist + hot-apply
+    overrides = dict(await app_settings.get(db, "message_overrides") or {})
+    if text:
+        overrides[body.key] = text
+    else:
+        overrides.pop(body.key, None)
+    await app_settings.set_value(db, "message_overrides", overrides)
+    set_override(body.key, text or None)
+    await audit.record(
+        actor_role="admin", actor="dashboard",
+        action="message_format_edited" if text else "message_format_reset",
+        args={"key": body.key}, result=text[:150],
+    )
+    return {"key": body.key, "overridden": bool(text)}
+
+
+# ---------------------------------------------------------------------------
 # WhatsApp template studio (create -> submit to Meta -> track approval)
 # ---------------------------------------------------------------------------
 
