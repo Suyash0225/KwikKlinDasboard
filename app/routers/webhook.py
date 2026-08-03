@@ -82,12 +82,21 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
     reply_key = {"good": "rate_good_reply", "mid": "rate_mid_reply", "bad": "rate_bad_reply"}[kind]
     reply_text = get_message(reply_key)
     if kind == "good":
-        # Google review link ONLY on happy ratings (owner's spec)
+        # Google review link ONLY on happy ratings (owner's spec). Two
+        # listings — rotate by phone so both profiles grow.
         from app.services import app_settings
 
-        link = (await app_settings.get(db, "google_review_link") or "").strip()
-        if link:
-            reply_text += f"\n\nEk minute ho to Google par review kar dijiye 🙏\n{link}"
+        l1 = (await app_settings.get(db, "google_review_link") or "").strip()
+        l2 = (await app_settings.get(db, "google_review_link_2") or "").strip()
+        links = [l for l in (l1, l2) if l]
+        if links:
+            link = links[sum(ord(c) for c in phone) % len(links)]
+            reply_text += (
+                "\n\nAap jaise pyare customers ki wajah se hi hum chal rahe hain 🥰 "
+                "Bas 30 second — yahan tap karke Google par 2 shabd likh dijiye, "
+                "aapka ek review hamari dukaan ke liye diwali ka bonus jaisa hai! 🎁\n"
+                f"{link}"
+            )
     try:
         await send_message(db, to_phone=phone, text=reply_text)
     except SendError:

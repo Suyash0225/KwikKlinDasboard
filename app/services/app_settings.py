@@ -58,7 +58,8 @@ DEFAULTS: dict[str, Any] = {
     "sla_normal_days": 4,
     "sla_heavy_days": 7,
     "heavy_items": "blanket,kambal,razai,quilt,curtain,parda,saree,carpet,sofa,jacket,coat,sherwani,lehenga",
-    "google_review_link": "",   # bheja jata hai sirf 4-5 star par
+    "google_review_link": "",    # bheja jata hai sirf 4-5 star par
+    "google_review_link_2": "",  # doosri listing — customers me rotate hota hai
     "tone": "friendly",               # formal | professional | friendly | casual
     "emoji_level": "minimal",         # off | minimal | expressive
 }
