@@ -439,6 +439,56 @@ async def test_manager_business_query_answers_from_db_facts(monkeypatch, sent) -
     assert "kitne order pending hai?" in seen["user_text"]
 
 
+async def test_whatsapp_sandbox_train_loop(monkeypatch) -> None:
+    """test customer -> sandboxed answer -> sikhao: -> Correction saved."""
+    from app.models import Correction, Customer as Cust
+    from tests.conftest import purge_phones
+
+    bill_module._TEST_MODE.clear()
+    async with async_session_factory() as db:
+        db.add(Cust(phone=SENDER, name="Malik"))
+        await db.commit()
+
+    async def fake_brain(db, customer, text, sandbox=False):
+        assert sandbox is True
+        return "Hum sirf kapde dhote hain ji."
+
+    monkeypatch.setattr("app.services.ai_agent.build_ai_reply", fake_brain)
+    try:
+        async with async_session_factory() as db:
+            r1 = await handle_staff_message(
+                db, sender_phone=SENDER, sender_label="manager", text="test customer"
+            )
+            assert "Test mode ON" in r1
+            r2 = await handle_staff_message(
+                db, sender_phone=SENDER, sender_label="manager", text="juta saaf karte ho?"
+            )
+            assert r2.startswith("🧪") and "kapde dhote" in r2
+            r3 = await handle_staff_message(
+                db, sender_phone=SENDER, sender_label="manager",
+                text="sikhao: Haan ji, shoe cleaning bhi hoti hai, ₹150 per pair",
+            )
+            assert "Seekh liya" in r3
+            corr = (
+                await db.execute(
+                    select(Correction).where(Correction.question == "juta saaf karte ho?")
+                )
+            ).scalar_one()
+            assert "shoe cleaning" in corr.correct_reply
+            r4 = await handle_staff_message(
+                db, sender_phone=SENDER, sender_label="manager", text="test band"
+            )
+            assert "OFF" in r4
+    finally:
+        bill_module._TEST_MODE.clear()
+        async with async_session_factory() as s:
+            await s.execute(
+                sqltext("DELETE FROM corrections WHERE question = 'juta saaf karte ho?'")
+            )
+            await s.commit()
+        await purge_phones(SENDER)
+
+
 async def test_llm_down_notifies_manager_but_not_staff(monkeypatch) -> None:
     async def fake_ask_json(**kw):
         raise LLMUnavailable("down")

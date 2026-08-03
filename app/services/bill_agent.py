@@ -86,6 +86,10 @@ class PendingPayment:
 # sender phone -> action awaiting 'haan' (a bill draft or a payment)
 _PENDING: dict[str, PendingBill | PendingPayment] = {}
 
+# owner's WhatsApp sandbox: phone -> {"last_q": last test question}
+# ('test customer' se on, 'test band' se off; sikhao: se Correction banti hai)
+_TEST_MODE: dict[str, dict] = {}
+
 _STATUS_NAMES = [s.name for s in OrderStatus]
 
 _EXTRACT_SCHEMA = {
@@ -200,6 +204,10 @@ async def handle_staff_message(
             return await approve_latest_suggestion(
                 db, approved=m.group(1).lower() in ("yes", "haan")
             )
+        # WhatsApp sandbox: the owner tests + trains the agents in chat.
+        test_reply = await _handle_test_mode(db, sender_phone, text)
+        if test_reply is not None:
+            return test_reply
 
     photo = _IMAGE_MARKER_RE.match(text or "")
     if photo is None:
@@ -525,6 +533,73 @@ async def _apply_delay(db: AsyncSession, sender_label: str, extracted: dict) -> 
     return get_message(
         "delay_done", order_number=number, date=new_date.strftime("%d %b %Y")
     )
+
+
+async def _handle_test_mode(db: AsyncSession, phone: str, text: str) -> str | None:
+    """Owner's in-chat sandbox. Returns None when not a test interaction."""
+    t = text.strip()
+    if re.match(r"^(test customer|customer bano|test service)$", t, re.I):
+        _TEST_MODE[phone] = {"last_q": ""}
+        return (
+            "🧪 Test mode ON — ab aap customer ho. Jo chaho pucho, main "
+            "customer-agent ki tarah jawaab dunga (kuch bhi asli nahi hoga — "
+            "na escalation, na alerts).\n"
+            "Galat jawaab pe: 'sikhao: <sahi jawaab>' — turant seekh lunga.\n"
+            "Wapas aane ke liye: 'test band'"
+        )
+    if re.match(r"^(test band|test stop|stop test)$", t, re.I):
+        if _TEST_MODE.pop(phone, None) is not None:
+            return "🧪 Test mode OFF — wapas malik mode mein. 👑"
+        return None
+    if re.match(r"^(test marketing|marketing test)$", t, re.I):
+        from app.services.marketing_agent import preview_suggestion
+
+        return await preview_suggestion(db)
+
+    state = _TEST_MODE.get(phone)
+    if state is None:
+        return None
+
+    # teaching: 'sikhao: <right answer>' -> Correction on the last question
+    m = re.match(r"^(sikhao|sikho|teach)\s*[:\-]\s*(.+)$", t, re.I | re.S)
+    if m:
+        if not state.get("last_q"):
+            return "🧪 Pehle koi sawal pucho, phir 'sikhao:' se sahi jawaab batao."
+        from app.models import Correction
+
+        db.add(
+            Correction(
+                question=state["last_q"][:2000],
+                correct_reply=m.group(2).strip()[:2000],
+            )
+        )
+        await db.commit()
+        await audit.record(
+            actor_role="admin", actor="manager", action="taught_via_whatsapp",
+            args={"question": state["last_q"][:150]}, result=m.group(2)[:150],
+        )
+        return (
+            "✅ Seekh liya! Ab isi sawal pe aisa hi jawaab dunga. "
+            "(Dashboard → AI training → Corrections mein dikh jayega.)\n"
+            "Wahi sawal dobara puch ke check kar lo. 🧪"
+        )
+
+    # anything else in test mode = a customer question -> sandboxed brain
+    from app.services.ai_agent import build_ai_reply
+
+    cust = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if cust is None:
+        return "🧪 Test ke liye aapka customer record nahi mila — 'test band' karke dobara try karo."
+    state["last_q"] = t
+    try:
+        reply = await build_ai_reply(db, cust, t, sandbox=True)
+    except LLMError:
+        reply = None
+    if reply is None:
+        return "🧪 (AI abhi jawaab nahi de paya — LLM down ya samajh nahi aaya. Real mein customer ko rule-based ack jata.)"
+    return f"🧪 Customer ko ye jata:\n\n{reply}\n\n(sikhao: <sahi jawaab> | test band)"
 
 
 async def _find_order_flex(

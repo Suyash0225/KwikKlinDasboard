@@ -138,6 +138,32 @@ async def _draft_copy(segment: str, offer: str) -> str:
         return fallback
 
 
+async def preview_suggestion(db) -> str:
+    """'test marketing' on WhatsApp: show what the agent WOULD send. No sends."""
+    segs = await compute_segments(db)
+    counts = ", ".join(f"{k}: {len(v)}" for k, v in segs.items() if v)
+    target_seg, pitch = None, ""
+    for seg, why in _PLAYBOOK:
+        if len(segs.get(seg, [])) >= 3:
+            target_seg, pitch = seg, why
+            break
+    if target_seg is None:
+        return (
+            f"🧪 Marketing preview:\nSegments abhi: {counts or 'sab khali'}\n"
+            "Koi segment 3+ customers ka nahi — is hafte campaign nahi banta. "
+            "Jaise hi customers badhenge, Monday ko khud bhejunga."
+        )
+    offer = "10% off agle order par, 7 din valid"
+    copy = await _draft_copy(target_seg, offer)
+    return (
+        f"🧪 Marketing preview (kuch bheja NAHI gaya):\n"
+        f"Segments: {counts}\n\n"
+        f"Agla campaign hoga → {target_seg} ({len(segs[target_seg])} customers)\n"
+        f"Wajah: {pitch}\n\nMessage draft:\n{copy}\n\n"
+        "Style badalna ho: Dashboard → AI training → Marketing message style."
+    )
+
+
 async def approve_latest_suggestion(db, approved: bool) -> str:
     """Owner replied 'campaign yes/nahi' on WhatsApp. Returns reply text."""
     campaign = (

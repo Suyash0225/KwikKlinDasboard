@@ -68,10 +68,15 @@ _COMPOSE_SYSTEM = (
 )
 
 
-async def build_ai_reply(db: AsyncSession, customer: Customer, text: str) -> str | None:
+async def build_ai_reply(
+    db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False
+) -> str | None:
     """Return a reply for a customer message, or None to use rule-based flow.
 
     May create an escalation + open question as side effects (committed).
+    sandbox=True (owner's WhatsApp 'test customer' mode) runs the full brain
+    but suppresses EVERY side effect — no escalations, no FYIs, no pausing —
+    and annotates what would have happened instead.
     """
     # Media/button markers like "[image:...]" are not conversational text.
     if not text or text.startswith("["):
@@ -80,7 +85,7 @@ async def build_ai_reply(db: AsyncSession, customer: Customer, text: str) -> str
     # Global kill switch (Settings) — bot falls back to rule-based replies.
     from app.services import app_settings, audit
 
-    if not await app_settings.get(db, "agent_enabled"):
+    if not sandbox and not await app_settings.get(db, "agent_enabled"):
         log.info("ai_agent_disabled_by_switch")
         return None
 
@@ -93,6 +98,11 @@ async def build_ai_reply(db: AsyncSession, customer: Customer, text: str) -> str
     # Complaining customers also pause the agent (spec 7.6c) — the admin
     # takes over; the flag is released from the Inbox.
     if cls["intent"] == "COMPLAINT":
+        if sandbox:
+            return (
+                get_message("complaint_ack", lang)
+                + "\n🧪 (real mein: escalation banti + aapko alert + is chat par bot pause)"
+            )
         await raise_escalation(db, question=f"COMPLAINT: {text}", customer=customer)
         await _open_question(db, customer, text)
         customer.agent_paused = True
@@ -131,6 +141,11 @@ async def build_ai_reply(db: AsyncSession, customer: Customer, text: str) -> str
 
     if out.get("escalate"):
         reason = out.get("escalation_reason") or "bot could not answer"
+        if sandbox:
+            return (
+                (out.get("reply") or get_message("escalated_ack", lang))
+                + f"\n🧪 (real mein: escalate hota — '{reason}' — Teach-me queue + aapko alert)"
+            )
         await raise_escalation(db, question=f"{reason}: {text}", customer=customer)
         await _open_question(db, customer, text)
         await audit.record(
@@ -142,14 +157,17 @@ async def build_ai_reply(db: AsyncSession, customer: Customer, text: str) -> str
     # Agent handled it itself — if the owner should know, send a quiet FYI
     # (no open question, nothing waits on the owner).
     admin_note = (out.get("admin_note") or "").strip()
+    if admin_note and sandbox:
+        return (out.get("reply") or "") + f"\n🧪 (aapko FYI jata: {admin_note})"
     if admin_note:
         await _notify_admin_fyi(db, customer, admin_note)
 
-    log.info("ai_reply_composed", intent=cls["intent"], chars=len(out["reply"]))
-    await audit.record(
-        actor_role="customer", actor=customer.phone, action="ai_reply",
-        args={"intent": cls["intent"], "fyi": bool(admin_note)}, result=out["reply"][:200],
-    )
+    log.info("ai_reply_composed", intent=cls["intent"], chars=len(out["reply"]), sandbox=sandbox)
+    if not sandbox:
+        await audit.record(
+            actor_role="customer", actor=customer.phone, action="ai_reply",
+            args={"intent": cls["intent"], "fyi": bool(admin_note)}, result=out["reply"][:200],
+        )
     return out.get("reply") or None
 
 
