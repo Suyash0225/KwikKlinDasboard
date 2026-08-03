@@ -118,9 +118,17 @@ async def _draft_copy(segment: str, offer: str) -> str:
         "Namaste {name} ji! Kaafi din ho gaye — kapdon ki dhulai ya dry clean "
         f"ki zaroorat ho to yaad kijiyega. {offer}. — Kwik Klin"
     )
+    # owner's style rules from AI training (hot-reloaded, optional)
+    extra = ""
+    try:
+        async with async_session_factory() as db:
+            extra = (await app_settings.get(db, "marketing_instructions") or "").strip()
+    except Exception:
+        pass
+    system = _COPY_SYSTEM + (f"\nOwner's style rules (follow them): {extra}" if extra else "")
     try:
         copy = await llm_client.ask(
-            system=_COPY_SYSTEM,
+            system=system,
             user_text=f"Segment: {segment}. Offer: {offer}. Draft the message.",
             model=llm_client.MODEL_SMART,
             max_tokens=200,

@@ -746,6 +746,7 @@ async function loadTraining() {
     $("agent-toggle").checked = !!settings.agent_enabled;
     $("tr-cust-inst").value = settings.customer_instructions || "";
     $("tr-staff-inst").value = settings.staff_instructions || "";
+    $("tr-mkt-inst").value = settings.marketing_instructions || "";
     renderFaqs(faqs); renderCorrections(corr); renderTeachme(teach); renderDocs(docs);
   } catch (e) { $("faq-list").innerHTML = errBox(e.message, "loadTraining"); }
 }
@@ -840,6 +841,7 @@ async function saveAgentSettings(btn) {
     await api("/admin/api/settings", { method: "PUT", body: { key: "agent_enabled", value: $("agent-toggle").checked } });
     await api("/admin/api/settings", { method: "PUT", body: { key: "customer_instructions", value: $("tr-cust-inst").value } });
     await api("/admin/api/settings", { method: "PUT", body: { key: "staff_instructions", value: $("tr-staff-inst").value } });
+    await api("/admin/api/settings", { method: "PUT", body: { key: "marketing_instructions", value: $("tr-mkt-inst").value } });
     toast("Saved — live immediately, no restart");
   });
 }

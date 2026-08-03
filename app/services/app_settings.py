@@ -33,6 +33,7 @@ DEFAULTS: dict[str, Any] = {
     "agent_enabled": True,            # global kill switch
     "customer_instructions": "",      # owner's extra instructions, hot-loaded
     "staff_instructions": "",
+    "marketing_instructions": "",     # tone/style rules for campaign copy
     "tone": "friendly",               # formal | professional | friendly | casual
     "emoji_level": "minimal",         # off | minimal | expressive
 }
