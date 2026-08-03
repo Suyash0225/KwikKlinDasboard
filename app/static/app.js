@@ -200,6 +200,26 @@ async function loadDashboard() {
     return;
   }
   renderKpis(); renderChips(); renderOrders();
+  loadWaStats();
+}
+async function loadWaStats() {
+  try {
+    const s = await api("/admin/api/whatsapp/stats");
+    const t = s.templates, q = s.quality;
+    const qpill = q ? `<span class="pill ${q === "GREEN" ? "PAID" : "PARTIAL"}">quality ${q.toLowerCase()}</span>` : "";
+    $("wa-stats").innerHTML = `
+      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+        <b style="margin:0">📱 WhatsApp aaj</b>
+        <span>➡️ Bheje: <b>${s.today.sent}</b></span>
+        <span>⬅️ Aaye: <b>${s.today.received}</b></span>
+        <span>👥 Baat hui: <b>${s.today.customers_talked}</b> customers se</span>
+        <span>📑 Templates: <b style="color:var(--ok)">${t.approved} ✓</b> · <b style="color:var(--warn)">${t.pending} pending</b>${t.rejected ? ` · <b style="color:var(--danger)">${t.rejected} ✗</b>` : ""}</span>
+        ${qpill}
+        ${s.meta_ok ? "" : '<span class="pill UNPAID">Meta API unreachable</span>'}
+      </div>`;
+  } catch (e) {
+    $("wa-stats").innerHTML = `<span class="muted">📱 WhatsApp stats nahi mile: ${esc(e.message)}</span>`;
+  }
 }
 
 function renderKpis() {

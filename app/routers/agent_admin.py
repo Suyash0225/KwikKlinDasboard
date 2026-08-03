@@ -889,6 +889,71 @@ async def toggle_agent(body: AgentToggleIn, db: AsyncSession = Depends(get_db)) 
     return {"phone": phone, "agent_paused": cust.agent_paused}
 
 
+@router.get("/whatsapp/stats")
+async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
+    """Today's WhatsApp traffic (our DB) + live Meta template/quality data."""
+    from zoneinfo import ZoneInfo
+
+    from app.models import Conversation, Direction
+
+    ist = ZoneInfo("Asia/Kolkata")
+    today_start = (
+        datetime.now(ist).replace(hour=0, minute=0, second=0, microsecond=0)
+    ).astimezone(timezone.utc)
+    sent_n = (
+        await db.execute(
+            select(func.count()).select_from(Conversation).where(
+                Conversation.direction == Direction.OUTBOUND,
+                Conversation.created_at >= today_start,
+            )
+        )
+    ).scalar_one()
+    recv_n = (
+        await db.execute(
+            select(func.count()).select_from(Conversation).where(
+                Conversation.direction == Direction.INBOUND,
+                Conversation.created_at >= today_start,
+            )
+        )
+    ).scalar_one()
+    talked = (
+        await db.execute(
+            select(func.count(func.distinct(Conversation.customer_id))).where(
+                Conversation.created_at >= today_start,
+                Conversation.customer_id.isnot(None),
+            )
+        )
+    ).scalar_one()
+
+    tpl = {"approved": 0, "pending": 0, "rejected": 0}
+    quality, meta_ok = None, False
+    try:
+        status, data = await _graph(
+            "GET", f"{_settings.WHATSAPP_WABA_ID}/message_templates",
+            params={"fields": "name,status", "limit": 100},
+        )
+        if status == 200:
+            meta_ok = True
+            for t in data.get("data", []):
+                k = (t.get("status") or "").lower()
+                if k in tpl:
+                    tpl[k] += 1
+        s2, d2 = await _graph(
+            "GET", f"{_settings.WHATSAPP_PHONE_NUMBER_ID}",
+            params={"fields": "quality_rating"},
+        )
+        if s2 == 200:
+            quality = d2.get("quality_rating")
+    except Exception:
+        log.exception("wa_stats_meta_failed")
+    return {
+        "today": {"sent": sent_n, "received": recv_n, "customers_talked": talked},
+        "templates": tpl,
+        "quality": quality,
+        "meta_ok": meta_ok,
+    }
+
+
 @router.get("/backup.json")
 async def backup_json(db: AsyncSession = Depends(get_db)) -> dict:
     """One-click business backup: every business table as plain JSON.
