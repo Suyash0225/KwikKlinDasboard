@@ -73,9 +73,10 @@
           <div style="padding:10px"><input id="th-search" placeholder="Search…" oninput="renderThreads()"></div>
           <div id="th-list"></div>
         </div>
-        <div class="chatpane">
+        <div class="chatpane" style="position:relative">
           <div class="chathead" id="chat-head"><span class="muted">Pick a conversation on the left…</span></div>
           <div class="chatlog" id="chat-log"></div>
+          <div class="newmsg-pill" id="newmsg-pill" onclick="scrollChatBottom()">⬇ Naye messages</div>
           <div class="composer" style="position:relative">
             <div class="emojis" id="emoji-pal"></div>
             <button class="btn ghost sm" onclick="toggleEmojis()">😊</button>
@@ -462,14 +463,32 @@
   </main>
 </div>
 
-<!-- bottom tab bar (mobile) -->
+<!-- bottom tab bar (mobile): thumb-zone essentials + More sheet -->
 <div class="tabbar">
-  <div data-s="dashboard" onclick="go('dashboard')"><span class="ti">📊</span>Home</div>
+  <div data-s="inbox" onclick="go('inbox')" style="position:relative"><span class="ti">💬</span>Inbox<span class="tab-badge" id="unread-badge">0</span></div>
   <div data-s="newbill" onclick="go('newbill')"><span class="ti">➕</span>New bill</div>
-  <div data-s="inbox" onclick="go('inbox')"><span class="ti">💬</span>Inbox</div>
-  <div data-s="bills" onclick="go('bills')"><span class="ti">🧾</span>Bills</div>
-  <div data-s="campaigns" onclick="go('campaigns')"><span class="ti">📣</span>Growth</div>
+  <div data-s="dashboard" onclick="go('dashboard')"><span class="ti">📊</span>Home</div>
+  <div data-s="customers" onclick="go('customers')"><span class="ti">👥</span>Customers</div>
+  <div onclick="openSheet()"><span class="ti">☰</span>More</div>
 </div>
+
+<!-- More sheet (mobile) -->
+<div class="sheet-ov" id="sheet-ov" onclick="closeSheet()"></div>
+<div class="sheet" id="more-sheet">
+  <div class="grabber"></div>
+  <div class="sheet-grid">
+    <div onclick="sheetGo('bills')"><span class="si">🧾</span>Bill history</div>
+    <div onclick="sheetGo('expenses')"><span class="si">💸</span>Expenses</div>
+    <div onclick="sheetGo('reports')"><span class="si">📈</span>Reports</div>
+    <div onclick="sheetGo('campaigns')"><span class="si">📣</span>Campaigns</div>
+    <div onclick="sheetGo('agents')"><span class="si">🤖</span>Agents</div>
+    <div onclick="sheetGo('training')"><span class="si">🎓</span>AI training</div>
+    <div onclick="sheetGo('activity')"><span class="si">🛰</span>Activity</div>
+    <div onclick="sheetGo('settings')"><span class="si">⚙️</span>Settings</div>
+  </div>
+</div>
+
+<div id="offline-bar">📴 Internet nahi hai — messages queue ho rahe hain, connection aate hi chale jayenge</div>
 
 <!-- overlays -->
 <div class="overlay" id="modal-ov" onclick="if(event.target===this)closeModal()"><div class="modal" id="modal-body"></div></div>

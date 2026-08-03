@@ -3,6 +3,8 @@
 
 "use strict";
 
+if (new URLSearchParams(location.search).get("probe")) document.title = "PROBE-BOOT";
+
 /* ============================= strings ============================= */
 const T = {
   saved: "Saved", deleted: "Deleted", sent: "Sent", created: "Created",
@@ -143,21 +145,46 @@ const TITLES = {
   activity: ["Activity", "Everything the agent did, and why"],
   settings: ["Settings", "Rates, staff, shop and agent"],
 };
-let CURRENT = "dashboard";
-function go(sec) {
+let CURRENT = "dashboard", NAVIGATING = false;
+function go(sec, push = true) {
   if (!SECTIONS.includes(sec)) sec = "dashboard";
   CURRENT = sec;
+  closeSheet();
+  // leaving a full-screen mobile chat closes it
+  if (sec !== "inbox") closeThreadMobile(false);
   SECTIONS.forEach((s) => { const el = $("sec-" + s); if (el) el.style.display = s === sec ? "" : "none"; });
   document.querySelectorAll(".nav div[data-s]").forEach((el) => el.classList.toggle("on", el.dataset.s === sec));
   document.querySelectorAll(".tabbar div[data-s]").forEach((el) => el.classList.toggle("on", el.dataset.s === sec));
   $("mob-title").textContent = TITLES[sec][0];
   $("sidebar").classList.remove("open");
-  location.hash = sec;
+  if (push && location.hash !== "#" + sec) {
+    NAVIGATING = true;
+    location.hash = sec;  // creates a history entry -> Android back works
+    setTimeout(() => (NAVIGATING = false), 0);
+  }
   ({ dashboard: loadDashboard, inbox: loadThreads, newbill: initNewBill, bills: loadBills,
      customers: loadCustomers, expenses: loadExpenses, reports: loadReports,
      campaigns: loadCampaigns, agents: loadAgents, training: loadTraining,
      activity: loadActivity, settings: loadSettings }[sec] || (() => {}))();
 }
+
+// Browser/Android back button: '#inbox/<phone>' = open thread, '#sec' = section
+window.addEventListener("hashchange", () => {
+  if (NAVIGATING) return;
+  const h = (location.hash || "#dashboard").slice(1);
+  if (h.startsWith("inbox/")) {
+    if (CURRENT !== "inbox") go("inbox", false);
+    openThread(decodeURIComponent(h.slice(6)), false, false);
+    return;
+  }
+  closeThreadMobile(false);
+  go(h, false);
+});
+
+/* More sheet */
+function openSheet() { $("sheet-ov").classList.add("open"); $("more-sheet").classList.add("open"); }
+function closeSheet() { $("sheet-ov")?.classList.remove("open"); $("more-sheet")?.classList.remove("open"); }
+function sheetGo(sec) { closeSheet(); go(sec); }
 
 /* ============================= dashboard ============================= */
 let DASH = null, SUMMARY = null, dashFilter = { status: "", pay: "", q: "", page: 1 };
@@ -1291,44 +1318,126 @@ let THREADS = [], OPEN_PHONE = null, OPEN_THREAD = null, inboxTimer = null;
 const EMOJIS = ["😀","😄","😊","🙏","👍","👌","✅","❤️","🎉","😅","😂","🤝","🧺","👔","🧼","⏰","📅","💰","🛵","⚠️","❓","🌟"];
 async function loadThreads() {
   try { THREADS = await api("/admin/api/inbox/threads"); } catch (e) { $("th-list").innerHTML = errBox(e.message, "loadThreads"); return; }
-  renderThreads();
-  if (OPEN_PHONE) openThread(OPEN_PHONE, true);
+  renderThreads(); updateUnreadBadge();
+  if (OPEN_PHONE) openThread(OPEN_PHONE, true, false);
   clearTimeout(inboxTimer);
   if (CURRENT === "inbox") inboxTimer = setTimeout(loadThreads, 12000);
 }
 const avatar = (n) => `<div class="avatar">${esc((n || "?").trim()[0] || "?").toUpperCase()}</div>`;
+const seenKey = (p) => "kk_seen_" + p;
+const isUnread = (t) =>
+  t.last_direction === "INBOUND" && t.last_at > (localStorage.getItem(seenKey(t.phone)) || "");
+function updateUnreadBadge() {
+  const n = THREADS.filter(isUnread).length;
+  const b = $("unread-badge");
+  if (b) { b.textContent = n; b.classList.toggle("show", n > 0); }
+}
 function renderThreads() {
   const q = ($("th-search").value || "").toLowerCase();
   const rows = THREADS.filter((t) => !q || t.name.toLowerCase().includes(q) || t.phone.includes(q));
   $("th-list").innerHTML = rows.map((t) => {
     const chip = t.kind === "staff" ? '<span class="staff-chip">staff</span>' : t.kind === "admin" ? '<span class="staff-chip">👑 you</span>' : "";
-    return `<div class="thread-item ${t.phone === OPEN_PHONE ? "on" : ""}" onclick="openThread('${t.phone}')">
-      <div class="nm"><span>${esc(t.name)}${chip}</span><span class="t">${fmtWhen(t.last_at)}</span></div>
+    const unread = isUnread(t) ? ' style="border-left:3px solid var(--brand)"' : "";
+    return `<div class="thread-item ${t.phone === OPEN_PHONE ? "on" : ""}"${unread}
+      onclick="openThread('${t.phone}')" ontouchstart="thTouchStart(event,'${t.phone}')" ontouchend="thTouchEnd(event,'${t.phone}')">
+      <div class="nm"><span>${isUnread(t) ? "<b>●</b> " : ""}${esc(t.name)}${chip}</span><span class="t">${fmtWhen(t.last_at)}</span></div>
       <div class="pv">${t.last_direction === "OUTBOUND" ? "➡️ " : ""}${esc(t.last_text)}</div></div>`;
   }).join("") || `<div class="thread-item">${T.noData}</div>`;
 }
-async function openThread(phone, silent = false) {
+
+/* swipe (left = mark read, right = agent toggle) + long-press menu fallback */
+let _thTouch = null, _thTimer = null;
+function thTouchStart(e, phone) {
+  _thTouch = { x: e.touches[0].clientX, t: Date.now(), phone };
+  clearTimeout(_thTimer);
+  _thTimer = setTimeout(() => { _thTouch = null; threadMenu(phone); }, 550);
+}
+function thTouchEnd(e, phone) {
+  clearTimeout(_thTimer);
+  if (!_thTouch || _thTouch.phone !== phone) return;
+  const dx = e.changedTouches[0].clientX - _thTouch.x;
+  _thTouch = null;
+  if (dx < -60) { markRead(phone); e.preventDefault(); }
+  else if (dx > 60) { OPEN_PHONE = phone; toggleAgentPause(); e.preventDefault(); }
+}
+function markRead(phone) {
+  localStorage.setItem(seenKey(phone), new Date().toISOString());
+  renderThreads(); updateUnreadBadge(); toast("Marked read");
+}
+function threadMenu(phone) {
+  const t = THREADS.find((x) => x.phone === phone) || {};
+  openModal(`<h3>${esc(t.name || phone)}</h3>
+    <div class="frm">
+      <button class="btn" onclick="closeModal();openThread('${phone}')">💬 Open chat</button>
+      <button class="btn ghost" onclick="closeModal();markRead('${phone}')">✓ Mark read</button>
+      ${t.kind === "customer" ? `<button class="btn ghost" onclick="closeModal();OPEN_PHONE='${phone}';toggleAgentPause()">🤖 Agent on/off (take over)</button>` : ""}
+    </div>`);
+}
+
+function closeThreadMobile(push = true) {
+  document.body.classList.remove("chat-open");
+  const pane = document.querySelector(".chatpane");
+  if (pane) pane.removeAttribute("style");
+  if (push && location.hash.startsWith("#inbox/")) {
+    NAVIGATING = true; location.hash = "inbox"; setTimeout(() => (NAVIGATING = false), 0);
+  }
+}
+function scrollChatBottom() {
+  const log = $("chat-log");
+  log.scrollTop = log.scrollHeight;
+  $("newmsg-pill").classList.remove("show");
+}
+
+async function openThread(phone, silent = false, push = true) {
   OPEN_PHONE = phone;
-  if (!silent) { $("chat-log").innerHTML = skeleton(3); renderThreads(); }
+  localStorage.setItem(seenKey(phone), new Date().toISOString());
+  updateUnreadBadge();
+  if (window.innerWidth <= 767) {
+    document.body.classList.add("chat-open");
+    // belt + braces: inline styles guarantee the full-screen push even if
+    // a stylesheet hiccups on some browser
+    const pane = document.querySelector(".chatpane");
+    if (pane) Object.assign(pane.style, {
+      display: "flex", position: "fixed", top: "0", left: "0", right: "0",
+      bottom: "0", zIndex: "70", background: "#fff", height: "100dvh",
+    });
+    if (push) {
+      NAVIGATING = true;
+      location.hash = "inbox/" + encodeURIComponent(phone);  // Android back closes chat
+      setTimeout(() => (NAVIGATING = false), 0);
+    }
+  }
+  const log = $("chat-log");
+  const cached = sessionStorage.getItem("kk_thread_" + phone);
+  if (!silent) {
+    log.innerHTML = cached || skeleton(3);  // instant back-navigation
+    renderThreads();
+  }
+  const prevCount = (OPEN_THREAD?.messages || []).length;
   try { OPEN_THREAD = await api(`/admin/api/inbox/thread?phone=${encodeURIComponent(phone)}`); }
-  catch (e) { $("chat-log").innerHTML = errBox(e.message, "loadThreads"); return; }
+  catch (e) { log.innerHTML = errBox(e.message, "loadThreads"); return; }
   const d = OPEN_THREAD;
   $("chat-head").innerHTML = `
+    <button class="chat-back" onclick="closeThreadMobile()" aria-label="Back">←</button>
     ${avatar(d.name)}
     <div style="flex:1;min-width:0"><b>${esc(d.name)}</b>
       <div class="muted">${d.phone} · ${d.kind === "staff" ? "Staff 🧑‍🔧" : d.kind === "admin" ? "You 👑" : "Customer"}</div></div>
     <span class="winchip ${d.window.open ? "open" : "closed"}">${d.window.open ? "window open" : "window closed"}</span>
     ${d.kind === "customer" ? `<button class="btn sm ghost" id="agent-pause-btn" onclick="toggleAgentPause()">🤖 Agent: …</button>` : ""}`;
   refreshPauseBtn();
-  const wasBottom = true;
-  $("chat-log").innerHTML = (d.messages || []).map((m) => {
+  const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  const html = (d.messages || []).map((m) => {
     let body = esc(m.text || "");
     const img = (m.text || "").match(/^\[image:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
-    if (img) body = `<img src="${img[1]}?key=${encodeURIComponent(KEY)}" loading="lazy">${esc(img[2] || "")}`;
+    if (img) body = `<img src="${img[1]}?key=${encodeURIComponent(KEY)}" loading="lazy" width="280" height="210">${esc(img[2] || "")}`;
     return `<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${body}
       <span class="bt">${fmtWhen(m.at)}${m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") : ""}</span></div>`;
   }).join("") || emptyBox("Chat appears here", "💬");
-  if (wasBottom) $("chat-log").scrollTop = $("chat-log").scrollHeight;
+  log.innerHTML = html;
+  sessionStorage.setItem("kk_thread_" + phone, html);
+  const newCount = (d.messages || []).length;
+  if (nearBottom || !silent) scrollChatBottom();
+  else if (newCount > prevCount) $("newmsg-pill").classList.add("show");
 }
 async function refreshPauseBtn() {
   const btn = $("agent-pause-btn");
@@ -1346,14 +1455,36 @@ async function toggleAgentPause() {
     toast(nowPaused ? "You took over — the bot stays silent on this chat" : "Agent resumed on this chat");
   } catch (e) { toast(e.message, true); }
 }
+/* offline outbox: queued locally, flushed when the connection returns */
+const outbox = () => JSON.parse(localStorage.getItem("kk_outbox") || "[]");
+const saveOutbox = (q) => localStorage.setItem("kk_outbox", JSON.stringify(q));
+async function flushOutbox() {
+  const q = outbox();
+  if (!q.length) return;
+  const rest = [];
+  for (const m of q) {
+    try { await api("/admin/api/inbox/send", { method: "POST", body: m }); }
+    catch (e) { rest.push(m); }
+  }
+  saveOutbox(rest);
+  if (q.length !== rest.length) {
+    toast(`${q.length - rest.length} queued message(s) sent`);
+    if (OPEN_PHONE) openThread(OPEN_PHONE, true, false);
+  }
+}
 async function sendChat() {
   const input = $("chat-input");
   const text = input.value.trim();
   if (!text || !OPEN_PHONE) return;
   input.value = "";
+  if (!navigator.onLine) {
+    saveOutbox([...outbox(), { phone: OPEN_PHONE, text }]);
+    toast("Offline — message queue mein hai, net aate hi jayega");
+    return;
+  }
   try {
     await api("/admin/api/inbox/send", { method: "POST", body: { phone: OPEN_PHONE, text } });
-    openThread(OPEN_PHONE, true);
+    openThread(OPEN_PHONE, true, false);
   } catch (e) { toast(e.message, true); input.value = text; }
 }
 function toggleEmojis() { $("emoji-pal").classList.toggle("open"); }
@@ -1373,8 +1504,57 @@ async function sendMedia(input) {
 
 /* ============================= init ============================= */
 window.addEventListener("DOMContentLoaded", () => {
+  // dev probe: ?probe=1 writes overflow offenders into the <title>
+  if (qs.get("probe")) {  // qs captured before replaceState strips the query
+    const report = () => {
+      const wide = [...document.querySelectorAll("body *")]
+        .filter((e) => e.getBoundingClientRect().right > window.innerWidth + 1
+          && getComputedStyle(e).position !== "fixed")
+        .slice(0, 6)
+        .map((e) => `${e.tagName}.${String(e.className).slice(0, 24)}=${Math.round(e.getBoundingClientRect().right)}`);
+      document.title = `PROBE vw=${window.innerWidth} sw=${document.documentElement.scrollWidth} :: ${wide.join(" ; ") || "none"}`;
+    };
+    report();
+    setTimeout(report, 1200);
+    setTimeout(report, 3000);
+  }
   $("emoji-pal").innerHTML = EMOJIS.map((e) => `<span onclick="addEmoji('${e}')">${e}</span>`).join("");
-  const start = (location.hash || "#dashboard").slice(1);
   if (!KEY) { showLogin(); }
-  go(start);
+  const h = (location.hash || "#dashboard").slice(1);
+  if (h.startsWith("inbox/")) {
+    go("inbox", false);
+    setTimeout(() => openThread(decodeURIComponent(h.slice(6)), false, false), 300);
+  } else {
+    go(h, false);
+  }
+
+  // offline awareness
+  const setNet = () => {
+    $("offline-bar").classList.toggle("show", !navigator.onLine);
+    if (navigator.onLine) flushOutbox();
+  };
+  window.addEventListener("online", setNet);
+  window.addEventListener("offline", setNet);
+  setNet();
+
+  // keyboard-safe composer: visualViewport shrinks -> chat pane follows,
+  // so the input is never hidden behind the on-screen keyboard
+  if (window.visualViewport) {
+    const vv = window.visualViewport;
+    const fit = () => {
+      const pane = document.querySelector("body.chat-open .chatpane");
+      if (!pane) return;
+      pane.style.height = vv.height + "px";
+      scrollChatBottom();
+    };
+    vv.addEventListener("resize", fit);
+    vv.addEventListener("scroll", fit);
+  }
+
+  // "new messages" pill hides once the user reaches the bottom themselves
+  $("chat-log").addEventListener("scroll", () => {
+    const log = $("chat-log");
+    if (log.scrollHeight - log.scrollTop - log.clientHeight < 40)
+      $("newmsg-pill").classList.remove("show");
+  });
 });
