@@ -7,6 +7,7 @@ Base.metadata — Alembic autogenerate depends on this.
 from app.models.agent import (
     AuditLog,
     Correction,
+    DocChunk,
     FaqEntry,
     OpenQuestion,
     SentEvent,
@@ -42,6 +43,7 @@ __all__ = [
     "CouponRedemption",
     "Customer",
     "Direction",
+    "DocChunk",
     "Escalation",
     "EscalationStatus",
     "Expense",

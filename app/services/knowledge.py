@@ -12,7 +12,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Conversation, Correction, FaqEntry
+from app.models import Conversation, Correction, DocChunk, FaqEntry
 
 log = structlog.get_logger()
 
@@ -73,12 +73,30 @@ async def relevant_knowledge(
     )
     picked_f = [f for f, s in scored_f[:top_k] if s > 0.15]
     picked_c = [c for c, s in scored_c[:top_k] if s > 0.15]
-    if picked_f or picked_c:
-        log.info("knowledge_retrieved", faqs=len(picked_f), corrections=len(picked_c))
-    return picked_f, picked_c
+
+    # uploaded documents: match against chunk CONTENT (lower threshold —
+    # a chunk is long, so overlap ratios run smaller than for questions)
+    chunks = (
+        (await db.execute(select(DocChunk).where(DocChunk.enabled))).scalars().all()
+    )
+    scored_d = sorted(
+        ((d, _score(q, d.content)) for d in chunks), key=lambda t: t[1], reverse=True
+    )
+    picked_d = [d for d, s in scored_d[:2] if s > 0.04]
+
+    if picked_f or picked_c or picked_d:
+        log.info(
+            "knowledge_retrieved",
+            faqs=len(picked_f), corrections=len(picked_c), doc_chunks=len(picked_d),
+        )
+    return picked_f, picked_c, picked_d
 
 
-def knowledge_block(faqs: list[FaqEntry], corrections: list[Correction]) -> str:
+def knowledge_block(
+    faqs: list[FaqEntry],
+    corrections: list[Correction],
+    doc_chunks: list[DocChunk] | None = None,
+) -> str:
     """Format retrieved knowledge for a prompt's FACTS section."""
     lines: list[str] = []
     if faqs:
@@ -87,6 +105,8 @@ def knowledge_block(faqs: list[FaqEntry], corrections: list[Correction]) -> str:
     if corrections:
         lines.append("Owner-approved reply examples (match their style):")
         lines += [f"When asked: {c.question}\nReply like: {c.correct_reply}" for c in corrections]
+    for d in doc_chunks or []:
+        lines.append(f"From the shop document '{d.document}':\n{d.content[:900]}")
     return "\n".join(lines)
 
 

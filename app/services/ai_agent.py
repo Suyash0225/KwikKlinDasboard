@@ -108,8 +108,8 @@ async def build_ai_reply(db: AsyncSession, customer: Customer, text: str) -> str
 
     facts = await _build_facts(db, customer)
     history = await thread_history(db, customer_id=customer.id, limit=6)
-    faqs, corrections = await relevant_knowledge(db, text, audience="customer")
-    kb = knowledge_block(faqs, corrections)
+    faqs, corrections, doc_chunks = await relevant_knowledge(db, text, audience="customer")
+    kb = knowledge_block(faqs, corrections, doc_chunks)
     prompt = f"FACTS:\n{facts}\n"
     if kb:
         prompt += f"{kb}\n"

@@ -235,6 +235,15 @@
         <b>🙋 Teach me — questions the agent could not answer (<span id="teach-count">0</span>)</b>
         <div id="teach-list" style="margin-top:10px"></div>
       </div>
+      <div class="card" style="margin-bottom:14px">
+        <b>📄 Documents — upload a PDF/TXT/CSV and the agent reads it</b>
+        <p class="muted" style="margin-top:4px">Price lists, policies, service brochures — the agent pulls the matching part into its answers. Re-uploading a file with the same name replaces it.</p>
+        <div class="filters" style="margin-top:8px">
+          <label class="btn ghost" style="cursor:pointer">⬆ Choose file<input type="file" accept=".pdf,.txt,.csv,.md" style="display:none" onchange="uploadDoc(this)"></label>
+          <span class="muted" id="doc-status"></span>
+        </div>
+        <div id="doc-list" style="margin-top:10px"></div>
+      </div>
       <div class="split2">
         <div class="card">
           <b>📚 Knowledge (FAQ)</b>

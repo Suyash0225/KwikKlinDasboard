@@ -738,15 +738,42 @@ async function toggleCoupon(code) {
 async function loadTraining() {
   $("faq-list").innerHTML = skeleton(3);
   try {
-    const [settings, faqs, corr, teach] = await Promise.all([
+    const [settings, faqs, corr, teach, docs] = await Promise.all([
       api("/admin/api/settings"), api("/admin/api/training/faq"),
       api("/admin/api/training/corrections"), api("/admin/api/training/teachme"),
+      api("/admin/api/training/docs"),
     ]);
     $("agent-toggle").checked = !!settings.agent_enabled;
     $("tr-cust-inst").value = settings.customer_instructions || "";
     $("tr-staff-inst").value = settings.staff_instructions || "";
-    renderFaqs(faqs); renderCorrections(corr); renderTeachme(teach);
+    renderFaqs(faqs); renderCorrections(corr); renderTeachme(teach); renderDocs(docs);
   } catch (e) { $("faq-list").innerHTML = errBox(e.message, "loadTraining"); }
+}
+function renderDocs(docs) {
+  $("doc-list").innerHTML = docs.length ? docs.map((d) => `
+    <div class="sumrow"><span>📄 <b>${esc(d.document)}</b> <span class="tag">${d.chunks} parts</span>
+      <span class="muted">${fmtWhen(d.uploaded_at)}</span></span>
+      <button class="btn sm danger" onclick="delDoc('${esc(d.document)}')">✕</button></div>`).join("")
+    : `<p class="muted">No documents yet.</p>`;
+}
+async function uploadDoc(input) {
+  if (!input.files || !input.files[0]) return;
+  const fd = new FormData();
+  fd.append("file", input.files[0]);
+  $("doc-status").textContent = "Reading " + input.files[0].name + "…";
+  try {
+    const r = await api("/admin/api/training/upload", { method: "POST", body: fd });
+    toast(`${r.document} learned — ${r.chunks} parts, live now`);
+    $("doc-status").textContent = "";
+    loadTraining();
+  } catch (e) { toast(e.message, true); $("doc-status").textContent = ""; }
+  input.value = "";
+}
+function delDoc(name) {
+  confirmDialog(`Remove "${name}" from the agent's knowledge?`, async () => {
+    try { await api(`/admin/api/training/docs/${encodeURIComponent(name)}`, { method: "DELETE" }); toast(T.deleted); loadTraining(); }
+    catch (e) { toast(e.message, true); }
+  });
 }
 function renderFaqs(faqs) {
   $("faq-list").innerHTML = faqs.length ? faqs.map((f) => `

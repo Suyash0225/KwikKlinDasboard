@@ -106,6 +106,24 @@ class Correction(Base):
     )
 
 
+class DocChunk(Base):
+    """Text chunks from owner-uploaded documents (PDF/TXT/CSV) — the agent
+    retrieves the best-matching chunks per question (lightweight RAG)."""
+
+    __tablename__ = "doc_chunks"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    document: Mapped[str] = mapped_column(String(160), index=True)  # filename
+    chunk_index: Mapped[int] = mapped_column()
+    content: Mapped[str] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class SettingKV(Base):
     """Hot-reloadable app settings the owner edits from the UI — no restarts."""
 

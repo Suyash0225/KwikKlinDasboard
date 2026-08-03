@@ -330,6 +330,113 @@ async def delete_correction(cid: str, db: AsyncSession = Depends(get_db)) -> dic
     return {"deleted": True}
 
 
+from fastapi import File, UploadFile
+
+_ALLOWED_DOC_TYPES = {".pdf", ".txt", ".csv", ".md"}
+_MAX_DOC_BYTES = 8 * 1024 * 1024  # 8 MB
+_CHUNK_CHARS = 700
+
+
+def _chunk_text(text: str) -> list[str]:
+    """Paragraph-packed ~700-char chunks; tiny fragments merge forward."""
+    paras = [p.strip() for p in text.replace("\r", "").split("\n\n") if p.strip()]
+    if not paras:  # fall back to line-based packing (CSVs, PDFs without paras)
+        paras = [l.strip() for l in text.split("\n") if l.strip()]
+    chunks, cur = [], ""
+    for p in paras:
+        if len(cur) + len(p) + 1 > _CHUNK_CHARS and cur:
+            chunks.append(cur)
+            cur = p
+        else:
+            cur = f"{cur}\n{p}" if cur else p
+    if cur:
+        chunks.append(cur)
+    return chunks[:200]  # sanity cap per document
+
+
+@router.post("/training/upload", status_code=201)
+async def upload_training_doc(
+    file: UploadFile = File(...), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """PDF/TXT/CSV/MD -> text -> chunks the agent retrieves at answer time."""
+    from pathlib import PurePosixPath
+
+    from app.models import DocChunk
+
+    name = PurePosixPath(file.filename or "document").name[:160]
+    suffix = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+    if suffix not in _ALLOWED_DOC_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF, TXT, CSV and MD files are supported (convert DOCX to PDF first)",
+        )
+    blob = await file.read()
+    if len(blob) > _MAX_DOC_BYTES:
+        raise HTTPException(status_code=400, detail="File is too large (max 8 MB)")
+
+    if suffix == ".pdf":
+        import io as _io
+
+        from pypdf import PdfReader
+
+        try:
+            reader = PdfReader(_io.BytesIO(blob))
+            text = "\n\n".join((page.extract_text() or "") for page in reader.pages)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not read this PDF")
+    else:
+        try:
+            text = blob.decode("utf-8")
+        except UnicodeDecodeError:
+            text = blob.decode("latin-1", errors="replace")
+
+    chunks = _chunk_text(text)
+    if not chunks:
+        raise HTTPException(status_code=400, detail="No readable text found in the file")
+
+    # replace any previous upload of the same filename
+    from sqlalchemy import delete as sqldelete
+
+    await db.execute(sqldelete(DocChunk).where(DocChunk.document == name))
+    for i, c in enumerate(chunks):
+        db.add(DocChunk(document=name, chunk_index=i, content=c[:4000]))
+    await db.commit()
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="training_doc_uploaded",
+        args={"document": name}, result=f"{len(chunks)} chunks",
+    )
+    return {"document": name, "chunks": len(chunks)}
+
+
+@router.get("/training/docs")
+async def list_training_docs(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    from app.models import DocChunk
+
+    rows = (
+        await db.execute(
+            select(DocChunk.document, func.count(), func.max(DocChunk.created_at))
+            .group_by(DocChunk.document)
+            .order_by(func.max(DocChunk.created_at).desc())
+        )
+    ).all()
+    return [
+        {"document": d, "chunks": n, "uploaded_at": at.isoformat()} for d, n, at in rows
+    ]
+
+
+@router.delete("/training/docs/{document}")
+async def delete_training_doc(document: str, db: AsyncSession = Depends(get_db)) -> dict:
+    from sqlalchemy import delete as sqldelete
+
+    from app.models import DocChunk
+
+    r = await db.execute(sqldelete(DocChunk).where(DocChunk.document == document))
+    await db.commit()
+    if r.rowcount == 0:
+        raise HTTPException(status_code=404, detail="document not found")
+    return {"deleted": document, "chunks": r.rowcount}
+
+
 @router.get("/training/teachme")
 async def teachme_queue(db: AsyncSession = Depends(get_db)) -> list[dict]:
     rows = (

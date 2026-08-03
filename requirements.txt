@@ -32,3 +32,4 @@ structlog==26.1.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
 python-multipart==0.0.20  # FastAPI file uploads (Inbox media)
+pypdf
