@@ -63,6 +63,23 @@ app.mount(
 )
 
 
+@app.get("/social/{name}")
+async def social_image(name: str):
+    """Public marketing posters (Instagram fetches from here). Only files the
+    daily social job created — nothing else in media/ is ever exposed."""
+    from pathlib import Path as _P
+
+    from fastapi.responses import FileResponse
+
+    safe = _P(name).name
+    if not (safe.startswith("social-") and safe.endswith(".png")):
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+    path = _P(__file__).resolve().parent / "media" / safe
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+    return FileResponse(path, media_type="image/png")
+
+
 @app.get("/health")
 async def health() -> JSONResponse:
     """Liveness + DB connectivity check. Never raises: reports instead."""

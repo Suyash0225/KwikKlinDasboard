@@ -877,6 +877,10 @@ async function loadSettings() {
     $("set-freqcap").value = s.marketing_freq_cap_per_month;
     $("set-budget").value = s.marketing_monthly_msg_budget;
     $("set-autonomy").value = s.marketing_autonomy;
+    $("set-social").value = String(!!s.social_daily_enabled);
+    $("set-socialhour").value = s.social_post_hour;
+    $("set-igid").value = s.ig_user_id || "";
+    $("set-igtoken").value = s.ig_access_token || "";
     $("set-washer").innerHTML = '<option value="">— none —</option>' +
       staff.filter((x) => x.is_active).map((x) => `<option value="${x.phone}" ${s.default_washer_phone === x.phone ? "selected" : ""}>${esc(x.name)}</option>`).join("");
   } catch (e) { $("rates-list").innerHTML = errBox(e.message, "loadSettings"); }
@@ -958,6 +962,10 @@ async function saveOps(btn) {
       ["marketing_freq_cap_per_month", parseInt($("set-freqcap").value)],
       ["marketing_monthly_msg_budget", parseInt($("set-budget").value)],
       ["marketing_autonomy", $("set-autonomy").value],
+      ["social_daily_enabled", $("set-social").value === "true"],
+      ["social_post_hour", parseInt($("set-socialhour").value) || 11],
+      ["ig_user_id", $("set-igid").value.trim()],
+      ["ig_access_token", $("set-igtoken").value.trim()],
     ];
     for (const [key, value] of pairs) await api("/admin/api/settings", { method: "PUT", body: { key, value } });
     toast("Settings saved — live immediately");

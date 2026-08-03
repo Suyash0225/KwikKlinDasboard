@@ -34,6 +34,12 @@ DEFAULTS: dict[str, Any] = {
     "customer_instructions": "",      # owner's extra instructions, hot-loaded
     "staff_instructions": "",
     "marketing_instructions": "",     # tone/style rules for campaign copy
+    # daily social posts (Instagram auto-publish + GMB ready-to-post)
+    "social_daily_enabled": True,
+    "social_post_hour": 11,           # IST hour the daily poster goes out
+    "ig_user_id": "",                 # Instagram Business user id (empty = off)
+    "ig_access_token": "",            # token with instagram_content_publish
+    "public_base_url": "",            # current tunnel URL (IG fetches images from here)
     "tone": "friendly",               # formal | professional | friendly | casual
     "emoji_level": "minimal",         # off | minimal | expressive
 }

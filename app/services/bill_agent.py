@@ -555,6 +555,16 @@ async def _handle_test_mode(db: AsyncSession, phone: str, text: str) -> str | No
         from app.services.marketing_agent import preview_suggestion
 
         return await preview_suggestion(db)
+    if re.match(r"^(social bhejo|test social|post banao)$", t, re.I):
+        from app.services.social import run_daily_social
+
+        status = await run_daily_social(force=True)
+        return {
+            "posted": "✅ Aaj ka poster Instagram par post ho gaya + aapko pack bheja.",
+            "skipped": "📸 Poster + caption aapko bhej diya. (Instagram abhi linked nahi — Settings mein IG id/token daalo to wahan bhi khud jayega.)",
+            "disabled": "Daily social Settings mein OFF hai.",
+            "already_done": "Aaj ka post pehle hi ban chuka — 'social bhejo' kal phir chalega.",
+        }.get(status, f"⚠️ Kuch gadbad: {status[:120]}")
 
     state = _TEST_MODE.get(phone)
     if state is None:

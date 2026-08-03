@@ -101,6 +101,16 @@ async def _hourly_tick() -> None:
             await run_payment_reminders()
     except Exception:
         log.exception("reminder_jobs_failed")
+    # daily social poster (Instagram + owner's GMB pack)
+    try:
+        async with async_session_factory() as db:
+            social_hour = int(await app_settings.get(db, "social_post_hour"))
+        if now_ist.hour == social_hour:
+            from app.services.social import run_daily_social
+
+            await run_daily_social()
+    except Exception:
+        log.exception("daily_social_failed")
     # resume campaigns that paused for quiet hours / restarts
     try:
         if not _in_quiet_hours(now_ist):
