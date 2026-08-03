@@ -51,6 +51,17 @@ app.include_router(orders_router)
 app.include_router(admin_router)
 app.include_router(agent_admin_router)
 
+# Static assets for the dashboard (CSS/JS — no secrets, safe to serve openly)
+from pathlib import Path
+
+from fastapi.staticfiles import StaticFiles
+
+app.mount(
+    "/admin/static",
+    StaticFiles(directory=Path(__file__).resolve().parent / "static"),
+    name="static",
+)
+
 
 @app.get("/health")
 async def health() -> JSONResponse:

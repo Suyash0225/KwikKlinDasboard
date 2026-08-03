@@ -1,0 +1,1035 @@
+/* Kwik Klin — Laundry Pro dashboard logic.
+   All UI strings live in T (single place to change wording). */
+
+"use strict";
+
+/* ============================= strings ============================= */
+const T = {
+  saved: "Saved", deleted: "Deleted", sent: "Sent", created: "Created",
+  errGeneric: "Something went wrong", tryAgain: "Try again",
+  confirmDelete: "Delete this? This cannot be undone.",
+  noData: "Nothing here yet",
+  loading: "Loading…",
+  billCreated: "Bill created",
+  paymentSaved: "Payment recorded",
+  statusUpdated: "Status updated",
+  dateUpdated: "Delivery date updated",
+  reminderSent: "Payment reminder sent",
+  windowClosed: "24h window is closed — the customer must message first",
+};
+
+const STATUS_LABEL = {
+  RECEIVED: "New", IN_WASH: "Washing", IN_DRY: "Drying", IN_IRON: "Ironing",
+  READY: "Ready", OUT_FOR_DELIVERY: "Out for delivery", DELIVERED: "Delivered",
+  ON_HOLD: "On hold", CANCELLED: "Cancelled",
+};
+const STATUS_SEQ = ["RECEIVED", "IN_WASH", "IN_DRY", "IN_IRON", "READY", "OUT_FOR_DELIVERY", "DELIVERED"];
+const SEGMENT_LABEL = {
+  new: "New customers", active_regular: "Active regulars", at_risk: "At risk",
+  lapsed: "Lapsed (60–120d)", lost: "Lost (120d+)", high_value: "High value",
+  outstanding_dues: "Has dues",
+};
+
+/* ============================= core ============================= */
+let KEY = localStorage.getItem("kk_admin_key") || "";
+const qs = new URLSearchParams(location.search);
+if (qs.get("key")) {
+  KEY = qs.get("key");
+  localStorage.setItem("kk_admin_key", KEY);
+  history.replaceState({}, "", location.pathname + location.hash);
+}
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({ "X-API-Key": KEY }, opts.headers || {});
+  if (opts.body && !(opts.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+    opts.body = typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body);
+  }
+  const r = await fetch(path, Object.assign({}, opts, { headers }));
+  if (r.status === 401) { showLogin(); throw new Error("Please sign in"); }
+  if (!r.ok) {
+    let d = T.errGeneric;
+    try { d = (await r.json()).detail || d; } catch (e) {}
+    throw new Error(typeof d === "string" ? d : JSON.stringify(d));
+  }
+  const ct = r.headers.get("content-type") || "";
+  return ct.includes("json") ? r.json() : r.text();
+}
+
+/* helpers */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const inr = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 });
+const money = (v) => "₹" + inr.format(Number(v || 0));
+const fmtDate = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+};
+const fmtWhen = (iso) => {
+  const d = new Date(iso), now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  return sameDay
+    ? d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+};
+function toast(msg, err = false) {
+  const t = document.createElement("div");
+  t.className = "toast" + (err ? " err" : "");
+  t.textContent = msg;
+  $("toasts").appendChild(t);
+  setTimeout(() => t.remove(), err ? 5000 : 2600);
+}
+const skeleton = (n = 4) => Array.from({ length: n }, () => '<div class="skel skelrow"></div>').join("");
+const emptyBox = (msg, ico = "🧺") => `<div class="empty"><div class="ico">${ico}</div>${esc(msg)}</div>`;
+const errBox = (msg, retry) => `<div class="errbox">⚠️ ${esc(msg)}<br><br><button class="btn ghost" onclick="${retry}()">${T.tryAgain}</button></div>`;
+function openModal(html) { $("modal-body").innerHTML = html; $("modal-ov").classList.add("open"); }
+function closeModal() { $("modal-ov").classList.remove("open"); }
+function confirmDialog(text, onYes) {
+  openModal(`<h3>Confirm</h3><p>${esc(text)}</p>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn danger" id="cf-yes">Yes, continue</button></div>`);
+  $("cf-yes").onclick = () => { closeModal(); onYes(); };
+}
+async function busy(btn, fn) {
+  const old = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>';
+  try { await fn(); } catch (e) { toast(e.message, true); }
+  btn.disabled = false; btn.innerHTML = old;
+}
+function dlCsvClient(filename, header, rows) {
+  const csv = [header, ...rows].map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv" }));
+  a.download = filename; a.click();
+}
+
+/* login */
+function showLogin() {
+  openModal(`<h3>Sign in</h3><p class="muted">Enter your admin key to continue.</p>
+    <div class="frm" style="margin-top:10px"><input id="login-key" type="password" placeholder="Admin key" autofocus></div>
+    <div class="btnrow"><button class="btn" id="login-go">Sign in</button></div>`);
+  $("login-go").onclick = async () => {
+    KEY = $("login-key").value.trim();
+    try {
+      await api("/admin/api/staff");
+      localStorage.setItem("kk_admin_key", KEY);
+      closeModal(); toast("Welcome back!"); go(CURRENT);
+    } catch (e) { toast("That key is not correct", true); }
+  };
+}
+
+/* ============================= router ============================= */
+const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "training", "activity", "settings"];
+const TITLES = {
+  dashboard: ["Dashboard", "Today at a glance"],
+  inbox: ["Inbox", "WhatsApp — see and reply yourself"],
+  newbill: ["New bill", "Fast entry at the counter"],
+  bills: ["Bill history", "Every order, filterable"],
+  customers: ["Customers", "Ledger — business, paid and outstanding"],
+  expenses: ["Expenses", "Daily spend and categories"],
+  reports: ["Reports", "Revenue, expenses and profit"],
+  campaigns: ["Campaigns", "Segments, offers and results"],
+  training: ["AI training", "Teach the agent your business"],
+  activity: ["Activity", "Everything the agent did, and why"],
+  settings: ["Settings", "Rates, staff, shop and agent"],
+};
+let CURRENT = "dashboard";
+function go(sec) {
+  if (!SECTIONS.includes(sec)) sec = "dashboard";
+  CURRENT = sec;
+  SECTIONS.forEach((s) => { const el = $("sec-" + s); if (el) el.style.display = s === sec ? "" : "none"; });
+  document.querySelectorAll(".nav div[data-s]").forEach((el) => el.classList.toggle("on", el.dataset.s === sec));
+  document.querySelectorAll(".tabbar div[data-s]").forEach((el) => el.classList.toggle("on", el.dataset.s === sec));
+  $("mob-title").textContent = TITLES[sec][0];
+  $("sidebar").classList.remove("open");
+  location.hash = sec;
+  ({ dashboard: loadDashboard, inbox: loadThreads, newbill: initNewBill, bills: loadBills,
+     customers: loadCustomers, expenses: loadExpenses, reports: loadReports,
+     campaigns: loadCampaigns, training: loadTraining, activity: loadActivity,
+     settings: loadSettings }[sec] || (() => {}))();
+}
+
+/* ============================= dashboard ============================= */
+let DASH = null, SUMMARY = null, dashFilter = { status: "", pay: "", q: "", page: 1 };
+const PAGE = 25;
+
+async function loadDashboard() {
+  $("kpis").innerHTML = skeleton(1) ;
+  $("dash-orders").innerHTML = skeleton(5);
+  try {
+    [DASH, SUMMARY] = await Promise.all([api("/admin/api/dashboard"), api("/admin/api/reports/summary")]);
+  } catch (e) {
+    $("dash-orders").innerHTML = errBox(e.message, "loadDashboard");
+    return;
+  }
+  renderKpis(); renderChips(); renderOrders();
+}
+
+function renderKpis() {
+  const c = DASH.counts, m = SUMMARY.month || {}, t = SUMMARY.today || {};
+  const outstanding = CUSTOMERS_CACHE
+    ? CUSTOMERS_CACHE.reduce((a, x) => a + Number(x.outstanding || 0), 0) : null;
+  $("kpis").innerHTML = `
+    ${kpi("New orders today", c.today_new, "", "go('bills')")}
+    ${kpi("Today's collection", money(t.revenue || 0), "", "go('reports')")}
+    ${kpi("Revenue this month", money(m.revenue || 0), "", "go('reports')")}
+    ${kpi("Expenses this month", money(m.expenses || 0), "", "go('expenses')")}
+    ${kpi("Profit this month", money(m.profit || 0), "revenue − expenses", "go('reports')")}
+    ${kpi("Total outstanding", outstanding === null ? "…" : money(outstanding), "tap for the list", "go('customers')")}
+  `;
+  if (outstanding === null) loadCustomers(true).then(renderKpis);
+}
+const kpi = (lbl, val, sub, click) =>
+  `<div class="card kpi" onclick="${click}"><div class="lbl">${lbl}</div><div class="val">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+
+function renderChips() {
+  const by = DASH.counts.by_status || {};
+  const chips = [["", `All active <b>${DASH.counts.active_total}</b>`]]
+    .concat(STATUS_SEQ.filter((s) => s !== "DELIVERED").map((s) => [s, `${STATUS_LABEL[s]} <b>${by[s] || 0}</b>`]));
+  $("dash-chips").innerHTML = chips
+    .map(([v, h]) => `<span class="chip ${dashFilter.status === v ? "on" : ""}" onclick="dashFilter.status='${v}';dashFilter.page=1;renderChips();renderOrders()">${h}</span>`)
+    .join("");
+}
+
+function orderMatches(o) {
+  if (dashFilter.status && o.status !== dashFilter.status) return false;
+  if (dashFilter.pay && o.payment_status !== dashFilter.pay) return false;
+  const q = dashFilter.q.toLowerCase();
+  if (q && !(o.order_number.toLowerCase().includes(q) || (o.customer || "").toLowerCase().includes(q) || o.phone.includes(q))) return false;
+  return true;
+}
+const isOverdue = (o) => o.expected_delivery && o.expected_delivery < new Date().toISOString().slice(0, 10) && !["DELIVERED", "CANCELLED"].includes(o.status);
+const itemsText = (items) => (items || []).map((i) => `${i.qty} × ${i.type || i.garment || i.service}`).join(", ");
+
+function renderOrders() {
+  const all = (DASH.active_orders || []).filter(orderMatches);
+  const pages = Math.max(1, Math.ceil(all.length / PAGE));
+  dashFilter.page = Math.min(dashFilter.page, pages);
+  const rows = all.slice((dashFilter.page - 1) * PAGE, dashFilter.page * PAGE);
+  if (!rows.length) { $("dash-orders").innerHTML = emptyBox("No orders match — new bills appear here."); $("dash-pager").innerHTML = ""; return; }
+
+  $("dash-orders").innerHTML = `
+    <table class="tbl"><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Status</th><th>Payment</th><th>Delivery</th><th>Actions</th></tr></thead>
+    <tbody>${rows.map((o) => `
+      <tr class="${isOverdue(o) ? "overdue" : ""}">
+        <td><b>${o.order_number}</b><div class="muted">${fmtDate(o.created_at)}</div></td>
+        <td>${esc(o.customer)}<div class="muted">${esc(o.phone)}</div></td>
+        <td style="max-width:190px"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
+        <td><span class="pill ${o.status}">${STATUS_LABEL[o.status]}</span>${isOverdue(o) ? ' <span class="pill UNPAID">Overdue</span>' : ""}</td>
+        <td><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span><div class="muted">${money(o.amount_paid)} / ${o.total_amount ? money(o.total_amount) : "—"}</div></td>
+        <td>${fmtDate(o.expected_delivery)}</td>
+        <td><div class="act">
+          <button class="btn sm ghost" onclick="statusModal('${o.order_number}','${o.status}')">Status</button>
+          <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button>
+          <button class="btn sm ghost" onclick="dateModal('${o.order_number}')">Date</button>
+          <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">👁</button>
+          <button class="btn sm ghost" onclick="jumpChat('${o.phone}')">💬</button>
+        </div></td>
+      </tr>`).join("")}
+    </tbody></table>
+    <div class="rowcards">${rows.map((o) => `
+      <div class="rowcard ${isOverdue(o) ? "overdue" : ""}">
+        <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${STATUS_LABEL[o.status]}</span></div>
+        <div class="kv"><span>${esc(o.customer)}</span><span>${esc(o.phone)}</span></div>
+        <div class="kv"><span class="muted">${esc(itemsText(o.items))}</span></div>
+        <div class="kv"><span>Paid ${money(o.amount_paid)} of ${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
+        <div class="kv"><span>Delivery</span><span>${fmtDate(o.expected_delivery)}${isOverdue(o) ? " ⚠️" : ""}</span></div>
+        <div class="act">
+          <button class="btn sm" onclick="statusModal('${o.order_number}','${o.status}')">Status</button>
+          <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button>
+          <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
+          <button class="btn sm ghost" onclick="jumpChat('${o.phone}')">Chat</button>
+        </div>
+      </div>`).join("")}
+    </div>`;
+  $("dash-pager").innerHTML = pages > 1
+    ? `<button class="btn sm ghost" ${dashFilter.page <= 1 ? "disabled" : ""} onclick="dashFilter.page--;renderOrders()">‹ Prev</button>
+       <span class="muted">Page ${dashFilter.page} of ${pages}</span>
+       <button class="btn sm ghost" ${dashFilter.page >= pages ? "disabled" : ""} onclick="dashFilter.page++;renderOrders()">Next ›</button>`
+    : "";
+}
+
+function statusModal(number, current) {
+  const nexts = STATUS_SEQ.slice(STATUS_SEQ.indexOf(current) + 1).concat(["ON_HOLD", "CANCELLED"]);
+  openModal(`<h3>Update status — ${number}</h3>
+    <p class="muted">Current: ${STATUS_LABEL[current]}. Customer is notified automatically on Ready / Out for delivery / Delivered.</p>
+    <div class="frm" style="margin-top:10px">
+      <select id="st-new">${nexts.map((s) => `<option value="${s}">${STATUS_LABEL[s]}</option>`).join("")}</select>
+    </div>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn" id="st-go">Update</button></div>`);
+  $("st-go").onclick = (e) => busy(e.target, async () => {
+    await api(`/orders/${number}/status`, { method: "POST", body: { status: $("st-new").value, changed_by: "dashboard" } });
+    closeModal(); toast(T.statusUpdated); loadDashboard();
+  });
+}
+
+function paymentModal(number) {
+  openModal(`<h3>Collect payment — ${number}</h3>
+    <div class="frm">
+      <div><label>Amount (₹)</label><input id="pm-amt" type="number" min="1" step="0.01" autofocus></div>
+      <div><label>Mode</label><select id="pm-mode"><option value="CASH">Cash</option><option value="UPI">UPI</option><option value="OTHER">Other</option></select></div>
+    </div>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn ok" id="pm-go">Record payment</button></div>`);
+  $("pm-go").onclick = (e) => busy(e.target, async () => {
+    const amt = parseFloat($("pm-amt").value);
+    if (!(amt > 0)) throw new Error("Amount must be greater than 0");
+    await api(`/orders/${number}/payment`, { method: "POST", body: { amount: amt, method: $("pm-mode").value } });
+    closeModal(); toast(T.paymentSaved); loadDashboard(); loadCustomers(true);
+  });
+}
+
+function dateModal(number) {
+  openModal(`<h3>Delivery date — ${number}</h3>
+    <div class="frm">
+      <div><label>New date</label><input id="dt-new" type="date" value="${new Date(Date.now() + 864e5).toISOString().slice(0, 10)}"></div>
+      <div><label>Internal reason (never sent to the customer)</label><input id="dt-why" placeholder="e.g. machine under repair"></div>
+    </div>
+    <p class="muted">The customer gets a polite notice with the new date only.</p>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn" id="dt-go">Update date</button></div>`);
+  $("dt-go").onclick = (e) => busy(e.target, async () => {
+    await api(`/orders/${number}/delivery-date`, { method: "POST", body: { expected_delivery: $("dt-new").value, changed_by: "dashboard", internal_reason: $("dt-why").value || null } });
+    closeModal(); toast(T.dateUpdated); loadDashboard();
+  });
+}
+
+async function orderDetail(number) {
+  $("drawer").classList.add("open");
+  $("drawer-body").innerHTML = skeleton(4);
+  try {
+    const d = await api(`/orders/${number}`);
+    const o = d.order;
+    $("drawer-body").innerHTML = `
+      <h3>${o.order_number} <span class="pill ${o.status}">${STATUS_LABEL[o.status]}</span></h3>
+      <p class="muted">${esc(o.customer_name || "")} · ${esc(o.customer_phone)}</p><hr class="hr">
+      <b>Items</b>
+      ${(o.items || []).map((i) => `<div class="sumrow"><span>${i.qty} × ${esc(i.type || i.garment || i.service || "?")}</span><span>${i.amount != null ? money(i.amount) : ""}</span></div>`).join("")}
+      <div class="sumrow"><span>Discount</span><span>${money(o.discount_amount || 0)}</span></div>
+      <div class="sumrow"><span>GST</span><span>${money(o.gst_amount || 0)}</span></div>
+      <div class="sumrow total"><span>Total</span><span>${o.total_amount ? money(o.total_amount) : "—"}</span></div>
+      <div class="sumrow"><span>Paid</span><span>${money(o.amount_paid)} <span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></span></div>
+      <hr class="hr"><b>Timeline</b>
+      ${(d.history || []).map((h) => `<div class="sumrow"><span>${STATUS_LABEL[h.new_status] || h.new_status}</span><span class="muted">${fmtWhen(h.changed_at)} · ${esc(h.changed_by)}</span></div>`).join("")}
+      ${o.notes ? `<hr class="hr"><b>Internal notes</b><p class="muted" style="white-space:pre-wrap">${esc(o.notes)}</p>` : ""}
+      <div class="btnrow" style="margin-top:14px">
+        <button class="btn ghost" onclick="printReceiptFromOrder('${o.order_number}')">🖨 Print</button>
+        <button class="btn" onclick="jumpChat('${o.customer_phone}')">💬 Chat</button>
+      </div>`;
+  } catch (e) { $("drawer-body").innerHTML = errBox(e.message, "closeDrawer"); }
+}
+function closeDrawer() { $("drawer").classList.remove("open"); }
+function jumpChat(phone) { go("inbox"); setTimeout(() => openThread(phone), 250); }
+
+/* ============================= new bill ============================= */
+let RATES = [], CUSTOMERS_CACHE = null, LINES = [];
+
+async function initNewBill() {
+  try { RATES = await api("/admin/api/rates"); } catch (e) { toast(e.message, true); }
+  if (!CUSTOMERS_CACHE) loadCustomers(true);
+  if (!LINES.length) addLine();
+  renderLines();
+  $("nb-date").value = new Date(Date.now() + 2 * 864e5).toISOString().slice(0, 10);
+}
+function addLine() { LINES.push({ service: "", garment: "", qty: 1, rate: "", amount: 0 }); renderLines(); }
+function delLine(i) { LINES.splice(i, 1); if (!LINES.length) addLine(); renderLines(); }
+const services = () => [...new Set(RATES.filter((r) => r.is_active).map((r) => r.service))];
+const garmentsFor = (svc) => RATES.filter((r) => r.is_active && r.service === svc);
+
+function renderLines() {
+  $("nb-lines").innerHTML = LINES.map((l, i) => `
+    <div class="lineitem">
+      <select onchange="LINES[${i}].service=this.value;LINES[${i}].garment='';lineRate(${i})">
+        <option value="">Service…</option>
+        ${services().map((s) => `<option ${l.service === s ? "selected" : ""}>${esc(s)}</option>`).join("")}
+      </select>
+      <select onchange="LINES[${i}].garment=this.value;lineRate(${i})">
+        <option value="">Item…</option>
+        ${garmentsFor(l.service).map((r) => `<option value="${esc(r.garment)}" ${l.garment === r.garment ? "selected" : ""}>${esc(r.garment || "(per kg)")} — ₹${r.rate}/${r.unit}</option>`).join("")}
+      </select>
+      <input type="number" min="0.1" step="0.1" value="${l.qty}" onchange="LINES[${i}].qty=parseFloat(this.value)||1;calcBill()" title="Qty / kg">
+      <input type="number" min="0" step="0.01" value="${l.rate}" placeholder="Rate" onchange="LINES[${i}].rate=parseFloat(this.value)||0;calcBill()">
+      <div class="money" id="nb-amt-${i}">${money(l.amount)}</div>
+      <button class="btn sm danger del" onclick="delLine(${i})">✕</button>
+    </div>`).join("");
+  calcBill();
+}
+function lineRate(i) {
+  const l = LINES[i];
+  const r = RATES.find((x) => x.service === l.service && x.garment === l.garment);
+  if (r) l.rate = parseFloat(r.rate);
+  renderLines();
+}
+function calcBill() {
+  let sub = 0;
+  LINES.forEach((l, i) => {
+    l.amount = (parseFloat(l.rate) || 0) * (parseFloat(l.qty) || 0);
+    sub += l.amount;
+    const el = $("nb-amt-" + i); if (el) el.textContent = money(l.amount);
+  });
+  const disc = parseFloat($("nb-disc").value) || 0;
+  const gst = $("nb-gst").checked ? Math.round((sub - disc) * 0.18 * 100) / 100 : 0;
+  const total = Math.max(0, sub - disc + gst);
+  const adv = parseFloat($("nb-adv").value) || 0;
+  $("nb-sub").textContent = money(sub);
+  $("nb-gstamt").textContent = money(gst);
+  $("nb-total").textContent = money(total);
+  $("nb-due").textContent = money(Math.max(0, total - adv));
+  return { sub, disc, gst, total, adv };
+}
+function custAc() {
+  const q = $("nb-phone").value.trim().toLowerCase();
+  const box = $("nb-ac");
+  if (!q || !CUSTOMERS_CACHE) { box.innerHTML = ""; return; }
+  const hits = CUSTOMERS_CACHE.filter((c) => c.phone.includes(q) || (c.name || "").toLowerCase().includes(q)).slice(0, 6);
+  box.innerHTML = hits.map((c) => `<div onclick="pickCust('${c.phone}','${esc(c.name || "")}')">${esc(c.name || "New customer")} · ${c.phone}</div>`).join("");
+}
+function pickCust(phone, name) { $("nb-phone").value = phone; $("nb-name").value = name; $("nb-ac").innerHTML = ""; }
+
+async function saveBill(btn) {
+  await busy(btn, async () => {
+    const t = calcBill();
+    const phone = $("nb-phone").value.trim();
+    if (!phone) throw new Error("Customer phone is required");
+    const items = LINES.filter((l) => l.service && (l.garment || l.service.toLowerCase().includes("kg"))).map((l) => {
+      const r = RATES.find((x) => x.service === l.service && x.garment === l.garment) || {};
+      return { type: l.garment || l.service, service: l.service, qty: l.qty, rate: l.rate, amount: l.amount, unit: r.unit || "pc" };
+    });
+    if (!items.length) throw new Error("Add at least one item");
+    const body = {
+      customer_phone: phone, customer_name: $("nb-name").value.trim() || null, items,
+      total_amount: t.total, discount_amount: t.disc || null, gst_amount: t.gst || null,
+      expected_delivery: $("nb-date").value || null, notes: $("nb-notes").value.trim() || null,
+      advance_amount: t.adv || null, advance_method: t.adv ? $("nb-advmode").value : null,
+      coupon_code: $("nb-coupon").value.trim() || null,
+    };
+    const out = await api("/orders", { method: "POST", body });
+    toast(T.billCreated + " — " + out.order_number);
+    showBillSuccess(out);
+    LINES = []; addLine();
+    ["nb-phone", "nb-name", "nb-disc", "nb-adv", "nb-notes", "nb-coupon"].forEach((id) => ($(id).value = ""));
+    loadDashboard();
+  });
+}
+function showBillSuccess(o) {
+  openModal(`<h3>✅ ${o.order_number} created</h3>
+    <p class="muted">Total ${o.total_amount ? money(o.total_amount) : "—"} · ${esc(o.customer_name || o.customer_phone)}. Customer notified on WhatsApp; staff got the work order.</p>
+    <div class="btnrow" style="margin-top:12px">
+      <button class="btn ghost" onclick="printReceipt(${esc(JSON.stringify(o)).replace(/"/g, "&quot;")})">🖨 Print receipt</button>
+      <button class="btn ghost" onclick="waBill(${esc(JSON.stringify(o)).replace(/"/g, "&quot;")})">📲 Send bill on WhatsApp</button>
+      <button class="btn" onclick="closeModal()">Done</button>
+    </div>`);
+}
+function receiptText(o) {
+  const lines = (o.items || []).map((i) => ` ${i.qty} x ${i.type}  ${i.amount != null ? money(i.amount) : ""}`);
+  return `KWIK KLIN — Laundry Pro\n------------------------------\nBill: ${o.order_number}\nCustomer: ${o.customer_name || o.customer_phone}\nDate: ${fmtDate(o.created_at || new Date().toISOString())}\n------------------------------\n${lines.join("\n")}\n------------------------------\nTotal: ${o.total_amount ? money(o.total_amount) : "—"}\nPaid: ${money(o.amount_paid || 0)}\nDue: ${o.total_amount ? money(o.total_amount - (o.amount_paid || 0)) : "—"}\nDelivery: ${fmtDate(o.expected_delivery)}\n------------------------------\nThank you! 🙏`;
+}
+function printReceipt(o) { $("receipt").textContent = receiptText(o); window.print(); }
+async function printReceiptFromOrder(number) {
+  try { const d = await api(`/orders/${number}`); printReceipt(d.order); } catch (e) { toast(e.message, true); }
+}
+async function waBill(o) {
+  try {
+    await api("/admin/api/inbox/send", { method: "POST", body: { phone: o.customer_phone, text: receiptText(o) } });
+    toast(T.sent);
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ============================= bills ============================= */
+let BILLS = [], billFilter = { q: "", status: "", pay: "", from: "", to: "", page: 1 };
+async function loadBills() {
+  $("bills-list").innerHTML = skeleton(6);
+  try { BILLS = await api("/orders?limit=200"); } catch (e) { $("bills-list").innerHTML = errBox(e.message, "loadBills"); return; }
+  renderBills();
+}
+function renderBills() {
+  const f = billFilter;
+  const rows = BILLS.filter((o) => {
+    if (f.status && o.status !== f.status) return false;
+    if (f.pay && o.payment_status !== f.pay) return false;
+    if (f.from && o.created_at.slice(0, 10) < f.from) return false;
+    if (f.to && o.created_at.slice(0, 10) > f.to) return false;
+    const q = f.q.toLowerCase();
+    if (q && !(o.order_number.toLowerCase().includes(q) || (o.customer_name || "").toLowerCase().includes(q) || o.customer_phone.includes(q))) return false;
+    return true;
+  });
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE));
+  f.page = Math.min(f.page, pages);
+  const page = rows.slice((f.page - 1) * PAGE, f.page * PAGE);
+  if (!page.length) { $("bills-list").innerHTML = emptyBox("No bills match these filters.", "🧾"); $("bills-pager").innerHTML = ""; return; }
+  $("bills-list").innerHTML = `
+    <table class="tbl"><thead><tr><th>Invoice</th><th>Customer</th><th>Items</th><th>Total / due</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>${page.map((o) => billRowHtml(o, "tr")).join("")}</tbody></table>
+    <div class="rowcards">${page.map((o) => billRowHtml(o, "card")).join("")}</div>`;
+  $("bills-pager").innerHTML = pages > 1
+    ? `<button class="btn sm ghost" ${f.page <= 1 ? "disabled" : ""} onclick="billFilter.page--;renderBills()">‹ Prev</button>
+       <span class="muted">Page ${f.page} of ${pages}</span>
+       <button class="btn sm ghost" ${f.page >= pages ? "disabled" : ""} onclick="billFilter.page++;renderBills()">Next ›</button>` : "";
+}
+function billRowHtml(o, kind) {
+  const due = o.total_amount ? Number(o.total_amount) - Number(o.amount_paid) : null;
+  if (kind === "tr") return `<tr>
+    <td><b>${o.order_number}</b><div class="muted">${fmtDate(o.created_at)}</div></td>
+    <td>${esc(o.customer_name || o.customer_phone)}<div class="muted">${esc(o.customer_phone)}</div></td>
+    <td style="max-width:180px"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
+    <td class="money">${o.total_amount ? money(o.total_amount) : "—"}${due > 0 ? `<div class="muted">due ${money(due)}</div>` : ""}</td>
+    <td><span class="pill ${o.status}">${STATUS_LABEL[o.status]}</span> <span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></td>
+    <td><div class="act">
+      <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">👁</button>
+      <button class="btn sm ghost" onclick="printReceiptFromOrder('${o.order_number}')">🖨</button>
+      <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button>
+    </div></td></tr>`;
+  return `<div class="rowcard">
+    <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${STATUS_LABEL[o.status]}</span></div>
+    <div class="kv"><span>${esc(o.customer_name || o.customer_phone)}</span><span>${fmtDate(o.created_at)}</span></div>
+    <div class="kv"><span>${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
+    <div class="act"><button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
+    <button class="btn sm ghost" onclick="printReceiptFromOrder('${o.order_number}')">Print</button>
+    <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button></div></div>`;
+}
+function billsCsv() {
+  dlCsvClient("bills.csv",
+    ["order", "date", "customer", "phone", "total", "paid", "status", "payment"],
+    BILLS.map((o) => [o.order_number, o.created_at.slice(0, 10), o.customer_name || "", o.customer_phone, o.total_amount || "", o.amount_paid, o.status, o.payment_status]));
+}
+
+/* ============================= customers ============================= */
+async function loadCustomers(quiet = false) {
+  if (!quiet) $("cust-list").innerHTML = skeleton(6);
+  try { CUSTOMERS_CACHE = await api("/admin/api/customers"); } catch (e) { if (!quiet) $("cust-list").innerHTML = errBox(e.message, "loadCustomers"); return; }
+  if (!quiet || CURRENT === "customers") renderCustomers();
+}
+function renderCustomers() {
+  if (!$("cust-list")) return;
+  const q = ($("cust-search").value || "").toLowerCase();
+  const rows = (CUSTOMERS_CACHE || [])
+    .filter((c) => !q || (c.name || "").toLowerCase().includes(q) || c.phone.includes(q))
+    .sort((a, b) => Number(b.outstanding) - Number(a.outstanding));
+  if (!rows.length) { $("cust-list").innerHTML = emptyBox("No customers yet — they appear after their first bill or message.", "👥"); return; }
+  $("cust-list").innerHTML = `
+    <table class="tbl"><thead><tr><th>Customer</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Last seen</th><th>Actions</th></tr></thead>
+    <tbody>${rows.map((c) => `
+      <tr><td>${esc(c.name || "—")}${c.opted_out ? ' <span class="tag">opted out</span>' : ""}<div class="muted">${c.phone}</div></td>
+      <td>${c.total_orders} <span class="muted">(${c.active_orders} active)</span></td>
+      <td class="money">${money(c.business)}</td><td class="money">${money(c.paid)}</td>
+      <td class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</td>
+      <td class="muted">${c.last_message_at ? fmtWhen(c.last_message_at) : "—"}</td>
+      <td><div class="act">
+        ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}','${c.outstanding}')">Send payment reminder</button>` : ""}
+        <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">💬</button>
+      </div></td></tr>`).join("")}
+    </tbody></table>
+    <div class="rowcards">${rows.map((c) => `
+      <div class="rowcard"><div class="r1"><b>${esc(c.name || c.phone)}</b><span class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</span></div>
+      <div class="kv"><span>${c.phone}</span><span>${c.total_orders} orders</span></div>
+      <div class="kv"><span>Business ${money(c.business)}</span><span>Paid ${money(c.paid)}</span></div>
+      <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}','${c.outstanding}')">Remind</button>` : ""}
+      <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">Chat</button></div></div>`).join("")}</div>`;
+}
+async function sendReminder(phone, amt) {
+  try {
+    await api("/admin/api/inbox/send", { method: "POST", body: { phone, text: `Namaste! Aapka ₹${amt} baaki hai. Jab suvidha ho, de dijiyega 🙏 — Kwik Klin` } });
+    toast(T.reminderSent);
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ============================= expenses ============================= */
+const EXP_CATS = ["Detergent", "Electricity", "Rent", "Salary", "Transport", "Maintenance", "Other"];
+let EXPENSES = [];
+async function loadExpenses() {
+  $("exp-list").innerHTML = skeleton(4);
+  $("exp-cat").innerHTML = EXP_CATS.map((c) => `<option>${c}</option>`).join("");
+  $("exp-date").value = new Date().toISOString().slice(0, 10);
+  try {
+    [EXPENSES, SUMMARY] = await Promise.all([api("/admin/api/expenses"), api("/admin/api/reports/summary")]);
+  } catch (e) { $("exp-list").innerHTML = errBox(e.message, "loadExpenses"); return; }
+  const t = SUMMARY.today || {}, m = SUMMARY.month || {};
+  $("exp-kpis").innerHTML =
+    kpi("Expenses today", money(t.expenses || 0), "", "") +
+    kpi("Expenses this month", money(m.expenses || 0), "", "") +
+    kpi("Profit this month", money(m.profit || 0), "revenue − expenses", "go('reports')");
+  renderExpenses(); renderExpChart();
+}
+function renderExpenses() {
+  if (!EXPENSES.length) { $("exp-list").innerHTML = emptyBox("No expenses recorded yet — add your first one above.", "💸"); return; }
+  $("exp-list").innerHTML = `
+    <table class="tbl"><thead><tr><th>Date</th><th>Category</th><th>Amount</th><th>Description</th><th></th></tr></thead>
+    <tbody>${EXPENSES.map((e) => `
+      <tr><td>${fmtDate(e.spent_on)}</td><td>${esc(e.category)}</td><td class="money">${money(e.amount)}</td>
+      <td class="muted">${esc(e.description || "")}</td>
+      <td><button class="btn sm danger" onclick="delExpense('${e.id}')">✕</button></td></tr>`).join("")}
+    </tbody></table>
+    <div class="rowcards">${EXPENSES.map((e) => `
+      <div class="rowcard"><div class="r1"><b>${esc(e.category)}</b><span class="money">${money(e.amount)}</span></div>
+      <div class="kv"><span>${fmtDate(e.spent_on)}</span><span>${esc(e.description || "")}</span></div>
+      <div class="act"><button class="btn sm danger" onclick="delExpense('${e.id}')">Delete</button></div></div>`).join("")}</div>`;
+}
+async function saveExpense(btn) {
+  await busy(btn, async () => {
+    const amt = parseFloat($("exp-amt").value);
+    if (!(amt > 0)) throw new Error("Amount must be greater than 0");
+    await api("/admin/api/expenses", { method: "POST", body: { category: $("exp-cat").value, amount: amt, spent_on: $("exp-date").value, description: $("exp-desc").value.trim() || null } });
+    $("exp-amt").value = ""; $("exp-desc").value = "";
+    toast("Expense saved"); loadExpenses();
+  });
+}
+function delExpense(id) {
+  confirmDialog("Delete this expense? This cannot be undone.", async () => {
+    try { await api(`/admin/api/expenses/${id}`, { method: "DELETE" }); toast(T.deleted); loadExpenses(); }
+    catch (e) { toast(e.message, true); }
+  });
+}
+const PALETTE = ["#f97316", "#2563eb", "#16a34a", "#d97706", "#7c3aed", "#0e7490", "#dc2626", "#78716c"];
+function donutHtml(pairs, elLegend) {
+  const total = pairs.reduce((a, [, v]) => a + v, 0) || 1;
+  let acc = 0;
+  const stops = pairs.map(([k, v], i) => {
+    const from = (acc / total) * 360; acc += v;
+    return `${PALETTE[i % PALETTE.length]} ${from}deg ${(acc / total) * 360}deg`;
+  });
+  const legend = pairs.map(([k, v], i) => `<div><span class="sw" style="background:${PALETTE[i % PALETTE.length]}"></span>${esc(k)} — <b>${typeof v === "number" && v > 999 ? money(v) : v}</b></div>`).join("");
+  return [`<div class="donut" style="background:conic-gradient(${stops.join(",")})"></div>`, legend];
+}
+function renderExpChart() {
+  const byCat = {};
+  EXPENSES.forEach((e) => { byCat[e.category] = (byCat[e.category] || 0) + Number(e.amount); });
+  const pairs = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+  if (!pairs.length) { $("exp-chart").innerHTML = ""; return; }
+  const [donut, legend] = donutHtml(pairs);
+  $("exp-chart").innerHTML = `<div class="split2" style="align-items:center">${donut}<div class="legend">${legend}</div></div>`;
+}
+
+/* ============================= reports ============================= */
+async function loadReports() {
+  $("rep-body").innerHTML = skeleton(5);
+  try {
+    const [sum, dash] = await Promise.all([api("/admin/api/reports/summary"), api("/admin/api/dashboard")]);
+    SUMMARY = sum; DASH = dash;
+    if (!CUSTOMERS_CACHE) await loadCustomers(true);
+  } catch (e) { $("rep-body").innerHTML = errBox(e.message, "loadReports"); return; }
+  const periods = [["Today", SUMMARY.today], ["This week", SUMMARY.week], ["This month", SUMMARY.month]];
+  const maxV = Math.max(1, ...periods.flatMap(([, p]) => [Number(p.revenue || 0), Number(p.expenses || 0), Math.abs(Number(p.profit || 0))]));
+  const bars = periods.map(([lbl, p]) => `
+    <div class="bargrp">
+      <div style="display:flex;gap:4px;align-items:flex-end;height:110px;width:100%;justify-content:center">
+        <div class="bar rev" style="height:${(Number(p.revenue || 0) / maxV) * 100}%" title="Revenue ${money(p.revenue)}"></div>
+        <div class="bar exp" style="height:${(Number(p.expenses || 0) / maxV) * 100}%" title="Expenses ${money(p.expenses)}"></div>
+        <div class="bar pft" style="height:${(Math.max(0, Number(p.profit || 0)) / maxV) * 100}%" title="Profit ${money(p.profit)}"></div>
+      </div>
+      <div class="muted">${lbl}</div>
+      <div style="font-size:11px" class="muted">R ${money(p.revenue)} · E ${money(p.expenses)} · P ${money(p.profit)}</div>
+    </div>`).join("");
+  const statusPairs = Object.entries(DASH.counts.by_status || {}).map(([k, v]) => [STATUS_LABEL[k] || k, v]);
+  const [sd, sl] = statusPairs.length ? donutHtml(statusPairs) : ["", ""];
+  const top = (CUSTOMERS_CACHE || []).slice().sort((a, b) => Number(b.business) - Number(a.business)).slice(0, 8);
+  $("rep-body").innerHTML = `
+    <div class="card"><b>Revenue vs expenses vs profit</b>
+      <div class="muted" style="margin-bottom:6px">Revenue = payments received on orders created in the period</div>
+      <div class="bars">${bars}</div>
+      <div class="legend" style="flex-direction:row;gap:16px;margin-top:8px">
+        <div><span class="sw" style="background:var(--brand)"></span>Revenue</div>
+        <div><span class="sw" style="background:var(--n300)"></span>Expenses</div>
+        <div><span class="sw" style="background:var(--ok)"></span>Profit</div></div></div>
+    <div class="split2" style="margin-top:14px">
+      <div class="card"><b>Active orders by status</b><div class="split2" style="align-items:center;margin-top:8px">${sd}<div class="legend">${sl}</div></div></div>
+      <div class="card"><b>Top customers by business</b>
+        ${top.map((c) => `<div class="sumrow"><span>${esc(c.name || c.phone)}</span><span class="money">${money(c.business)}</span></div>`).join("") || emptyBox(T.noData)}
+      </div></div>
+    <div class="btnrow" style="margin-top:12px;justify-content:flex-start">
+      <button class="btn ghost" onclick="dlServer('/admin/api/export/orders.csv','orders.csv')">⬇ Orders CSV</button>
+      <button class="btn ghost" onclick="dlServer('/admin/api/export/customers.csv','customers.csv')">⬇ Customers CSV</button>
+    </div>`;
+}
+async function dlServer(path, name) {
+  const r = await fetch(path, { headers: { "X-API-Key": KEY } });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(await r.blob()); a.download = name; a.click();
+}
+
+/* ============================= campaigns ============================= */
+async function loadCampaigns() {
+  $("seg-cards").innerHTML = skeleton(2);
+  $("camp-list").innerHTML = skeleton(3);
+  try {
+    const [segs, camps, coupons] = await Promise.all([
+      api("/admin/api/segments"), api("/admin/api/campaigns"), api("/admin/api/coupons"),
+    ]);
+    renderSegments(segs); renderCampaigns(camps); renderCoupons(coupons);
+  } catch (e) { $("camp-list").innerHTML = errBox(e.message, "loadCampaigns"); }
+}
+function renderSegments(segs) {
+  $("seg-cards").innerHTML = Object.entries(segs.counts)
+    .map(([k, v]) => `<div class="card kpi seg-card" onclick="prefillCampaign('${k}')">
+      <div class="lbl">${SEGMENT_LABEL[k] || k}</div><div class="val">${v}</div>
+      <div class="sub">tap to create a campaign</div></div>`).join("");
+  const sel = $("camp-seg");
+  if (sel) sel.innerHTML = Object.keys(segs.counts).map((k) => `<option value="${k}">${SEGMENT_LABEL[k] || k}</option>`).join("");
+}
+function prefillCampaign(seg) {
+  $("camp-seg").value = seg;
+  $("camp-name").value = `${seg}-${new Date().toISOString().slice(0, 10)}`;
+  $("camp-name").scrollIntoView({ behavior: "smooth", block: "center" });
+}
+function renderCampaigns(camps) {
+  if (!camps.length) { $("camp-list").innerHTML = emptyBox("No campaigns yet. The agent also suggests one every Monday.", "📣"); return; }
+  $("camp-list").innerHTML = camps.map((c) => {
+    const s = c.stats || {};
+    return `<div class="card" style="margin-bottom:10px">
+      <div class="r1" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <b>${esc(c.name)}</b>
+        <span><span class="tag">${SEGMENT_LABEL[c.segment] || c.segment}</span>
+        <span class="pill ${c.status === "sent" ? "PAID" : c.status === "cancelled" ? "CANCELLED" : "PARTIAL"}">${c.status}</span></span>
+      </div>
+      ${c.rationale ? `<p class="muted" style="margin:6px 0">${esc(c.rationale)}</p>` : ""}
+      <p style="background:var(--n50);border-radius:8px;padding:8px 10px;font-size:13px;margin:6px 0;white-space:pre-wrap">${esc(c.message_text)}</p>
+      <div class="muted">Sent ${s.sent || 0} · Delivered ${s.delivered || 0} · Read ${s.read || 0} · Replied ${s.replied || 0} · Failed ${s.failed || 0} · Skipped ${s.skipped || 0}
+      ${s.orders_attributed ? ` · <b style="color:var(--ok)">Orders ${s.orders_attributed} (${money(s.revenue_attributed)})</b>` : ""}</div>
+      <div class="act" style="margin-top:8px">
+        ${["draft", "suggested"].includes(c.status) ? `<button class="btn sm ok" onclick="approveCampaign('${c.id}')">Approve & send</button>
+        <button class="btn sm ghost" onclick="cancelCampaign('${c.id}')">Skip</button>` : ""}
+      </div></div>`;
+  }).join("");
+}
+async function createCampaign(btn) {
+  await busy(btn, async () => {
+    await api("/admin/api/campaigns", { method: "POST", body: {
+      name: $("camp-name").value.trim(), segment: $("camp-seg").value,
+      message_text: $("camp-msg").value.trim(), coupon_code: $("camp-coupon").value.trim() || null,
+    }});
+    toast("Campaign saved as draft"); $("camp-msg").value = ""; loadCampaigns();
+  });
+}
+function approveCampaign(id) {
+  confirmDialog("Send this campaign now? Only opted-in customers are messaged; quiet hours are respected.", async () => {
+    try { const r = await api(`/admin/api/campaigns/${id}/approve`, { method: "POST" }); toast(`Sending to ${r.queued} customers`); loadCampaigns(); }
+    catch (e) { toast(e.message, true); }
+  });
+}
+async function cancelCampaign(id) {
+  try { await api(`/admin/api/campaigns/${id}/cancel`, { method: "POST" }); toast("Campaign skipped"); loadCampaigns(); }
+  catch (e) { toast(e.message, true); }
+}
+function renderCoupons(coupons) {
+  $("coupon-list").innerHTML = coupons.length ? coupons.map((c) => `
+    <div class="sumrow"><span><b>${c.code}</b> — ${c.discount_type === "percent" ? c.value + "%" : money(c.value)} off
+      ${c.min_order ? `(min ${money(c.min_order)})` : ""} <span class="tag">${c.used} used</span></span>
+      <button class="btn sm ghost" onclick="toggleCoupon('${c.code}')">${c.active ? "Disable" : "Enable"}</button></div>`).join("")
+    : `<p class="muted">No coupons yet.</p>`;
+}
+async function createCoupon(btn) {
+  await busy(btn, async () => {
+    await api("/admin/api/coupons", { method: "POST", body: {
+      code: $("cp-code").value.trim(), discount_type: $("cp-type").value,
+      value: parseFloat($("cp-val").value), min_order: parseFloat($("cp-min").value) || null,
+      valid_to: $("cp-until").value || null,
+    }});
+    toast("Coupon created"); $("cp-code").value = ""; loadCampaigns();
+  });
+}
+async function toggleCoupon(code) {
+  try { await api(`/admin/api/coupons/${code}/toggle`, { method: "POST" }); loadCampaigns(); }
+  catch (e) { toast(e.message, true); }
+}
+
+/* ============================= training ============================= */
+async function loadTraining() {
+  $("faq-list").innerHTML = skeleton(3);
+  try {
+    const [settings, faqs, corr, teach] = await Promise.all([
+      api("/admin/api/settings"), api("/admin/api/training/faq"),
+      api("/admin/api/training/corrections"), api("/admin/api/training/teachme"),
+    ]);
+    $("agent-toggle").checked = !!settings.agent_enabled;
+    $("tr-cust-inst").value = settings.customer_instructions || "";
+    $("tr-staff-inst").value = settings.staff_instructions || "";
+    renderFaqs(faqs); renderCorrections(corr); renderTeachme(teach);
+  } catch (e) { $("faq-list").innerHTML = errBox(e.message, "loadTraining"); }
+}
+function renderFaqs(faqs) {
+  $("faq-list").innerHTML = faqs.length ? faqs.map((f) => `
+    <div class="sumrow" style="align-items:flex-start;gap:8px">
+      <span style="flex:1"><b>Q:</b> ${esc(f.question)}<br><b>A:</b> ${esc(f.answer)} <span class="tag">${f.audience}</span></span>
+      <button class="btn sm danger" onclick="delFaq('${f.id}')">✕</button></div>`).join("")
+    : `<p class="muted">No FAQ entries yet — add shop timings, prices policy, delivery areas…</p>`;
+}
+async function addFaq(btn) {
+  await busy(btn, async () => {
+    await api("/admin/api/training/faq", { method: "POST", body: { question: $("faq-q").value.trim(), answer: $("faq-a").value.trim(), audience: $("faq-aud").value } });
+    $("faq-q").value = ""; $("faq-a").value = "";
+    toast("Saved — the agent uses this immediately"); loadTraining();
+  });
+}
+function delFaq(id) {
+  confirmDialog(T.confirmDelete, async () => {
+    await api(`/admin/api/training/faq/${id}`, { method: "DELETE" }); toast(T.deleted); loadTraining();
+  });
+}
+function renderCorrections(corr) {
+  $("corr-list").innerHTML = corr.length ? corr.map((c) => `
+    <div class="sumrow" style="align-items:flex-start;gap:8px">
+      <span style="flex:1"><b>When asked:</b> ${esc(c.question)}<br><b>Reply like:</b> ${esc(c.correct_reply)}</span>
+      <button class="btn sm danger" onclick="delCorr('${c.id}')">✕</button></div>`).join("")
+    : `<p class="muted">No corrections yet.</p>`;
+}
+async function addCorr(btn) {
+  await busy(btn, async () => {
+    await api("/admin/api/training/corrections", { method: "POST", body: { question: $("corr-q").value.trim(), correct_reply: $("corr-a").value.trim() } });
+    $("corr-q").value = ""; $("corr-a").value = "";
+    toast("Saved — used from the next reply"); loadTraining();
+  });
+}
+function delCorr(id) {
+  confirmDialog(T.confirmDelete, async () => {
+    await api(`/admin/api/training/corrections/${id}`, { method: "DELETE" }); toast(T.deleted); loadTraining();
+  });
+}
+function renderTeachme(teach) {
+  $("teach-count").textContent = teach.length;
+  $("teach-list").innerHTML = teach.length ? teach.map((q) => `
+    <div class="card" style="margin-bottom:8px">
+      <div class="muted">${esc(q.customer)} · ${fmtWhen(q.asked_at)}</div>
+      <p style="margin:5px 0"><b>${esc(q.question)}</b></p>
+      <div class="frm"><textarea id="ta-${q.id}" rows="2" placeholder="Write the answer once — it becomes permanent knowledge"></textarea></div>
+      <div class="act" style="margin-top:6px">
+        <button class="btn sm" onclick="answerTeach('${q.id}', true)">Answer + send to customer</button>
+        <button class="btn sm ghost" onclick="answerTeach('${q.id}', false)">Save answer only</button>
+      </div></div>`).join("")
+    : `<p class="muted">Queue is empty — the agent knew everything it was asked. 🎉</p>`;
+}
+async function answerTeach(id, send) {
+  const ans = $("ta-" + id).value.trim();
+  if (!ans) { toast("Write an answer first", true); return; }
+  try {
+    const r = await api(`/admin/api/training/teachme/${id}/answer`, { method: "POST", body: { answer: ans, save_as_faq: true, send_to_customer: send } });
+    toast(r.sent_to_customer ? "Answered + sent to the customer" : "Answered — saved to knowledge");
+    loadTraining();
+  } catch (e) { toast(e.message, true); }
+}
+async function saveAgentSettings(btn) {
+  await busy(btn, async () => {
+    await api("/admin/api/settings", { method: "PUT", body: { key: "agent_enabled", value: $("agent-toggle").checked } });
+    await api("/admin/api/settings", { method: "PUT", body: { key: "customer_instructions", value: $("tr-cust-inst").value } });
+    await api("/admin/api/settings", { method: "PUT", body: { key: "staff_instructions", value: $("tr-staff-inst").value } });
+    toast("Saved — live immediately, no restart");
+  });
+}
+
+/* ============================= activity ============================= */
+async function loadActivity() {
+  $("act-list").innerHTML = skeleton(6);
+  try {
+    const role = $("act-role").value;
+    const rows = await api("/admin/api/activity" + (role ? `?role=${role}` : ""));
+    if (!rows.length) { $("act-list").innerHTML = emptyBox("No agent activity yet.", "🤖"); return; }
+    $("act-list").innerHTML = rows.map((r) => `
+      <div class="sumrow" style="align-items:flex-start;border-bottom:1px solid var(--n100);padding:8px 0">
+        <span style="flex:1"><b>${esc(r.action)}</b> <span class="tag">${r.role}</span> ${r.actor ? `<span class="muted">${esc(r.actor)}</span>` : ""}
+          ${r.args ? `<div class="muted" style="font-size:11.5px">${esc(JSON.stringify(r.args)).slice(0, 160)}</div>` : ""}
+          ${r.result ? `<div style="font-size:12px">${esc(r.result).slice(0, 200)}</div>` : ""}</span>
+        <span class="muted" style="flex-shrink:0">${fmtWhen(r.at)}</span></div>`).join("");
+  } catch (e) { $("act-list").innerHTML = errBox(e.message, "loadActivity"); }
+}
+
+/* ============================= settings ============================= */
+let STAFF = [];
+async function loadSettings() {
+  $("rates-list").innerHTML = skeleton(4);
+  try {
+    const [rates, staff, s] = await Promise.all([
+      api("/admin/api/rates"), api("/admin/api/staff"), api("/admin/api/settings"),
+    ]);
+    STAFF = staff;
+    renderRates(rates); renderStaff();
+    $("set-standup").value = s.standup_hour;
+    $("set-turnaround").value = s.turnaround_days;
+    $("set-freqcap").value = s.marketing_freq_cap_per_month;
+    $("set-budget").value = s.marketing_monthly_msg_budget;
+    $("set-autonomy").value = s.marketing_autonomy;
+    $("set-washer").innerHTML = '<option value="">— none —</option>' +
+      staff.filter((x) => x.is_active).map((x) => `<option value="${x.phone}" ${s.default_washer_phone === x.phone ? "selected" : ""}>${esc(x.name)}</option>`).join("");
+  } catch (e) { $("rates-list").innerHTML = errBox(e.message, "loadSettings"); }
+}
+function renderRates(rates) {
+  $("rates-list").innerHTML = `
+    <table class="tbl"><thead><tr><th>Service</th><th>Item</th><th>Rate</th><th>Unit</th><th>Active</th></tr></thead>
+    <tbody>${rates.map((r) => `
+      <tr><td>${esc(r.service)}</td><td>${esc(r.garment || "—")}</td>
+      <td style="max-width:90px"><input type="number" value="${r.rate}" step="0.5" onchange="updRate('${r.id}', this.value, null)"></td>
+      <td>${r.unit}</td>
+      <td><input type="checkbox" ${r.is_active ? "checked" : ""} onchange="updRate('${r.id}', null, this.checked)"></td></tr>`).join("")}
+    </tbody></table>
+    <div class="rowcards">${rates.map((r) => `
+      <div class="rowcard"><div class="r1"><b>${esc(r.service)} · ${esc(r.garment || "per kg")}</b>
+      <input type="checkbox" ${r.is_active ? "checked" : ""} onchange="updRate('${r.id}', null, this.checked)"></div>
+      <div class="kv"><span>Rate (₹/${r.unit})</span><span style="max-width:110px"><input type="number" value="${r.rate}" step="0.5" onchange="updRate('${r.id}', this.value, null)"></span></div></div>`).join("")}</div>`;
+}
+let rateTimer = {};
+function updRate(id, rate, active) {
+  clearTimeout(rateTimer[id]);
+  rateTimer[id] = setTimeout(async () => {
+    try {
+      const body = {};
+      if (rate !== null) body.rate = parseFloat(rate);
+      if (active !== null) body.is_active = active;
+      await api(`/admin/api/rates/${id}`, { method: "PUT", body });
+      toast("Rate saved — applies to new bills only");
+    } catch (e) { toast(e.message, true); }
+  }, 500);
+}
+async function addRate(btn) {
+  await busy(btn, async () => {
+    await api("/admin/api/rates", { method: "POST", body: {
+      service: $("rt-svc").value.trim(), garment: $("rt-item").value.trim(),
+      unit: $("rt-unit").value, rate: parseFloat($("rt-rate").value),
+    }});
+    toast("Rate added"); $("rt-item").value = ""; $("rt-rate").value = ""; loadSettings();
+  });
+}
+function renderStaff() {
+  $("staff-list").innerHTML = STAFF.map((s) => `
+    <div class="rowcard" style="margin-bottom:8px;${s.is_active ? "" : "opacity:.5"}">
+      <div class="r1"><b>${esc(s.name)}</b>
+        <select style="width:auto" onchange="updStaff('${s.id}', {role: this.value})">
+          <option value="WASHER" ${s.role === "WASHER" ? "selected" : ""}>Washer (washing & ironing)</option>
+          <option value="DELIVERY" ${s.role === "DELIVERY" ? "selected" : ""}>Delivery</option>
+        </select></div>
+      <div class="kv"><span>${s.phone}</span><span>${s.is_active ? "Active" : "Inactive"}</span></div>
+      <div class="act">
+        ${s.is_active ? `<button class="btn sm danger" onclick="deactivateStaff('${s.id}','${esc(s.name)}')">Deactivate</button>`
+                      : `<button class="btn sm ghost" onclick="updStaff('${s.id}', {is_active: true})">Reactivate</button>`}
+      </div></div>`).join("");
+}
+async function updStaff(id, body) {
+  try { await api(`/admin/api/staff/${id}`, { method: "PUT", body }); toast(T.saved); loadSettings(); }
+  catch (e) { toast(e.message, true); }
+}
+function deactivateStaff(id, name) {
+  confirmDialog(`Deactivate ${name}? They stop getting standups and work orders. History is kept.`, async () => {
+    try { await api(`/admin/api/staff/${id}`, { method: "DELETE" }); toast("Staff deactivated"); loadSettings(); }
+    catch (e) { toast(e.message, true); }
+  });
+}
+async function addStaff(btn) {
+  await busy(btn, async () => {
+    const phone = $("sf-phone").value.replace(/\D/g, "");
+    if (phone.length < 10) throw new Error("Enter a valid 10-digit phone number");
+    await api("/admin/api/staff", { method: "POST", body: { name: $("sf-name").value.trim(), phone: $("sf-phone").value.trim(), role: $("sf-role").value } });
+    toast("Staff added"); $("sf-name").value = ""; $("sf-phone").value = ""; loadSettings();
+  });
+}
+async function saveOps(btn) {
+  await busy(btn, async () => {
+    const pairs = [
+      ["standup_hour", parseInt($("set-standup").value)],
+      ["turnaround_days", parseInt($("set-turnaround").value)],
+      ["default_washer_phone", $("set-washer").value],
+      ["marketing_freq_cap_per_month", parseInt($("set-freqcap").value)],
+      ["marketing_monthly_msg_budget", parseInt($("set-budget").value)],
+      ["marketing_autonomy", $("set-autonomy").value],
+    ];
+    for (const [key, value] of pairs) await api("/admin/api/settings", { method: "PUT", body: { key, value } });
+    toast("Settings saved — live immediately");
+  });
+}
+async function testStandup(btn) {
+  await busy(btn, async () => {
+    const r = await api("/admin/api/jobs/standup", { method: "POST" });
+    toast(`Standup sent to ${r.sent_to} staff member(s)`);
+  });
+}
+
+/* ============================= inbox ============================= */
+let THREADS = [], OPEN_PHONE = null, OPEN_THREAD = null, inboxTimer = null;
+const EMOJIS = ["😀","😄","😊","🙏","👍","👌","✅","❤️","🎉","😅","😂","🤝","🧺","👔","🧼","⏰","📅","💰","🛵","⚠️","❓","🌟"];
+async function loadThreads() {
+  try { THREADS = await api("/admin/api/inbox/threads"); } catch (e) { $("th-list").innerHTML = errBox(e.message, "loadThreads"); return; }
+  renderThreads();
+  if (OPEN_PHONE) openThread(OPEN_PHONE, true);
+  clearTimeout(inboxTimer);
+  if (CURRENT === "inbox") inboxTimer = setTimeout(loadThreads, 12000);
+}
+const avatar = (n) => `<div class="avatar">${esc((n || "?").trim()[0] || "?").toUpperCase()}</div>`;
+function renderThreads() {
+  const q = ($("th-search").value || "").toLowerCase();
+  const rows = THREADS.filter((t) => !q || t.name.toLowerCase().includes(q) || t.phone.includes(q));
+  $("th-list").innerHTML = rows.map((t) => {
+    const chip = t.kind === "staff" ? '<span class="staff-chip">staff</span>' : t.kind === "admin" ? '<span class="staff-chip">👑 you</span>' : "";
+    return `<div class="thread-item ${t.phone === OPEN_PHONE ? "on" : ""}" onclick="openThread('${t.phone}')">
+      <div class="nm"><span>${esc(t.name)}${chip}</span><span class="t">${fmtWhen(t.last_at)}</span></div>
+      <div class="pv">${t.last_direction === "OUTBOUND" ? "➡️ " : ""}${esc(t.last_text)}</div></div>`;
+  }).join("") || `<div class="thread-item">${T.noData}</div>`;
+}
+async function openThread(phone, silent = false) {
+  OPEN_PHONE = phone;
+  if (!silent) { $("chat-log").innerHTML = skeleton(3); renderThreads(); }
+  try { OPEN_THREAD = await api(`/admin/api/inbox/thread?phone=${encodeURIComponent(phone)}`); }
+  catch (e) { $("chat-log").innerHTML = errBox(e.message, "loadThreads"); return; }
+  const d = OPEN_THREAD;
+  $("chat-head").innerHTML = `
+    ${avatar(d.name)}
+    <div style="flex:1;min-width:0"><b>${esc(d.name)}</b>
+      <div class="muted">${d.phone} · ${d.kind === "staff" ? "Staff 🧑‍🔧" : d.kind === "admin" ? "You 👑" : "Customer"}</div></div>
+    <span class="winchip ${d.window.open ? "open" : "closed"}">${d.window.open ? "window open" : "window closed"}</span>
+    ${d.kind === "customer" ? `<button class="btn sm ghost" id="agent-pause-btn" onclick="toggleAgentPause()">🤖 Agent: …</button>` : ""}`;
+  refreshPauseBtn();
+  const wasBottom = true;
+  $("chat-log").innerHTML = (d.messages || []).map((m) => {
+    let body = esc(m.text || "");
+    const img = (m.text || "").match(/^\[image:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
+    if (img) body = `<img src="${img[1]}?key=${encodeURIComponent(KEY)}" loading="lazy">${esc(img[2] || "")}`;
+    return `<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${body}
+      <span class="bt">${fmtWhen(m.at)}${m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") : ""}</span></div>`;
+  }).join("") || emptyBox("Chat appears here", "💬");
+  if (wasBottom) $("chat-log").scrollTop = $("chat-log").scrollHeight;
+}
+async function refreshPauseBtn() {
+  const btn = $("agent-pause-btn");
+  if (!btn || !OPEN_PHONE) return;
+  // customers list carries agent_paused? Not included — read from threads name only; do a light check via customers cache
+  btn.textContent = "🤖 Agent: on/off";
+  btn.onclick = toggleAgentPause;
+}
+let PAUSED_SET = new Set();
+async function toggleAgentPause() {
+  const nowPaused = !PAUSED_SET.has(OPEN_PHONE);
+  try {
+    await api("/admin/api/inbox/toggle-agent", { method: "POST", body: { phone: OPEN_PHONE, paused: nowPaused } });
+    if (nowPaused) PAUSED_SET.add(OPEN_PHONE); else PAUSED_SET.delete(OPEN_PHONE);
+    toast(nowPaused ? "You took over — the bot stays silent on this chat" : "Agent resumed on this chat");
+  } catch (e) { toast(e.message, true); }
+}
+async function sendChat() {
+  const input = $("chat-input");
+  const text = input.value.trim();
+  if (!text || !OPEN_PHONE) return;
+  input.value = "";
+  try {
+    await api("/admin/api/inbox/send", { method: "POST", body: { phone: OPEN_PHONE, text } });
+    openThread(OPEN_PHONE, true);
+  } catch (e) { toast(e.message, true); input.value = text; }
+}
+function toggleEmojis() { $("emoji-pal").classList.toggle("open"); }
+function addEmoji(e) { $("chat-input").value += e; $("chat-input").focus(); }
+async function sendMedia(input) {
+  if (!input.files || !input.files[0] || !OPEN_PHONE) return;
+  const fd = new FormData();
+  fd.append("phone", OPEN_PHONE);
+  fd.append("file", input.files[0]);
+  fd.append("caption", "");
+  try {
+    await api("/admin/api/inbox/send-media", { method: "POST", body: fd });
+    toast(T.sent); openThread(OPEN_PHONE, true);
+  } catch (e) { toast(e.message, true); }
+  input.value = "";
+}
+
+/* ============================= init ============================= */
+window.addEventListener("DOMContentLoaded", () => {
+  $("emoji-pal").innerHTML = EMOJIS.map((e) => `<span onclick="addEmoji('${e}')">${e}</span>`).join("");
+  const start = (location.hash || "#dashboard").slice(1);
+  if (!KEY) { showLogin(); }
+  go(start);
+});

@@ -83,7 +83,8 @@ async def test_dashboard_page_serves(client) -> None:
     r = await client.get("/admin")
     assert r.status_code == 200
     assert "Laundry Pro" in r.text
-    assert "New Bill" in r.text and "Expenses" in r.text  # CRM sections present
+    assert "New bill" in r.text and "Expenses" in r.text  # CRM sections present
+    assert "Campaigns" in r.text and "AI training" in r.text  # agent-era sections
 
 
 async def test_customers_endpoint(client) -> None:

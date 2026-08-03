@@ -164,4 +164,4 @@ async def test_manager_send_blocked_outside_window(client, monkeypatch) -> None:
         "/admin/api/inbox/send", json={"phone": PHONE, "text": "suno"}, headers=AUTH
     )
     assert r.status_code == 409
-    assert "window band" in r.json()["detail"]
+    assert "window is closed" in r.json()["detail"]

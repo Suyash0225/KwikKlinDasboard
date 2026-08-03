@@ -312,7 +312,7 @@ async def rate_create(body: RateIn, db: AsyncSession = Depends(get_db)) -> dict:
         await db.commit()
     except Exception:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Ye service+kapda pehle se rate card mein hai")
+        raise HTTPException(status_code=409, detail="This service + item is already on the rate card")
     log.info("rate_created", service=body.service, garment=body.garment, rate=str(body.rate))
     return {"id": str(rate.id)}
 
@@ -371,7 +371,7 @@ async def staff_create(body: StaffIn, db: AsyncSession = Depends(get_db)) -> dic
         await db.commit()
     except Exception:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Ye number pehle se staff mein hai")
+        raise HTTPException(status_code=409, detail="This phone number is already a staff member")
     log.info("staff_created_via_settings", name=body.name, phone=phone, role=body.role)
     return {"id": str(staff.id)}
 
@@ -408,6 +408,22 @@ def _csv_response(filename: str, header: list[str], rows: list[list]) -> Respons
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.delete("/api/staff/{staff_id}", dependencies=[Depends(require_admin_key)])
+async def staff_delete(staff_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Soft-delete: is_active=False keeps history (orders reference staff)."""
+    try:
+        sid = uuid_module.UUID(staff_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid staff id")
+    staff = await db.get(Staff, sid)
+    if staff is None:
+        raise HTTPException(status_code=404, detail="staff not found")
+    staff.is_active = False
+    await db.commit()
+    log.info("staff_deactivated", staff_id=staff_id)
+    return {"deactivated": True}
 
 
 @router.get("/api/export/orders.csv", dependencies=[Depends(require_admin_key)])
@@ -626,10 +642,10 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
     except WindowClosedError:
         raise HTTPException(
             status_code=409,
-            detail="24h window band hai — free-form nahi ja sakta. Template bhejo ya customer ke message ka intezaar karo.",
+            detail="The 24h window is closed — free-form messages can't be sent. Use a template or wait for the customer to message first.",
         )
     except SendError as exc:
-        raise HTTPException(status_code=502, detail=f"WhatsApp send fail hua: {exc}")
+        raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {exc}")
     return {"wa_message_id": wa_id, "at": datetime.now(timezone.utc).isoformat()}
 
 

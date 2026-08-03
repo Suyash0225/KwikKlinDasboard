@@ -1,1058 +1,341 @@
-<!DOCTYPE html>
-<html lang="hi">
+<!doctype html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Kwik Klin — Laundry Pro</title>
-<style>
-  * { box-sizing: border-box; margin: 0; }
-  :root { --side:#111827; --side2:#1b2436; --acc:#f97316; --ink:#101828; --mut:#667085;
-          --bg:#eef1f6; --ok:#05603a; --bad:#b42318; --warn:#93370d; }
-  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg);
-         color: var(--ink); font-size: 14px; }
-  .shell { display: flex; min-height: 100vh; }
-  /* ---- sidebar ---- */
-  .side { width: 224px; background: var(--side); color: #cbd5e1; display: flex; flex-direction: column;
-          position: sticky; top: 0; height: 100vh; flex-shrink: 0; }
-  .logo { display: flex; gap: 10px; align-items: center; padding: 18px 16px; }
-  .logo .kk { background: var(--acc); color: #fff; font-weight: 800; border-radius: 10px;
-              width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; }
-  .logo b { color: #fff; font-size: 15px; display: block; }
-  .logo small { font-size: 10px; color: #94a3b8; letter-spacing: .1em; }
-  .nav { flex: 1; padding: 8px; overflow-y: auto; }
-  .nav div { padding: 11px 14px; border-radius: 10px; cursor: pointer; font-size: 13.5px;
-             font-weight: 600; margin-bottom: 2px; display: flex; gap: 10px; align-items: center; }
-  .nav div:hover { background: var(--side2); color: #fff; }
-  .nav div.on { background: linear-gradient(90deg, var(--acc), #fb923c); color: #fff; }
-  .dbchip { margin: 12px; padding: 8px 12px; background: var(--side2); border-radius: 8px;
-            font-size: 11px; color: #86efac; }
-  /* ---- main ---- */
-  .main { flex: 1; padding: 18px 24px; min-width: 0; max-width: 1280px; }
-  .tophead { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap;
-             background: #fff; border-radius: 14px; padding: 14px 18px;
-             box-shadow: 0 1px 3px rgba(16,24,40,.07); }
-  .tophead h1 { font-size: 20px; font-weight: 800; letter-spacing: -.01em; }
-  .tophead .sub { color: var(--mut); font-size: 12px; margin-top: 2px; }
-  .tophead .right { margin-left: auto; display: flex; gap: 8px; }
-  h2 { font-size: 15px; margin: 6px 0 10px; font-weight: 700; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px;
-           margin-bottom: 18px; }
-  .card { background: #fff; border-radius: 16px; padding: 16px; position: relative;
-          box-shadow: 0 1px 3px rgba(16,24,40,.07); }
-  .card .l { font-size: 10.5px; color: var(--mut); text-transform: uppercase; font-weight: 700;
-             letter-spacing: .06em; padding-right: 34px; }
-  .card .n { font-size: 25px; font-weight: 800; margin-top: 8px; letter-spacing: -.02em; }
-  .card .ic { position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; border-radius: 10px;
-              display: flex; align-items: center; justify-content: center; font-size: 15px;
-              background: #f2f4f7; }
-  .card.click { cursor: pointer; border: 2px solid transparent; transition: transform .08s; }
-  .card.click:hover { transform: translateY(-1px); }
-  .card.click.on { border-color: var(--acc); }
-  .good { color: var(--ok); } .bad { color: var(--bad); } .warncol { color: var(--warn); }
-  .tblwrap { background: #fff; border-radius: 14px; box-shadow: 0 1px 3px rgba(16,24,40,.07);
-             overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; background: #fff; font-size: 13px; }
-  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid #f0f2f5; vertical-align: middle; }
-  th { color: var(--mut); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
-       background: #fafbfc; }
-  tbody tr:hover { background: #fafbff; }
-  tbody tr:last-child td { border-bottom: 0; }
-  td.num, th.num { text-align: right; }
-  .avatar { width: 34px; height: 34px; border-radius: 50%; background: #eef2ff; color: #4338ca;
-            display: inline-flex; align-items: center; justify-content: center; font-weight: 700;
-            font-size: 13px; margin-right: 9px; flex-shrink: 0; }
-  .whocell { display: flex; align-items: center; }
-  .pill-search { position: relative; }
-  .pill-search input { border-radius: 999px; padding-left: 34px; }
-  .pill-search::before { content: '🔍'; position: absolute; left: 12px; top: 50%;
-                         transform: translateY(-50%); font-size: 12px; opacity: .6; }
-  .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
-  .RECEIVED { background:#eef4ff; color:#3538cd; } .IN_WASH { background:#e0f2fe; color:#026aa2; }
-  .IN_DRY { background:#fef0c7; color:#93370d; } .IN_IRON { background:#fce7f6; color:#9e165f; }
-  .READY { background:#d1fadf; color:#05603a; } .OUT_FOR_DELIVERY { background:#e9d7fe; color:#6941c6; }
-  .DELIVERED { background:#ecfdf3; color:#054f31; } .ON_HOLD { background:#fee4e2; color:#912018; }
-  .CANCELLED { background:#f2f4f7; color:#475467; }
-  .PAID { color:var(--ok); font-weight:600; } .PARTIAL { color:var(--warn); font-weight:600; }
-  .UNPAID { color:var(--bad); font-weight:600; }
-  button { border: 0; background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 9px;
-           cursor: pointer; font-size: 13px; font-weight: 600; }
-  button.ghost { background: #fff; color: var(--ink); border: 1px solid #d0d5dd; }
-  button.green { background: #059452; }
-  button.orange { background: var(--acc); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  .act { display: flex; gap: 4px; flex-wrap: wrap; }
-  .act button { font-size: 11px; padding: 4px 8px; }
-  input, select, textarea { padding: 9px 11px; border: 1px solid #d0d5dd; border-radius: 9px;
-                            font-size: 13px; width: 100%; font-family: inherit; background: #fff; }
-  label { font-size: 12px; color: #475467; font-weight: 700; display: block; margin: 10px 0 4px; }
-  .panel { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 1px 3px rgba(16,24,40,.08); }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
-  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 12px; }
-  .filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
-  .filters input, .filters select { width: auto; min-width: 150px; }
-  .t { color:#98a2b3; font-size:11px; }
-  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink);
-           color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; z-index: 30; }
-  #toast.err { background: var(--bad); }
-  .modal-bg { position: fixed; inset: 0; background: rgba(16,24,40,.55); display: none;
-              align-items: center; justify-content: center; padding: 16px; z-index: 20; }
-  .modal-bg.open { display: flex; }
-  .modal { background: #fff; border-radius: 14px; padding: 18px; width: 100%; max-width: 480px;
-           max-height: 90vh; overflow-y: auto; }
-  .modal h3 { font-size: 15px; margin-bottom: 6px; }
-  .modal .foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-  .hist { border-left: 2px solid #e4e7ec; margin: 8px 0 8px 6px; padding-left: 14px; }
-  .hist div { margin-bottom: 8px; font-size: 12px; }
-  .note { background: #fffaeb; border: 1px solid #fedf89; padding: 8px 10px; border-radius: 8px;
-          font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
-  .warn { font-size: 11px; color: var(--warn); margin-top: 4px; }
-  /* ---- new bill ---- */
-  .bill-wrap { display: grid; grid-template-columns: 1fr 320px; gap: 14px; align-items: start; }
-  .iline { display: grid; grid-template-columns: 1.2fr 1fr 64px 80px 84px 32px; gap: 6px; margin-bottom: 6px;
-           align-items: center; }
-  .iline.wline { grid-template-columns: 1.2fr 1fr 64px 80px 84px 32px; }
-  .iline .amt { font-weight: 700; text-align: right; font-size: 13px; }
-  .iline button { padding: 5px; background: #fee4e2; color: #912018; }
-  .sumrow { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; }
-  .sumrow.total { font-size: 17px; font-weight: 800; border-top: 2px solid #f0f2f5; padding-top: 10px;
-                  margin-top: 6px; color: var(--ok); }
-  /* ---- inbox ---- */
-  .inbox { display: flex; height: calc(100vh - 120px); min-height: 420px; background: #fff;
-           border-radius: 14px; box-shadow: 0 1px 3px rgba(16,24,40,.08); overflow: hidden; }
-  .threads { width: 290px; min-width: 230px; border-right: 1px solid #eaecf0; display: flex; flex-direction: column; }
-  .threads .head { padding: 10px; border-bottom: 1px solid #eaecf0; }
-  .threads .list { overflow-y: auto; flex: 1; }
-  .thread-item { padding: 10px 12px; border-bottom: 1px solid #f5f6f8; cursor: pointer; }
-  .thread-item:hover { background: #f9fafb; }
-  .thread-item.on { background: #fff7ed; }
-  .thread-item .nm { font-weight: 600; font-size: 13px; display: flex; justify-content: space-between; }
-  .thread-item .pv { font-size: 12px; color: var(--mut); white-space: nowrap; overflow: hidden;
-                     text-overflow: ellipsis; margin-top: 2px; }
-  .staff-chip { font-size: 10px; background: #fef0c7; color: #93370d; border-radius: 6px; padding: 1px 6px; margin-left: 4px; }
-  .chatpane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  .chat-head { padding: 10px 14px; border-bottom: 1px solid #eaecf0; display: flex; gap: 10px;
-               align-items: center; flex-wrap: wrap; }
-  .chat-head .nm { font-weight: 700; font-size: 14px; }
-  .win { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
-  .win.open { background: #d1fadf; color: var(--ok); }
-  .win.closed { background: #fee4e2; color: var(--bad); }
-  .ordchips { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
-  .ordchip { font-size: 11px; background: #f2f4f7; border-radius: 6px; padding: 3px 8px; }
-  .msgs { flex: 1; overflow-y: auto; padding: 14px; background: #eef1f5; display: flex;
-          flex-direction: column; gap: 6px; }
-  .bubble { max-width: 75%; padding: 8px 12px; border-radius: 12px; font-size: 13px;
-            white-space: pre-wrap; word-break: break-word; box-shadow: 0 1px 1px rgba(0,0,0,.06); }
-  .bubble .meta { font-size: 10px; color: #98a2b3; margin-top: 3px; text-align: right; }
-  .bin  { align-self: flex-start; background: #fff; border-top-left-radius: 4px; }
-  .bout { align-self: flex-end; background: #d9fdd3; border-top-right-radius: 4px; }
-  .bout.manager { background: #d3e9fd; }
-  .sending { opacity: .6; }
-  .composer { display: flex; gap: 6px; padding: 10px; border-top: 1px solid #eaecf0; align-items: flex-end; }
-  .composer textarea { resize: none; max-height: 90px; }
-  .composer .lock { flex: 1; font-size: 12px; color: var(--bad); background: #fee4e2;
-                    border-radius: 8px; padding: 10px; }
-  .icobtn { background: #fff; border: 1px solid #d0d5dd; color: var(--ink); font-size: 16px;
-            padding: 7px 10px; border-radius: 9px; }
-  .emoji-pop { position: absolute; bottom: 56px; left: 8px; background: #fff; border-radius: 12px;
-               box-shadow: 0 6px 24px rgba(16,24,40,.18); padding: 10px; display: none;
-               grid-template-columns: repeat(8, 34px); gap: 2px; z-index: 15; }
-  .emoji-pop.open { display: grid; }
-  .emoji-pop span { font-size: 20px; cursor: pointer; text-align: center; padding: 3px;
-                    border-radius: 6px; }
-  .emoji-pop span:hover { background: #f2f4f7; }
-  .chatpane { position: relative; }
-  .bubble img { max-width: 240px; max-height: 260px; border-radius: 8px; display: block;
-                margin-bottom: 4px; cursor: pointer; }
-  .drawer { position: fixed; top: 0; right: -340px; width: 330px; height: 100vh; background: #fff;
-            box-shadow: -4px 0 24px rgba(16,24,40,.15); z-index: 25; transition: right .2s;
-            padding: 18px; overflow-y: auto; }
-  .drawer.open { right: 0; }
-  .drawer .big-av { width: 74px; height: 74px; border-radius: 50%; background: #eef2ff; color: #4338ca;
-                    display: flex; align-items: center; justify-content: center; font-size: 26px;
-                    font-weight: 800; margin: 8px auto; }
-  .drawer h3 { text-align: center; }
-  .drawer .ph { text-align: center; color: var(--mut); font-size: 13px; margin-bottom: 12px; }
-  .drawer .stat { display: flex; justify-content: space-between; padding: 8px 0;
-                  border-bottom: 1px solid #f0f2f5; font-size: 13px; }
-  .drawer .actions { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
-  .chat-head { cursor: pointer; }
-  .backbtn { display: none; }
-  .empty { margin: auto; color: #98a2b3; font-size: 13px; text-align: center; }
-  .exp-wrap { display: grid; grid-template-columns: 380px 1fr; gap: 14px; align-items: start; }
-  @media (max-width: 860px) {
-    body { font-size: 13px; }
-    .shell { flex-direction: column; }
-    .side { width: 100%; height: auto; position: sticky; top: 0; z-index: 5;
-            flex-direction: column; }
-    .logo { padding: 8px 12px; }
-    .logo .kk { width: 30px; height: 30px; font-size: 12px; }
-    .dbchip { display: none; }
-    .nav { display: flex; padding: 4px 8px 8px; overflow-x: auto; gap: 4px;
-           -webkit-overflow-scrolling: touch; }
-    .nav div { white-space: nowrap; padding: 8px 12px; font-size: 12.5px; flex-shrink: 0; }
-    .main { padding: 12px; }
-    .tophead { padding: 10px 12px; margin-bottom: 12px; }
-    .tophead h1 { font-size: 17px; }
-    .tophead .right button { padding: 7px 10px; font-size: 12px; }
-    .cards { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
-    .card { padding: 12px; border-radius: 12px; }
-    .card .n { font-size: 20px; }
-    .card .ic { width: 26px; height: 26px; font-size: 12px; top: 10px; right: 10px; }
-    th, td { padding: 9px 8px; }
-    /* tables scroll sideways inside their panel instead of squishing —
-       every column keeps a readable width */
-    html, body { overflow-x: hidden; }
-    .tblwrap table { min-width: 780px; }
-    .tblwrap th, .tblwrap td { white-space: nowrap; }
-    .itemscell { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
-    /* bigger tap targets; keep the action strip on ONE row (the table
-       scrolls sideways anyway — wrapping made rows tall) */
-    .act { flex-wrap: nowrap; }
-    .act button { font-size: 12px; padding: 7px 10px; }
-    .bill-wrap, .grid2, .grid3, .exp-wrap { grid-template-columns: 1fr; }
-    /* item lines scroll sideways instead of squishing */
-    #piece-items, #weight-items { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .iline { min-width: 540px; }
-    /* inbox: one pane at a time + keyboard-safe height */
-    .inbox { height: calc(100dvh - 190px); min-height: 340px; }
-    .inbox.chat-open .threads { display: none; }
-    .inbox:not(.chat-open) .chatpane { display: none; }
-    .threads { width: 100%; }
-    .backbtn { display: inline-block; }
-    .bubble { max-width: 88%; }
-    .ordchips { display: none; }  /* order chips crowd the chat header on phone */
-    .modal { padding: 14px; border-radius: 12px; }
-    .filters input, .filters select { min-width: 0; flex: 1; }
-  }
-  @supports (height: 100dvh) { .side { height: auto; } }
-</style>
+<link rel="stylesheet" href="/admin/static/app.css">
 </head>
 <body>
 <div class="shell">
-  <div class="side">
-    <div class="logo"><div class="kk">KK</div>
-      <div><b>KWIK KLIN</b><small>LAUNDRY PRO</small></div></div>
-    <div class="nav" id="nav">
-      <div data-s="home" class="on" onclick="go('home')">📊 Dashboard</div>
+
+  <!-- ======== sidebar ======== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="logo">
+      <div class="logo-badge">KK</div>
+      <div><h1>Kwik Klin</h1><small>LAUNDRY PRO</small></div>
+    </div>
+    <nav class="nav">
+      <div data-s="dashboard" onclick="go('dashboard')">📊 Dashboard</div>
       <div data-s="inbox" onclick="go('inbox')">💬 Inbox</div>
-      <div data-s="newbill" onclick="go('newbill')">➕ New Bill</div>
-      <div data-s="bills" onclick="go('bills')">🧾 Bill History</div>
+      <div data-s="newbill" onclick="go('newbill')">➕ New bill</div>
+      <div data-s="bills" onclick="go('bills')">🧾 Bill history</div>
       <div data-s="customers" onclick="go('customers')">👥 Customers</div>
       <div data-s="expenses" onclick="go('expenses')">💸 Expenses</div>
       <div data-s="reports" onclick="go('reports')">📈 Reports</div>
+      <div class="navsec">GROWTH</div>
+      <div data-s="campaigns" onclick="go('campaigns')">📣 Campaigns</div>
+      <div class="navsec">AGENT</div>
+      <div data-s="training" onclick="go('training')">🎓 AI training</div>
+      <div data-s="activity" onclick="go('activity')">🛰 Activity</div>
+      <div class="navsec">SYSTEM</div>
       <div data-s="settings" onclick="go('settings')">⚙️ Settings</div>
-    </div>
-    <div class="dbchip">🟢 Postgres DB · WhatsApp bot active</div>
-  </div>
+    </nav>
+    <div class="sysline"><span class="dot"></span>Postgres · WhatsApp bot active</div>
+  </aside>
 
-  <div class="main">
-    <div class="tophead">
-      <div><h1 id="head-title">Dashboard</h1>
-      <div class="sub" id="head-sub">Aaj ka haal ek nazar mein</div></div>
-      <div class="right"><button class="ghost" onclick="refreshAll()">↻ Refresh</button>
-        <button class="orange" onclick="go('newbill')">+ New Bill</button></div>
-    </div>
-
-    <!-- HOME -->
-    <div id="s-home">
-      <div class="cards" id="home-cards"></div>
-      <h2>Chalu Orders</h2>
-      <div class="cards" id="cards"></div>
-      <div class="tblwrap"><table>
-        <thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Status</th><th>Payment</th><th>Delivery</th><th>Action</th></tr></thead>
-        <tbody id="orders-body"></tbody>
-      </table></div>
+  <!-- ======== main ======== -->
+  <main class="main">
+    <div class="topbar">
+      <span class="burger" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</span>
+      <h2 id="mob-title">Dashboard</h2>
     </div>
 
-    <!-- INBOX -->
-    <div id="s-inbox" style="display:none">
-      <div class="inbox" id="inbox-wrap">
+    <!-- Dashboard -->
+    <section id="sec-dashboard">
+      <div class="pagehead"><div><h2>Dashboard</h2><p>Today at a glance</p></div>
+        <div class="actions"><button class="btn" onclick="go('newbill')">➕ New bill</button></div></div>
+      <div class="grid kpis" id="kpis"></div>
+      <div class="chips" id="dash-chips"></div>
+      <div class="filters">
+        <input placeholder="Search name, phone or order…" oninput="dashFilter.q=this.value;dashFilter.page=1;renderOrders()">
+        <select onchange="dashFilter.pay=this.value;dashFilter.page=1;renderOrders()">
+          <option value="">All payments</option><option value="PAID">Paid</option>
+          <option value="PARTIAL">Partial</option><option value="UNPAID">Unpaid</option>
+        </select>
+        <button class="btn ghost sm" onclick="loadDashboard()">↻ Refresh</button>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden"><div id="dash-orders"></div></div>
+      <div class="pager" id="dash-pager"></div>
+    </section>
+
+    <!-- Inbox -->
+    <section id="sec-inbox" style="display:none">
+      <div class="pagehead"><div><h2>Inbox</h2><p>WhatsApp — see and reply yourself</p></div>
+        <div class="actions"><button class="btn ghost" onclick="loadThreads()">↻ Refresh</button></div></div>
+      <div class="inboxwrap">
         <div class="threads">
-          <div class="head"><div class="pill-search"><input placeholder="naam ya number..." id="th-search" oninput="renderThreads()"></div></div>
-          <div class="list" id="th-list"></div>
+          <div style="padding:10px"><input id="th-search" placeholder="Search…" oninput="renderThreads()"></div>
+          <div id="th-list"></div>
         </div>
         <div class="chatpane">
-          <div class="chat-head" id="chat-head"><span class="t">Bayen se kisi ko chuno…</span></div>
-          <div class="msgs" id="msgs"><div class="empty">💬<br>Chat yahan dikhegi</div></div>
-          <div class="emoji-pop" id="emoji-pop"></div>
-          <div class="composer" id="composer" style="display:none">
-            <button class="ghost backbtn" onclick="closeThread()">←</button>
-            <button class="icobtn" id="emoji-btn" onclick="toggleEmoji()" title="Emoji">😊</button>
-            <button class="icobtn" id="attach-btn" onclick="document.getElementById('file-in').click()" title="Photo bhejo">📎</button>
-            <input type="file" id="file-in" accept="image/*" style="display:none" onchange="sendMedia(this)">
-            <textarea id="msg-in" rows="1" placeholder="Message likho… (Enter = bhejo)"
-                      oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,90)+'px'"
-                      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
-            <button class="green" id="send-btn" onclick="sendMsg()">➤</button>
+          <div class="chathead" id="chat-head"><span class="muted">Pick a conversation on the left…</span></div>
+          <div class="chatlog" id="chat-log"></div>
+          <div class="composer" style="position:relative">
+            <div class="emojis" id="emoji-pal"></div>
+            <button class="btn ghost sm" onclick="toggleEmojis()">😊</button>
+            <label class="btn ghost sm" style="cursor:pointer">📎<input type="file" accept="image/*" style="display:none" onchange="sendMedia(this)"></label>
+            <input type="text" id="chat-input" placeholder="Type a message… (Enter to send)" onkeydown="if(event.key==='Enter')sendChat()">
+            <button class="btn" onclick="sendChat()">Send</button>
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- NEW BILL -->
-    <div id="s-newbill" style="display:none">
-      <div class="bill-wrap">
-        <div class="panel">
-          <h2>👤 Customer</h2>
-          <div class="grid2">
-            <div><label>Mobile number *</label><input id="f-phone" placeholder="98765 43210" onblur="prefillCustomer()"></div>
-            <div><label>Naam</label><input id="f-name" placeholder="Customer ka naam"></div>
+    <!-- New bill -->
+    <section id="sec-newbill" style="display:none">
+      <div class="pagehead"><div><h2>New bill</h2><p>Fast entry at the counter — Enter moves you along</p></div></div>
+      <div class="billgrid">
+        <div class="card">
+          <b>👤 Customer</b>
+          <div class="split2" style="margin-top:8px">
+            <div class="autocomplete">
+              <label>Mobile number *</label>
+              <input id="nb-phone" placeholder="98765 43210" oninput="custAc()" autocomplete="off">
+              <div class="acp" id="nb-ac"></div>
+            </div>
+            <div><label>Name</label><input id="nb-name" placeholder="Customer name"></div>
           </div>
-          <div class="grid3">
-            <div><label>Pickup date</label><input id="f-pickup" type="date"></div>
-            <div><label>Delivery date</label><input id="f-delivery" type="date"></div>
-            <div><label>Internal note 🔒</label><input id="f-notes" placeholder="sirf aapke liye"></div>
+          <hr class="hr"><b>🧺 Items</b>
+          <div id="nb-lines" style="margin-top:8px"></div>
+          <button class="btn ghost sm" onclick="addLine()">+ Add item</button>
+          <hr class="hr">
+          <div class="split2">
+            <div><label>Delivery date</label><input id="nb-date" type="date"></div>
+            <div><label>Notes (e.g. stain on collar)</label><input id="nb-notes" placeholder="Internal + staff instruction"></div>
           </div>
-          <h2 style="margin-top:16px">🧺 Items</h2>
-          <div class="t" style="margin-bottom:6px">Service · kapda · qty · rate → amount</div>
-          <div id="piece-items"></div>
-          <button class="ghost" style="font-size:12px" onclick="addPiece()">+ Piece item</button>
-          <div class="t" style="margin:10px 0 6px">Weight-based (per kg): service · — · kg · rate/kg → amount</div>
-          <div id="weight-items"></div>
-          <button class="ghost" style="font-size:12px" onclick="addWeight()">+ Weight service</button>
         </div>
-        <div class="panel">
-          <h2>₹ Summary</h2>
-          <div class="sumrow"><span>Subtotal</span><b id="sum-sub">₹0</b></div>
-          <div class="sumrow"><span>Discount (₹)</span>
-            <input id="f-discount" type="number" min="0" value="" style="width:90px" oninput="calc()"></div>
-          <div class="sumrow"><span><label style="display:inline;font-weight:600">
-            <input type="checkbox" id="f-gst" style="width:auto" onchange="calc()"> GST 18%</label></span>
-            <b id="sum-gst">₹0</b></div>
-          <div class="sumrow total"><span>Bill Total</span><span id="sum-total">₹0</span></div>
-          <div class="sumrow"><span>Advance liya (₹)</span>
-            <input id="f-advance" type="number" min="0" value="" style="width:90px" oninput="calc()"></div>
-          <div class="sumrow"><span>Advance kaise</span>
-            <select id="f-advmethod" style="width:110px"><option value="CASH">Cash</option>
-              <option value="UPI">UPI</option><option value="OTHER">Aur</option></select></div>
-          <div class="sumrow"><span>Baaki (Due)</span><b class="bad" id="sum-due">₹0</b></div>
-          <button class="green" style="width:100%;margin-top:12px;padding:12px" onclick="createOrder()">
-            ✓ Bill banao (customer ko WhatsApp jayega)</button>
+        <div class="card">
+          <b>💰 Totals</b>
+          <div class="sumrow" style="margin-top:8px"><span>Subtotal</span><span class="money" id="nb-sub">₹0</span></div>
+          <div class="sumrow"><span>Discount (₹)</span><span style="max-width:110px"><input id="nb-disc" type="number" min="0" oninput="calcBill()"></span></div>
+          <div class="sumrow"><span><label style="display:inline"><input type="checkbox" id="nb-gst" onchange="calcBill()" style="width:auto"> GST 18%</label></span><span class="money" id="nb-gstamt">₹0</span></div>
+          <div class="sumrow"><span>Coupon code</span><span style="max-width:130px"><input id="nb-coupon" placeholder="e.g. OFF10"></span></div>
+          <div class="sumrow total"><span>Total</span><span id="nb-total">₹0</span></div>
+          <div class="sumrow"><span>Advance (₹)</span><span style="max-width:110px"><input id="nb-adv" type="number" min="0" oninput="calcBill()"></span></div>
+          <div class="sumrow"><span>Advance mode</span><span style="max-width:110px"><select id="nb-advmode"><option value="CASH">Cash</option><option value="UPI">UPI</option></select></span></div>
+          <div class="sumrow"><span>Due</span><span class="money" id="nb-due">₹0</span></div>
+          <button class="btn" style="width:100%;margin-top:10px" onclick="saveBill(this)">💾 Save bill</button>
+          <p class="muted" style="margin-top:8px">Saving notifies the customer on WhatsApp and sends the work order to staff.</p>
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- BILLS -->
-    <div id="s-bills" style="display:none">
+    <!-- Bill history -->
+    <section id="sec-bills" style="display:none">
+      <div class="pagehead"><div><h2>Bill history</h2><p>Every order, filterable</p></div>
+        <div class="actions"><button class="btn ghost" onclick="billsCsv()">⬇ CSV</button></div></div>
       <div class="filters">
-        <div class="pill-search"><input id="b-search" placeholder="order no / naam / phone..." oninput="renderBills()"></div>
-        <select id="b-pay" onchange="renderBills()">
-          <option value="">Sab payments</option><option value="DUE">Baaki wale</option>
-          <option value="PAID">Paid</option><option value="PARTIAL">Partial</option>
-          <option value="UNPAID">Unpaid</option></select>
-        <select id="b-status" onchange="renderBills()">
-          <option value="">Sab status</option><option>RECEIVED</option><option>IN_WASH</option>
-          <option>IN_DRY</option><option>IN_IRON</option><option>READY</option>
-          <option>OUT_FOR_DELIVERY</option><option>DELIVERED</option><option>ON_HOLD</option>
-          <option>CANCELLED</option></select>
+        <input placeholder="Search…" oninput="billFilter.q=this.value;billFilter.page=1;renderBills()">
+        <select onchange="billFilter.status=this.value;billFilter.page=1;renderBills()">
+          <option value="">All statuses</option>
+          <option value="RECEIVED">New</option><option value="IN_WASH">Washing</option>
+          <option value="IN_IRON">Ironing</option><option value="READY">Ready</option>
+          <option value="OUT_FOR_DELIVERY">Out for delivery</option>
+          <option value="DELIVERED">Delivered</option><option value="CANCELLED">Cancelled</option>
+        </select>
+        <select onchange="billFilter.pay=this.value;billFilter.page=1;renderBills()">
+          <option value="">All payments</option><option value="PAID">Paid</option>
+          <option value="PARTIAL">Partial</option><option value="UNPAID">Unpaid</option>
+        </select>
+        <input type="date" onchange="billFilter.from=this.value;renderBills()" title="From date">
+        <input type="date" onchange="billFilter.to=this.value;renderBills()" title="To date">
       </div>
-      <div class="tblwrap"><table>
-        <thead><tr><th>Invoice</th><th>Customer</th><th>Dates</th><th>Items</th><th>Total / Due</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody id="bills-body"></tbody>
-      </table></div>
-    </div>
+      <div class="card" style="padding:0;overflow:hidden"><div id="bills-list"></div></div>
+      <div class="pager" id="bills-pager"></div>
+    </section>
 
-    <!-- CUSTOMERS -->
-    <div id="s-customers" style="display:none">
-      <div class="filters"><div class="pill-search"><input id="cust-search" placeholder="naam ya number..." oninput="renderCustomers()"></div></div>
-      <div class="tblwrap"><table>
-        <thead><tr><th>Customer</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Aakhri msg</th><th>Actions</th></tr></thead>
-        <tbody id="cust-body"></tbody>
-      </table></div>
-    </div>
+    <!-- Customers -->
+    <section id="sec-customers" style="display:none">
+      <div class="pagehead"><div><h2>Customers</h2><p>Ledger — sorted by highest outstanding first</p></div></div>
+      <div class="filters"><input id="cust-search" placeholder="Search name or number…" oninput="renderCustomers()"></div>
+      <div class="card" style="padding:0;overflow:hidden"><div id="cust-list"></div></div>
+    </section>
 
-    <!-- EXPENSES -->
-    <div id="s-expenses" style="display:none">
-      <div class="cards" id="exp-cards"></div>
-      <div class="exp-wrap">
-        <div class="panel">
-          <h2>Kharcha likho</h2>
-          <label>Category</label>
-          <select id="e-cat"><option>Detergent</option><option>Staff salary</option>
-            <option>Bijli</option><option>Kiraya</option><option>Delivery/Petrol</option>
-            <option>Machine repair</option><option>Aur kuch</option></select>
-          <div class="grid2">
-            <div><label>Date</label><input id="e-date" type="date"></div>
-            <div><label>Amount (₹)</label><input id="e-amt" type="number" min="1"></div>
-          </div>
-          <label>Detail</label><input id="e-desc" placeholder="optional">
-          <button class="green" style="width:100%;margin-top:12px" onclick="addExpense()">+ Save karcha</button>
-        </div>
-        <div class="panel" style="grid-column:span 1">
-          <h2>Kharcha log</h2>
-          <div class="tblwrap"><table>
-            <thead><tr><th>Date</th><th>Category</th><th>Detail</th><th>₹</th><th></th></tr></thead>
-            <tbody id="exp-body"></tbody>
-          </table></div>
+    <!-- Expenses -->
+    <section id="sec-expenses" style="display:none">
+      <div class="pagehead"><div><h2>Expenses</h2><p>Daily spend and categories</p></div></div>
+      <div class="grid kpis" id="exp-kpis"></div>
+      <div class="card" style="margin-bottom:14px">
+        <b>Add expense</b>
+        <div class="filters" style="margin-top:8px">
+          <select id="exp-cat"></select>
+          <input id="exp-amt" type="number" min="1" placeholder="Amount (₹)">
+          <input id="exp-date" type="date">
+          <input id="exp-desc" placeholder="Description (optional)" style="flex:1">
+          <button class="btn" onclick="saveExpense(this)">Save expense</button>
         </div>
       </div>
-    </div>
+      <div class="split2">
+        <div class="card"><b>Category breakdown</b><div id="exp-chart" style="margin-top:10px"></div></div>
+        <div class="card" style="padding:0;overflow:hidden"><div id="exp-list"></div></div>
+      </div>
+    </section>
 
-    <!-- REPORTS -->
-    <div id="s-reports" style="display:none">
-      <div class="cards" id="rep-cards"></div>
-      <div class="panel">
-        <h2>📤 Excel / CSV Export</h2>
-        <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="ghost" onclick="dlCsv('/admin/api/export/orders.csv','orders.csv')">🧾 Orders → CSV</button>
-          <button class="ghost" onclick="dlCsv('/admin/api/export/customers.csv','customers.csv')">👥 Customers → CSV</button>
-        </div>
-        <div class="t" style="margin-top:10px">Data Postgres mein surakshit hai — browser-backup wali tension khatam.
-        Rozana ka asli backup Phase 6 (deploy) mein automatic hoga.</div>
-      </div>
-    </div>
-    <!-- SETTINGS -->
-    <div id="s-settings" style="display:none">
-      <div class="exp-wrap">
-        <div class="panel">
-          <h2>👷 Staff</h2>
-          <div class="tblwrap" style="box-shadow:none"><table>
-            <thead><tr><th>Naam</th><th>Phone</th><th>Role</th><th>Active</th></tr></thead>
-            <tbody id="staff-body"></tbody>
-          </table></div>
-          <h2 style="margin-top:14px">+ Naya staff</h2>
-          <div class="grid2">
-            <div><label>Naam</label><input id="st-name" placeholder="naam"></div>
-            <div><label>WhatsApp number</label><input id="st-phone" placeholder="98765 43210"></div>
+    <!-- Reports -->
+    <section id="sec-reports" style="display:none">
+      <div class="pagehead"><div><h2>Reports</h2><p>Revenue, expenses and profit — real numbers only</p></div>
+        <div class="actions"><button class="btn ghost" onclick="loadReports()">↻ Refresh</button></div></div>
+      <div id="rep-body"></div>
+    </section>
+
+    <!-- Campaigns -->
+    <section id="sec-campaigns" style="display:none">
+      <div class="pagehead"><div><h2>Campaigns</h2><p>Segments recompute nightly · STOP and quiet hours enforced automatically</p></div></div>
+      <div class="grid kpis" id="seg-cards"></div>
+      <div class="split2">
+        <div class="card">
+          <b>New campaign</b>
+          <div class="frm" style="margin-top:8px">
+            <div><label>Name</label><input id="camp-name" placeholder="diwali-offer"></div>
+            <div><label>Audience segment</label><select id="camp-seg"></select></div>
+            <div><label>Message — use {name} for the customer's name</label>
+              <textarea id="camp-msg" rows="3" placeholder="Namaste {name}! …"></textarea></div>
+            <div><label>Coupon code (optional)</label><input id="camp-coupon" placeholder="OFF10"></div>
+            <button class="btn" onclick="createCampaign(this)">Save as draft</button>
           </div>
-          <label>Role</label>
-          <select id="st-role"><option value="WASHER">Washer (dhulai/istri ka kaam)</option>
-            <option value="DELIVERY">Delivery (pickup/drop)</option></select>
-          <button class="green" style="width:100%;margin-top:10px" onclick="addStaff()">+ Staff jodo</button>
-        </div>
-        <div class="panel">
-          <h2>💰 Rate Card <span class="t">(New Bill isse rate uthata hai — kabhi bhi badlo)</span></h2>
-          <div class="tblwrap" style="box-shadow:none"><table>
-            <thead><tr><th>Service</th><th>Kapda</th><th class="num">Rate</th><th>Unit</th><th>Active</th><th></th></tr></thead>
-            <tbody id="rates-body"></tbody>
-          </table></div>
-          <h2 style="margin-top:14px">+ Naya rate</h2>
-          <div class="grid3">
-            <div><label>Service</label><input id="r-serv" list="serv-list" placeholder="Dry Clean">
-              <datalist id="serv-list"></datalist></div>
-            <div><label>Kapda <span class="t">(kg service = khali)</span></label>
-              <input id="r-garm" placeholder="Shirt"></div>
-            <div><label>Rate (₹)</label><input id="r-rate" type="number" min="1"></div>
+          <hr class="hr">
+          <b>Coupons</b>
+          <div class="frm" style="margin-top:8px">
+            <div class="split2">
+              <div><label>Code</label><input id="cp-code" placeholder="OFF10"></div>
+              <div><label>Type</label><select id="cp-type"><option value="percent">% off</option><option value="flat">₹ flat off</option></select></div>
+            </div>
+            <div class="split2">
+              <div><label>Value</label><input id="cp-val" type="number" min="1"></div>
+              <div><label>Min order ₹ (optional)</label><input id="cp-min" type="number" min="0"></div>
+            </div>
+            <div><label>Valid until (optional)</label><input id="cp-until" type="date"></div>
+            <button class="btn ghost" onclick="createCoupon(this)">Create coupon</button>
           </div>
-          <label>Unit</label>
-          <select id="r-unit"><option value="pc">Per piece</option><option value="kg">Per kg</option></select>
-          <button class="green" style="width:100%;margin-top:10px" onclick="addRate()">+ Rate jodo</button>
+          <div id="coupon-list" style="margin-top:10px"></div>
+        </div>
+        <div><div id="camp-list"></div></div>
+      </div>
+    </section>
+
+    <!-- AI training -->
+    <section id="sec-training" style="display:none">
+      <div class="pagehead"><div><h2>AI training</h2><p>Everything here goes live immediately — no restart</p></div></div>
+      <div class="card" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <b>🤖 Agent master switch</b>
+          <label style="display:flex;align-items:center;gap:8px;margin:0"><input type="checkbox" id="agent-toggle" style="width:auto"> Agent replies to customers</label>
+        </div>
+        <div class="split2" style="margin-top:10px">
+          <div><label>Extra instructions — customer replies</label>
+            <textarea id="tr-cust-inst" rows="3" placeholder="e.g. Always mention we pick up and deliver free within 3 km."></textarea></div>
+          <div><label>Extra instructions — staff/owner commands</label>
+            <textarea id="tr-staff-inst" rows="3" placeholder="e.g. Always confirm the delivery date when creating bills."></textarea></div>
+        </div>
+        <p class="muted" style="margin-top:6px">🔒 Locked rules always win: no invented prices, no other customer's data, no unapproved discounts, no promises the database doesn't support.</p>
+        <button class="btn" style="margin-top:8px" onclick="saveAgentSettings(this)">Save</button>
+      </div>
+      <div class="card" style="margin-bottom:14px">
+        <b>🙋 Teach me — questions the agent could not answer (<span id="teach-count">0</span>)</b>
+        <div id="teach-list" style="margin-top:10px"></div>
+      </div>
+      <div class="split2">
+        <div class="card">
+          <b>📚 Knowledge (FAQ)</b>
+          <div class="frm" style="margin-top:8px">
+            <input id="faq-q" placeholder="Question — e.g. What are your timings?">
+            <textarea id="faq-a" rows="2" placeholder="Answer — e.g. 9am to 9pm, all days"></textarea>
+            <div class="filters"><select id="faq-aud"><option value="customer">For customers</option><option value="staff">For staff</option><option value="all">Everyone</option></select>
+            <button class="btn sm" onclick="addFaq(this)">Add</button></div>
+          </div>
+          <div id="faq-list" style="margin-top:8px"></div>
+        </div>
+        <div class="card">
+          <b>✏️ Corrections — “when asked X, reply like Y”</b>
+          <div class="frm" style="margin-top:8px">
+            <input id="corr-q" placeholder="When a customer asks…">
+            <textarea id="corr-a" rows="2" placeholder="The reply should be…"></textarea>
+            <button class="btn sm" onclick="addCorr(this)">Add</button>
+          </div>
+          <div id="corr-list" style="margin-top:8px"></div>
         </div>
       </div>
-    </div>
-  </div>
+    </section>
+
+    <!-- Activity -->
+    <section id="sec-activity" style="display:none">
+      <div class="pagehead"><div><h2>Activity</h2><p>Every message, tool call and escalation — what the agent did, and why</p></div>
+        <div class="actions">
+          <select id="act-role" onchange="loadActivity()">
+            <option value="">All roles</option><option value="admin">Admin</option>
+            <option value="staff">Staff</option><option value="customer">Customer</option>
+            <option value="system">System</option>
+          </select>
+          <button class="btn ghost" onclick="loadActivity()">↻ Refresh</button>
+        </div></div>
+      <div class="card"><div id="act-list"></div></div>
+    </section>
+
+    <!-- Settings -->
+    <section id="sec-settings" style="display:none">
+      <div class="pagehead"><div><h2>Settings</h2><p>Rates, staff, shop and agent behaviour</p></div></div>
+      <div class="card" style="margin-bottom:14px">
+        <b>🏪 Operations</b>
+        <div class="filters" style="margin-top:8px">
+          <div><label>Standup hour (IST)</label><input id="set-standup" type="number" min="6" max="20" style="width:90px"></div>
+          <div><label>Turnaround (days)</label><input id="set-turnaround" type="number" min="0" max="14" style="width:90px"></div>
+          <div><label>Default washer</label><select id="set-washer" style="min-width:140px"></select></div>
+          <div><label>Marketing msgs / customer / month</label><input id="set-freqcap" type="number" min="0" max="10" style="width:90px"></div>
+          <div><label>Monthly marketing budget (msgs)</label><input id="set-budget" type="number" min="0" style="width:110px"></div>
+          <div><label>Marketing autonomy</label><select id="set-autonomy" style="min-width:130px">
+            <option value="suggest">Suggest only (I approve)</option>
+            <option value="off">Off</option>
+          </select></div>
+        </div>
+        <div class="act" style="margin-top:10px">
+          <button class="btn" onclick="saveOps(this)">Save settings</button>
+          <button class="btn ghost" onclick="testStandup(this)">▶ Send standup now</button>
+        </div>
+      </div>
+      <div class="split2">
+        <div class="card">
+          <b>💲 Rate card — new bills use these rates, never old ones</b>
+          <div class="filters" style="margin-top:8px">
+            <input id="rt-svc" placeholder="Service (e.g. Dry Clean)" style="min-width:120px">
+            <input id="rt-item" placeholder="Item (e.g. Kurta)" style="min-width:110px">
+            <select id="rt-unit" style="min-width:70px"><option value="pc">pc</option><option value="kg">kg</option></select>
+            <input id="rt-rate" type="number" placeholder="₹" style="width:80px">
+            <button class="btn sm" onclick="addRate(this)">Add</button>
+          </div>
+          <div id="rates-list" style="margin-top:8px"></div>
+        </div>
+        <div class="card">
+          <b>🧑‍🔧 Staff</b>
+          <div class="filters" style="margin-top:8px">
+            <input id="sf-name" placeholder="Name" style="min-width:110px">
+            <input id="sf-phone" placeholder="10-digit phone" style="min-width:120px">
+            <select id="sf-role"><option value="WASHER">Washer (washing & ironing)</option><option value="DELIVERY">Delivery</option></select>
+            <button class="btn sm" onclick="addStaff(this)">Add staff</button>
+          </div>
+          <div id="staff-list" style="margin-top:10px"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
 </div>
 
-<div class="modal-bg" id="modal-bg" onclick="if(event.target===this)closeModal()">
-  <div class="modal" id="modal"></div>
+<!-- bottom tab bar (mobile) -->
+<div class="tabbar">
+  <div data-s="dashboard" onclick="go('dashboard')"><span class="ti">📊</span>Home</div>
+  <div data-s="newbill" onclick="go('newbill')"><span class="ti">➕</span>New bill</div>
+  <div data-s="inbox" onclick="go('inbox')"><span class="ti">💬</span>Inbox</div>
+  <div data-s="bills" onclick="go('bills')"><span class="ti">🧾</span>Bills</div>
+  <div data-s="campaigns" onclick="go('campaigns')"><span class="ti">📣</span>Growth</div>
 </div>
-<div class="drawer" id="drawer"></div>
-<div id="toast"></div>
 
-<script>
-const LABEL = {RECEIVED:'Naya', IN_WASH:'Dhulai', IN_DRY:'Sukh raha', IN_IRON:'Istri',
-               READY:'Taiyar', OUT_FOR_DELIVERY:'Delivery pe', DELIVERED:'Ho gaya',
-               ON_HOLD:'Ruka', CANCELLED:'Cancel'};
-const NEXT = {RECEIVED:['IN_WASH','READY','ON_HOLD','CANCELLED'],
-              IN_WASH:['IN_DRY','IN_IRON','READY','ON_HOLD','CANCELLED'],
-              IN_DRY:['IN_IRON','READY','ON_HOLD','CANCELLED'],
-              IN_IRON:['READY','ON_HOLD','CANCELLED'],
-              READY:['OUT_FOR_DELIVERY','ON_HOLD','CANCELLED'],
-              OUT_FOR_DELIVERY:['DELIVERED','ON_HOLD','CANCELLED'],
-              ON_HOLD:['RECEIVED','IN_WASH','IN_DRY','IN_IRON','READY','OUT_FOR_DELIVERY','CANCELLED']};
-const TITLES = {home:['Dashboard','Aaj ka haal ek nazar mein'], inbox:['Inbox','WhatsApp — dekho aur khud jawaab do'],
-  newbill:['New Bill','30 second mein bill + customer ko WhatsApp'], bills:['Bill History','Sab bills, dues, status'],
-  customers:['Customers','Ledger — kitna business, kitna baaki'], expenses:['Expenses','Roz ka kharcha'],
-  reports:['Reports','Kamai, kharcha, munafa'], settings:['Settings','Rate card, kapde, staff']};
-let DATA=null, CUSTOMERS=[], THREADS=[], BILLS=[], SUMMARY=null, EXPENSES=[], RATES=[],
-    FILTER=null, OPEN_PHONE=null, SECTION='home';
+<!-- overlays -->
+<div class="overlay" id="modal-ov" onclick="if(event.target===this)closeModal()"><div class="modal" id="modal-body"></div></div>
+<div class="drawer" id="drawer"><div style="text-align:right"><button class="btn ghost sm" onclick="closeDrawer()">✕ Close</button></div><div id="drawer-body"></div></div>
+<div id="toasts"></div>
+<pre id="receipt"></pre>
 
-// ?key=... in the URL stores the admin key (phone/LAN access without typing);
-// it is stripped from the address bar immediately.
-(function(){const u=new URLSearchParams(location.search).get('key');
-  if(u){localStorage.setItem('kk_admin_key',u);
-        history.replaceState({},'',location.pathname+location.hash);}})();
-function getKey(force){let k=localStorage.getItem('kk_admin_key');
-  if(!k||force){k=prompt('Admin API key daalo (.env ke ADMIN_API_KEY se):')||'';localStorage.setItem('kk_admin_key',k);}return k;}
-async function api(path,opts={}){opts.headers=Object.assign({'X-API-Key':getKey(false),'Content-Type':'application/json'},opts.headers||{});
-  const r=await fetch(path,opts);
-  if(r.status===401){getKey(true);throw new Error('key galat thi — dobara try karo');}
-  const b=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(b.detail||('HTTP '+r.status));return b;}
-function toast(m,e){const t=document.getElementById('toast');t.textContent=m;t.className=e?'err':'';
-  t.style.display='block';setTimeout(()=>t.style.display='none',3500);}
-function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML;}
-function rs(n){return '₹'+(+n||0).toLocaleString('en-IN');}
-function fmtDate(x){if(!x)return '—';
-  return new Date(x).toLocaleDateString('en-IN',{day:'2-digit',month:'short'});}
-function avatar(name){const i=(name||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
-  const hues=['#eef2ff;color:#4338ca','#ecfdf3;color:#05603a','#fff7ed;color:#c2410c','#fdf2fa;color:#9e165f'];
-  const h=hues[(name||'').length%hues.length].split(';color:');
-  return `<span class="avatar" style="background:${h[0]};color:${h[1]}">${esc(i)||'?'}</span>`;}
-function fmtWhen(x){const d=new Date(x);
-  return d.toDateString()===new Date().toDateString()
-    ? d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})
-    : fmtDate(x);}
-function go(name){SECTION=name;
-  for(const el of document.querySelectorAll('.nav div'))el.classList.toggle('on',el.dataset.s===name);
-  for(const s of ['home','inbox','newbill','bills','customers','expenses','reports','settings'])
-    document.getElementById('s-'+s).style.display=s===name?'':'none';
-  document.getElementById('head-title').textContent=TITLES[name][0];
-  document.getElementById('head-sub').textContent=TITLES[name][1];
-  ({home:loadHome,inbox:loadThreads,bills:loadBills,customers:loadCustomers,
-    expenses:loadExpenses,reports:loadReports,settings:loadSettings}[name]||(()=>{}))();
-}
-async function refreshAll(){go(SECTION);toast('Refresh ho gaya ✓');}
-
-/* ---------- HOME ---------- */
-async function loadHome(){
-  try{
-    [DATA,SUMMARY]=await Promise.all([api('/admin/api/dashboard'),api('/admin/api/reports/summary')]);
-    const hc=[
-      ['Aaj ke naye',DATA.counts.today_new,'','🧺','#eef4ff'],
-      ['Aaj ka collection',rs(SUMMARY.today.revenue),'good','💰','#ecfdf3'],
-      ['Month orders',SUMMARY.month.orders,'','📦','#f5f3ff'],
-      ['Month revenue',rs(SUMMARY.month.revenue),'good','📈','#ecfdf3'],
-      ['Month profit',rs(SUMMARY.month.profit),(+SUMMARY.month.profit>=0?'good':'bad'),'🏆','#fff7ed'],
-      ['Total udhaar',rs(SUMMARY.outstanding_total),'bad','🏦','#fef3f2'],
-    ];
-    document.getElementById('home-cards').innerHTML=hc.map(([l,n,cls,ic,bg])=>
-      `<div class="card"><div class="l">${l}</div><div class="n ${cls}">${n}</div>
-       <div class="ic" style="background:${bg}">${ic}</div></div>`).join('');
-    renderOrders();
-  }catch(e){toast(e.message,true);}
-}
-function renderOrders(){
-  const c=DATA.counts;
-  let cards=card('ALL',c.active_total,'Total chalu');
-  for(const [s,n] of Object.entries(c.by_status))cards+=card(s,n,LABEL[s]||s);
-  document.getElementById('cards').innerHTML=cards;
-  let rows=DATA.active_orders;
-  if(FILTER&&FILTER!=='ALL')rows=rows.filter(o=>o.status===FILTER);
-  document.getElementById('orders-body').innerHTML=rows.map(o=>orderRow(o)).join('')
-    ||'<tr><td colspan="7">Koi chalu order nahi.</td></tr>';
-}
-function orderRow(o){
-  const items=(o.items||[]).map(i=>`${i.qty}× ${esc(i.type)}`).join(', ');
-  const due=(+o.total_amount||0)-(+o.amount_paid||0);
-  const pay=o.total_amount?`<span class="${o.payment_status}">${o.payment_status}</span><br>${due>0?'<b class="bad">Due '+rs(due)+'</b>':rs(o.total_amount)}`:o.payment_status;
-  return `<tr>
-    <td><b>${esc(o.order_number)}</b><br><span class="t">${fmtDate(o.created_at)}</span></td>
-    <td>${esc(o.customer)}<br><span class="t">${esc(o.phone)}</span></td>
-    <td class="itemscell" title="${esc(items)}">${items}</td>
-    <td><span class="badge ${o.status}">${LABEL[o.status]||o.status}</span></td>
-    <td>${pay}</td><td>${fmtDate(o.expected_delivery)}</td>
-    <td><div class="act">
-      <button onclick="openStatus('${o.order_number}','${o.status}')">▶ Status</button>
-      <button class="ghost" onclick="openPayment('${o.order_number}')">₹ Paisa</button>
-      <button class="ghost" onclick="openDate('${o.order_number}')">📅 Date</button>
-      <button class="ghost" onclick="openDetail('${o.order_number}')">👁</button>
-      <button class="ghost" onclick="go('inbox');openThread('${o.phone}')">💬</button>
-    </div></td></tr>`;
-}
-const CARD_IC={ALL:'📦',RECEIVED:'🧺',IN_WASH:'🧼',IN_DRY:'🌬️',IN_IRON:'👔',
-  READY:'✨',OUT_FOR_DELIVERY:'🛵',ON_HOLD:'⏸️'};
-function card(f,n,l){const on=FILTER===f?'on':'';
-  return `<div class="card click ${on}" onclick="FILTER=FILTER==='${f}'?null:'${f}';renderOrders()">
-    <div class="l">${l}</div><div class="n">${n}</div>
-    <div class="ic">${CARD_IC[f]||'🧺'}</div></div>`;}
-
-/* ---------- BILLS ---------- */
-async function loadBills(){
-  try{BILLS=await api('/orders?limit=200');renderBills();}catch(e){toast(e.message,true);}
-}
-function renderBills(){
-  const q=(document.getElementById('b-search').value||'').toLowerCase();
-  const pay=document.getElementById('b-pay').value;
-  const st=document.getElementById('b-status').value;
-  const rows=BILLS.filter(o=>{
-    const due=(+o.total_amount||0)-(+o.amount_paid||0);
-    if(q&&!(o.order_number.toLowerCase().includes(q)||(o.customer_name||'').toLowerCase().includes(q)||o.customer_phone.includes(q)))return false;
-    if(pay==='DUE'&&due<=0)return false;
-    if(pay&&pay!=='DUE'&&o.payment_status!==pay)return false;
-    if(st&&o.status!==st)return false;
-    return true;});
-  document.getElementById('bills-body').innerHTML=rows.map(o=>{
-    const items=(o.items||[]).reduce((a,i)=>a+(+i.qty||1),0);
-    const due=(+o.total_amount||0)-(+o.amount_paid||0);
-    return `<tr>
-      <td><b>${esc(o.order_number)}</b><br><span class="t">${fmtDate(o.created_at)}</span></td>
-      <td><div class="whocell">${avatar(o.customer_name||o.customer_phone)}<div>
-        <b>${esc(o.customer_name||'—')}</b>${due>0?` <span class="badge UNPAID">${rs(due)} due</span>`:''}
-        <br><span class="t">${esc(o.customer_phone)}</span></div></div></td>
-      <td><span class="t">Delivery:</span><br>${fmtDate(o.expected_delivery)}</td>
-      <td class="num">${items} pcs</td>
-      <td class="num">${o.total_amount?rs(o.total_amount):'—'} <span class="${o.payment_status}">${o.payment_status}</span></td>
-      <td><span class="badge ${o.status}">${LABEL[o.status]||o.status}</span></td>
-      <td><div class="act">
-        <button onclick="openStatus('${o.order_number}','${o.status}')">▶ Status</button>
-        <button class="ghost" onclick="openPayment('${o.order_number}')">₹ Paisa</button>
-        <button class="ghost" onclick="openDetail('${o.order_number}')">👁</button>
-        <button class="ghost" onclick="go('inbox');openThread('${o.customer_phone}')">💬</button>
-      </div></td></tr>`;
-  }).join('')||'<tr><td colspan="7">Kuch nahi mila.</td></tr>';
-}
-
-/* ---------- NEW BILL ---------- */
-/* fallbacks when the rate card is empty */
-const GARMENTS=['Shirt','Pant','Kurta','Saree','Suit 2pc','Suit 3pc','Jeans','T-shirt','Blazer','Sherwani','Lehenga','Chadar','Razai/Blanket','Curtain','Shoes','Aur'];
-const PSERV=['Dry Clean','Wash & Iron','Sirf Iron','Premium/Delicate'];
-const WSERV=['Wash & Fold (kg)','Wash & Iron (kg)','Household (kg)'];
-async function loadRates(){try{RATES=await api('/admin/api/rates');}catch(e){RATES=[];}}
-function pcServices(){const s=[...new Set(RATES.filter(r=>r.unit==='pc'&&r.is_active).map(r=>r.service))];
-  return s.length?s:PSERV;}
-function kgServices(){const s=[...new Set(RATES.filter(r=>r.unit==='kg'&&r.is_active).map(r=>r.service))];
-  return s.length?s:WSERV;}
-function garmentsFor(serv){const g=[...new Set(RATES.filter(r=>r.unit==='pc'&&r.is_active&&r.service===serv).map(r=>r.garment))].filter(Boolean);
-  return g.length?g:GARMENTS;}
-function findRate(serv,garm){const r=RATES.find(x=>x.is_active&&x.service===serv&&x.garment===(garm||''));
-  return r?+r.rate:null;}
-function pieceServChange(sel){const row=sel.parentElement;
-  const tsel=row.querySelector('.p-type');const cur=tsel.value;
-  tsel.innerHTML=garmentsFor(sel.value).map(g=>`<option${g===cur?' selected':''}>${esc(g)}</option>`).join('');
-  pieceTypeChange(tsel);}
-function pieceTypeChange(sel){const row=sel.parentElement;
-  const r=findRate(row.querySelector('.p-serv').value,sel.value);
-  if(r!=null)row.querySelector('.p-rate').value=r;
-  calc();}
-function weightServChange(sel){const row=sel.parentElement;
-  const r=findRate(sel.value,'');
-  if(r!=null)row.querySelector('.w-rate').value=r;
-  calc();}
-function addPiece(){const d=document.createElement('div');d.className='iline';
-  const servs=pcServices();
-  d.innerHTML=`<select class="p-serv" onchange="pieceServChange(this)">${servs.map(s=>`<option>${esc(s)}</option>`).join('')}</select>
-    <select class="p-type" onchange="pieceTypeChange(this)">${garmentsFor(servs[0]).map(g=>`<option>${esc(g)}</option>`).join('')}</select>
-    <input type="number" class="p-qty" min="1" value="1" oninput="calc()">
-    <input type="number" class="p-rate" min="0" placeholder="rate" oninput="calc()">
-    <div class="amt p-amt">₹0</div>
-    <button onclick="this.parentElement.remove();calc()">✕</button>`;
-  document.getElementById('piece-items').appendChild(d);
-  const r=findRate(servs[0],garmentsFor(servs[0])[0]);
-  if(r!=null)d.querySelector('.p-rate').value=r;
-  calc();}
-function addWeight(){const d=document.createElement('div');d.className='iline wline';
-  const servs=kgServices();
-  d.innerHTML=`<select class="w-serv" onchange="weightServChange(this)">${servs.map(s=>`<option>${esc(s)}</option>`).join('')}</select>
-    <div class="t" style="text-align:center">per kg</div>
-    <input type="number" class="w-kg" min="0.5" step="0.5" placeholder="kg" oninput="calc()">
-    <input type="number" class="w-rate" min="0" placeholder="₹/kg" oninput="calc()">
-    <div class="amt w-amt">₹0</div>
-    <button onclick="this.parentElement.remove();calc()">✕</button>`;
-  document.getElementById('weight-items').appendChild(d);
-  const r=findRate(servs[0],'');
-  if(r!=null)d.querySelector('.w-rate').value=r;
-  calc();}
-
-/* ---------- SETTINGS ---------- */
-async function loadSettings(){
-  try{
-    const [staff]=await Promise.all([api('/admin/api/staff'),loadRates()]);
-    document.getElementById('staff-body').innerHTML=staff.map(s=>`<tr>
-      <td><div class="whocell">${avatar(s.name)}<b>${esc(s.name)}</b></div></td>
-      <td><span class="t">${esc(s.phone)}</span></td>
-      <td><select style="width:auto" onchange="updStaff('${s.id}','role',this.value)">
-        <option value="WASHER"${s.role==='WASHER'?' selected':''}>Washer</option>
-        <option value="DELIVERY"${s.role==='DELIVERY'?' selected':''}>Delivery</option></select></td>
-      <td><input type="checkbox" style="width:auto"${s.is_active?' checked':''}
-        onchange="updStaff('${s.id}','is_active',this.checked)"></td>
-    </tr>`).join('')||'<tr><td colspan="4">Koi staff nahi.</td></tr>';
-
-    document.getElementById('rates-body').innerHTML=RATES.map(r=>`<tr${r.is_active?'':' style="opacity:.45"'}>
-      <td>${esc(r.service)}</td><td>${esc(r.garment)||'<span class="t">—</span>'}</td>
-      <td class="num"><input type="number" value="${r.rate}" min="1"
-        style="width:80px;text-align:right" onchange="updRate('${r.id}','rate',this.value)"></td>
-      <td><span class="t">/${r.unit}</span></td>
-      <td><input type="checkbox" style="width:auto"${r.is_active?' checked':''}
-        onchange="updRate('${r.id}','is_active',this.checked)"></td>
-      <td></td>
-    </tr>`).join('')||'<tr><td colspan="6">Rate card khali hai — neeche jodo.</td></tr>';
-
-    document.getElementById('serv-list').innerHTML=
-      [...new Set(RATES.map(r=>r.service))].map(s=>`<option value="${esc(s)}">`).join('');
-  }catch(e){toast(e.message,true);}
-}
-async function updRate(id,field,val){
-  try{await api('/admin/api/rates/'+id,{method:'PUT',body:JSON.stringify({[field]:val})});
-    toast('Rate update ✓');await loadRates();}
-  catch(e){toast(e.message,true);loadSettings();}
-}
-async function addRate(){
-  try{
-    const rate=document.getElementById('r-rate').value;
-    const serv=document.getElementById('r-serv').value.trim();
-    if(!serv)throw new Error('service likho');
-    if(!rate||+rate<=0)throw new Error('rate daalo');
-    await api('/admin/api/rates',{method:'POST',body:JSON.stringify({
-      service:serv,garment:document.getElementById('r-garm').value.trim(),
-      unit:document.getElementById('r-unit').value,rate})});
-    document.getElementById('r-garm').value='';document.getElementById('r-rate').value='';
-    toast('Rate jud gaya ✓');loadSettings();
-  }catch(e){toast(e.message,true);}
-}
-async function updStaff(id,field,val){
-  try{await api('/admin/api/staff/'+id,{method:'PUT',body:JSON.stringify({[field]:val})});
-    toast('Staff update ✓');}
-  catch(e){toast(e.message,true);loadSettings();}
-}
-async function addStaff(){
-  try{
-    const name=document.getElementById('st-name').value.trim();
-    const phone=document.getElementById('st-phone').value.trim();
-    if(!name||!phone)throw new Error('naam aur number dono daalo');
-    await api('/admin/api/staff',{method:'POST',body:JSON.stringify({
-      name,phone,role:document.getElementById('st-role').value})});
-    document.getElementById('st-name').value='';document.getElementById('st-phone').value='';
-    toast('Staff jud gaya ✓ (bot ab isse pehchanega)');loadSettings();
-  }catch(e){toast(e.message,true);}
-}
-function calc(){
-  let sub=0;
-  for(const r of document.querySelectorAll('#piece-items .iline')){
-    const a=(+r.querySelector('.p-qty').value||0)*(+r.querySelector('.p-rate').value||0);
-    r.querySelector('.p-amt').textContent=rs(a);sub+=a;}
-  for(const r of document.querySelectorAll('#weight-items .iline')){
-    const a=(+r.querySelector('.w-kg').value||0)*(+r.querySelector('.w-rate').value||0);
-    r.querySelector('.w-amt').textContent=rs(a);sub+=a;}
-  const disc=+document.getElementById('f-discount').value||0;
-  const gst=document.getElementById('f-gst').checked?Math.round((sub-disc)*0.18*100)/100:0;
-  const total=Math.max(0,sub-disc+gst);
-  const adv=+document.getElementById('f-advance').value||0;
-  document.getElementById('sum-sub').textContent=rs(sub);
-  document.getElementById('sum-gst').textContent=rs(gst);
-  document.getElementById('sum-total').textContent=rs(total);
-  document.getElementById('sum-due').textContent=rs(Math.max(0,total-adv));
-  return {sub,disc,gst,total,adv};
-}
-function prefillCustomer(){
-  const p=document.getElementById('f-phone').value.replace(/\D/g,'').slice(-10);
-  if(p.length!==10)return;
-  const m=CUSTOMERS.find(c=>c.phone.endsWith(p));
-  if(m&&m.name&&!document.getElementById('f-name').value)document.getElementById('f-name').value=m.name;
-}
-async function createOrder(){
-  try{
-    const items=[];
-    for(const r of document.querySelectorAll('#piece-items .iline')){
-      const qty=+r.querySelector('.p-qty').value,rate=+r.querySelector('.p-rate').value||null;
-      items.push({type:r.querySelector('.p-type').value,qty,
-        service:r.querySelector('.p-serv').value,rate,amount:rate?qty*rate:null,unit:'pc'});}
-    for(const r of document.querySelectorAll('#weight-items .iline')){
-      const kg=+r.querySelector('.w-kg').value,rate=+r.querySelector('.w-rate').value||null;
-      if(!kg)continue;
-      items.push({type:r.querySelector('.w-serv').value,qty:1,service:'per_kg',
-        weight_kg:kg,rate,amount:rate?kg*rate:null,unit:'kg'});}
-    const phone=document.getElementById('f-phone').value.trim();
-    if(!phone)throw new Error('phone daalo');
-    if(!items.length)throw new Error('kam se kam ek item daalo');
-    const {disc,gst,total,adv}=calc();
-    if(adv>total)throw new Error(`Advance (${rs(adv)}) bill total (${rs(total)}) se zyada hai — check karo`);
-    const body={customer_phone:phone,items,
-      customer_name:document.getElementById('f-name').value.trim()||null,
-      total_amount:total||null,
-      discount_amount:disc||null,gst_amount:gst||null,
-      advance_amount:adv||null,advance_method:document.getElementById('f-advmethod').value,
-      pickup_date:document.getElementById('f-pickup').value||null,
-      expected_delivery:document.getElementById('f-delivery').value||null,
-      notes:document.getElementById('f-notes').value.trim()||null};
-    const r=await api('/orders',{method:'POST',body:JSON.stringify(body)});
-    toast(`Bill ${r.order_number} ban gaya ✓`);
-    for(const el of ['f-phone','f-name','f-pickup','f-delivery','f-notes','f-discount','f-advance'])
-      document.getElementById(el).value='';
-    document.getElementById('f-gst').checked=false;
-    document.getElementById('piece-items').innerHTML='';document.getElementById('weight-items').innerHTML='';
-    addPiece();calc();go('bills');
-  }catch(e){toast(e.message,true);}
-}
-
-/* ---------- CUSTOMERS ---------- */
-async function loadCustomers(){try{CUSTOMERS=await api('/admin/api/customers');renderCustomers();}catch(e){toast(e.message,true);}}
-function renderCustomers(){
-  const q=(document.getElementById('cust-search').value||'').toLowerCase();
-  const rows=CUSTOMERS.filter(c=>!q||(c.name||'').toLowerCase().includes(q)||c.phone.includes(q));
-  document.getElementById('cust-body').innerHTML=rows.map(c=>{
-    const out=+c.outstanding;
-    return `<tr>
-      <td><div class="whocell">${avatar(c.name||c.phone)}<div>
-        <b>${esc(c.name||'—')}</b>${out>0?` <span class="badge UNPAID">${rs(out)} due</span>`:''}
-        <br><span class="t">${esc(c.phone)}</span></div></div></td>
-      <td>${c.total_orders} <span class="t">(${c.active_orders} chalu)</span></td>
-      <td class="num">${rs(c.business)}</td><td class="num good">${rs(c.paid)}</td>
-      <td class="num ${out>0?'bad':'good'}"><b>${rs(out)}</b></td>
-      <td><span class="t">${fmtDate(c.last_message_at)}</span></td>
-      <td><div class="act">
-        ${out>0?`<button class="green" onclick="collectFrom('${c.phone}')">₹ Collect</button>`:''}
-        <button class="ghost" onclick="go('inbox');openThread('${c.phone}')">💬 Chat</button>
-        <button class="ghost" onclick="go('bills');document.getElementById('b-search').value='${c.phone}';renderBills()">🧾 Bills</button>
-      </div></td></tr>`;
-  }).join('')||'<tr><td colspan="7">Koi customer nahi.</td></tr>';
-}
-function collectFrom(phone){go('bills');
-  document.getElementById('b-search').value=phone;
-  document.getElementById('b-pay').value='DUE';
-  setTimeout(renderBills,300);}
-
-/* ---------- EXPENSES ---------- */
-async function loadExpenses(){
-  try{EXPENSES=await api('/admin/api/expenses');
-    if(!SUMMARY)SUMMARY=await api('/admin/api/reports/summary');
-    document.getElementById('exp-cards').innerHTML=[
-      ['Aaj ka kharcha',rs(SUMMARY.today.expenses),'warncol'],
-      ['Month ka kharcha',rs(SUMMARY.month.expenses),'warncol'],
-      ['Month profit',rs(SUMMARY.month.profit),(+SUMMARY.month.profit>=0?'good':'bad')],
-    ].map(([l,n,c])=>`<div class="card"><div class="l">${l}</div><div class="n ${c}">${n}</div></div>`).join('');
-    document.getElementById('e-date').value=new Date().toISOString().slice(0,10);
-    document.getElementById('exp-body').innerHTML=EXPENSES.map(e=>`<tr>
-      <td>${e.spent_on}</td><td>${esc(e.category)}</td><td>${esc(e.description||'—')}</td>
-      <td><b>${rs(e.amount)}</b></td>
-      <td><button class="ghost" style="font-size:11px" onclick="delExpense('${e.id}')">🗑</button></td>
-    </tr>`).join('')||'<tr><td colspan="5">Abhi koi kharcha nahi likha.</td></tr>';
-  }catch(e){toast(e.message,true);}
-}
-async function addExpense(){
-  try{
-    const amt=document.getElementById('e-amt').value;
-    if(!amt||+amt<=0)throw new Error('amount daalo');
-    await api('/admin/api/expenses',{method:'POST',body:JSON.stringify({
-      category:document.getElementById('e-cat').value,
-      amount:amt,spent_on:document.getElementById('e-date').value,
-      description:document.getElementById('e-desc').value.trim()||null})});
-    document.getElementById('e-amt').value='';document.getElementById('e-desc').value='';
-    SUMMARY=null;toast('Kharcha save ✓');loadExpenses();
-  }catch(e){toast(e.message,true);}
-}
-async function delExpense(id){
-  try{await api('/admin/api/expenses/'+id,{method:'DELETE'});SUMMARY=null;loadExpenses();}
-  catch(e){toast(e.message,true);}
-}
-
-/* ---------- REPORTS ---------- */
-async function loadReports(){
-  try{SUMMARY=await api('/admin/api/reports/summary');
-    const s=SUMMARY;
-    document.getElementById('rep-cards').innerHTML=[
-      ['Aaj — kamai',rs(s.today.revenue),'good'],['Aaj — kharcha',rs(s.today.expenses),'warncol'],
-      ['Aaj — profit',rs(s.today.profit),(+s.today.profit>=0?'good':'bad')],
-      ['7 din — profit',rs(s.week.profit),(+s.week.profit>=0?'good':'bad')],
-      ['Month — kamai',rs(s.month.revenue),'good'],['Month — kharcha',rs(s.month.expenses),'warncol'],
-      ['Month — profit',rs(s.month.profit),(+s.month.profit>=0?'good':'bad')],
-      ['Total udhaar',rs(s.outstanding_total),'bad'],
-    ].map(([l,n,c])=>`<div class="card"><div class="l">${l}</div><div class="n ${c}">${n}</div></div>`).join('');
-  }catch(e){toast(e.message,true);}
-}
-async function dlCsv(path,name){
-  try{
-    const r=await fetch(path,{headers:{'X-API-Key':getKey(false)}});
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const blob=await r.blob();const a=document.createElement('a');
-    a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href);
-  }catch(e){toast(e.message,true);}
-}
-
-/* ---------- INBOX (same engine as pehle) ---------- */
-async function loadThreads(){try{THREADS=await api('/admin/api/inbox/threads');renderThreads();}catch(e){toast(e.message,true);}}
-function renderThreads(){
-  const q=(document.getElementById('th-search').value||'').toLowerCase();
-  const rows=THREADS.filter(t=>!q||t.name.toLowerCase().includes(q)||t.phone.includes(q));
-  document.getElementById('th-list').innerHTML=rows.map(t=>{
-    const time=fmtWhen(t.last_at);
-    const arrow=t.last_direction==='INBOUND'?'':'➡️ ';
-    const chip=t.kind==='staff'?'<span class="staff-chip">staff</span>':(t.kind==='admin'?'<span class="staff-chip">👑 malik</span>':'');
-    return `<div class="thread-item ${t.phone===OPEN_PHONE?'on':''}" onclick="openThread('${t.phone}')">
-      <div class="whocell">${avatar(t.name)}<div style="min-width:0;flex:1">
-      <div class="nm"><span>${esc(t.name)}${chip}</span><span class="t">${time}</span></div>
-      <div class="pv">${arrow}${esc(t.last_text)}</div></div></div></div>`;
-  }).join('')||'<div class="thread-item">Koi baat-cheet nahi.</div>';
-}
-async function openThread(phone){OPEN_PHONE=phone;
-  document.getElementById('inbox-wrap').classList.add('chat-open');renderThreads();await refreshThread(true);}
-function closeThread(){OPEN_PHONE=null;
-  document.getElementById('inbox-wrap').classList.remove('chat-open');renderThreads();}
-async function refreshThread(scroll){
-  if(!OPEN_PHONE)return;
-  try{
-    const d=await api('/admin/api/inbox/thread?phone='+encodeURIComponent(OPEN_PHONE));
-    const win=d.window.open?'<span class="win open">🟢 window khuli</span>'
-                           :'<span class="win closed">🔴 window band</span>';
-    const chips=(d.active_orders||[]).map(o=>`<span class="ordchip">${esc(o.order_number)} · ${LABEL[o.status]||o.status}</span>`).join('');
-    document.getElementById('chat-head').innerHTML=
-      `<button class="ghost backbtn" onclick="event.stopPropagation();closeThread()">←</button>
-       ${avatar(d.name)}<span class="nm">${esc(d.name)}</span>
-       <span class="t">${esc(d.phone)} · profile dekhne ke liye click</span>${win}
-       <div class="ordchips">${chips}</div>`;
-    document.getElementById('chat-head').onclick=openProfile;
-    const msgs=document.getElementById('msgs');
-    const nearBottom=msgs.scrollHeight-msgs.scrollTop-msgs.clientHeight<80;
-    msgs.innerHTML=d.messages.map(m=>{
-      const t=new Date(m.at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
-      const body=renderMsgBody(m.text);
-      if(m.direction==='INBOUND')return `<div class="bubble bin">${body}<div class="meta">${t}</div></div>`;
-      const who=m.sent_by==='manager'?'👤 Aap':'🤖 Bot';
-      const cls=m.sent_by==='manager'?'bout manager':'bout';
-      return `<div class="bubble ${cls}">${body}<div class="meta">${who} · ${t}</div></div>`;
-    }).join('')||'<div class="empty">Abhi koi message nahi.</div>';
-    if(scroll||nearBottom)msgs.scrollTop=msgs.scrollHeight;
-    const composer=document.getElementById('composer');
-    composer.style.display='flex';
-    const locked=!d.window.open&&d.kind==='customer';
-    document.getElementById('msg-in').style.display=locked?'none':'';
-    document.getElementById('send-btn').style.display=locked?'none':'';
-    let lock=composer.querySelector('.lock');
-    if(locked&&!lock){lock=document.createElement('div');lock.className='lock';
-      lock.textContent='🔴 24h window band — customer ke message aane par khulegi.';
-      composer.appendChild(lock);}else if(!locked&&lock)lock.remove();
-  }catch(e){toast(e.message,true);}
-}
-function renderMsgBody(text){
-  const m=(text||'').match(/^\[image:([^\]\s]+)\]\s*(.*)$/s);
-  if(m){
-    const src=m[1]+'?key='+encodeURIComponent(getKey(false));
-    return `<img src="${src}" loading="lazy" onclick="window.open('${src}','_blank')">`+
-           (m[2]?esc(m[2]):'');
-  }
-  return esc(text);
-}
-const EMOJIS=['😊','😄','🙏','👍','❤️','🎉','✨','🧺','👔','🧼','✅','❌','⏰','📅','💰','₹','🛵','📦','🙌','😅','🤝','💯','🔥','⭐','☑️','📍','☎️','🫡','😢','🤔','⚡','🌟'];
-function toggleEmoji(){
-  const p=document.getElementById('emoji-pop');
-  if(!p.innerHTML)p.innerHTML=EMOJIS.map(e=>`<span onclick="pickEmoji('${e}')">${e}</span>`).join('');
-  p.classList.toggle('open');
-}
-function pickEmoji(e){
-  const inp=document.getElementById('msg-in');
-  const s=inp.selectionStart||inp.value.length;
-  inp.value=inp.value.slice(0,s)+e+inp.value.slice(s);
-  inp.focus();inp.selectionStart=inp.selectionEnd=s+e.length;
-}
-async function sendMedia(input){
-  const f=input.files[0];input.value='';
-  if(!f||!OPEN_PHONE)return;
-  if(f.size>5*1024*1024)return toast('Photo 5MB se chhoti rakho',true);
-  const msgs=document.getElementById('msgs');
-  const tmp=document.createElement('div');tmp.className='bubble bout manager sending';
-  tmp.innerHTML='📎 photo bhej raha hai…';msgs.appendChild(tmp);msgs.scrollTop=msgs.scrollHeight;
-  try{
-    const fd=new FormData();fd.append('phone',OPEN_PHONE);fd.append('file',f);
-    const cap=document.getElementById('msg-in').value.trim();
-    if(cap){fd.append('caption',cap);document.getElementById('msg-in').value='';}
-    const r=await fetch('/admin/api/inbox/send-media',{method:'POST',
-      headers:{'X-API-Key':getKey(false)},body:fd});
-    const b=await r.json().catch(()=>({}));
-    if(!r.ok)throw new Error(b.detail||('HTTP '+r.status));
-    await refreshThread(true);loadThreads();toast('Photo chali gayi ✓');
-  }catch(e){toast(e.message,true);}
-  finally{tmp.remove();}
-}
-function openProfile(){
-  if(!OPEN_PHONE)return;
-  const c=CUSTOMERS.find(x=>x.phone===OPEN_PHONE);
-  const t=THREADS.find(x=>x.phone===OPEN_PHONE)||{};
-  const name=(c&&c.name)||t.name||OPEN_PHONE;
-  const d=document.getElementById('drawer');
-  const out=c?+c.outstanding:0;
-  d.innerHTML=`<div style="text-align:right"><button class="ghost" onclick="document.getElementById('drawer').classList.remove('open')">✕</button></div>
-    <div class="big-av">${esc((name||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase())}</div>
-    <h3>${esc(name)}</h3><div class="ph">${esc(OPEN_PHONE)} · ${t.kind==='staff'?'Staff 🧑‍🔧':(t.kind==='admin'?'Malik 👑 (aap)':'Customer')}</div>
-    ${c?`<div class="stat"><span>Total orders</span><b>${c.total_orders}</b></div>
-    <div class="stat"><span>Chalu</span><b>${c.active_orders}</b></div>
-    <div class="stat"><span>Total business</span><b>${rs(c.business)}</b></div>
-    <div class="stat"><span>Paid</span><b class="good">${rs(c.paid)}</b></div>
-    <div class="stat"><span>Baaki</span><b class="${out>0?'bad':'good'}">${rs(c.outstanding)}</b></div>`:''}
-    <div class="actions">
-      <button class="orange" onclick="document.getElementById('drawer').classList.remove('open');go('newbill');document.getElementById('f-phone').value='${OPEN_PHONE}';prefillCustomer()">➕ Naya Bill</button>
-      <button class="ghost" onclick="document.getElementById('drawer').classList.remove('open');go('bills');document.getElementById('b-search').value='${OPEN_PHONE}';renderBills()">🧾 Sab Bills</button>
-      ${out>0?`<button class="green" onclick="document.getElementById('drawer').classList.remove('open');collectFrom('${OPEN_PHONE}')">₹ Collect (${rs(out)})</button>`:''}
-    </div>`;
-  d.classList.add('open');
-}
-async function sendMsg(){
-  const input=document.getElementById('msg-in');const text=input.value.trim();
-  if(!text||!OPEN_PHONE)return;
-  input.value='';
-  const msgs=document.getElementById('msgs');
-  const tmp=document.createElement('div');tmp.className='bubble bout manager sending';
-  tmp.innerHTML=esc(text)+'<div class="meta">👤 bhej raha hai…</div>';
-  msgs.appendChild(tmp);msgs.scrollTop=msgs.scrollHeight;
-  try{await api('/admin/api/inbox/send',{method:'POST',body:JSON.stringify({phone:OPEN_PHONE,text})});
-    await refreshThread(true);loadThreads();}
-  catch(e){tmp.remove();input.value=text;toast(e.message,true);}
-}
-
-/* ---------- MODALS ---------- */
-function openModal(h){document.getElementById('modal').innerHTML=h;document.getElementById('modal-bg').classList.add('open');}
-function closeModal(){document.getElementById('modal-bg').classList.remove('open');}
-function openStatus(num,cur){
-  const opts=(NEXT[cur]||[]).map(s=>`<option value="${s}">${LABEL[s]} (${s})</option>`).join('');
-  openModal(`<h3>${num} — status badlo</h3>
-    <div class="t">Abhi: <span class="badge ${cur}">${LABEL[cur]}</span></div>
-    <label>Naya status</label><select id="m-status">${opts}</select>
-    <div class="warn">READY / Delivery pe / Ho gaya → customer ko WhatsApp jayega</div>
-    <div class="foot"><button class="ghost" onclick="closeModal()">Nahi</button>
-    <button class="green" onclick="doStatus('${num}')">Badlo ✓</button></div>`);}
-async function doStatus(num){
-  try{await api(`/orders/${num}/status`,{method:'POST',
-      body:JSON.stringify({status:document.getElementById('m-status').value,changed_by:'manager:dashboard'})});
-    closeModal();toast(num+' update ✓');go(SECTION);}catch(e){toast(e.message,true);}}
-function openPayment(num){
-  openModal(`<h3>${num} — payment aayi</h3>
-    <label>Kitna (₹)</label><input id="m-amount" type="number" min="1" step="0.5">
-    <label>Kaise</label><select id="m-method"><option value="UPI">UPI</option>
-      <option value="CASH">Cash</option><option value="OTHER">Aur</option></select>
-    <div class="foot"><button class="ghost" onclick="closeModal()">Nahi</button>
-    <button class="green" onclick="doPayment('${num}')">Save ✓</button></div>`);}
-async function doPayment(num){
-  try{const amt=document.getElementById('m-amount').value;
-    if(!amt||+amt<=0)throw new Error('amount daalo');
-    const r=await api(`/orders/${num}/payment`,{method:'POST',
-      body:JSON.stringify({amount:amt,method:document.getElementById('m-method').value})});
-    closeModal();toast(`${num}: ab ${r.payment_status} ✓`);go(SECTION);}catch(e){toast(e.message,true);}}
-function openDate(num){
-  openModal(`<h3>${num} — delivery date badlo</h3>
-    <label>Nayi date</label><input id="m-date" type="date">
-    <label>Wajah (INTERNAL — customer ko KABHI nahi dikhegi)</label>
-    <textarea id="m-reason" rows="2" placeholder="jaise: paani nahi aaya"></textarea>
-    <div class="warn">Customer ko sirf polite delay notice + nayi date jayegi</div>
-    <div class="foot"><button class="ghost" onclick="closeModal()">Nahi</button>
-    <button class="green" onclick="doDate('${num}')">Save ✓</button></div>`);}
-async function doDate(num){
-  try{const d=document.getElementById('m-date').value;
-    if(!d)throw new Error('date chuno');
-    await api(`/orders/${num}/delivery-date`,{method:'POST',
-      body:JSON.stringify({expected_delivery:d,internal_reason:document.getElementById('m-reason').value||null,
-                          changed_by:'manager:dashboard'})});
-    closeModal();toast('Date update + notice ✓');go(SECTION);}catch(e){toast(e.message,true);}}
-async function openDetail(num){
-  try{const d=await api(`/orders/${num}`);const o=d.order;
-    const hist=d.history.map(h=>`<div><b>${LABEL[h.new_status]||h.new_status}</b> — ${esc(h.changed_by)}
-      <div class="t">${new Date(h.changed_at).toLocaleString('en-IN')}</div></div>`).join('');
-    const items=(o.items||[]).map(i=>{
-      const base=`${i.unit==='kg'?(i.weight_kg+' kg'):(i.qty+'×')} ${esc(i.type)}`;
-      return base+(i.rate?` @₹${i.rate}${i.unit==='kg'?'/kg':''}`:'')+(i.amount?` = ${rs(i.amount)}`:'');
-    }).join('<br>');
-    const money=[];
-    if(o.total_amount){
-      if(o.discount_amount)money.push(`Discount: −${rs(o.discount_amount)}`);
-      if(o.gst_amount)money.push(`GST: +${rs(o.gst_amount)}`);
-      money.push(`<b>Total: ${rs(o.total_amount)}</b> · Paid: ${rs(o.amount_paid)} · <span class="${o.payment_status}">${o.payment_status}</span>`);
-    }
-    openModal(`<h3>${o.order_number}</h3>
-      <div class="t">${esc(o.customer_name||'')} · ${esc(o.customer_phone)}</div>
-      <label>Items</label><div style="font-size:13px">${items}</div>
-      <label>Bill</label><div style="font-size:13px">${money.join('<br>')||'—'}</div>
-      <label>History</label><div class="hist">${hist}</div>
-      ${o.notes?`<label>Internal notes 🔒</label><div class="note">${esc(o.notes)}</div>`:''}
-      <div class="foot"><button class="ghost" onclick="closeModal()">Band karo</button></div>`);
-  }catch(e){toast(e.message,true);}
-}
-
-// rates first so the first New Bill line gets auto-filled prices
-loadRates().then(()=>addPiece());
-// deep-link: /admin#bills, #newbill, #inbox ... (hash wins over default home)
-const _h=location.hash.slice(1);
-if(_h&&TITLES[_h])go(_h);
-loadHome();loadThreads();loadCustomers();
-setInterval(()=>{if(SECTION==='home')loadHome();
-  if(SECTION==='inbox'){loadThreads();refreshThread(false);}},10000);
-</script>
+<script src="/admin/static/app.js"></script>
 </body>
 </html>
