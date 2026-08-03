@@ -660,6 +660,7 @@ async function loadCampaigns() {
     ]);
     renderSegments(segs); renderCampaigns(camps); renderCoupons(coupons);
   } catch (e) { $("camp-list").innerHTML = errBox(e.message, "loadCampaigns"); }
+  tplLoad(); tplPreview();
 }
 function renderSegments(segs) {
   $("seg-cards").innerHTML = Object.entries(segs.counts)
@@ -733,6 +734,74 @@ async function createCoupon(btn) {
 async function toggleCoupon(code) {
   try { await api(`/admin/api/coupons/${code}/toggle`, { method: "POST" }); loadCampaigns(); }
   catch (e) { toast(e.message, true); }
+}
+
+/* ============================= template studio ============================= */
+let TPL_BTNS = [];
+function tplAddBtn() {
+  if (TPL_BTNS.length >= 3) { toast("Meta allows at most 3 buttons", true); return; }
+  TPL_BTNS.push({ type: "QUICK_REPLY", text: "", url: "", phone_number: "" });
+  tplRenderBtns();
+}
+function tplRenderBtns() {
+  $("tpl-btns").innerHTML = TPL_BTNS.map((b, i) => `
+    <div class="filters" style="margin-bottom:6px">
+      <select style="min-width:120px" onchange="TPL_BTNS[${i}].type=this.value;tplRenderBtns()">
+        <option value="QUICK_REPLY" ${b.type === "QUICK_REPLY" ? "selected" : ""}>Quick reply</option>
+        <option value="URL" ${b.type === "URL" ? "selected" : ""}>Open link</option>
+        <option value="PHONE_NUMBER" ${b.type === "PHONE_NUMBER" ? "selected" : ""}>Call</option>
+      </select>
+      <input placeholder="Button text (max 25)" maxlength="25" value="${esc(b.text)}" oninput="TPL_BTNS[${i}].text=this.value;tplPreview()" style="min-width:130px">
+      ${b.type === "URL" ? `<input placeholder="https://wa.me/…" value="${esc(b.url)}" oninput="TPL_BTNS[${i}].url=this.value" style="min-width:150px">` : ""}
+      ${b.type === "PHONE_NUMBER" ? `<input placeholder="+919696856069" value="${esc(b.phone_number)}" oninput="TPL_BTNS[${i}].phone_number=this.value" style="min-width:130px">` : ""}
+      <button class="btn sm danger" onclick="TPL_BTNS.splice(${i},1);tplRenderBtns();tplPreview()">✕</button>
+    </div>`).join("");
+  tplPreview();
+}
+function tplPreview() {
+  const body = $("tpl-body").value || "…";
+  $("tpl-count").textContent = `${body.length}/1024`;
+  const samples = $("tpl-samples").value.split(",").map((s) => s.trim());
+  let rendered = body;
+  (body.match(/\{\{(\d+)\}\}/g) || []).forEach((m) => {
+    const n = parseInt(m.replace(/\D/g, ""));
+    rendered = rendered.replace(m, samples[n - 1] || `[${n}]`);
+  });
+  $("tplp-body").textContent = rendered;
+  $("tplp-footer").textContent = $("tpl-footer").value;
+  $("tplp-btns").innerHTML = TPL_BTNS.filter((b) => b.text).map((b) =>
+    `<div style="border-top:1px solid #eee;margin-top:8px;padding-top:8px;text-align:center;color:#00a5f4;font-weight:600">${b.type === "PHONE_NUMBER" ? "📞 " : b.type === "URL" ? "🔗 " : ""}${esc(b.text)}</div>`).join("");
+}
+async function tplSubmit(btn) {
+  await busy(btn, async () => {
+    const r = await api("/admin/api/templates", { method: "POST", body: {
+      name: $("tpl-name").value.trim(), category: $("tpl-cat").value,
+      body: $("tpl-body").value, footer: $("tpl-footer").value.trim() || null,
+      buttons: TPL_BTNS.filter((b) => b.text),
+      samples: $("tpl-samples").value.split(",").map((s) => s.trim()).filter(Boolean),
+    }});
+    toast(`Submitted — '${r.name}' is ${r.status} at Meta`);
+    $("tpl-body").value = ""; TPL_BTNS = []; tplRenderBtns(); tplLoad();
+  });
+}
+async function tplLoad() {
+  try {
+    const rows = await api("/admin/api/templates");
+    $("tpl-list").innerHTML = rows.length ? rows.map((t) => `
+      <div class="sumrow" style="align-items:flex-start">
+        <span style="flex:1"><b>${esc(t.name)}</b> <span class="tag">${t.category}</span>
+          <span class="pill ${t.status === "APPROVED" ? "PAID" : t.status === "REJECTED" ? "UNPAID" : "PARTIAL"}">${t.status}</span>
+          ${t.rejected_reason ? `<div class="muted" style="color:var(--danger)">Reason: ${esc(t.rejected_reason)}</div>` : ""}
+          <div class="muted" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px">${esc(t.body)}</div></span>
+        <button class="btn sm danger" onclick="tplDelete('${esc(t.name)}')">✕</button>
+      </div>`).join("") : `<p class="muted">No templates yet.</p>`;
+  } catch (e) { $("tpl-list").innerHTML = errBox(e.message, "tplLoad"); }
+}
+function tplDelete(name) {
+  confirmDialog(`Delete template "${name}" from Meta? This cannot be undone.`, async () => {
+    try { await api(`/admin/api/templates/${encodeURIComponent(name)}`, { method: "DELETE" }); toast(T.deleted); tplLoad(); }
+    catch (e) { toast(e.message, true); }
+  });
 }
 
 /* ============================= agents control room ============================= */

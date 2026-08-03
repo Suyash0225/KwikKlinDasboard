@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     # --- People ---
     # Manager's WhatsApp number in E.164 form, e.g. +919876543210.
     MANAGER_PHONE: str
+    # WhatsApp Business Account id — template management via Graph API
+    WHATSAPP_WABA_ID: str = ""
     # Optional second number CC'd on every escalation alert (Ravi).
     ESCALATION_CC_PHONE: str = ""
 

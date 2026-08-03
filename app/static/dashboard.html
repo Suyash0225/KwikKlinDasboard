@@ -213,6 +213,42 @@
         </div>
         <div><div id="camp-list"></div></div>
       </div>
+
+      <div class="card" style="margin-top:14px">
+        <b>📑 Template Studio — pre-approved WhatsApp templates</b>
+        <p class="muted" style="margin-top:4px">Build here, submit to Meta, track approval. Approved templates can be sent outside the 24h window.</p>
+        <div class="split2" style="margin-top:10px">
+          <div class="frm">
+            <div class="split2">
+              <div><label>Template name</label><input id="tpl-name" placeholder="diwali_offer" oninput="tplPreview()"></div>
+              <div><label>Category</label><select id="tpl-cat" onchange="tplPreview()">
+                <option value="UTILITY">Utility (order updates)</option>
+                <option value="MARKETING">Marketing (offers)</option>
+              </select></div>
+            </div>
+            <div><label>Body — use {{1}}, {{2}} for variables · <span id="tpl-count" class="muted">0/1024</span></label>
+              <textarea id="tpl-body" rows="4" placeholder="Namaste {{1}}! Aapke liye khaas offer…" oninput="tplPreview()"></textarea></div>
+            <div><label>Sample values (comma separated — Meta review ke liye)</label>
+              <input id="tpl-samples" placeholder="Sharma ji, 10%" oninput="tplPreview()"></div>
+            <div><label>Footer (optional)</label><input id="tpl-footer" maxlength="60" placeholder="Kwik Klin, Varanasi" oninput="tplPreview()"></div>
+            <div><label>Buttons (max 3)</label><div id="tpl-btns"></div>
+              <button class="btn ghost sm" onclick="tplAddBtn()">+ Add button</button></div>
+            <button class="btn" onclick="tplSubmit(this)">Submit to Meta for approval</button>
+          </div>
+          <div>
+            <label>Live preview</label>
+            <div style="background:#e5ddd5;border-radius:12px;padding:18px;min-height:220px">
+              <div style="background:#fff;border-radius:10px;padding:10px 12px;max-width:300px;box-shadow:0 1px 2px rgba(0,0,0,.15);font-size:13.5px">
+                <div id="tplp-body" style="white-space:pre-wrap">Namaste…</div>
+                <div id="tplp-footer" class="muted" style="font-size:11px;margin-top:6px"></div>
+                <div id="tplp-btns"></div>
+              </div>
+            </div>
+            <div style="margin-top:12px"><label>Your templates <button class="btn ghost sm" onclick="tplLoad()">↻ Refresh status</button></label>
+              <div id="tpl-list"></div></div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Agents control room -->

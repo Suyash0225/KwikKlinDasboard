@@ -499,6 +499,150 @@ async def answer_teachme(qid: str, body: TeachIn, db: AsyncSession = Depends(get
 
 
 # ---------------------------------------------------------------------------
+# WhatsApp template studio (create -> submit to Meta -> track approval)
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+import httpx as _httpx
+
+from app.config import settings as _settings
+
+_GRAPH = "https://graph.facebook.com/v21.0"
+
+
+async def _graph(method: str, path: str, **kw):
+    """One Graph API call — isolated so tests can fake it."""
+    async with _httpx.AsyncClient(timeout=30) as c:
+        r = await c.request(
+            method, f"{_GRAPH}/{path}",
+            headers={"Authorization": f"Bearer {_settings.WHATSAPP_TOKEN}"}, **kw,
+        )
+    return r.status_code, r.json()
+
+
+@router.get("/templates")
+async def list_templates() -> list[dict]:
+    if not _settings.WHATSAPP_WABA_ID:
+        raise HTTPException(status_code=400, detail="WHATSAPP_WABA_ID not configured")
+    status, data = await _graph(
+        "GET", f"{_settings.WHATSAPP_WABA_ID}/message_templates",
+        params={"fields": "name,status,category,language,components,rejected_reason", "limit": 100},
+    )
+    if status != 200:
+        raise HTTPException(status_code=502, detail=str(data)[:300])
+    out = []
+    for t in data.get("data", []):
+        body = next(
+            (c.get("text", "") for c in t.get("components", []) if c.get("type") == "BODY"), ""
+        )
+        buttons = next(
+            (c.get("buttons", []) for c in t.get("components", []) if c.get("type") == "BUTTONS"),
+            [],
+        )
+        out.append(
+            {
+                "name": t["name"], "status": t.get("status"),
+                "category": t.get("category"), "language": t.get("language"),
+                "body": body, "buttons": buttons,
+                "rejected_reason": t.get("rejected_reason"),
+            }
+        )
+        # approved templates become sendable through the single door
+        if t.get("status") == "APPROVED":
+            from app.services.templates import register_dynamic
+
+            params = len(set(_re.findall(r"\{\{(\d+)\}\}", body)))
+            register_dynamic(t["name"], t.get("language", "en_US"), params)
+    return out
+
+
+class TplButtonIn(BaseModel):
+    type: str = Field(pattern="^(QUICK_REPLY|URL|PHONE_NUMBER)$")
+    text: str = Field(min_length=1, max_length=25)
+    url: str | None = None
+    phone_number: str | None = None
+
+
+class TemplateIn(BaseModel):
+    name: str = Field(min_length=3, max_length=60)
+    category: str = Field(pattern="^(UTILITY|MARKETING)$")
+    language: str = "en_US"
+    body: str = Field(min_length=5, max_length=1024)
+    footer: str | None = Field(default=None, max_length=60)
+    buttons: list[TplButtonIn] = Field(default_factory=list, max_length=3)
+    samples: list[str] = Field(default_factory=list)  # one per {{n}}
+
+
+@router.post("/templates", status_code=201)
+async def create_template(body: TemplateIn) -> dict:
+    if not _settings.WHATSAPP_WABA_ID:
+        raise HTTPException(status_code=400, detail="WHATSAPP_WABA_ID not configured")
+    name = _re.sub(r"[^a-z0-9_]", "_", body.name.strip().lower())
+    var_ids = sorted({int(n) for n in _re.findall(r"\{\{(\d+)\}\}", body.body)})
+    if var_ids != list(range(1, len(var_ids) + 1)):
+        raise HTTPException(
+            status_code=400, detail="Variables must be {{1}}, {{2}}… in order, no gaps"
+        )
+    if var_ids and len(body.samples) < len(var_ids):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Provide a sample value for each of the {len(var_ids)} variables (Meta needs them for review)",
+        )
+    components: list[dict] = []
+    body_comp: dict = {"type": "BODY", "text": body.body}
+    if var_ids:
+        body_comp["example"] = {"body_text": [body.samples[: len(var_ids)]]}
+    components.append(body_comp)
+    if body.footer:
+        components.append({"type": "FOOTER", "text": body.footer})
+    if body.buttons:
+        btns = []
+        for b in body.buttons:
+            if b.type == "QUICK_REPLY":
+                btns.append({"type": "QUICK_REPLY", "text": b.text})
+            elif b.type == "URL":
+                if not b.url:
+                    raise HTTPException(status_code=400, detail=f"Button '{b.text}' needs a URL")
+                btns.append({"type": "URL", "text": b.text, "url": b.url})
+            else:
+                if not b.phone_number:
+                    raise HTTPException(status_code=400, detail=f"Button '{b.text}' needs a phone number")
+                btns.append({"type": "PHONE_NUMBER", "text": b.text, "phone_number": b.phone_number})
+        components.append({"type": "BUTTONS", "buttons": btns})
+
+    status, data = await _graph(
+        "POST", f"{_settings.WHATSAPP_WABA_ID}/message_templates",
+        json={
+            "name": name, "language": body.language,
+            "category": body.category, "components": components,
+        },
+    )
+    if status != 200:
+        err = data.get("error", {})
+        raise HTTPException(
+            status_code=400,
+            detail=err.get("error_user_msg") or err.get("message") or str(data)[:250],
+        )
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="template_submitted",
+        args={"name": name, "category": body.category}, result=data.get("status", "PENDING"),
+    )
+    return {"name": name, "status": data.get("status", "PENDING")}
+
+
+@router.delete("/templates/{name}")
+async def delete_template(name: str) -> dict:
+    status, data = await _graph(
+        "DELETE", f"{_settings.WHATSAPP_WABA_ID}/message_templates",
+        params={"name": name},
+    )
+    if status != 200:
+        raise HTTPException(status_code=400, detail=str(data)[:250])
+    return {"deleted": name}
+
+
+# ---------------------------------------------------------------------------
 # Agents overview (control room)
 # ---------------------------------------------------------------------------
 

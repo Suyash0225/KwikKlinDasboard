@@ -34,16 +34,27 @@ TEMPLATES: dict[str, dict] = {
 }
 
 
+# Templates created from the dashboard's Template Studio register here at
+# runtime once Meta approves them (refreshed on every studio page load).
+_DYNAMIC: dict[str, dict] = {}
+
+
+def register_dynamic(name: str, language: str, param_count: int) -> None:
+    if name not in TEMPLATES:
+        _DYNAMIC[name] = {"language": language, "param_count": param_count}
+
+
 def build_template(name: str, params: list[str] | None = None) -> dict:
     """Build the `template` object for the Graph API send payload.
 
     Raises ValueError for unknown template or wrong parameter count.
     """
-    if name not in TEMPLATES:
-        log.error("unknown_template", template=name, known=list(TEMPLATES))
+    registry = {**_DYNAMIC, **TEMPLATES}
+    if name not in registry:
+        log.error("unknown_template", template=name, known=list(registry))
         raise ValueError(f"template {name!r} is not registered in templates.py")
 
-    spec = TEMPLATES[name]
+    spec = registry[name]
     params = params or []
     if len(params) != spec["param_count"]:
         raise ValueError(
