@@ -499,6 +499,112 @@ async def answer_teachme(qid: str, body: TeachIn, db: AsyncSession = Depends(get
 
 
 # ---------------------------------------------------------------------------
+# Agents overview (control room)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/agents/overview")
+async def agents_overview(db: AsyncSession = Depends(get_db)) -> dict:
+    """One call powering the Agents control-room page."""
+    from zoneinfo import ZoneInfo
+
+    from app.models import Campaign, Correction, DocChunk, FaqEntry
+    from app.services.marketing import compute_segments, month_send_count
+
+    ist = ZoneInfo("Asia/Kolkata")
+    now_ist = datetime.now(ist)
+    today_start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(
+        timezone.utc
+    )
+    month_start = now_ist.replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    ).astimezone(timezone.utc)
+
+    counts_rows = (
+        await db.execute(
+            select(AuditLog.action, func.count())
+            .where(AuditLog.at >= today_start)
+            .group_by(AuditLog.action)
+        )
+    ).all()
+    today_actions = {a: c for a, c in counts_rows}
+
+    faq_n = (await db.execute(select(func.count()).select_from(FaqEntry))).scalar_one()
+    corr_n = (await db.execute(select(func.count()).select_from(Correction))).scalar_one()
+    docs_n = (
+        await db.execute(select(func.count(func.distinct(DocChunk.document))))
+    ).scalar_one()
+    teachme_n = (
+        await db.execute(
+            select(func.count())
+            .select_from(OpenQuestion)
+            .where(OpenQuestion.status == "open")
+        )
+    ).scalar_one()
+
+    month_campaigns = (
+        (
+            await db.execute(
+                select(Campaign).where(
+                    Campaign.status == "sent", Campaign.sent_at >= month_start
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    orders_attr = sum((c.stats or {}).get("orders_attributed", 0) for c in month_campaigns)
+    revenue_attr = sum((c.stats or {}).get("revenue_attributed", 0) for c in month_campaigns)
+
+    s = await app_settings.all_settings(db)
+    segs = await compute_segments(db)
+
+    return {
+        "service": {
+            "enabled": s["agent_enabled"],
+            "today": {
+                "replies": today_actions.get("ai_reply", 0),
+                "escalations": today_actions.get("escalated", 0)
+                + today_actions.get("complaint_escalated", 0),
+                "fyis": today_actions.get("admin_fyi", 0),
+                "commands": sum(
+                    today_actions.get(a, 0)
+                    for a in (
+                        "create_bill", "status_update", "delay_update", "relay",
+                        "set_priority", "assign_staff", "add_note", "record_payment",
+                    )
+                ),
+                "taught": today_actions.get("taught_via_whatsapp", 0),
+            },
+            "knowledge": {"faqs": faq_n, "corrections": corr_n, "docs": docs_n},
+            "teachme_open": teachme_n,
+        },
+        "marketing": {
+            "autonomy": s["marketing_autonomy"],
+            "segments": {k: len(v) for k, v in segs.items()},
+            "month": {
+                "campaigns_sent": len(month_campaigns),
+                "orders_attributed": orders_attr,
+                "revenue_attributed": revenue_attr,
+                "messages_used": await month_send_count(db),
+                "budget": s["marketing_monthly_msg_budget"],
+            },
+            "social": {
+                "enabled": s["social_daily_enabled"],
+                "hour": s["social_post_hour"],
+                "instagram_linked": bool(s["ig_user_id"] and s["ig_access_token"]),
+            },
+        },
+        "health": {
+            "llm_provider": __import__("app.services.llm_client", fromlist=["PROVIDER"]).PROVIDER,
+            "public_url_set": bool(s["public_base_url"]),
+            "standup_hour": s["standup_hour"],
+            "turnaround_days": s["turnaround_days"],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # Settings + agent controls
 # ---------------------------------------------------------------------------
 

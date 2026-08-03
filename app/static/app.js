@@ -121,7 +121,7 @@ function showLogin() {
 }
 
 /* ============================= router ============================= */
-const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "training", "activity", "settings"];
+const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "agents", "training", "activity", "settings"];
 const TITLES = {
   dashboard: ["Dashboard", "Today at a glance"],
   inbox: ["Inbox", "WhatsApp — see and reply yourself"],
@@ -131,6 +131,7 @@ const TITLES = {
   expenses: ["Expenses", "Daily spend and categories"],
   reports: ["Reports", "Revenue, expenses and profit"],
   campaigns: ["Campaigns", "Segments, offers and results"],
+  agents: ["Agents", "Your AI employees — health and controls"],
   training: ["AI training", "Teach the agent your business"],
   activity: ["Activity", "Everything the agent did, and why"],
   settings: ["Settings", "Rates, staff, shop and agent"],
@@ -147,8 +148,8 @@ function go(sec) {
   location.hash = sec;
   ({ dashboard: loadDashboard, inbox: loadThreads, newbill: initNewBill, bills: loadBills,
      customers: loadCustomers, expenses: loadExpenses, reports: loadReports,
-     campaigns: loadCampaigns, training: loadTraining, activity: loadActivity,
-     settings: loadSettings }[sec] || (() => {}))();
+     campaigns: loadCampaigns, agents: loadAgents, training: loadTraining,
+     activity: loadActivity, settings: loadSettings }[sec] || (() => {}))();
 }
 
 /* ============================= dashboard ============================= */
@@ -731,6 +732,78 @@ async function createCoupon(btn) {
 }
 async function toggleCoupon(code) {
   try { await api(`/admin/api/coupons/${code}/toggle`, { method: "POST" }); loadCampaigns(); }
+  catch (e) { toast(e.message, true); }
+}
+
+/* ============================= agents control room ============================= */
+async function loadAgents() {
+  $("agents-body").innerHTML = skeleton(5);
+  let d;
+  try { d = await api("/admin/api/agents/overview"); }
+  catch (e) { $("agents-body").innerHTML = errBox(e.message, "loadAgents"); return; }
+  const sv = d.service, mk = d.marketing;
+  const segTop = Object.entries(mk.segments).filter(([, v]) => v > 0)
+    .map(([k, v]) => `${SEGMENT_LABEL[k] || k}: <b>${v}</b>`).join(" · ") || "koi segment nahi";
+  const budgetPct = Math.min(100, Math.round((mk.month.messages_used / Math.max(1, mk.month.budget)) * 100));
+  $("agents-body").innerHTML = `
+    <div class="split2">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <b style="font-size:16px">🛎️ Service agent</b>
+          <label style="display:flex;align-items:center;gap:8px;margin:0;font-size:13px">
+            <input type="checkbox" ${sv.enabled ? "checked" : ""} style="width:auto"
+              onchange="quickSet('agent_enabled', this.checked, 'Service agent ' + (this.checked ? 'on' : 'off'))"> Active
+          </label>
+        </div>
+        <div class="grid kpis" style="grid-template-columns:repeat(2,1fr);margin:12px 0">
+          ${kpi("Replies today", sv.today.replies, "", "go('activity')")}
+          ${kpi("Owner commands", sv.today.commands, "bills, status, relay…", "go('activity')")}
+          ${kpi("Escalations", sv.today.escalations, "needed you", "go('activity')")}
+          ${kpi("FYIs sent", sv.today.fyis, "handled + informed", "go('activity')")}
+        </div>
+        <div class="sumrow"><span>📚 Knowledge</span><span><b>${sv.knowledge.faqs}</b> FAQs · <b>${sv.knowledge.corrections}</b> corrections · <b>${sv.knowledge.docs}</b> documents</span></div>
+        <div class="sumrow"><span>🙋 Teach-me queue</span><span style="color:${sv.teachme_open ? "var(--danger)" : "var(--ok)"}"><b>${sv.teachme_open}</b> pending</span></div>
+        <div class="act" style="margin-top:10px">
+          <button class="btn sm" onclick="go('training')">🎓 Train</button>
+          <button class="btn sm ghost" onclick="go('activity')">🛰 Activity</button>
+        </div>
+        <p class="muted" style="margin-top:8px">WhatsApp se train: <b>test customer</b> → sawal → <b>sikhao: sahi jawaab</b> → <b>test band</b></p>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <b style="font-size:16px">📣 Marketing agent</b>
+          <select style="width:auto" onchange="quickSet('marketing_autonomy', this.value, 'Marketing: ' + this.value)">
+            <option value="auto" ${mk.autonomy === "auto" ? "selected" : ""}>Full auto</option>
+            <option value="suggest" ${mk.autonomy === "suggest" ? "selected" : ""}>Suggest only</option>
+            <option value="off" ${mk.autonomy === "off" ? "selected" : ""}>Off</option>
+          </select>
+        </div>
+        <div class="grid kpis" style="grid-template-columns:repeat(2,1fr);margin:12px 0">
+          ${kpi("Campaigns this month", mk.month.campaigns_sent, "", "go('campaigns')")}
+          ${kpi("Orders from campaigns", mk.month.orders_attributed, money(mk.month.revenue_attributed) + " revenue", "go('campaigns')")}
+        </div>
+        <div class="sumrow"><span>🎯 Segments</span><span style="text-align:right">${segTop}</span></div>
+        <div class="sumrow"><span>💬 Message budget</span><span><b>${mk.month.messages_used}</b> / ${mk.month.budget} (${budgetPct}%)</span></div>
+        <div class="sumrow"><span>📸 Daily social</span><span>${mk.social.enabled ? `On, ${mk.social.hour}:00 IST` : "Off"} · Instagram ${mk.social.instagram_linked ? "✅ linked" : "❌ not linked"}</span></div>
+        <div class="act" style="margin-top:10px">
+          <button class="btn sm" onclick="go('campaigns')">📣 Campaigns</button>
+          <button class="btn sm ghost" onclick="go('settings')">⚙️ Limits</button>
+        </div>
+        <p class="muted" style="margin-top:8px">WhatsApp se: <b>test marketing</b> (preview) · <b>social bhejo</b> (aaj ka poster) · <b>campaign nahi</b> (brake)</p>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <b>🩺 System health</b>
+      <div class="filters" style="margin-top:8px">
+        <span class="tag">LLM: ${esc(d.health.llm_provider)}</span>
+        <span class="tag">Public URL: ${d.health.public_url_set ? "✅ set" : "❌ missing"}</span>
+        <span class="tag">Standup: ${d.health.standup_hour}:00 IST</span>
+        <span class="tag">Turnaround: ${d.health.turnaround_days} din</span>
+      </div>
+    </div>`;
+}
+async function quickSet(key, value, msg) {
+  try { await api("/admin/api/settings", { method: "PUT", body: { key, value } }); toast(msg); }
   catch (e) { toast(e.message, true); }
 }
 

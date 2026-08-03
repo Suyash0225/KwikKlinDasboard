@@ -26,6 +26,7 @@
       <div class="navsec">GROWTH</div>
       <div data-s="campaigns" onclick="go('campaigns')">📣 Campaigns</div>
       <div class="navsec">AGENT</div>
+      <div data-s="agents" onclick="go('agents')">🤖 Agents</div>
       <div data-s="training" onclick="go('training')">🎓 AI training</div>
       <div data-s="activity" onclick="go('activity')">🛰 Activity</div>
       <div class="navsec">SYSTEM</div>
@@ -212,6 +213,13 @@
         </div>
         <div><div id="camp-list"></div></div>
       </div>
+    </section>
+
+    <!-- Agents control room -->
+    <section id="sec-agents" style="display:none">
+      <div class="pagehead"><div><h2>Agents</h2><p>Your two AI employees — health, workload and controls in one place</p></div>
+        <div class="actions"><button class="btn ghost" onclick="loadAgents()">↻ Refresh</button></div></div>
+      <div id="agents-body"></div>
     </section>
 
     <!-- AI training -->
