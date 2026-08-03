@@ -428,6 +428,13 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
             await send_message(db, to_phone=phone, text=reply)
         except SendError:
             log.exception("reply_send_failed", phone=phone)
+        # first-contact numbers with no orders -> lead pipeline (never raises)
+        try:
+            from app.services.leads import note_inquiry
+
+            await note_inquiry(db, customer, text or "")
+        except Exception:
+            log.exception("lead_capture_failed")
 
 
 async def _build_customer_reply(db: AsyncSession, customer: Customer, text: str) -> str:

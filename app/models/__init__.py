@@ -1,7 +1,7 @@
-"""SQLAlchemy models.
+﻿"""SQLAlchemy models.
 
 Import everything here so that `import app.models` registers every table on
-Base.metadata — Alembic autogenerate depends on this.
+Base.metadata â€” Alembic autogenerate depends on this.
 """
 
 from app.models.agent import (
@@ -26,7 +26,7 @@ from app.models.enums import (
 )
 from app.models.escalation import Escalation
 from app.models.expense import Expense
-from app.models.marketing import Campaign, CampaignRecipient, Coupon, CouponRedemption
+from app.models.marketing import Campaign, Lead, CampaignRecipient, Coupon, CouponRedemption
 from app.models.order import Order, OrderStatusHistory, derive_payment_status
 from app.models.payment import Payment
 from app.models.rate import Rate
@@ -48,6 +48,7 @@ __all__ = [
     "EscalationStatus",
     "Expense",
     "FaqEntry",
+    "Lead",
     "OpenQuestion",
     "Order",
     "OrderStatus",
@@ -62,3 +63,4 @@ __all__ = [
     "StaffRole",
     "derive_payment_status",
 ]
+

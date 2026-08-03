@@ -104,6 +104,36 @@ async def _hourly_tick() -> None:
             await run_payment_reminders()
     except Exception:
         log.exception("reminder_jobs_failed")
+    # 10:00 daily: lead follow-up ladder; 1st of month: marketing report
+    try:
+        if now_ist.hour == 10:
+            from app.services.leads import run_lead_followups
+
+            await run_lead_followups()
+        if now_ist.day == 1 and now_ist.hour == 10 and await _claim(
+            f"mktreport:{now_ist.strftime('%Y-%m')}"
+        ):
+            from app.models import Lead
+
+            async with async_session_factory() as db:
+                rows = (
+                    await db.execute(select(Lead.stage, func.count()).group_by(Lead.stage))
+                ).all()
+                stages = " | ".join(f"{s}: {c}" for s, c in rows) or "koi lead nahi"
+                stops = (
+                    await db.execute(
+                        select(func.count()).select_from(Customer).where(Customer.opted_out)
+                    )
+                ).scalar_one()
+                try:
+                    await send_message(
+                        db, to_phone=settings.MANAGER_PHONE,
+                        text=f"📊 Mahine ki marketing report:\nLeads: {stages}\nSTOP kiye hue: {stops}",
+                    )
+                except SendError:
+                    pass
+    except Exception:
+        log.exception("lead_jobs_failed")
     # every 2 hours 08-20: stale-order follow-up pings (owner's spec)
     try:
         if 8 <= now_ist.hour <= 20 and now_ist.hour % 2 == 0:

@@ -64,7 +64,17 @@ async def weekly_suggestion() -> None:
         reach = len(members)
         usual_revenue = sum(Decimal(m["lifetime_paid"]) for m in members)
         offer = "10% off agle order par, 7 din valid"
-        copy = await _draft_copy(target_seg, offer)
+        # owner's seasonal calendar — the copy rides the season
+        season = {
+            9: "Diwali safai: parde, sofa cover, carpet", 10: "Diwali safai: parde, sofa cover, carpet",
+            11: "Kambal-razai + shaadi season (saree, sherwani, lehenga)",
+            12: "Kambal-razai + shaadi season", 1: "Kambal-razai + shaadi season",
+            2: "Kambal-razai + shaadi season",
+            3: "Holi ke baad daag safai + winter clothes storage", 4: "Holi ke baad daag safai + storage",
+            5: "Garmi: bedsheet, AC cover, curtain", 6: "Garmi: bedsheet, AC cover, curtain",
+            7: "Barish: hum dho kar, sukha kar, press karke denge", 8: "Barish: sukha ke denge wala angle",
+        }.get(date.today().month, "")
+        copy = await _draft_copy(f"{target_seg} ({season})" if season else target_seg, offer)
 
         campaign = Campaign(
             name=f"{target_seg}-{date.today().isoformat()}",

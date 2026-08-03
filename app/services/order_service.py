@@ -168,6 +168,14 @@ async def create_order(
         created_by=created_by,
     )
 
+    # lead -> customer (Marketing Agent pipeline; never raises)
+    try:
+        from app.services.leads import mark_converted
+
+        await mark_converted(db, phone)
+    except Exception:
+        log.exception("lead_convert_hook_failed")
+
     # Pickup confirmation WITH the bill details (owner's policy 03 Aug).
     from app.services.work_orders import items_summary
 

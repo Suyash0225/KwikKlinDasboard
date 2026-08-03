@@ -166,8 +166,11 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
     segs = await compute_segments(db)
     targets = segs.get(campaign.segment, [])
     queued = 0
+    from app.services.leads import check_marketing_eligible
+
     for st in targets:
-        ok, reason = await eligible(db, st["id"])
+        # THE single gate: opt-out, cap, complaints, active order, bad rating
+        ok, reason = await check_marketing_eligible(db, st["id"])
         rec = CampaignRecipient(
             campaign_id=campaign.id,
             customer_id=st["id"],

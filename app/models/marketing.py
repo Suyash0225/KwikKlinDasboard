@@ -22,6 +22,33 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 
 
+class Lead(Base):
+    """Marketing Agent spec: enquiry -> follow-up ladder -> customer."""
+
+    __tablename__ = "leads"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    phone: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    name: Mapped[str | None] = mapped_column(String(120))
+    source: Mapped[str] = mapped_column(String(40), default="whatsapp")
+    area: Mapped[str | None] = mapped_column(String(120))
+    items_text: Mapped[str | None] = mapped_column(String(300))
+    stage: Mapped[str] = mapped_column(
+        String(12), default="NEW", server_default="NEW", index=True
+    )  # NEW|CONTACTED|INTERESTED|CONVERTED|LOST|DORMANT
+    followup_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_followup_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class Campaign(Base):
     __tablename__ = "campaigns"
 

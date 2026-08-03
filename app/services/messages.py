@@ -41,6 +41,19 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Baaki: ₹{due}\nDelivery: {date}\n— {shop}",
         "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Due: ₹{due}\nDelivery: {date}\n— {shop}",
     },
+    # --- lead follow-up ladder (Marketing Agent spec) ---
+    "lead_day1": {
+        "hi": "{name} ji, Kwik Klin se yaad dila rahe hain 🙏 Aaj ya kal kabhi bhi free pickup ho sakta hai — bas time bata dijiye. — {shop}",
+        "en": "{name} ji, a gentle reminder from Kwik Klin 🙏 Free pickup today or tomorrow — just tell us a time. — {shop}",
+    },
+    "lead_day3": {
+        "hi": "{name} ji, ek baar try karke dekhiye — free pickup + delivery, kapde naye jaise. Bata dijiye kab aayein? — {shop}",
+        "en": "{name} ji, give us one try — free pickup + delivery. When shall we come? — {shop}",
+    },
+    "lead_day7": {
+        "hi": "{name} ji, aapko pareshan nahi karenge 🙏 Kabhi bhi zarurat ho to yahi message kar dijiye, hum pahunch jayenge. Dhanyavaad! — {shop}",
+        "en": "{name} ji, we won't disturb you again 🙏 Whenever you need us, just message here. Thank you! — {shop}",
+    },
     "pickup_done": {
         "hi": "Namaste! Aapke {count} kapde pickup ho gaye hain ✅ Delivery {date} tak ho jayegi. Order: {order_number} — {shop}",
         "en": "Hello! Your {count} clothes have been picked up ✅ Delivery by {date}. Order: {order_number} — {shop}",

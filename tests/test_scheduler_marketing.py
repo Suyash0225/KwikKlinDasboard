@@ -151,6 +151,10 @@ async def test_campaign_queue_send_and_track(sched_sent, sent, monkeypatch) -> N
             await s.execute(select(Order).where(Order.order_number == order.order_number))
         ).scalar_one()
         row.created_at = datetime.now(timezone.utc) - timedelta(days=75)
+        # a real lapsed customer has no ACTIVE order — the single gate
+        # (check_marketing_eligible) rightly skips anyone mid-order
+        row.status = OrderStatus.DELIVERED
+        row.actual_delivery = datetime.now(timezone.utc) - timedelta(days=74)
         await s.commit()
 
     async with async_session_factory() as db:
