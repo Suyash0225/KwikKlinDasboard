@@ -105,6 +105,13 @@ function dlCsvClient(filename, header, rows) {
   a.download = filename; a.click();
 }
 
+function kkLogout() {
+  localStorage.removeItem("kk_admin_key");
+  KEY = "";
+  toast("Logged out");
+  showLogin();
+}
+
 /* login */
 function showLogin() {
   openModal(`<h3>Sign in</h3><p class="muted">Enter your admin key to continue.</p>
@@ -173,17 +180,17 @@ function renderKpis() {
   const outstanding = CUSTOMERS_CACHE
     ? CUSTOMERS_CACHE.reduce((a, x) => a + Number(x.outstanding || 0), 0) : null;
   $("kpis").innerHTML = `
-    ${kpi("New orders today", c.today_new, "", "go('bills')")}
-    ${kpi("Today's collection", money(t.revenue || 0), "", "go('reports')")}
-    ${kpi("Revenue this month", money(m.revenue || 0), "", "go('reports')")}
-    ${kpi("Expenses this month", money(m.expenses || 0), "", "go('expenses')")}
-    ${kpi("Profit this month", money(m.profit || 0), "revenue − expenses", "go('reports')")}
-    ${kpi("Total outstanding", outstanding === null ? "…" : money(outstanding), "tap for the list", "go('customers')")}
+    ${kpi("New orders today", c.today_new, "", "go('bills')", "🧺", "orange")}
+    ${kpi("Today's collection", money(t.revenue || 0), "", "go('reports')", "₹", "green")}
+    ${kpi("Revenue this month", money(m.revenue || 0), "", "go('reports')", "📈", "blue")}
+    ${kpi("Expenses this month", money(m.expenses || 0), "", "go('expenses')", "💸", "amber")}
+    ${kpi("Profit this month", money(m.profit || 0), "revenue − expenses", "go('reports')", "💰", "teal")}
+    ${kpi("Total outstanding", outstanding === null ? "…" : money(outstanding), "tap for the list", "go('customers')", "🏦", "red")}
   `;
   if (outstanding === null) loadCustomers(true).then(renderKpis);
 }
-const kpi = (lbl, val, sub, click) =>
-  `<div class="card kpi" onclick="${click}"><div class="lbl">${lbl}</div><div class="val">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+const kpi = (lbl, val, sub, click, icon = "📊", tint = "blue") =>
+  `<div class="card kpi" onclick="${click}"><span class="kico ${tint}">${icon}</span><div class="lbl">${lbl}</div><div class="val">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
 
 function renderChips() {
   const by = DASH.counts.by_status || {};
@@ -549,9 +556,9 @@ async function loadExpenses() {
   } catch (e) { $("exp-list").innerHTML = errBox(e.message, "loadExpenses"); return; }
   const t = SUMMARY.today || {}, m = SUMMARY.month || {};
   $("exp-kpis").innerHTML =
-    kpi("Expenses today", money(t.expenses || 0), "", "") +
-    kpi("Expenses this month", money(m.expenses || 0), "", "") +
-    kpi("Profit this month", money(m.profit || 0), "revenue − expenses", "go('reports')");
+    kpi("Expenses today", money(t.expenses || 0), "", "", "📅", "amber") +
+    kpi("Expenses this month", money(m.expenses || 0), "", "", "🗓️", "pink") +
+    kpi("Profit this month", money(m.profit || 0), "revenue − expenses", "go('reports')", "💰", "green");
   renderExpenses(); renderExpChart();
 }
 function renderExpenses() {
