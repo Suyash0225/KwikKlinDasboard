@@ -218,6 +218,10 @@ async def send_campaign(campaign_id) -> None:
             ).scalar_one_or_none()
             if rec is None:
                 break
+            await db.refresh(campaign)
+            if campaign.status == "cancelled":  # owner hit the brake mid-send
+                log.info("campaign_cancelled_mid_send", campaign=str(campaign_id))
+                return
             if _in_quiet_hours_now():
                 log.info("campaign_paused_quiet_hours", campaign=str(campaign_id))
                 return

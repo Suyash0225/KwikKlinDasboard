@@ -41,9 +41,14 @@ _COPY_SYSTEM = (
 
 
 async def weekly_suggestion() -> None:
-    """Compose and send this week's campaign suggestion to the owner."""
+    """Weekly campaign: suggest to the owner, or (autonomy=auto) just do it.
+
+    Auto mode still obeys every guardrail IN CODE: opted-in only, frequency
+    cap, monthly budget, quiet hours — and the owner is told what was sent.
+    """
     async with async_session_factory() as db:
-        if await app_settings.get(db, "marketing_autonomy") == "off":
+        autonomy = await app_settings.get(db, "marketing_autonomy")
+        if autonomy == "off":
             return
         segs = await compute_segments(db)
         target_seg, pitch = None, ""
@@ -75,19 +80,37 @@ async def weekly_suggestion() -> None:
         db.add(campaign)
         await db.commit()
 
-        text = (
-            f"📣 Marketing idea:\n{campaign.rationale}\n\nMessage draft:\n"
-            f"{copy}\n\nBhejun? Reply 'campaign yes' → send hoga (sirf "
-            f"opted-in customers ko, quiet hours ke bahar). 'campaign nahi' → skip."
-        )
+        if autonomy == "auto":
+            # Full autopilot: approve + send now; TELL the owner, don't ask.
+            campaign.status = "approved"
+            await db.commit()
+            queued = await queue_campaign(db, campaign)
+            asyncio.create_task(send_campaign(campaign.id))
+            text = (
+                f"🚀 Maine campaign bhej diya (autopilot ON):\n"
+                f"{campaign.rationale}\n\nMessage:\n{copy}\n\n"
+                f"{queued} eligible customers ko ja raha hai (opted-out/"
+                f"complaint wale auto-skip). Report: dashboard → Campaigns. "
+                f"Rokna ho to: 'campaign nahi'."
+            )
+            await audit.record(
+                actor_role="system", actor="marketing", action="campaign_auto_sent",
+                args={"segment": target_seg, "queued": queued}, result=campaign.name,
+            )
+        else:
+            text = (
+                f"📣 Marketing idea:\n{campaign.rationale}\n\nMessage draft:\n"
+                f"{copy}\n\nBhejun? Reply 'campaign yes' → send hoga (sirf "
+                f"opted-in customers ko, quiet hours ke bahar). 'campaign nahi' → skip."
+            )
+            await audit.record(
+                actor_role="system", actor="marketing", action="campaign_suggested",
+                args={"segment": target_seg, "reach": reach}, result=campaign.name,
+            )
         try:
             await send_message(db, to_phone=settings.MANAGER_PHONE, text=text)
         except SendError:
             log.warning("weekly_suggestion_not_sent")  # dashboard still shows it
-        await audit.record(
-            actor_role="system", actor="marketing", action="campaign_suggested",
-            args={"segment": target_seg, "reach": reach}, result=campaign.name,
-        )
 
 
 async def _draft_copy(segment: str, offer: str) -> str:
@@ -117,6 +140,20 @@ async def approve_latest_suggestion(db, approved: bool) -> str:
             .limit(1)
         )
     ).scalar_one_or_none()
+    if campaign is None and not approved:
+        # 'campaign nahi' also works as an emergency brake on a running send
+        campaign = (
+            await db.execute(
+                select(Campaign)
+                .where(Campaign.status.in_(("approved", "sending")))
+                .order_by(Campaign.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if campaign is not None:
+            campaign.status = "cancelled"
+            await db.commit()
+            return f"🛑 '{campaign.name}' rok diya — jo bache the unko nahi jayega."
     if campaign is None:
         return "Koi campaign suggestion pending nahi hai."
     if not approved:
