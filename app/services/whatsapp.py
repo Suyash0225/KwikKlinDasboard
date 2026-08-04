@@ -32,7 +32,7 @@ from typing import NamedTuple
 
 import httpx
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -462,7 +462,11 @@ async def drain_outbound_queue() -> int:
                     select(OutboundMessage)
                     .where(
                         OutboundMessage.status == "queued",
-                        OutboundMessage.next_attempt_at <= now,
+                        # compare against the DB clock: next_attempt_at is
+                        # written by the DB, and its clock can read a few ms
+                        # ahead of ours — a just-queued row would then look
+                        # "not due yet" and wait a whole tick for nothing
+                        OutboundMessage.next_attempt_at <= func.now(),
                     )
                     .order_by(OutboundMessage.created_at)
                     .limit(30)
