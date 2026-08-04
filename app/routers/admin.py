@@ -649,6 +649,104 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
     return {"wa_message_id": wa_id, "at": datetime.now(timezone.utc).isoformat()}
 
 
+class TemplateSendIn(BaseModel):
+    phone: str
+    template_name: str = Field(min_length=2)
+    params: list[str] = Field(default_factory=list)
+
+
+@router.post("/api/inbox/send-template", dependencies=[Depends(require_admin_key)])
+async def inbox_send_template(
+    body: TemplateSendIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Send a pre-approved template — works even when the 24h window is shut."""
+    try:
+        phone = normalize_phone(body.phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    # unknown number? create the customer row so a thread exists
+    cust = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if cust is None:
+        db.add(Customer(phone=phone))
+        await db.commit()
+    try:
+        wa_id = await send_message(
+            db, to_phone=phone,
+            template_name=body.template_name,
+            template_params=[p[:600] for p in body.params],
+            sent_by="manager",
+        )
+    except ValueError as exc:  # unknown template / wrong param count
+        raise HTTPException(status_code=400, detail=str(exc))
+    except SendError as exc:
+        raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {exc}")
+    return {"wa_message_id": wa_id}
+
+
+class NewChatIn(BaseModel):
+    phone: str
+    name: str | None = None
+
+
+@router.post("/api/inbox/new-chat", dependencies=[Depends(require_admin_key)])
+async def inbox_new_chat(body: NewChatIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Create/open a thread for any number (even brand new)."""
+    try:
+        phone = normalize_phone(body.phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    cust = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if cust is None:
+        cust = Customer(phone=phone, name=(body.name or "").strip() or None)
+        db.add(cust)
+        await db.commit()
+    elif body.name and not cust.name:
+        cust.name = body.name.strip()
+        await db.commit()
+    return {"phone": phone, "name": cust.name}
+
+
+class BulkCustomersIn(BaseModel):
+    text: str = Field(min_length=3)  # lines: "number" or "name, number"
+
+
+@router.post("/api/customers/bulk", dependencies=[Depends(require_admin_key)])
+async def customers_bulk(body: BulkCustomersIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Paste a list of numbers (one per line, 'name, number' allowed)."""
+    import re as _re
+
+    added, skipped, bad = 0, 0, []
+    for raw in body.text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        name = None
+        if "," in line:
+            name, _, num = line.partition(",")
+            name, line = name.strip() or None, num.strip()
+        digits = _re.sub(r"[^\d+]", "", line)
+        try:
+            phone = normalize_phone(digits)
+        except ValueError:
+            bad.append(raw.strip()[:30])
+            continue
+        exists = (
+            await db.execute(select(Customer.id).where(Customer.phone == phone))
+        ).scalar_one_or_none()
+        if exists:
+            skipped += 1
+            continue
+        db.add(Customer(phone=phone, name=name))
+        added += 1
+    await db.commit()
+    log.info("customers_bulk_import", added=added, skipped=skipped, bad=len(bad))
+    return {"added": added, "skipped_existing": skipped, "invalid": bad[:10]}
+
+
 @router.post("/api/inbox/send-media", dependencies=[Depends(require_admin_key)])
 async def inbox_send_media(
     phone: str = Form(...),

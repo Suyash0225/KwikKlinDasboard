@@ -68,7 +68,10 @@
     <!-- Inbox -->
     <section id="sec-inbox" style="display:none">
       <div class="pagehead"><div><h2>Inbox</h2><p>WhatsApp — see and reply yourself</p></div>
-        <div class="actions"><button class="btn ghost" onclick="loadThreads()">↻ Refresh</button></div></div>
+        <div class="actions">
+          <button class="btn" onclick="newChatModal()">➕ New chat</button>
+          <button class="btn ghost" onclick="loadThreads()">↻ Refresh</button>
+        </div></div>
       <div class="inboxwrap">
         <div class="threads">
           <div style="padding:10px"><input id="th-search" placeholder="Search…" oninput="renderThreads()"></div>
@@ -80,6 +83,7 @@
           <div class="newmsg-pill" id="newmsg-pill" onclick="scrollChatBottom()">⬇ Naye messages</div>
           <div class="composer" style="position:relative">
             <div class="emojis" id="emoji-pal"></div>
+            <button class="btn ghost sm" onclick="tplSendModal()" title="Template bhejo (window band ho tab bhi)">📑</button>
             <button class="btn ghost sm" onclick="toggleEmojis()">😊</button>
             <label class="btn ghost sm" style="cursor:pointer">📎<input type="file" accept="image/*" style="display:none" onchange="sendMedia(this)"></label>
             <input type="text" id="chat-input" placeholder="Type a message… (Enter to send)" onkeydown="if(event.key==='Enter')sendChat()">
@@ -155,7 +159,8 @@
 
     <!-- Customers -->
     <section id="sec-customers" style="display:none">
-      <div class="pagehead"><div><h2>Customers</h2><p>Ledger — sorted by highest outstanding first</p></div></div>
+      <div class="pagehead"><div><h2>Customers</h2><p>Ledger — sorted by highest outstanding first</p></div>
+        <div class="actions"><button class="btn ghost" onclick="bulkImportModal()">📥 Bulk import numbers</button></div></div>
       <div class="filters"><input id="cust-search" placeholder="Search name or number…" oninput="renderCustomers()"></div>
       <div class="card" style="padding:0;overflow:hidden"><div id="cust-list"></div></div>
     </section>

@@ -1507,6 +1507,93 @@ async function sendChat() {
     openThread(OPEN_PHONE, true, false);
   } catch (e) { toast(e.message, true); input.value = text; }
 }
+/* new chat with any number */
+function newChatModal() {
+  openModal(`<h3>➕ New chat</h3>
+    <div class="frm">
+      <div><label>Mobile number</label><input id="nc-phone" placeholder="98765 43210" autofocus></div>
+      <div><label>Name (optional)</label><input id="nc-name" placeholder="Customer name"></div>
+    </div>
+    <p class="muted">Naya number ho to pehla message sirf <b>approved template</b> se ja sakta hai (WhatsApp ka niyam) — chat khulne par 📑 button use karo.</p>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn" id="nc-go">Open chat</button></div>`);
+  $("nc-go").onclick = (e) => busy(e.target, async () => {
+    const r = await api("/admin/api/inbox/new-chat", { method: "POST",
+      body: { phone: $("nc-phone").value.trim(), name: $("nc-name").value.trim() || null } });
+    closeModal();
+    await loadThreads();
+    openThread(r.phone);
+  });
+}
+
+/* template picker send (works outside the 24h window) */
+let TPL_CACHE = [];
+async function tplSendModal() {
+  if (!OPEN_PHONE) { toast("Pehle koi chat kholo", true); return; }
+  openModal(`<h3>📑 Template bhejo</h3><div class="frm" id="tps-body">${skeleton(2)}</div>`);
+  try { TPL_CACHE = (await api("/admin/api/templates")).filter((t) => t.status === "APPROVED"); }
+  catch (e) { $("tps-body").innerHTML = errBox(e.message, "closeModal"); return; }
+  if (!TPL_CACHE.length) {
+    $("tps-body").innerHTML = `<p class="muted">Abhi koi APPROVED template nahi — Campaigns → Template Studio mein status dekho.</p>
+      <div class="btnrow"><button class="btn ghost" onclick="closeModal()">OK</button></div>`;
+    return;
+  }
+  $("tps-body").innerHTML = `
+    <div><label>Template</label><select id="tps-name" onchange="tplSendPick()">
+      ${TPL_CACHE.map((t, i) => `<option value="${i}">${esc(t.name)} (${t.category})</option>`).join("")}
+    </select></div>
+    <div id="tps-params"></div>
+    <div style="background:#e5ddd5;border-radius:10px;padding:10px"><div id="tps-preview" style="background:#fff;border-radius:8px;padding:8px 10px;font-size:13px;white-space:pre-wrap"></div></div>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="tps-go">Send template</button></div>`;
+  tplSendPick();
+  $("tps-go").onclick = (e) => busy(e.target, async () => {
+    const t = TPL_CACHE[parseInt($("tps-name").value)];
+    const n = (t.body.match(/\{\{\d+\}\}/g) || []).length;
+    const params = [];
+    for (let i = 1; i <= n; i++) params.push($("tps-p" + i).value.trim());
+    if (params.some((p) => !p)) throw new Error("Sab variables bharo");
+    await api("/admin/api/inbox/send-template", { method: "POST",
+      body: { phone: OPEN_PHONE, template_name: t.name, params } });
+    closeModal(); toast(T.sent); openThread(OPEN_PHONE, true, false);
+  });
+}
+function tplSendPick() {
+  const t = TPL_CACHE[parseInt($("tps-name").value) || 0];
+  if (!t) return;
+  const n = (t.body.match(/\{\{\d+\}\}/g) || []).length;
+  $("tps-params").innerHTML = Array.from({ length: n }, (_, i) =>
+    `<div><label>Variable {{${i + 1}}}</label><input id="tps-p${i + 1}" oninput="tplSendPrev()"></div>`).join("");
+  tplSendPrev();
+}
+function tplSendPrev() {
+  const t = TPL_CACHE[parseInt($("tps-name").value) || 0];
+  if (!t) return;
+  let body = t.body;
+  (body.match(/\{\{(\d+)\}\}/g) || []).forEach((m) => {
+    const i = m.replace(/\D/g, "");
+    body = body.replace(m, $("tps-p" + i)?.value || `[${i}]`);
+  });
+  $("tps-preview").textContent = body;
+}
+
+/* bulk customer numbers */
+function bulkImportModal() {
+  openModal(`<h3>📥 Bulk import numbers</h3>
+    <div class="frm">
+      <textarea id="bi-text" rows="8" placeholder="Ek line mein ek number:\n9876543210\nSharma ji, 9812345678\nSeema Mam, 98111 22333"></textarea>
+    </div>
+    <p class="muted">Format: sirf number, ya 'naam, number'. Jo pehle se hain wo skip honge. Yaad rahe — marketing message sirf opted-in logon ko jayega.</p>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn" id="bi-go">Import</button></div>`);
+  $("bi-go").onclick = (e) => busy(e.target, async () => {
+    const r = await api("/admin/api/customers/bulk", { method: "POST", body: { text: $("bi-text").value } });
+    closeModal();
+    toast(`${r.added} naye jude, ${r.skipped_existing} pehle se the` + (r.invalid.length ? `, ${r.invalid.length} galat` : ""));
+    loadCustomers();
+  });
+}
+
 function toggleEmojis() { $("emoji-pal").classList.toggle("open"); }
 function addEmoji(e) { $("chat-input").value += e; $("chat-input").focus(); }
 async function sendMedia(input) {
