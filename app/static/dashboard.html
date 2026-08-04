@@ -74,8 +74,14 @@
         </div></div>
       <div class="inboxwrap">
         <div class="threads">
-          <div style="padding:10px"><input id="th-search" placeholder="Search…" oninput="renderThreads()"></div>
-          <div id="th-list"></div>
+          <div class="th-head">
+            <div class="kkav">KK</div>
+            <div class="spacer"></div>
+            <button class="th-ico" onclick="newChatModal()" title="New chat">✚</button>
+            <button class="th-ico" onclick="bulkImportModal()" title="Bulk import numbers">⋮</button>
+          </div>
+          <div class="th-search"><input id="th-search" placeholder="Search" oninput="renderThreads()"></div>
+          <div id="th-list" style="flex:1;overflow-y:auto"></div>
         </div>
         <div class="chatpane" style="position:relative">
           <div class="chathead" id="chat-head"><span class="muted">Pick a conversation on the left…</span></div>
@@ -86,8 +92,8 @@
             <button class="btn ghost sm" onclick="tplSendModal()" title="Template bhejo (window band ho tab bhi)">📑</button>
             <button class="btn ghost sm" onclick="toggleEmojis()">😊</button>
             <label class="btn ghost sm" style="cursor:pointer">📎<input type="file" accept="image/*" style="display:none" onchange="sendMedia(this)"></label>
-            <input type="text" id="chat-input" placeholder="Type a message… (Enter to send)" onkeydown="if(event.key==='Enter')sendChat()">
-            <button class="btn" onclick="sendChat()">Send</button>
+            <input type="text" id="chat-input" placeholder="Type a message" onkeydown="if(event.key==='Enter')sendChat()">
+            <button class="btn" onclick="sendChat()" title="Send" aria-label="Send">➤</button>
           </div>
         </div>
       </div>

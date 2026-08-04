@@ -1357,11 +1357,15 @@ function renderThreads() {
   const rows = THREADS.filter((t) => !q || t.name.toLowerCase().includes(q) || t.phone.includes(q));
   $("th-list").innerHTML = rows.map((t) => {
     const chip = t.kind === "staff" ? '<span class="staff-chip">staff</span>' : t.kind === "admin" ? '<span class="staff-chip">👑 you</span>' : "";
-    const unread = isUnread(t) ? ' style="border-left:3px solid var(--brand)"' : "";
-    return `<div class="thread-item ${t.phone === OPEN_PHONE ? "on" : ""}"${unread}
+    return `<div class="thread-item ${t.phone === OPEN_PHONE ? "on" : ""}"
       onclick="openThread('${t.phone}')" ontouchstart="thTouchStart(event,'${t.phone}')" ontouchend="thTouchEnd(event,'${t.phone}')">
-      <div class="nm"><span>${isUnread(t) ? "<b>●</b> " : ""}${esc(t.name)}${chip}</span><span class="t">${fmtWhen(t.last_at)}</span></div>
-      <div class="pv">${t.last_direction === "OUTBOUND" ? "➡️ " : ""}${esc(t.last_text)}</div></div>`;
+      <div style="display:flex;gap:10px;align-items:center">
+        ${avatar(t.name)}
+        <div style="flex:1;min-width:0">
+          <div class="nm"><span>${esc(t.name)}${chip}</span><span class="t">${fmtWhen(t.last_at)}</span></div>
+          <div class="pv">${isUnread(t) ? '<b style="color:#00A884">● </b>' : ""}${t.last_direction === "OUTBOUND" ? "✓✓ " : ""}${esc(t.last_text)}</div>
+        </div>
+      </div></div>`;
   }).join("") || `<div class="thread-item">${T.noData}</div>`;
 }
 
@@ -1446,11 +1450,19 @@ async function openThread(phone, silent = false, push = true) {
     ${d.kind === "customer" ? `<button class="btn sm ghost" id="agent-pause-btn" onclick="toggleAgentPause()">🤖 Agent: …</button>` : ""}`;
   refreshPauseBtn();
   const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  let lastDay = "";
   const html = (d.messages || []).map((m) => {
+    let chip = "";
+    const day = new Date(m.at).toDateString();
+    if (day !== lastDay) {
+      lastDay = day;
+      const today = new Date().toDateString() === day;
+      chip = `<div class="daychip">${today ? "today" : fmtDate(m.at)}</div>`;
+    }
     let body = esc(m.text || "");
     const img = (m.text || "").match(/^\[image:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
     if (img) body = `<img src="${img[1]}?key=${encodeURIComponent(KEY)}" loading="lazy" width="280" height="210">${esc(img[2] || "")}`;
-    return `<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${body}
+    return `${chip}<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${body}
       <span class="bt">${fmtWhen(m.at)}${m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") : ""}</span></div>`;
   }).join("") || emptyBox("Chat appears here", "💬");
   log.innerHTML = html;
