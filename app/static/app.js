@@ -3,7 +3,12 @@
 
 "use strict";
 
-if (new URLSearchParams(location.search).get("probe")) document.title = "PROBE-BOOT";
+if (new URLSearchParams(location.search).get("probe")) {
+  document.title = "PROBE-BOOT";
+  window.addEventListener("error", (e) => {
+    document.title = "JSERR: " + e.message + " @line " + e.lineno;
+  });
+}
 
 /* ============================= strings ============================= */
 const T = {
@@ -1543,14 +1548,24 @@ let TPL_CACHE = [];
 async function tplSendModal() {
   if (!OPEN_PHONE) { toast("Pehle koi chat kholo", true); return; }
   openModal(`<h3>📑 Template bhejo</h3><div class="frm" id="tps-body">${skeleton(2)}</div>`);
-  try { TPL_CACHE = (await api("/admin/api/templates")).filter((t) => t.status === "APPROVED"); }
-  catch (e) { $("tps-body").innerHTML = errBox(e.message, "closeModal"); return; }
+  let note = "";
+  try {
+    TPL_CACHE = (await api("/admin/api/templates")).filter((t) => t.status === "APPROVED");
+    if (!TPL_CACHE.length) note = "⚠️ Meta par abhi koi template APPROVED nahi — bhejne par fail ho sakta hai.";
+    if (!TPL_CACHE.length) TPL_CACHE = await api("/admin/api/templates/registry");
+  } catch (e) {
+    // Meta down/blocked -> local registry, honest warning
+    try { TPL_CACHE = await api("/admin/api/templates/registry"); } catch (e2) { TPL_CACHE = []; }
+    note = "⚠️ Meta API abhi unreachable — list local registry se hai, send try hoga par fail ho sakta hai.";
+  }
   if (!TPL_CACHE.length) {
-    $("tps-body").innerHTML = `<p class="muted">Abhi koi APPROVED template nahi — Campaigns → Template Studio mein status dekho.</p>
+    $("tps-body").innerHTML = `<p class="muted">Koi template nahi mila.</p>
       <div class="btnrow"><button class="btn ghost" onclick="closeModal()">OK</button></div>`;
     return;
   }
+  if (note) note = `<p class="muted" style="color:var(--warn)">${note}</p>`;
   $("tps-body").innerHTML = `
+    ${note}
     <div><label>Template</label><select id="tps-name" onchange="tplSendPick()">
       ${TPL_CACHE.map((t, i) => `<option value="${i}">${esc(t.name)} (${t.category})</option>`).join("")}
     </select></div>

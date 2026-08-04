@@ -612,6 +612,24 @@ async def _graph(method: str, path: str, **kw):
     return r.status_code, r.json()
 
 
+@router.get("/templates/registry")
+async def templates_registry() -> list[dict]:
+    """Local template registry — works even when Meta's API is down."""
+    from app.services.templates import _DYNAMIC, TEMPLATES
+
+    merged = {**TEMPLATES, **_DYNAMIC}
+    return [
+        {
+            "name": name, "status": "UNKNOWN", "category": "UTILITY",
+            "body": " ".join("{{%d}}" % i for i in range(1, spec["param_count"] + 1))
+            or "(no variables)",
+            "param_count": spec["param_count"],
+        }
+        for name, spec in merged.items()
+        if name != "hello_world"
+    ]
+
+
 @router.get("/templates")
 async def list_templates() -> list[dict]:
     if not _settings.WHATSAPP_WABA_ID:

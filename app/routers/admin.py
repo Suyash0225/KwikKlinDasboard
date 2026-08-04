@@ -809,6 +809,20 @@ async def serve_media(name: str, key: str = Query(default="")) -> FileResponse:
 
 
 @router.get("")
-async def dashboard_page() -> FileResponse:
-    """The dashboard page itself — data stays key-protected behind the API."""
-    return FileResponse(_DASHBOARD_FILE, media_type="text/html")
+async def dashboard_page() -> Response:
+    """The dashboard page — asset links get an mtime version stamp so the
+    browser can never serve a stale app.js/app.css against fresh HTML
+    (that mix = dead buttons + broken styling)."""
+    html = _DASHBOARD_FILE.read_text(encoding="utf-8")
+    static_dir = _DASHBOARD_FILE.parent
+    v = int(max(
+        (static_dir / "app.js").stat().st_mtime,
+        (static_dir / "app.css").stat().st_mtime,
+    ))
+    import re as _re
+
+    html = _re.sub(r"(app\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
+    return Response(
+        content=html, media_type="text/html",
+        headers={"Cache-Control": "no-cache"},
+    )
