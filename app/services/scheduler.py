@@ -181,14 +181,22 @@ async def _hourly_tick() -> None:
                 params={"fields": "display_phone_number"},
             )
         if _r.status_code == 200 and await _claim(
-            f"meta-unblocked:{now_ist.strftime('%Y-%m-%d')}"
+            f"meta-unblocked:{now_ist.strftime('%Y-%m-%d-%H')}"
         ):
+            # block ke दौरान tunnel badla ho sakta hai — webhook turant sync
+            from app.services import app_settings as _as
+            from app.services.tunnel_guard import _update_meta_webhook
+
+            async with async_session_factory() as db:
+                base = (await _as.get(db, "public_base_url") or "").rstrip("/")
+            hooked = await _update_meta_webhook(base) if base else False
             async with async_session_factory() as db:
                 try:
                     await send_message(
                         db, to_phone=settings.MANAGER_PHONE,
-                        text="🎉 Meta ka block hat gaya! Bot wapas zinda hai — "
-                             "templates/messages sab chalu. Kuch karna nahi hai.",
+                        text="🎉 Meta ka block hat gaya! Bot wapas zinda hai"
+                             + (" — webhook bhi sync ✅" if hooked else " (webhook sync retry hoga)")
+                             + ". Kuch karna nahi hai.",
                     )
                 except SendError:
                     pass
