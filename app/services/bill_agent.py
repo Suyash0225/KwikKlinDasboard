@@ -902,17 +902,67 @@ _QUERY_SYSTEM = (
 )
 
 
+_STEP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string"},
+        "args": {"type": "string"},
+        "answer": {"type": "string"},
+    },
+    "required": ["tool", "args", "answer"],
+}
+
+MAX_TOOL_ROUNDS = 3
+
+
 async def _answer_manager_query(db: AsyncSession, text: str) -> str | None:
-    """Owner asked something free-form — answer from live DB aggregates."""
+    """Owner asked something free-form.
+
+    The agent may LOOK THINGS UP before answering: each round it either
+    names a tool (we run it, feed back the result) or gives the final
+    answer. That is the whole difference between "dashboard dekh lo" and a
+    real answer — it can fetch what it wasn't handed up front.
+    """
+    from app.services import agent_tools
+
     facts = await _manager_facts(db)
-    reply = await llm_client.ask(
-        system=_QUERY_SYSTEM,
-        user_text=f"FACTS:\n{facts}\n\nOWNER'S QUESTION:\n{text[:500]}",
-        model=llm_client.MODEL_SMART,
-        max_tokens=400,
+    system = _QUERY_SYSTEM + "\n\nTOOLS you can use:\n" + agent_tools._tool_help() + (
+        "\nEach turn: either set tool+args (to look something up / do it) and "
+        "leave answer empty, OR leave tool empty and write the final answer. "
+        "Use a tool whenever the SNAPSHOT does not already contain the exact "
+        "detail asked for — guessing or deflecting is not allowed. After a "
+        "tool result, answer from it."
     )
-    reply = reply.strip()
-    log.info("manager_query_answered", chars=len(reply))
+    convo = f"SNAPSHOT:\n{facts}\n\nOWNER'S MESSAGE:\n{text[:500]}"
+    used: list[str] = []
+
+    for _ in range(MAX_TOOL_ROUNDS):
+        step = await llm_client.ask_json(
+            system=system, user_text=convo, schema=_STEP_SCHEMA,
+            model=llm_client.MODEL_SMART, max_tokens=700,
+        )
+        tool = (step.get("tool") or "").strip()
+        answer = (step.get("answer") or "").strip()
+        if not tool:
+            if answer:
+                log.info("manager_query_answered", chars=len(answer), tools=used)
+                return answer
+            break
+        args = (step.get("args") or "").strip()
+        observation = await agent_tools.run_tool(db, tool, args)
+        used.append(tool)
+        convo += f"\n\nTOOL {tool}({args}) ka result:\n{observation}"
+
+    # Out of rounds — force a final answer from whatever we gathered.
+    reply = (
+        await llm_client.ask(
+            system=system + "\nAb koi tool nahi. Jo mila hai usi se jawab do.",
+            user_text=convo,
+            model=llm_client.MODEL_SMART,
+            max_tokens=500,
+        )
+    ).strip()
+    log.info("manager_query_answered", chars=len(reply), tools=used, forced=True)
     return reply or None
 
 
