@@ -1019,8 +1019,10 @@ async def backup_json(db: AsyncSession = Depends(get_db)) -> dict:
     (Full binary-safe backups: pg_dump. This is the owner-friendly export.)
     """
     from app.models import (
+        Correction as _Cr,
         Coupon as _Cp,
         Customer as _C,
+        DocChunk as _D,
         Expense as _E,
         FaqEntry as _F,
         Order as _O,
@@ -1048,6 +1050,14 @@ async def backup_json(db: AsyncSession = Depends(get_db)) -> dict:
     expenses = (await db.execute(select(_E))).scalars().all()
     coupons = (await db.execute(select(_Cp))).scalars().all()
     faqs = (await db.execute(select(_F))).scalars().all()
+    # everything the owner TAUGHT the agent — without these the export
+    # restores the business but loses the agent's learning
+    corrections = (await db.execute(select(_Cr))).scalars().all()
+    doc_chunks = (
+        (await db.execute(select(_D).order_by(_D.document, _D.chunk_index)))
+        .scalars()
+        .all()
+    )
     return {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "customers": [_row(c, ["phone", "name", "address", "opted_out", "created_at"]) for c in customers],
@@ -1063,6 +1073,13 @@ async def backup_json(db: AsyncSession = Depends(get_db)) -> dict:
         "expenses": [_row(e, ["category", "amount", "spent_on", "description"]) for e in expenses],
         "coupons": [_row(c, ["code", "discount_type", "value", "active"]) for c in coupons],
         "faq": [_row(f, ["question", "answer", "audience", "enabled"]) for f in faqs],
+        "corrections": [
+            _row(c, ["question", "correct_reply", "audience", "enabled", "created_at"])
+            for c in corrections
+        ],
+        "doc_chunks": [
+            _row(d, ["document", "chunk_index", "content", "enabled"]) for d in doc_chunks
+        ],
         "settings": _redact_settings(await app_settings.all_settings(db)),
     }
 
