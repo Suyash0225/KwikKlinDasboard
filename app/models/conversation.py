@@ -8,7 +8,7 @@ database check constraint, not just application code.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,6 +24,10 @@ class Conversation(Base):
             "(customer_id IS NULL) <> (staff_id IS NULL)",
             name="exactly_one_participant",
         ),
+        # Thread views always read "WHERE participant = ? ORDER BY created_at
+        # DESC LIMIT n" — these composites keep that a pure index scan.
+        Index("ix_conversations_customer_created", "customer_id", "created_at"),
+        Index("ix_conversations_staff_created", "staff_id", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

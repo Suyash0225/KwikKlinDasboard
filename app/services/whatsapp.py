@@ -57,7 +57,15 @@ class Button(NamedTuple):
 
 
 class SendError(Exception):
-    """A message could not be sent. Caller decides how to degrade."""
+    """A message could not be sent. Caller decides how to degrade.
+
+    transient=True means network/5xx/429 — worth retrying later. Transient
+    failures are auto-queued in outbound_queue and retried by the scheduler.
+    """
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 class WindowClosedError(SendError):
@@ -73,6 +81,7 @@ async def send_message(
     template_name: str | None = None,
     template_params: list[str] | None = None,
     sent_by: str = "bot",
+    enqueue_on_fail: bool = True,
 ) -> str:
     """Send one WhatsApp message. Returns Meta's wa_message_id.
 
@@ -168,7 +177,22 @@ async def send_message(
         logged_text = text or ""
 
     # --- send (with one retry on transient failure) ---
-    data = await _post_with_retry(payload, to_phone)
+    try:
+        data = await _post_with_retry(payload, to_phone)
+    except SendError as exc:
+        if exc.transient and enqueue_on_fail:
+            await _enqueue_outbound(
+                db,
+                to_phone,
+                {
+                    "text": text,
+                    "buttons": [[b.id, b.title] for b in buttons] if buttons else None,
+                    "template_name": template_name,
+                    "template_params": template_params,
+                    "sent_by": sent_by,
+                },
+            )
+        raise
     wa_message_id: str = data["messages"][0]["id"]
     log.info(
         "whatsapp_sent",
@@ -320,9 +344,11 @@ async def _find_recipient(
 
 
 async def _post_with_retry(payload: dict, to_phone: str) -> dict:
-    """POST to the Graph API. One retry on network error / 5xx, then raise."""
+    """POST to the Graph API. One retry on network error / 5xx / 429, then
+    raise SendError — transient=True for anything worth retrying later."""
     headers = {"Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"}
     last_error: str = "unknown"
+    transient = False
 
     for attempt in (1, 2):
         try:
@@ -330,6 +356,7 @@ async def _post_with_retry(payload: dict, to_phone: str) -> dict:
                 r = await client.post(GRAPH_URL, headers=headers, json=payload)
         except httpx.TransportError as exc:
             last_error = f"network error: {exc}"
+            transient = True
             log.warning("whatsapp_send_network_error", to=to_phone, attempt=attempt, error=str(exc))
             if attempt == 1:
                 await asyncio.sleep(1.0)
@@ -341,18 +368,127 @@ async def _post_with_retry(payload: dict, to_phone: str) -> dict:
 
         err = r.json().get("error", {})
         last_error = f"{r.status_code} code={err.get('code')} {err.get('message')}"
+        if r.status_code == 429:
+            transient = True
+            retry_after = _parse_retry_after(r.headers.get("Retry-After"))
+            log.warning("whatsapp_send_rate_limited", to=to_phone, attempt=attempt, retry_after=retry_after)
+            if attempt == 1:
+                await asyncio.sleep(min(retry_after, 5.0))
+                continue
+            break
         if r.status_code >= 500:
+            transient = True
             log.warning("whatsapp_send_5xx", to=to_phone, attempt=attempt, error=last_error)
             if attempt == 1:
                 await asyncio.sleep(1.0)
                 continue
             break
-        # 4xx: our bug or Meta policy — retrying won't help.
+        # other 4xx: our bug or Meta policy — retrying won't help.
         log.error("whatsapp_send_rejected", to=to_phone, error=last_error)
         break
 
-    raise SendError(f"send to {to_phone} failed: {last_error}")
+    raise SendError(f"send to {to_phone} failed: {last_error}", transient=transient)
+
+
+def _parse_retry_after(value: str | None) -> float:
+    try:
+        return max(float(value), 1.0) if value else 2.0
+    except ValueError:
+        return 2.0
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# --- outbound retry queue -------------------------------------------------
+# A transient send failure must never lose a customer message: it lands in
+# outbound_queue and the scheduler drains it with exponential backoff.
+
+MAX_OUTBOUND_ATTEMPTS = 8
+
+
+async def _enqueue_outbound(db: AsyncSession, to_phone: str, payload: dict) -> None:
+    """Queue a failed send for retry. Never raises — the original SendError
+    is the caller's signal; this is purely a safety net on top."""
+    from app.models import OutboundMessage
+
+    try:
+        await db.rollback()  # the failed send may have left the session dirty
+        db.add(OutboundMessage(to_phone=to_phone, payload=payload))
+        await db.commit()
+        log.info("outbound_queued_for_retry", to=to_phone)
+    except Exception:
+        log.exception("outbound_enqueue_failed", to=to_phone)
+
+
+async def drain_outbound_queue() -> int:
+    """Scheduler entry: retry queued sends that are due. Returns sends made.
+
+    Backoff doubles from 5 min up to 6 h; MAX_OUTBOUND_ATTEMPTS transient
+    failures (or any permanent failure) dead-letters the row — visible in
+    the table for forensics, never silently dropped.
+    """
+    from app.database import async_session_factory
+    from app.models import OutboundMessage
+
+    now = _now()
+    sent = 0
+    async with async_session_factory() as db:
+        rows = (
+            (
+                await db.execute(
+                    select(OutboundMessage)
+                    .where(
+                        OutboundMessage.status == "queued",
+                        OutboundMessage.next_attempt_at <= now,
+                    )
+                    .order_by(OutboundMessage.created_at)
+                    .limit(30)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for row in rows:
+            p = row.payload or {}
+            raw_buttons = p.get("buttons") or []
+            buttons = [Button(b[0], b[1]) for b in raw_buttons] or None
+            try:
+                await send_message(
+                    db,
+                    to_phone=row.to_phone,
+                    text=p.get("text"),
+                    buttons=buttons,
+                    template_name=p.get("template_name"),
+                    template_params=p.get("template_params"),
+                    sent_by=p.get("sent_by") or "bot",
+                    enqueue_on_fail=False,
+                )
+            except WindowClosedError as exc:
+                await db.rollback()
+                row.status = "dead"
+                row.last_error = f"window closed: {exc}"
+            except SendError as exc:
+                await db.rollback()
+                row.attempts += 1
+                row.last_error = str(exc)[:500]
+                if not exc.transient or row.attempts >= MAX_OUTBOUND_ATTEMPTS:
+                    row.status = "dead"
+                    log.error("outbound_dead_lettered", to=row.to_phone, error=row.last_error)
+                else:
+                    backoff = min(300 * (2 ** row.attempts), 21_600)
+                    row.next_attempt_at = now + timedelta(seconds=backoff)
+            except Exception:
+                await db.rollback()
+                log.exception("outbound_drain_unexpected", to=row.to_phone)
+                row.attempts += 1
+                row.status = "dead" if row.attempts >= MAX_OUTBOUND_ATTEMPTS else "queued"
+                row.next_attempt_at = now + timedelta(seconds=600)
+            else:
+                row.status = "sent"
+                row.sent_at = now
+                sent += 1
+            db.add(row)
+            await db.commit()
+    return sent

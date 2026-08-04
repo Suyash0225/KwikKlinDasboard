@@ -23,7 +23,7 @@ import hashlib
 import hmac
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, Query, Request
@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import Conversation, Customer, Direction, Staff
+from app.models import Conversation, Customer, Direction, Staff, WebhookEvent
 from app.services.ai_agent import build_ai_reply
 from app.services.bill_agent import handle_staff_message
 from app.services.messages import get_message, status_label
@@ -129,7 +129,7 @@ async def verify_webhook(
     challenge: str = Query("", alias="hub.challenge"),
 ) -> PlainTextResponse:
     """Meta's subscription handshake: echo the challenge iff the token matches."""
-    if mode == "subscribe" and token == settings.WHATSAPP_VERIFY_TOKEN:
+    if mode == "subscribe" and hmac.compare_digest(token, settings.WHATSAPP_VERIFY_TOKEN):
         log.info("webhook_verify_ok")
         return PlainTextResponse(challenge)
     log.warning("webhook_verify_failed", mode=mode)
@@ -153,11 +153,22 @@ async def receive_webhook(
         log.warning("webhook_bad_json")
         return JSONResponse({"status": "ignored"})
 
+    # Journal FIRST: once this commit lands, the event can never be lost —
+    # a crash mid-processing is replayed by the scheduler from this row.
+    event = await _journal_event(db, "meta", body, payload)
+    if event is None:
+        return JSONResponse({"status": "duplicate"})
+    event_key = event.event_key
+
     try:
         await _process_payload(payload, db)
-    except Exception:
-        # Still 200 — see module docstring. The failure is logged with stack.
+    except Exception as exc:
+        # Still 200 — see module docstring. The failure is logged with stack
+        # and the journal row stays 'failed' for the retry job.
         log.exception("webhook_processing_failed")
+        await _mark_event(db, event_key, "failed", error=repr(exc))
+    else:
+        await _mark_event(db, event_key, "processed")
 
     return JSONResponse({"status": "received"})
 
@@ -176,15 +187,25 @@ async def receive_dotpe_webhook(
     if not settings.DOTPE_WEBHOOK_TOKEN:
         log.warning("dotpe_webhook_disabled_no_token")
         return JSONResponse({"error": "disabled"}, status_code=403)
-    if request.headers.get("Dotpe-Webhook-Token") != settings.DOTPE_WEBHOOK_TOKEN:
+    if not hmac.compare_digest(
+        request.headers.get("Dotpe-Webhook-Token", ""), settings.DOTPE_WEBHOOK_TOKEN
+    ):
         log.warning("dotpe_webhook_bad_token")
         return JSONResponse({"error": "invalid token"}, status_code=403)
 
+    body = await request.body()
     try:
-        payload = json.loads(await request.body())
+        payload = json.loads(body)
     except json.JSONDecodeError:
         # Their verification test may not be JSON — 200 keeps setup working.
         return JSONResponse({"status": "ok"})
+
+    event_key = None
+    if "message" in payload:
+        event = await _journal_event(db, "dotpe", body, payload)
+        if event is None:
+            return JSONResponse({"status": "duplicate"})
+        event_key = event.event_key
 
     try:
         if "message" in payload:
@@ -201,8 +222,13 @@ async def receive_dotpe_webhook(
             )
         else:
             log.info("dotpe_webhook_unknown_event", keys=list(payload.keys()))
-    except Exception:
+    except Exception as exc:
         log.exception("dotpe_webhook_processing_failed")
+        if event_key is not None:
+            await _mark_event(db, event_key, "failed", error=repr(exc))
+    else:
+        if event_key is not None:
+            await _mark_event(db, event_key, "processed")
 
     return JSONResponse({"status": "received"})
 
@@ -234,6 +260,103 @@ def _dotpe_to_meta_shape(payload: dict) -> dict:
         "type": "text",
         "text": {"body": body},
     }
+
+
+async def _journal_event(
+    db: AsyncSession, source: str, body: bytes, payload: dict
+) -> WebhookEvent | None:
+    """Persist the raw event before any processing. None = already journaled
+    (an exact redelivery), so the caller must skip processing."""
+    key = hashlib.sha256(body).hexdigest()
+    event = WebhookEvent(source=source, event_key=key, payload=payload)
+    db.add(event)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        log.info("webhook_event_duplicate", source=source, event_key=key)
+        return None
+    return event
+
+
+async def _mark_event(
+    db: AsyncSession, event_key: str, status: str, error: str | None = None
+) -> None:
+    """Update the journal row after processing. Never raises — a failure here
+    only means the retry job reprocesses an already-handled event, which the
+    wa_message_id dedup absorbs. Plain UPDATE by key: after a rollback the
+    ORM instance is expired and unusable in async code."""
+    from sqlalchemy import update
+
+    try:
+        await db.rollback()  # processing may have left the session dirty
+        await db.execute(
+            update(WebhookEvent)
+            .where(WebhookEvent.event_key == event_key)
+            .values(
+                status=status,
+                error=error[:2000] if error else None,
+                attempts=WebhookEvent.attempts + 1,
+                processed_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.commit()
+    except Exception:
+        log.exception("webhook_event_mark_failed", event_key=event_key)
+
+
+_MAX_EVENT_ATTEMPTS = 5
+
+
+async def retry_stuck_webhook_events() -> int:
+    """Scheduler entry: replay journaled events that failed or got stuck.
+
+    'failed'   = processing raised; retry with fresh state.
+    'received' = journaled but never marked — the process crashed mid-handling.
+    After _MAX_EVENT_ATTEMPTS the row is marked 'dead' (visible for forensics).
+    Returns the number of events retried.
+    """
+    from app.database import async_session_factory
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+    retried = 0
+    async with async_session_factory() as db:
+        # plain tuples, not ORM instances — the rollback inside _mark_event
+        # would expire instances and async lazy-refresh blows up
+        rows = (
+            await db.execute(
+                select(
+                    WebhookEvent.event_key,
+                    WebhookEvent.attempts,
+                    WebhookEvent.source,
+                    WebhookEvent.payload,
+                    WebhookEvent.error,
+                )
+                .where(
+                    WebhookEvent.status.in_(("failed", "received")),
+                    WebhookEvent.received_at <= cutoff,
+                )
+                .order_by(WebhookEvent.received_at)
+                .limit(50)
+            )
+        ).all()
+        for key, attempts, source, payload, error in rows:
+            if (attempts or 0) >= _MAX_EVENT_ATTEMPTS:
+                await _mark_event(db, key, "dead", error=error)
+                continue
+            retried += 1
+            try:
+                if source == "dotpe":
+                    if "message" in payload:
+                        await _handle_inbound_message(_dotpe_to_meta_shape(payload), db)
+                else:
+                    await _process_payload(payload, db)
+            except Exception as exc:
+                log.exception("webhook_event_retry_failed", event_key=key)
+                await _mark_event(db, key, "failed", error=repr(exc))
+            else:
+                await _mark_event(db, key, "processed")
+    return retried
 
 
 def _signature_valid(body: bytes, header: str | None) -> bool:

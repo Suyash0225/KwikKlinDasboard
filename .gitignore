@@ -25,3 +25,6 @@ app/media/
 
 # friend/dev copies of env
 .env.friend
+
+# Database backups (nightly pg_dump output)
+backups/

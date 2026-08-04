@@ -31,8 +31,14 @@ engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=5,
+    # 10 steady + 20 burst connections: enough for a busy inbox plus the
+    # scheduler's background sessions without exhausting local Postgres
+    # (default max_connections=100).
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=30,
+    # recycle before Windows/router NAT idle-kills a connection silently
+    pool_recycle=1800,
 )
 
 # expire_on_commit=False: objects stay usable after commit — without this,

@@ -56,6 +56,30 @@ app = FastAPI(
     redoc_url=None,
 )
 
+from fastapi import Request
+from fastapi.middleware.gzip import GZipMiddleware
+
+# Big JSON payloads (inbox threads, reports) shrink ~10x over the tunnel.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Baseline hardening headers on every response.
+
+    Referrer-Policy matters most here: media URLs carry ?key=..., and this
+    stops that key from leaking via the Referer header.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+    )
+    return response
+
+
 app.include_router(webhook_router)
 app.include_router(orders_router)
 app.include_router(admin_router)

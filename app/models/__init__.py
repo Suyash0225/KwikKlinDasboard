@@ -25,6 +25,7 @@ from app.models.enums import (
     StaffRole,
 )
 from app.models.escalation import Escalation
+from app.models.event import OutboundMessage, WebhookEvent
 from app.models.expense import Expense
 from app.models.marketing import Campaign, Lead, CampaignRecipient, Coupon, CouponRedemption
 from app.models.order import Order, OrderStatusHistory, derive_payment_status
@@ -53,6 +54,7 @@ __all__ = [
     "Order",
     "OrderStatus",
     "OrderStatusHistory",
+    "OutboundMessage",
     "Payment",
     "PaymentMethod",
     "PaymentStatus",
@@ -61,6 +63,7 @@ __all__ = [
     "SettingKV",
     "Staff",
     "StaffRole",
+    "WebhookEvent",
     "derive_payment_status",
 ]
 

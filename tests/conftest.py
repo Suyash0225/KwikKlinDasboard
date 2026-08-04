@@ -151,10 +151,32 @@ async def _cleanup_test_rows():
         await s.execute(
             sqltext("DELETE FROM conversations WHERE wa_message_id LIKE 'wamid.TEST%'")
         )
+        # webhook journal + outbound queue rows from test payloads
+        await s.execute(
+            sqltext(
+                "DELETE FROM webhook_events WHERE payload::text LIKE '%wamid.TEST%' "
+                f"OR payload::text LIKE '%{TEST_CUSTOMER_PHONE_RAW}%' "
+                f"OR payload::text LIKE '%{RAVI_PHONE_RAW}%'"
+            )
+        )
+        await s.execute(
+            sqltext(
+                "DELETE FROM outbound_queue WHERE to_phone IN "
+                f"('{TEST_CUSTOMER_PHONE}', '{RAVI_PHONE}')"
+            )
+        )
         # live-LLM accidents may have raised escalations on the test customer
         await s.execute(
             sqltext(
                 "DELETE FROM escalations WHERE customer_id IN "
+                f"(SELECT id FROM customers WHERE phone = '{TEST_CUSTOMER_PHONE}')"
+            )
+        )
+        # any conversation attached to the test customer (whatever its wamid)
+        # must go before the customer row — FK order
+        await s.execute(
+            sqltext(
+                "DELETE FROM conversations WHERE customer_id IN "
                 f"(SELECT id FROM customers WHERE phone = '{TEST_CUSTOMER_PHONE}')"
             )
         )

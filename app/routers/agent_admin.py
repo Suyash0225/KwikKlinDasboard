@@ -862,9 +862,20 @@ async def agents_overview(db: AsyncSession = Depends(get_db)) -> dict:
 # ---------------------------------------------------------------------------
 
 
+# Settings whose values are credentials — never sent back to the browser.
+_SECRET_SETTINGS = {"ig_access_token"}
+_SECRET_MASK = "••••••••"
+
+
+def _redact_settings(s: dict) -> dict:
+    return {
+        k: (_SECRET_MASK if k in _SECRET_SETTINGS and v else v) for k, v in s.items()
+    }
+
+
 @router.get("/settings")
 async def get_settings(db: AsyncSession = Depends(get_db)) -> dict:
-    return await app_settings.all_settings(db)
+    return _redact_settings(await app_settings.all_settings(db))
 
 
 class SettingIn(BaseModel):
@@ -874,6 +885,9 @@ class SettingIn(BaseModel):
 
 @router.put("/settings")
 async def put_setting(body: SettingIn, db: AsyncSession = Depends(get_db)) -> dict:
+    # Saving the mask back would overwrite the real secret with dots.
+    if body.key in _SECRET_SETTINGS and body.value == _SECRET_MASK:
+        return {"ok": True, "unchanged": True}
     try:
         await app_settings.set_value(db, body.key, body.value)
     except KeyError as exc:
@@ -1023,7 +1037,7 @@ async def backup_json(db: AsyncSession = Depends(get_db)) -> dict:
         "expenses": [_row(e, ["category", "amount", "spent_on", "description"]) for e in expenses],
         "coupons": [_row(c, ["code", "discount_type", "value", "active"]) for c in coupons],
         "faq": [_row(f, ["question", "answer", "audience", "enabled"]) for f in faqs],
-        "settings": await app_settings.all_settings(db),
+        "settings": _redact_settings(await app_settings.all_settings(db)),
     }
 
 

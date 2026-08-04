@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
@@ -46,7 +46,16 @@ def start() -> None:
     global _scheduler
     if _scheduler is not None:
         return
-    _scheduler = AsyncIOScheduler(timezone=IST)
+    _scheduler = AsyncIOScheduler(
+        timezone=IST,
+        job_defaults={
+            # A tick delayed by event-loop load (up to 5 min) still fires
+            # instead of being dropped; queued-up misfires collapse into one.
+            "coalesce": True,
+            "misfire_grace_time": 300,
+            "max_instances": 1,
+        },
+    )
     # Standup hour is read from settings at FIRE time inside the job would be
     # ideal, but cron needs a static hour — so we check inside and run the
     # trigger hourly, firing only when the configured hour matches.
@@ -57,8 +66,13 @@ def start() -> None:
     _scheduler.add_job(
         _tunnel_tick, CronTrigger(minute="*/10", timezone=IST), id="tunnel-guard"
     )
+    # Durability loop: replay stuck webhook events + drain the outbound
+    # retry queue. This is what makes "order kabhi lost nahi hota" true.
+    _scheduler.add_job(
+        _durability_tick, CronTrigger(minute="*/5", timezone=IST), id="durability"
+    )
     _scheduler.start()
-    log.info("scheduler_started", jobs=["hourly", "nightly"])
+    log.info("scheduler_started", jobs=["hourly", "nightly", "tunnel-guard", "durability"])
 
 
 def shutdown() -> None:
@@ -86,6 +100,39 @@ async def _claim(event_key: str) -> bool:
         except IntegrityError:
             await s.rollback()
             return False
+
+
+async def _unclaim(event_key: str) -> None:
+    """Release a claimed key after a permanent send failure, so a later tick
+    can try again instead of the notification being lost forever."""
+    from sqlalchemy import delete
+
+    try:
+        async with async_session_factory() as s:
+            await s.execute(delete(SentEvent).where(SentEvent.event_key == event_key[:120]))
+            await s.commit()
+    except Exception:
+        log.exception("unclaim_failed", event_key=event_key)
+
+
+async def _durability_tick() -> None:
+    """Every 5 min: replay failed/stuck webhook events, drain outbound queue."""
+    try:
+        from app.routers.webhook import retry_stuck_webhook_events
+
+        n = await retry_stuck_webhook_events()
+        if n:
+            log.info("webhook_events_retried", count=n)
+    except Exception:
+        log.exception("webhook_retry_job_failed")
+    try:
+        from app.services.whatsapp import drain_outbound_queue
+
+        n = await drain_outbound_queue()
+        if n:
+            log.info("outbound_queue_drained", count=n)
+    except Exception:
+        log.exception("outbox_drain_failed")
 
 
 async def _hourly_tick() -> None:
@@ -138,8 +185,9 @@ async def _hourly_tick() -> None:
                         db, to_phone=settings.MANAGER_PHONE,
                         text=f"📊 Mahine ki marketing report:\nLeads: {stages}\nSTOP kiye hue: {stops}",
                     )
-                except SendError:
-                    pass
+                except SendError as exc:
+                    if not exc.transient:  # transient goes via outbound_queue
+                        await _unclaim(f"mktreport:{now_ist.strftime('%Y-%m')}")
     except Exception:
         log.exception("lead_jobs_failed")
     # every 2 hours 08-20: stale-order follow-up pings (owner's spec)
@@ -289,8 +337,12 @@ async def run_follow_up_pings() -> int:
                                     f"Staff jawab nahi de raha — khud dekh lein."
                                 ),
                             )
-                        except SendError:
+                        except SendError as exc:
                             log.info("esc6h_not_sent")
+                            if not exc.transient:
+                                await _unclaim(
+                                    f"esc6h:{o.order_number}:{now_ist.strftime('%Y-%m-%d')}"
+                                )
                 if not await _claim(f"ping:{o.order_number}:{window_key}"):
                     continue
                 outcome = await send_work_order(
@@ -358,8 +410,10 @@ async def run_daily_summary() -> None:
         )
         try:
             await send_message(db, to_phone=settings.MANAGER_PHONE, text=text)
-        except SendError:
+        except SendError as exc:
             log.info("daily_summary_not_sent")
+            if not exc.transient:  # transient goes via outbound_queue
+                await _unclaim(f"daysum:{day_key}")
         await audit.record(
             actor_role="system", actor="scheduler", action="daily_summary",
             args={"date": day_key}, result=f"new={new_n} late={len(late)}",
@@ -367,6 +421,38 @@ async def run_daily_summary() -> None:
 
 
 async def _nightly_tick() -> None:
+    # Postgres backup FIRST — everything else can fail, this must run.
+    try:
+        from app.services.backup import run_backup
+
+        await run_backup()
+    except Exception:
+        log.exception("nightly_backup_failed")
+    # prune grow-forever tables (keys older than any retry window)
+    try:
+        from sqlalchemy import delete
+
+        from app.models import OutboundMessage, WebhookEvent
+
+        cutoff60 = datetime.now(timezone.utc) - timedelta(days=60)
+        cutoff30 = datetime.now(timezone.utc) - timedelta(days=30)
+        async with async_session_factory() as db:
+            await db.execute(delete(SentEvent).where(SentEvent.at < cutoff60))
+            await db.execute(
+                delete(WebhookEvent).where(
+                    WebhookEvent.status == "processed",
+                    WebhookEvent.received_at < cutoff30,
+                )
+            )
+            await db.execute(
+                delete(OutboundMessage).where(
+                    OutboundMessage.status == "sent",
+                    OutboundMessage.created_at < cutoff30,
+                )
+            )
+            await db.commit()
+    except Exception:
+        log.exception("nightly_prune_failed")
     # STOP-rate auto-throttle (senior-architect P0)
     try:
         from app.services.leads import check_stop_throttle

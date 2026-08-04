@@ -5,8 +5,12 @@ Auth: every endpoint requires the X-API-Key header == settings.ADMIN_API_KEY.
 This API is internal — it is NOT exposed to customers or staff.
 """
 
+import hmac
+import time
+from collections import defaultdict, deque
+
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,10 +37,35 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 log = structlog.get_logger()
 
 
-async def require_admin_key(x_api_key: str = Header(default="")) -> None:
-    """Dependency: reject any request without the correct X-API-Key."""
-    if x_api_key != settings.ADMIN_API_KEY:
-        log.warning("admin_api_bad_key")
+# Brute-force throttle: per-IP sliding window of failed key attempts.
+# In-memory is fine — a restart resets it, but so does it reset the attacker's
+# progress, and the key itself is 40+ random chars.
+_FAILED_AUTH: dict[str, deque] = defaultdict(lambda: deque(maxlen=32))
+_AUTH_WINDOW_SECS = 600
+_AUTH_MAX_FAILURES = 10
+
+
+def _auth_throttled(ip: str) -> bool:
+    now = time.monotonic()
+    attempts = _FAILED_AUTH[ip]
+    while attempts and now - attempts[0] > _AUTH_WINDOW_SECS:
+        attempts.popleft()
+    return len(attempts) >= _AUTH_MAX_FAILURES
+
+
+async def require_admin_key(request: Request, x_api_key: str = Header(default="")) -> None:
+    """Dependency: reject any request without the correct X-API-Key.
+
+    Constant-time compare (no timing side channel) + per-IP throttle
+    (10 wrong keys in 10 min -> 429 until the window clears).
+    """
+    ip = request.client.host if request.client else "?"
+    if _auth_throttled(ip):
+        log.warning("admin_api_throttled", ip=ip)
+        raise HTTPException(status_code=429, detail="too many failed attempts — wait 10 minutes")
+    if not hmac.compare_digest(x_api_key, settings.ADMIN_API_KEY):
+        _FAILED_AUTH[ip].append(time.monotonic())
+        log.warning("admin_api_bad_key", ip=ip, path=request.url.path)
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
 
 

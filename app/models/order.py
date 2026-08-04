@@ -52,7 +52,7 @@ class Order(Base):
     )
 
     status: Mapped[OrderStatus] = mapped_column(
-        Enum(OrderStatus, name="order_status"), default=OrderStatus.RECEIVED
+        Enum(OrderStatus, name="order_status"), default=OrderStatus.RECEIVED, index=True
     )
 
     # [{"type": "shirt", "qty": 3, "service": "wash_iron"}, ...]
@@ -79,7 +79,7 @@ class Order(Base):
     pickup_date: Mapped[date | None] = mapped_column(SADate)
     # THE promise to the customer. Ground rule: never quote a date in a
     # message unless it is already written here.
-    expected_delivery: Mapped[date | None] = mapped_column(SADate)
+    expected_delivery: Mapped[date | None] = mapped_column(SADate, index=True)
     actual_delivery: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # 'normal' | 'urgent' — set by the admin ("Sharma ji ka urgent hai")
@@ -100,7 +100,7 @@ class Order(Base):
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), server_default=func.now(), index=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

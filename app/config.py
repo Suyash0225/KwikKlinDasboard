@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # Used to verify the X-Hub-Signature-256 header on incoming webhooks.
     WHATSAPP_APP_SECRET: str
 
+    # --- Backups ---
+    # Where pg_dump lives on this machine; nightly backups need it.
+    PG_DUMP_PATH: str = r"C:\Program Files\PostgreSQL\15\bin\pg_dump.exe"
+
     # --- DotPe BSP (only used when WHATSAPP_PROVIDER=dotpe) ---
     # From the DotPe merchant panel -> API section. Empty = dotpe disabled.
     DOTPE_API_KEY: str = ""

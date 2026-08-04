@@ -25,7 +25,10 @@ class Customer(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     # When THEY last messaged US — this is what the 24h window check reads.
-    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Indexed: the customers list sorts on it.
+    last_message_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     # When we last sent a proactive follow-up — throttles Phase 5 follow-ups.
     last_followup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

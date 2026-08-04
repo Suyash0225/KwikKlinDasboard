@@ -31,6 +31,11 @@ async def _cleanup():
             )
         )
         await s.execute(sqltext(f"DELETE FROM customers WHERE phone = '{PHONE}'"))
+        # fixed-timestamp payloads hash identically across runs — stale
+        # journal rows would dedup away the next run's webhook POST
+        await s.execute(
+            sqltext(f"DELETE FROM webhook_events WHERE payload::text LIKE '%{PHONE_RAW}%'")
+        )
         await s.commit()
 
 

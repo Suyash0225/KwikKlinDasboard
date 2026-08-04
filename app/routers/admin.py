@@ -125,8 +125,14 @@ async def dashboard_data(db: AsyncSession = Depends(get_db)) -> dict:
 
 
 @router.get("/api/customers", dependencies=[Depends(require_admin_key)])
-async def customers_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
-    """Customers with order counts + money ledger, recently active first."""
+async def customers_list(
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=300, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> list[dict]:
+    """Customers with order counts + money ledger, recently active first.
+
+    Paged (limit/offset) so every customer stays reachable past page one."""
     active_count = (
         select(func.count())
         .where(Order.customer_id == Customer.id, Order.status.in_(ACTIVE_STATUSES))
@@ -149,7 +155,8 @@ async def customers_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
         await db.execute(
             select(Customer, active_count, total_count, business, paid)
             .order_by(Customer.last_message_at.desc().nulls_last())
-            .limit(300)
+            .limit(limit)
+            .offset(offset)
         )
     ).all()
     return [
@@ -453,7 +460,8 @@ async def export_orders(db: AsyncSession = Depends(get_db)) -> Response:
 
 @router.get("/api/export/customers.csv", dependencies=[Depends(require_admin_key)])
 async def export_customers(db: AsyncSession = Depends(get_db)) -> Response:
-    data = await customers_list(db)  # reuse the ledger query
+    # reuse the ledger query — export means ALL customers, not one page
+    data = await customers_list(db, limit=1_000_000, offset=0)
     return _csv_response(
         "customers.csv",
         ["name", "phone", "total_orders", "business", "paid", "outstanding", "last_message"],
@@ -480,8 +488,14 @@ def _window_state(last_inbound: datetime | None) -> dict:
 
 
 @router.get("/api/inbox/threads", dependencies=[Depends(require_admin_key)])
-async def inbox_threads(db: AsyncSession = Depends(get_db)) -> list[dict]:
-    """Every participant with conversation history, newest activity first."""
+async def inbox_threads(
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[dict]:
+    """Participants with conversation history, newest activity first.
+
+    Capped (default 200 threads) so a 10k-customer DB can't blow up the
+    response — the UI's search hits the API, not this list."""
     threads: list[dict] = []
 
     # last message per customer
@@ -555,7 +569,7 @@ async def inbox_threads(db: AsyncSession = Depends(get_db)) -> list[dict]:
         )
 
     threads.sort(key=lambda t: t["last_at"], reverse=True)
-    return threads
+    return threads[:limit]
 
 
 @router.get("/api/inbox/thread", dependencies=[Depends(require_admin_key)])
@@ -798,7 +812,9 @@ async def inbox_send_media(
 async def serve_media(name: str, key: str = Query(default="")) -> FileResponse:
     """Serve chat media to the Inbox. <img> tags can't send headers, so auth
     is the admin key as a query param."""
-    if key != settings.ADMIN_API_KEY:
+    import hmac as _hmac
+
+    if not _hmac.compare_digest(key, settings.ADMIN_API_KEY):
         raise HTTPException(status_code=401, detail="key chahiye")
     # basename() guard: no traversal
     safe = Path(name).name

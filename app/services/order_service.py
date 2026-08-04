@@ -230,6 +230,29 @@ async def update_status(
     order.status = new_status
     if new_status is OrderStatus.DELIVERED:
         order.actual_delivery = datetime.now(timezone.utc)
+    if new_status is OrderStatus.PICKED_UP:
+        # SLA clock starts at pickup (owner's Order Agent spec): 4 din
+        # normal, 7 din heavy items. Computed BEFORE the commit below so
+        # status + promise land atomically — a crash can't leave a picked-up
+        # order without its delivery date.
+        from app.services import app_settings
+
+        heavy_words = [
+            w.strip().lower()
+            for w in str(await app_settings.get(db, "heavy_items")).split(",")
+            if w.strip()
+        ]
+        items_blob = " ".join(
+            str(i.get("type", "")) + " " + str(i.get("service", ""))
+            for i in (order.items or [])
+        ).lower()
+        heavy = any(w in items_blob for w in heavy_words)
+        days = int(
+            await app_settings.get(
+                db, "sla_heavy_days" if heavy else "sla_normal_days"
+            )
+        )
+        order.expected_delivery = date.today() + timedelta(days=days)
     db.add(
         OrderStatusHistory(
             order_id=order.id,
@@ -253,27 +276,6 @@ async def update_status(
     )
 
     if new_status is OrderStatus.PICKED_UP:
-        # SLA clock starts at pickup (owner's Order Agent spec): 4 din
-        # normal, 7 din heavy items — computed here, never promised early.
-        from app.services import app_settings
-
-        heavy_words = [
-            w.strip().lower()
-            for w in str(await app_settings.get(db, "heavy_items")).split(",")
-            if w.strip()
-        ]
-        items_blob = " ".join(
-            str(i.get("type", "")) + " " + str(i.get("service", ""))
-            for i in (order.items or [])
-        ).lower()
-        heavy = any(w in items_blob for w in heavy_words)
-        days = int(
-            await app_settings.get(
-                db, "sla_heavy_days" if heavy else "sla_normal_days"
-            )
-        )
-        order.expected_delivery = date.today() + timedelta(days=days)
-        await db.commit()
         await _notify_customer(
             db, order,
             message_key="pickup_done",

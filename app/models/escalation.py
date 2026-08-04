@@ -20,13 +20,13 @@ class Escalation(Base):
     # All three optional: an escalation may come from a customer, from staff,
     # about an order, or any combination.
     customer_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("customers.id")
+        UUID(as_uuid=True), ForeignKey("customers.id"), index=True
     )
     staff_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("staff.id")
     )
     order_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("orders.id")
+        UUID(as_uuid=True), ForeignKey("orders.id"), index=True
     )
 
     question: Mapped[str] = mapped_column(Text)
