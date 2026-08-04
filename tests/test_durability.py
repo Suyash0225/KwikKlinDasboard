@@ -229,9 +229,9 @@ async def test_valid_key_still_works(client) -> None:
     assert r.status_code == 200
 
 
-# --- payment ledger integrity (QA sweep regression) ---
+# --- payment ledger behavior (owner's rule: advance/extra is fine) ---
 
-async def test_overpayment_rejected(client, sent) -> None:
+async def test_payment_flow_and_overpay_allowed(client, sent) -> None:
     from tests.conftest import purge_phones
 
     try:
@@ -250,15 +250,16 @@ async def test_overpayment_rejected(client, sent) -> None:
         r = await client.post(f"/orders/{num}/payment", headers=H, json={"amount": 60, "method": "CASH"})
         assert r.status_code == 200 and r.json()["payment_status"] == "PARTIAL"
 
-        # more than the outstanding ₹40 must be refused — the ledger can
-        # never drift past the bill
+        # customer pays extra / advance — accepted, order goes PAID and the
+        # full amount stays in the ledger
         r = await client.post(f"/orders/{num}/payment", headers=H, json={"amount": 60, "method": "CASH"})
-        assert r.status_code == 400
-        assert "exceeds outstanding" in r.json()["detail"]
+        assert r.status_code == 200
+        assert r.json()["payment_status"] == "PAID"
+        assert float(r.json()["amount_paid"]) == 120.0
 
-        r = await client.post(f"/orders/{num}/payment", headers=H, json={"amount": 40, "method": "UPI"})
-        assert r.status_code == 200 and r.json()["payment_status"] == "PAID"
-        assert float(r.json()["amount_paid"]) == 100.0
+        # zero/negative still rejected
+        r = await client.post(f"/orders/{num}/payment", headers=H, json={"amount": 0, "method": "CASH"})
+        assert 400 <= r.status_code < 500
     finally:
         await purge_phones(TEST_CUSTOMER_PHONE)
 

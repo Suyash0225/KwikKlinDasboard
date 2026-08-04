@@ -328,10 +328,18 @@ function statusModal(number, current) {
 }
 
 function paymentModal(number) {
+  // prefill with the outstanding amount — one click for the common case
+  const o = ((DASH && DASH.active_orders) || []).find((x) => x.order_number === number)
+         || BILLS.find((x) => x.order_number === number);
+  const due = o && o.total_amount
+    ? Math.max(0, Number(o.total_amount) - Number(o.amount_paid || 0)) : "";
+  const hint = o && o.total_amount
+    ? `<div class="muted">Baki: ${money(due)} (bill ${money(o.total_amount)}, mila ${money(o.amount_paid || 0)}) — advance/extra bhi chalega</div>` : "";
   openModal(`<h3>Collect payment — ${number}</h3>
     <div class="frm">
-      <div><label>Amount (₹)</label><input id="pm-amt" type="number" min="1" step="0.01" autofocus></div>
+      <div><label>Amount (₹)</label><input id="pm-amt" type="number" min="1" step="0.01" value="${due || ""}" autofocus></div>
       <div><label>Mode</label><select id="pm-mode"><option value="CASH">Cash</option><option value="UPI">UPI</option><option value="OTHER">Other</option></select></div>
+      ${hint}
     </div>
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
     <button class="btn ok" id="pm-go">Record payment</button></div>`);

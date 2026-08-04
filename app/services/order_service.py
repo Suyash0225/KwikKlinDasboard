@@ -354,14 +354,16 @@ async def record_payment(
     """
     if amount <= 0:
         raise OrderError("payment amount must be positive")
-    # Never let the ledger drift past the bill — a typo like 500 instead of 50
-    # would silently corrupt outstanding-amount reports (QA sweep finding).
+    # Overpayment is ALLOWED — customers round up or pay advance for the next
+    # order (owner's rule, 04 Aug). Log it so a genuine typo is still visible.
     if order.total_amount is not None:
         outstanding = order.total_amount - (order.amount_paid or Decimal("0"))
         if amount > outstanding:
-            raise OrderError(
-                f"payment ₹{amount} exceeds outstanding ₹{outstanding} "
-                f"on {order.order_number}"
+            log.info(
+                "payment_over_outstanding",
+                order_number=order.order_number,
+                amount=str(amount),
+                outstanding=str(outstanding),
             )
     from app.models import Payment, PaymentStatus  # local import avoids cycle noise
 
