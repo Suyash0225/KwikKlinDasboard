@@ -22,3 +22,6 @@ Thumbs.db
 
 # Inbox media files (chat photos)
 app/media/
+
+# friend/dev copies of env
+.env.friend
