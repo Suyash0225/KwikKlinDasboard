@@ -21,7 +21,8 @@ import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -30,6 +31,7 @@ from app.models import (
     Conversation,
     Customer,
     Direction,
+    Escalation,
     Expense,
     Order,
     Rate,
@@ -351,19 +353,51 @@ class StaffIn(BaseModel):
 
 
 class StaffUpdateIn(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    phone: str | None = Field(default=None, min_length=6, max_length=20)
     role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY)$")
     is_active: bool | None = None
 
 
+async def _active_order_count(db: AsyncSession, staff_id: uuid_module.UUID) -> int:
+    """Orders still in flight that this person is on the hook for."""
+    return (
+        await db.execute(
+            select(func.count())
+            .select_from(Order)
+            .where(
+                or_(
+                    Order.assigned_washer_id == staff_id,
+                    Order.assigned_delivery_id == staff_id,
+                ),
+                Order.status.in_(ACTIVE_STATUSES),
+            )
+        )
+    ).scalar_one()
+
+
 @router.get("/api/staff", dependencies=[Depends(require_admin_key)])
 async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
-    rows = (await db.execute(select(Staff).order_by(Staff.name))).scalars().all()
-    return [
-        {"id": str(s.id), "name": s.name, "phone": s.phone,
-         "role": s.role.name, "is_active": s.is_active}
-        for s in rows
-    ]
+    """Active first, then inactive, alphabetical within each group."""
+    rows = (
+        await db.execute(select(Staff).order_by(Staff.is_active.desc(), Staff.name))
+    ).scalars().all()
+    from app.services import app_settings
+
+    default_washer = await app_settings.get(db, "default_washer_phone")
+    default_delivery = await app_settings.get(db, "default_delivery_phone")
+    out = []
+    for s in rows:
+        out.append(
+            {
+                "id": str(s.id), "name": s.name, "phone": s.phone,
+                "role": s.role.name, "is_active": s.is_active,
+                # the UI needs these to explain WHY delete is blocked
+                "active_orders": await _active_order_count(db, s.id),
+                "is_default": s.phone in (default_washer, default_delivery),
+            }
+        )
+    return out
 
 
 @router.post("/api/staff", dependencies=[Depends(require_admin_key)], status_code=201)
@@ -393,7 +427,32 @@ async def staff_update(staff_id: str, body: StaffUpdateIn, db: AsyncSession = De
     if staff is None:
         raise HTTPException(status_code=404, detail="staff not found")
     if body.name is not None:
-        staff.name = body.name.strip()
+        name = body.name.strip()
+        if len(name) < 2:
+            raise HTTPException(status_code=400, detail="Name must be at least 2 characters")
+        staff.name = name
+    if body.phone is not None:
+        try:
+            phone = _norm_phone(body.phone)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if phone != staff.phone:
+            clash = (
+                await db.execute(select(Staff).where(Staff.phone == phone, Staff.id != sid))
+            ).scalar_one_or_none()
+            if clash is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{phone} is already {clash.name}'s number",
+                )
+            old_phone = staff.phone
+            staff.phone = phone
+            # keep the default-washer/delivery settings pointing at them
+            from app.services import app_settings
+
+            for key in ("default_washer_phone", "default_delivery_phone"):
+                if await app_settings.get(db, key) == old_phone:
+                    await app_settings.set_value(db, key, phone)
     if body.role is not None:
         staff.role = StaffRole[body.role]
     if body.is_active is not None:
@@ -401,6 +460,65 @@ async def staff_update(staff_id: str, body: StaffUpdateIn, db: AsyncSession = De
     await db.commit()
     log.info("staff_updated_via_settings", staff_id=staff_id)
     return {"ok": True}
+
+
+@router.delete("/api/staff/{staff_id}/permanent", dependencies=[Depends(require_admin_key)])
+async def staff_delete_permanent(
+    staff_id: str, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Hard delete. Refused while they still own active work — the orders
+    would lose their assignee. Deactivate is always available instead."""
+    try:
+        sid = uuid_module.UUID(staff_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid staff id")
+    staff = await db.get(Staff, sid)
+    if staff is None:
+        raise HTTPException(status_code=404, detail="staff not found")
+
+    n = await _active_order_count(db, sid)
+    if n:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{staff.name} is assigned to {n} active order"
+                f"{'s' if n != 1 else ''}. Reassign or complete those orders first."
+            ),
+        )
+
+    from app.services import app_settings
+
+    for key in ("default_washer_phone", "default_delivery_phone"):
+        if await app_settings.get(db, key) == staff.phone:
+            await app_settings.set_value(db, key, "")
+
+    # history rows point at this staff member — detach, don't cascade-delete
+    await db.execute(
+        update(Order)
+        .where(Order.assigned_washer_id == sid)
+        .values(assigned_washer_id=None)
+    )
+    await db.execute(
+        update(Order)
+        .where(Order.assigned_delivery_id == sid)
+        .values(assigned_delivery_id=None)
+    )
+    # conversations require a participant (XOR check constraint), so their
+    # chat history goes with them — that is what a hard delete means here.
+    await db.execute(delete(Conversation).where(Conversation.staff_id == sid))
+    await db.execute(delete(Escalation).where(Escalation.staff_id == sid))
+    name = staff.name
+    await db.delete(staff)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"{name} ka purana record juda hua hai — Deactivate kar dijiye.",
+        )
+    log.info("staff_deleted_permanently", staff_id=staff_id, name=name)
+    return {"ok": True, "deleted": name}
 
 
 # ---------- CSV exports ----------

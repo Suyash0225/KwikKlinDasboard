@@ -90,8 +90,16 @@ function toast(msg, err = false) {
 const skeleton = (n = 4) => Array.from({ length: n }, () => '<div class="skel skelrow"></div>').join("");
 const emptyBox = (msg, ico = "🧺") => `<div class="empty"><div class="ico">${ico}</div>${esc(msg)}</div>`;
 const errBox = (msg, retry) => `<div class="errbox">⚠️ ${esc(msg)}<br><br><button class="btn ghost" onclick="${retry}()">${T.tryAgain}</button></div>`;
-function openModal(html) { $("modal-body").innerHTML = html; $("modal-ov").classList.add("open"); }
+function openModal(html) {
+  $("modal-body").innerHTML = html;
+  $("modal-ov").classList.add("open");
+  const first = $("modal-body").querySelector("input, select, textarea, button");
+  if (first) first.focus();
+}
 function closeModal() { $("modal-ov").classList.remove("open"); }
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("modal-ov") && $("modal-ov").classList.contains("open")) closeModal();
+});
 function confirmDialog(text, onYes) {
   openModal(`<h3>Confirm</h3><p>${esc(text)}</p>
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
@@ -180,6 +188,11 @@ window.addEventListener("hashchange", () => {
   if (h.startsWith("inbox/")) {
     if (CURRENT !== "inbox") go("inbox", false);
     openThread(decodeURIComponent(h.slice(6)), false, false);
+    return;
+  }
+  if (h.startsWith("settings/")) {  // deep link to one settings tab
+    if (CURRENT !== "settings") go("settings", false);
+    stTab(h.slice(9));
     return;
   }
   closeThreadMobile(false);
@@ -1129,7 +1142,11 @@ async function loadSettings() {
     $("set-social").value = String(!!s.social_daily_enabled);
     $("set-socialhour").value = s.social_post_hour;
     $("set-igid").value = s.ig_user_id || "";
+    // the API returns a mask for a saved token — the real one never reaches
+    // the browser; saving the mask back is a no-op server-side
     $("set-igtoken").value = s.ig_access_token || "";
+    $("set-igtoken").placeholder = s.ig_access_token ? "" : "Paste token";
+    igState();
     const staffOpts = (sel) => '<option value="">— none —</option>' +
       staff.filter((x) => x.is_active).map((x) => `<option value="${x.phone}" ${sel === x.phone ? "selected" : ""}>${esc(x.name)}</option>`).join("");
     $("set-washer").innerHTML = staffOpts(s.default_washer_phone);
@@ -1262,37 +1279,172 @@ async function addRate(btn) {
     toast("Rate added"); $("rt-item").value = ""; $("rt-rate").value = ""; loadSettings();
   });
 }
-function renderStaff() {
-  $("staff-list").innerHTML = STAFF.map((s) => `
-    <div class="rowcard" style="margin-bottom:8px;${s.is_active ? "" : "opacity:.5"}">
-      <div class="r1"><b>${esc(s.name)}</b>
-        <select style="width:auto" onchange="updStaff('${s.id}', {role: this.value})">
-          <option value="WASHER" ${s.role === "WASHER" ? "selected" : ""}>Washer (washing & ironing)</option>
-          <option value="DELIVERY" ${s.role === "DELIVERY" ? "selected" : ""}>Delivery</option>
-        </select></div>
-      <div class="kv"><span>${s.phone}</span><span>${s.is_active ? "Active" : "Inactive"}</span></div>
-      <div class="act">
-        ${s.is_active ? `<button class="btn sm danger" onclick="deactivateStaff('${s.id}','${esc(s.name)}')">Deactivate</button>`
-                      : `<button class="btn sm ghost" onclick="updStaff('${s.id}', {is_active: true})">Reactivate</button>`}
-      </div></div>`).join("");
+const ROLE_LABEL = { WASHER: "Washer", DELIVERY: "Delivery" };
+
+/** +918707093136 -> +91 87070 93136 (never wraps mid-number, see .ph) */
+function fmtPhone(p) {
+  const m = String(p || "").match(/^\+91(\d{5})(\d{5})$/);
+  return m ? `+91 ${m[1]} ${m[2]}` : p || "";
 }
+
+function renderStaff() {
+  if (!STAFF.length) {
+    $("staff-list").innerHTML =
+      `<div class="emptystate">No staff added yet. Add your first team member above.</div>`;
+    return;
+  }
+  $("staff-list").innerHTML = `<div class="stafflist">` + STAFF.map((s) => `
+    <div class="staffrow ${s.is_active ? "" : "off"}">
+      <div class="who">
+        <div class="nm">${esc(s.name)}</div>
+        <div class="meta">
+          <span class="ph">${fmtPhone(s.phone)}</span>
+          <span class="badge role">${ROLE_LABEL[s.role] || esc(s.role)}</span>
+          <span class="statuspill ${s.is_active ? "on" : "off"}">${s.is_active ? "Active" : "Inactive"}</span>
+          ${s.is_default ? `<span class="badge">Default</span>` : ""}
+          ${s.active_orders ? `<span class="badge">${s.active_orders} active order${s.active_orders > 1 ? "s" : ""}</span>` : ""}
+        </div>
+      </div>
+      <div class="acts">
+        <button class="btn sm ghost" onclick="editStaffModal('${s.id}')">Edit</button>
+        ${s.is_active
+          ? `<button class="btn sm ghost" onclick="deactivateStaff('${s.id}')">Deactivate</button>`
+          : `<button class="btn sm ghost" onclick="updStaff('${s.id}', {is_active: true})">Reactivate</button>`}
+        <button class="btn sm danger" onclick="deleteStaffModal('${s.id}')">Delete</button>
+      </div>
+    </div>`).join("") + `</div>`;
+}
+
+function staffById(id) { return STAFF.find((s) => s.id === id); }
+
 async function updStaff(id, body) {
   try { await api(`/admin/api/staff/${id}`, { method: "PUT", body }); toast(T.saved); loadSettings(); }
   catch (e) { toast(e.message, true); }
 }
-function deactivateStaff(id, name) {
-  confirmDialog(`Deactivate ${name}? They stop getting standups and work orders. History is kept.`, async () => {
-    try { await api(`/admin/api/staff/${id}`, { method: "DELETE" }); toast("Staff deactivated"); loadSettings(); }
-    catch (e) { toast(e.message, true); }
+
+function editStaffModal(id) {
+  const s = staffById(id);
+  if (!s) return;
+  const digits = String(s.phone || "").replace(/^\+91/, "");
+  openModal(`<h3>Edit ${esc(s.name)}</h3>
+    <div class="frm">
+      <div class="setfield"><label for="es-name">Name</label>
+        <input id="es-name" value="${esc(s.name)}">
+        <small class="fielderr" id="es-name-err"></small></div>
+      <div class="setfield"><label for="es-phone">Phone</label>
+        <input id="es-phone" inputmode="numeric" value="${esc(digits)}">
+        <small class="fielderr" id="es-phone-err"></small></div>
+      <div class="setfield"><label for="es-role">Role</label>
+        <select id="es-role">
+          <option value="WASHER" ${s.role === "WASHER" ? "selected" : ""}>Washer (washing &amp; ironing)</option>
+          <option value="DELIVERY" ${s.role === "DELIVERY" ? "selected" : ""}>Delivery</option>
+        </select></div>
+    </div>
+    <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="es-save">Save changes</button>
+    </div>`);
+  $("es-save").onclick = (e) => busy(e.target, async () => {
+    const name = $("es-name").value.trim();
+    const phone = $("es-phone").value.replace(/\D/g, "");
+    $("es-name-err").textContent = ""; $("es-phone-err").textContent = "";
+    let bad = false;
+    if (name.length < 2) { $("es-name-err").textContent = "Name must be at least 2 characters."; bad = true; }
+    if (phone.length !== 10) { $("es-phone-err").textContent = "Phone must be exactly 10 digits."; bad = true; }
+    if (bad) return;
+    await api(`/admin/api/staff/${id}`, { method: "PUT", body: { name, phone, role: $("es-role").value } });
+    closeModal(); toast("Staff updated"); loadSettings();
   });
 }
+
+function deactivateStaff(id) {
+  const s = staffById(id);
+  if (!s) return;
+  confirmDialog(
+    `Deactivate ${s.name}? They'll stop receiving order assignments. You can reactivate them later.`,
+    async () => {
+      try { await api(`/admin/api/staff/${id}`, { method: "DELETE" }); toast(`${s.name} deactivated`); loadSettings(); }
+      catch (e) { toast(e.message, true); }
+    });
+}
+
+function deleteStaffModal(id) {
+  const s = staffById(id);
+  if (!s) return;
+  // Blocked cases are explained up front — deactivate stays available.
+  const blocker = s.active_orders
+    ? `${esc(s.name)} is assigned to ${s.active_orders} active order${s.active_orders > 1 ? "s" : ""}. Reassign or complete those orders first.`
+    : s.is_default
+      ? `${esc(s.name)} is set as the default washer or delivery person. Pick someone else in Daily operations first.`
+      : "";
+  if (blocker) {
+    openModal(`<h3>Can't delete ${esc(s.name)}</h3>
+      <p class="muted">${blocker}</p>
+      <div class="btnrow">
+        <button class="btn ghost" onclick="closeModal()">Close</button>
+        ${s.is_active ? `<button class="btn" onclick="closeModal();deactivateStaff('${id}')">Deactivate instead</button>` : ""}
+      </div>`);
+    return;
+  }
+  openModal(`<h3>Delete ${esc(s.name)}</h3>
+    <p class="muted">This removes them and their chat history for good. Type <b>${esc(s.name)}</b> to confirm.</p>
+    <div class="frm">
+      <div class="setfield">
+        <input id="ds-confirm" placeholder="${esc(s.name)}" autofocus>
+        <small class="fielderr" id="ds-err"></small>
+      </div>
+    </div>
+    <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn danger" id="ds-go">Delete staff</button>
+    </div>`);
+  $("ds-go").onclick = (e) => busy(e.target, async () => {
+    if ($("ds-confirm").value.trim() !== s.name) {
+      $("ds-err").textContent = `Type the name exactly: ${s.name}`;
+      return;
+    }
+    await api(`/admin/api/staff/${id}/permanent`, { method: "DELETE" });
+    closeModal(); toast(`${s.name} deleted`); loadSettings();
+  });
+}
+
 async function addStaff(btn) {
   await busy(btn, async () => {
+    const name = $("sf-name").value.trim();
     const phone = $("sf-phone").value.replace(/\D/g, "");
-    if (phone.length < 10) throw new Error("Enter a valid 10-digit phone number");
-    await api("/admin/api/staff", { method: "POST", body: { name: $("sf-name").value.trim(), phone: $("sf-phone").value.trim(), role: $("sf-role").value } });
-    toast("Staff added"); $("sf-name").value = ""; $("sf-phone").value = ""; loadSettings();
+    $("sf-name-err").textContent = ""; $("sf-phone-err").textContent = "";
+    let bad = false;
+    if (name.length < 2) { $("sf-name-err").textContent = "Name must be at least 2 characters."; bad = true; }
+    if (phone.length !== 10) {
+      $("sf-phone-err").textContent = "Phone must be exactly 10 digits.";
+      bad = true;
+    } else if (STAFF.some((s) => s.phone.replace(/^\+91/, "") === phone)) {
+      $("sf-phone-err").textContent = "This number is already a staff member.";
+      bad = true;
+    }
+    if (bad) return;
+    await api("/admin/api/staff", { method: "POST", body: { name, phone, role: $("sf-role").value } });
+    toast(`${name} added`);
+    $("sf-name").value = ""; $("sf-phone").value = "";
+    loadSettings();
   });
+}
+
+/* Instagram: say plainly whether it's actually connected. */
+function igState() {
+  const el = $("ig-status");
+  if (!el) return;
+  const linked = $("set-igid").value.trim() && $("set-igtoken").value.trim();
+  el.className = "connstate" + (linked ? " on" : "");
+  el.innerHTML = linked
+    ? `<span class="dot"></span>Connected`
+    : "Not connected — daily posters will only be sent to you on WhatsApp.";
+}
+function igPeek() {
+  const inp = $("set-igtoken"), btn = $("ig-peek");
+  const show = inp.type === "password";
+  inp.type = show ? "text" : "password";
+  btn.textContent = show ? "Hide" : "Show";
 }
 async function saveOps(btn) {
   await busy(btn, async () => {
@@ -1310,6 +1462,7 @@ async function saveOps(btn) {
     ];
     for (const [key, value] of pairs) await api("/admin/api/settings", { method: "PUT", body: { key, value } });
     toast("Settings saved — live immediately");
+    igState();
   });
 }
 async function testStandup(btn) {
@@ -1671,6 +1824,9 @@ window.addEventListener("DOMContentLoaded", () => {
   if (h.startsWith("inbox/")) {
     go("inbox", false);
     setTimeout(() => openThread(decodeURIComponent(h.slice(6)), false, false), 300);
+  } else if (h.startsWith("settings/")) {
+    go("settings", false);
+    stTab(h.slice(9));
   } else {
     go(h, false);
   }

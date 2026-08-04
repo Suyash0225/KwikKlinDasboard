@@ -408,42 +408,112 @@
 
       <div id="st-ops" style="display:none">
       <div class="card" style="margin-bottom:14px">
-        <b>🏪 Operations</b>
-        <div class="filters" style="margin-top:8px">
-          <div><label>Standup hour (IST)</label><input id="set-standup" type="number" min="6" max="20" style="width:90px"></div>
-          <div><label>Turnaround (days)</label><input id="set-turnaround" type="number" min="0" max="14" style="width:90px"></div>
-          <div><label>Default washer</label><select id="set-washer" style="min-width:140px"></select></div>
-          <div><label>Marketing msgs / customer / month</label><input id="set-freqcap" type="number" min="0" max="10" style="width:90px"></div>
-          <div><label>Monthly marketing budget (msgs)</label><input id="set-budget" type="number" min="0" style="width:110px"></div>
-          <div><label>Marketing autonomy</label><select id="set-autonomy" style="min-width:130px">
-            <option value="auto">Full auto (agent sends within limits)</option>
-            <option value="suggest">Suggest only (I approve)</option>
-            <option value="off">Off</option>
-          </select></div>
+        <b>🏪 Daily operations</b>
+        <div class="setgrid">
+          <div class="setfield">
+            <label for="set-standup">Standup hour (IST)</label>
+            <input id="set-standup" type="number" min="0" max="23">
+            <small>Bot sends you a summary of pending orders at this time each day.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-turnaround">Turnaround (days)</label>
+            <input id="set-turnaround" type="number" min="1" max="14">
+            <small>Days you promise for delivery when you take a normal order.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-washer">Default washer</label>
+            <select id="set-washer"></select>
+            <small>New orders go to this person unless you assign someone else.</small>
+          </div>
         </div>
-        <hr class="hr">
-        <b>📸 Daily social posts</b>
-        <p class="muted" style="margin-top:4px">A poster + caption is generated daily — auto-posted to Instagram when linked, and WhatsApped to you for Google Business.</p>
-        <div class="filters" style="margin-top:8px">
-          <div><label>Enabled</label><select id="set-social" style="min-width:90px"><option value="true">On</option><option value="false">Off</option></select></div>
-          <div><label>Post hour (IST)</label><input id="set-socialhour" type="number" min="8" max="20" style="width:90px"></div>
-          <div><label>Instagram user ID</label><input id="set-igid" placeholder="1784..." style="min-width:150px"></div>
-          <div><label>Instagram access token</label><input id="set-igtoken" type="password" placeholder="EAAG..." style="min-width:170px"></div>
-        </div>
-        <div class="act" style="margin-top:10px">
-          <button class="btn" onclick="saveOps(this)">Save settings</button>
+        <div class="act" style="margin-top:12px">
+          <button class="btn" onclick="saveOps(this)">Save changes</button>
           <button class="btn ghost" onclick="testStandup(this)">▶ Send standup now</button>
         </div>
       </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <b>📣 Marketing limits</b>
+        <div class="setgrid">
+          <div class="setfield">
+            <label for="set-freqcap">Marketing msgs / customer / month</label>
+            <input id="set-freqcap" type="number" min="0" max="10">
+            <small>Most offers one customer can get in a month, so nobody feels spammed.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-budget">Monthly marketing budget (msgs)</label>
+            <input id="set-budget" type="number" min="0">
+            <small>Total offer messages the shop sends in a month, all customers together.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-autonomy">Marketing autonomy</label>
+            <select id="set-autonomy">
+              <option value="auto">Full auto (agent sends within limits)</option>
+              <option value="suggest">Suggest only (I approve)</option>
+              <option value="off">Off</option>
+            </select>
+            <small>Whether offers go out on their own, wait for your yes, or stop completely.</small>
+          </div>
+        </div>
+
+        <hr class="hr">
+        <b class="subhead">Daily social posts</b>
+        <p class="muted" style="margin-top:4px">A poster + caption is made every day — posted to Instagram when connected, and sent to you on WhatsApp for Google Business.</p>
+        <div class="setgrid">
+          <div class="setfield">
+            <label for="set-social">Enabled</label>
+            <select id="set-social"><option value="true">On</option><option value="false">Off</option></select>
+            <small>Turn the daily poster on or off.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-socialhour">Post hour (IST)</label>
+            <input id="set-socialhour" type="number" min="0" max="23">
+            <small>Time of day the poster is made and posted.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-igid">Instagram user ID</label>
+            <input id="set-igid" oninput="igState()">
+            <small>From your Instagram Business account — needed to post automatically.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-igtoken">Instagram access token</label>
+            <div class="inputwrap">
+              <input id="set-igtoken" type="password" oninput="igState()">
+              <button type="button" class="peek" id="ig-peek" onclick="igPeek()">Show</button>
+            </div>
+            <small>Stored privately — never shown back in full.</small>
+          </div>
+        </div>
+        <p id="ig-status" class="connstate"></p>
+        <div class="act" style="margin-top:12px">
+          <button class="btn" onclick="saveOps(this)">Save changes</button>
+        </div>
+      </div>
+
       <div class="card" style="margin-bottom:14px">
         <b>🧑‍🔧 Staff</b>
-        <div class="filters" style="margin-top:8px">
-          <input id="sf-name" placeholder="Name" style="min-width:110px">
-          <input id="sf-phone" placeholder="10-digit phone" style="min-width:120px">
-          <select id="sf-role"><option value="WASHER">Washer (washing & ironing)</option><option value="DELIVERY">Delivery</option></select>
-          <button class="btn sm" onclick="addStaff(this)">Add staff</button>
+        <p class="muted" style="margin-top:4px">People who get work orders and daily standups on WhatsApp.</p>
+        <div class="setgrid staffadd">
+          <div class="setfield">
+            <label for="sf-name">Name</label>
+            <input id="sf-name" onkeydown="if(event.key==='Enter')addStaff(document.getElementById('sf-add'))">
+            <small class="fielderr" id="sf-name-err"></small>
+          </div>
+          <div class="setfield">
+            <label for="sf-phone">Phone</label>
+            <input id="sf-phone" inputmode="numeric" placeholder="10 digits" onkeydown="if(event.key==='Enter')addStaff(document.getElementById('sf-add'))">
+            <small class="fielderr" id="sf-phone-err"></small>
+          </div>
+          <div class="setfield">
+            <label for="sf-role">Role</label>
+            <select id="sf-role"><option value="WASHER">Washer (washing &amp; ironing)</option><option value="DELIVERY">Delivery</option></select>
+            <small>Washers get wash and iron jobs, delivery gets pickups and drops.</small>
+          </div>
+          <div class="setfield addbtn">
+            <button class="btn" id="sf-add" onclick="addStaff(this)">Add staff</button>
+          </div>
         </div>
-        <div id="staff-list" style="margin-top:10px"></div>
+        <div id="staff-list" style="margin-top:14px"></div>
       </div>
       <div class="card">
         <b>💾 Backups</b>
