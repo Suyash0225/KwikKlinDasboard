@@ -45,11 +45,22 @@ async def note_inquiry(db: AsyncSession, customer: Customer, text: str) -> None:
             await db.execute(select(Lead).where(Lead.phone == customer.phone))
         ).scalar_one_or_none()
         now = datetime.now(timezone.utc)
+        # source attribution: wa.me prefill codes (poster/google/bill/refer)
+        first = (text or "").strip().split()[:2]
+        code = " ".join(first).upper()
+        source = "whatsapp"
+        for tag, src in (
+            ("POSTER", "poster"), ("GOOGLE", "google"),
+            ("BILL", "bill"), ("REFER", "referral"), ("NAMASTE", "qr"),
+        ):
+            if tag in code:
+                source = src
+                break
         if lead is None:
             db.add(
                 Lead(
                     phone=customer.phone, name=customer.name,
-                    items_text=text[:300], stage="CONTACTED",
+                    items_text=text[:300], stage="CONTACTED", source=source,
                     last_contact_at=now, next_followup_at=now + timedelta(days=1),
                 )
             )
@@ -132,6 +143,102 @@ async def run_lead_followups() -> int:
                 args={"due": len(due)}, result=f"sent {sends}",
             )
     return sends
+
+
+_HOT_WORDS = {  # intent keywords -> heat points
+    "pickup": 3, "kab": 3, "aaj": 3, "kal": 3, "address": 2, "ghar": 2,
+    "rate": 2, "price": 2, "kitna": 2, "charge": 2, "urgent": 3, "chahiye": 2,
+}
+
+
+async def run_hot_lead_digest() -> int:
+    """09:00: owner gets the 5 hottest open leads — a human call converts."""
+    from app.config import settings
+    from app.models import Conversation, Direction
+
+    async with async_session_factory() as db:
+        open_leads = (
+            (
+                await db.execute(
+                    select(Lead).where(Lead.stage.in_(("CONTACTED", "INTERESTED")))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not open_leads:
+            return 0
+        scored = []
+        for lead in open_leads:
+            cust = (
+                await db.execute(select(Customer).where(Customer.phone == lead.phone))
+            ).scalar_one_or_none()
+            last_in = ""
+            if cust:
+                row = (
+                    await db.execute(
+                        select(Conversation.message_text)
+                        .where(
+                            Conversation.customer_id == cust.id,
+                            Conversation.direction == Direction.INBOUND,
+                        )
+                        .order_by(Conversation.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                last_in = row or ""
+            score = sum(
+                pts for w, pts in _HOT_WORDS.items() if w in last_in.lower()
+            ) + (3 if lead.stage == "INTERESTED" else 0)
+            scored.append((score, lead, last_in))
+        scored.sort(key=lambda t: t[0], reverse=True)
+        lines = ["🔥 Aaj ke hot leads (call maar do, order pakka hota hai):"]
+        for score, lead, last_in in scored[:5]:
+            heat = "🔥🔥" if score >= 5 else ("🔥" if score >= 3 else "·")
+            lines.append(
+                f"{heat} {lead.name or lead.phone} ({lead.source}) — "
+                f"\"{last_in[:50]}\""
+            )
+        try:
+            await send_message(db, to_phone=settings.MANAGER_PHONE, text="\n".join(lines))
+        except SendError:
+            log.info("hot_digest_not_sent")
+        await audit.record(
+            actor_role="system", actor="marketing", action="hot_lead_digest",
+            args={"open": len(open_leads)}, result=f"top {min(5, len(scored))}",
+        )
+        return len(scored)
+
+
+async def check_stop_throttle() -> None:
+    """STOP badh rahe = messages zyada — cap khud 1 pe girao, owner ko batao."""
+    from app.config import settings as cfg
+    from app.models import AuditLog
+    from app.services import app_settings
+
+    async with async_session_factory() as db:
+        stops = (
+            await db.execute(
+                select(AuditLog.id).where(
+                    AuditLog.action == "stop_optout",
+                    AuditLog.at >= datetime.now(timezone.utc) - timedelta(days=7),
+                )
+            )
+        ).scalars().all()
+        cap = int(await app_settings.get(db, "marketing_freq_cap_per_month"))
+        if len(stops) >= 3 and cap > 1:
+            await app_settings.set_value(db, "marketing_freq_cap_per_month", 1)
+            try:
+                await send_message(
+                    db, to_phone=cfg.MANAGER_PHONE,
+                    text=(
+                        f"⚠️ Hafte mein {len(stops)} logon ne STOP kiya — messages "
+                        "zyada ja rahe the. Maine marketing limit khud 2 se 1 kar "
+                        "di (Settings se wapas badha sakte ho)."
+                    ),
+                )
+            except SendError:
+                pass
 
 
 async def check_marketing_eligible(db: AsyncSession, customer_id) -> tuple[bool, str]:

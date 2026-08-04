@@ -104,6 +104,14 @@ async def _hourly_tick() -> None:
             await run_payment_reminders()
     except Exception:
         log.exception("reminder_jobs_failed")
+    # 09:00: hot-lead digest to the owner (human call = best converter)
+    try:
+        if now_ist.hour == 9 and await _claim(f"hotdigest:{now_ist.strftime('%Y-%m-%d')}"):
+            from app.services.leads import run_hot_lead_digest
+
+            await run_hot_lead_digest()
+    except Exception:
+        log.exception("hot_digest_failed")
     # 10:00 daily: lead follow-up ladder; 1st of month: marketing report
     try:
         if now_ist.hour == 10:
@@ -351,6 +359,13 @@ async def run_daily_summary() -> None:
 
 
 async def _nightly_tick() -> None:
+    # STOP-rate auto-throttle (senior-architect P0)
+    try:
+        from app.services.leads import check_stop_throttle
+
+        await check_stop_throttle()
+    except Exception:
+        log.exception("stop_throttle_failed")
     try:
         from app.services.marketing import recompute_segments
 

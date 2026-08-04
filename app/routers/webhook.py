@@ -395,6 +395,12 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
             customer.marketing_opt_out = True
             await db.commit()
             log.info("customer_opted_out", phone=phone)
+            from app.services import audit as _audit
+
+            await _audit.record(
+                actor_role="customer", actor=phone, action="stop_optout",
+                args={}, result="opted out",
+            )
             try:
                 await send_message(db, to_phone=phone, text=get_message("stop_confirmed"))
             except SendError:
