@@ -323,6 +323,7 @@ function statusModal(number, current) {
   $("st-go").onclick = (e) => busy(e.target, async () => {
     await api(`/orders/${number}/status`, { method: "POST", body: { status: $("st-new").value, changed_by: "dashboard" } });
     closeModal(); toast(T.statusUpdated); loadDashboard();
+    if (typeof loadBills === "function" && $("bills-list")) loadBills();
   });
 }
 
@@ -339,6 +340,9 @@ function paymentModal(number) {
     if (!(amt > 0)) throw new Error("Amount must be greater than 0");
     await api(`/orders/${number}/payment`, { method: "POST", body: { amount: amt, method: $("pm-mode").value } });
     closeModal(); toast(T.paymentSaved); loadDashboard(); loadCustomers(true);
+    // Bill history page has its own cache — refresh it too, else the
+    // payment looks "not saved" when the modal was opened from there.
+    if (typeof loadBills === "function" && $("bills-list")) loadBills();
   });
 }
 
@@ -354,6 +358,7 @@ function dateModal(number) {
   $("dt-go").onclick = (e) => busy(e.target, async () => {
     await api(`/orders/${number}/delivery-date`, { method: "POST", body: { expected_delivery: $("dt-new").value, changed_by: "dashboard", internal_reason: $("dt-why").value || null } });
     closeModal(); toast(T.dateUpdated); loadDashboard();
+    if (typeof loadBills === "function" && $("bills-list")) loadBills();
   });
 }
 

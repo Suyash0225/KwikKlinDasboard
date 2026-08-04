@@ -612,6 +612,32 @@ async def _graph(method: str, path: str, **kw):
     return r.status_code, r.json()
 
 
+@router.get("/leads")
+async def list_leads(
+    db: AsyncSession = Depends(get_db),
+    stage: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict]:
+    """Lead pipeline for the dashboard/CRM view. Newest activity first."""
+    from app.models import Lead
+
+    q = select(Lead).order_by(Lead.created_at.desc()).limit(limit)
+    if stage:
+        q = q.where(Lead.stage == stage.upper())
+    rows = (await db.execute(q)).scalars().all()
+    return [
+        {
+            "phone": l.phone, "name": l.name, "source": l.source, "area": l.area,
+            "stage": l.stage, "followup_count": l.followup_count,
+            "last_contact_at": l.last_contact_at.isoformat() if l.last_contact_at else None,
+            "next_followup_at": l.next_followup_at.isoformat() if l.next_followup_at else None,
+            "created_at": l.created_at.isoformat(),
+            "notes": l.notes,
+        }
+        for l in rows
+    ]
+
+
 @router.get("/templates/registry")
 async def templates_registry() -> list[dict]:
     """Local template registry — works even when Meta's API is down."""

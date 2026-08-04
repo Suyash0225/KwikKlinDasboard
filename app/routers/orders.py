@@ -69,8 +69,14 @@ async def require_admin_key(request: Request, x_api_key: str = Header(default=""
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
 
 
-async def _order_out(db: AsyncSession, order: Order, include_notes: bool = False) -> OrderOut:
-    customer = await db.get(Customer, order.customer_id)
+async def _order_out(
+    db: AsyncSession,
+    order: Order,
+    include_notes: bool = False,
+    customer: Customer | None = None,
+) -> OrderOut:
+    if customer is None:
+        customer = await db.get(Customer, order.customer_id)
     return OrderOut(
         order_number=order.order_number,
         status=order.status.name,
@@ -145,7 +151,14 @@ async def list_orders(
     active: bool = Query(default=False, description="only not-finished orders"),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[OrderOut]:
-    q = select(Order).order_by(Order.created_at.desc()).limit(limit)
+    # one JOIN instead of a customer lookup per order (N+1 killed the p95
+    # under load testing)
+    q = (
+        select(Order, Customer)
+        .join(Customer, Order.customer_id == Customer.id)
+        .order_by(Order.created_at.desc())
+        .limit(limit)
+    )
     if status:
         try:
             q = q.where(Order.status == OrderStatus[status.upper()])
@@ -153,8 +166,8 @@ async def list_orders(
             raise HTTPException(status_code=400, detail=f"unknown status {status!r}")
     elif active:
         q = q.where(Order.status.in_(order_service.ACTIVE_STATUSES))
-    orders = (await db.execute(q)).scalars().all()
-    return [await _order_out(db, o) for o in orders]
+    rows = (await db.execute(q)).all()
+    return [await _order_out(db, o, customer=c) for o, c in rows]
 
 
 @router.get("/{order_number}", dependencies=[Depends(require_admin_key)])

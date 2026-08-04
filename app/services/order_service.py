@@ -354,6 +354,15 @@ async def record_payment(
     """
     if amount <= 0:
         raise OrderError("payment amount must be positive")
+    # Never let the ledger drift past the bill — a typo like 500 instead of 50
+    # would silently corrupt outstanding-amount reports (QA sweep finding).
+    if order.total_amount is not None:
+        outstanding = order.total_amount - (order.amount_paid or Decimal("0"))
+        if amount > outstanding:
+            raise OrderError(
+                f"payment ₹{amount} exceeds outstanding ₹{outstanding} "
+                f"on {order.order_number}"
+            )
     from app.models import Payment, PaymentStatus  # local import avoids cycle noise
 
     db.add(
@@ -365,7 +374,9 @@ async def record_payment(
             note=(note or None),
         )
     )
-    order.amount_paid = (order.amount_paid or Decimal("0")) + amount
+    order.amount_paid = ((order.amount_paid or Decimal("0")) + amount).quantize(
+        Decimal("0.01")
+    )
     order.payment_method = method
     order.recalculate_payment_status()  # THE one place for the rule
 
