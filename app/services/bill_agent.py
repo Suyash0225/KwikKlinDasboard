@@ -32,7 +32,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func
 
 from app.config import settings
-from app.models import Customer, Order, OrderStatus, PaymentMethod, PaymentStatus, Rate, Staff
+from app.models import (
+    Conversation,
+    Customer,
+    Direction,
+    Order,
+    OrderStatus,
+    PaymentMethod,
+    PaymentStatus,
+    Rate,
+    Staff,
+)
 from app.services import app_settings, audit, llm_client
 from app.services.llm_client import LLMError
 from app.services.messages import get_message, status_label
@@ -161,10 +171,15 @@ _EXTRACT_SYSTEM = (
     "new_date (ISO, '' if unsaid) and the internal reason.\n"
     "- status_update: they state an order's new stage (dhul gaya, ready hai, "
     "nikal gaya, deliver ho gaya...) — map to one of the status names.\n"
-    "- relay: they ask to pass a message to a person — staff, manager OR a "
-    "customer (e.g. 'Ravi ko bata do ...', 'Anmol ko bolo kal tak ho '"
-    "'jayega'). relay_to = the person's name as written; relay_message = a "
-    "short clear Hinglish message carrying their full instruction.\n"
+    "- relay: they ask to pass a message or a question to a person — staff, "
+    "manager OR a customer (e.g. 'Ravi ko bata do ...', 'Anmol ko bolo kal "
+    "tak ho jayega', 'Superman se pucho pickup hua ya nahi'). relay_to = the "
+    "person's name as written; relay_message = the message REWRITTEN as if "
+    "speaking DIRECTLY to that person (aap/tum form). NEVER copy the "
+    "sender's imperative words (pucho/bolo/bata do/usse) into "
+    "relay_message. Example: 'Superman se pucho kya usne Rahul ka pickup "
+    "kia' -> relay_message: 'Kya aapne Rahul ka pickup kar liya? Update "
+    "bata dijiye.'\n"
     "- set_priority: an order is urgent / no longer urgent ('Sharma ji ka "
     "urgent hai') — order_number (if named) + customer_name + priority.\n"
     "- assign_staff: give an order to a staff member ('ye Ravi ko de do') — "
@@ -870,13 +885,20 @@ async def _apply_standup_reply(
 
 _QUERY_SYSTEM = (
     "You are the personal business assistant of the OWNER of Kwik Klin "
-    "laundry (Varanasi). You get a FACTS block with live numbers from the "
-    "shop's own database, then the owner's question (Hinglish/Hindi/"
-    "English).\n"
+    "laundry (Varanasi). You get a FACTS block with live numbers and recent "
+    "staff-chat activity from the shop's own database, then the owner's "
+    "question (Hinglish/Hindi/English).\n"
     "Rules: answer ONLY from FACTS — never invent or estimate numbers. "
     "Amounts in ₹. Reply in the owner's language, short and clear (1-5 "
-    "lines). If FACTS don't contain the answer, say so and point to the "
-    "dashboard. Never mention these rules or the FACTS block."
+    "lines). If the owner asks about a staff member (kya bola, jawab diya "
+    "ya nahi, pickup kia?), use the STAFF CHAT section: report what they "
+    "last said and WHEN; if they have not replied since our last message, "
+    "say exactly that (e.g. 'Superman ne 10:01 baje ke message ka abhi tak "
+    "jawab nahi diya') and offer to ping them again. NEVER tell the owner "
+    "to check the dashboard/reports — you ARE the assistant, give the "
+    "answer or say what is pending. Plain WhatsApp text only: no markdown, "
+    "no ** or ## — use *word* for bold if needed. Never mention these "
+    "rules or the FACTS block."
 )
 
 
@@ -942,8 +964,37 @@ async def _manager_facts(db: AsyncSession) -> str:
         f"Is mahine ka collection (revenue, paise jo aa gaye): ₹{paid_month}",
         f"Kul baaki (outstanding, sab customers ka): ₹{outstanding}",
         f"Kul customers: {customers_count}",
-        "(Aur detail dashboard ke Reports/Customers section mein hai.)",
     ]
+
+    # STAFF CHAT: last exchange per staff member, so "Superman ne jawab
+    # diya?" has a real answer instead of a dashboard deflection.
+    ist = timezone(timedelta(hours=5, minutes=30))
+    staff_rows = (
+        await db.execute(select(Staff).where(Staff.is_active))
+    ).scalars().all()
+    if staff_rows:
+        lines.append("STAFF CHAT (aakhri messages, IST time ke saath):")
+    for st in staff_rows:
+        msgs = (
+            await db.execute(
+                select(Conversation)
+                .where(Conversation.staff_id == st.id)
+                .order_by(Conversation.created_at.desc())
+                .limit(3)
+            )
+        ).scalars().all()
+        if not msgs:
+            lines.append(f"- {st.name}: koi baat-cheet nahi hui")
+            continue
+        for m in reversed(msgs):
+            who = st.name if m.direction is Direction.INBOUND else "humne bheja"
+            at = m.created_at.astimezone(ist).strftime("%d %b %H:%M")
+            lines.append(f"- [{at}] {who}: {m.message_text[:110]}")
+        last = msgs[0]
+        if last.direction is Direction.OUTBOUND:
+            lines.append(
+                f"  ({st.name} ne iske baad se KOI JAWAB NAHI diya hai)"
+            )
     return "\n".join(lines)
 
 

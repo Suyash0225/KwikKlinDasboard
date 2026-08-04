@@ -26,6 +26,7 @@ Usage:
 """
 
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
@@ -124,6 +125,9 @@ async def send_message(
             raise WindowClosedError(
                 f"24h window closed for {to_phone} — send a template instead"
             )
+
+    if text:
+        text = _wa_format(text)
 
     # --- DotPe provider: delegate the actual send, keep everything else ---
     if settings.WHATSAPP_PROVIDER == "dotpe":
@@ -395,6 +399,23 @@ def _parse_retry_after(value: str | None) -> float:
         return max(float(value), 1.0) if value else 2.0
     except ValueError:
         return 2.0
+
+
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.S)
+_MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*", re.M)
+_MD_BULLET_RE = re.compile(r"^(\s*)[-*]\s+", re.M)
+
+
+def _wa_format(text: str) -> str:
+    """LLM markdown -> WhatsApp formatting.
+
+    WhatsApp has no markdown: '**bold**' renders literally as asterisks and
+    '## heading' as hashes. Bold there is *single* asterisks.
+    """
+    text = _MD_BOLD_RE.sub(r"*\1*", text)
+    text = _MD_HEADING_RE.sub("", text)
+    text = _MD_BULLET_RE.sub(r"\1• ", text)
+    return text
 
 
 def _now() -> datetime:
