@@ -692,3 +692,173 @@ b.subhead { display: block; font-size: 13.5px; }
   font-size: 13px; max-width: 250px; word-break: break-word;
 }
 .filechip:hover { background: rgba(0,0,0,.09); }
+
+/* ==========================================================================
+   MODERN PASS — 2026 dashboard practice, applied on top of the base sheet.
+   Grounded in what the research agrees on: breathing room over density,
+   horizontal rules only (a full grid is visual noise), text left / numbers
+   right, dark-grey type on light-grey lines, generous card radii.
+   ========================================================================== */
+
+:root {
+  --line: #e7eaf1;          /* one border colour everywhere */
+  --line-soft: #f0f2f7;
+  --pad: 20px;              /* the single spacing step cards use */
+  --radius-lg: 18px;
+}
+
+/* ---------- cards: quieter shadow, real breathing room ---------- */
+.card {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(16,24,40,.04);
+  padding: var(--pad);
+}
+.card:has(.tbl) { padding-bottom: 6px; }
+.card > b {
+  font-size: 13px; letter-spacing: .2px; text-transform: none;
+  color: var(--n800); font-weight: 700; margin-bottom: 2px;
+}
+
+/* KPI: number is the hero, label calms down, hover lifts less */
+.kpi { border-radius: var(--radius-lg); padding: 20px; }
+.kpi:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(16,24,40,.08); }
+.kpi .lbl { font-size: 11px; letter-spacing: .3px; text-transform: none; color: var(--n500); font-weight: 600; }
+.kpi .val { font-size: 30px; letter-spacing: -.5px; margin-top: 8px; }
+
+/* ---------- tables: horizontal rules only, numbers right ---------- */
+.tbl { border-collapse: separate; border-spacing: 0; }
+.tbl th {
+  font-size: 11px; letter-spacing: .3px; text-transform: none;
+  color: var(--n500); font-weight: 700; background: transparent;
+  padding: 12px 16px; border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 1; background: var(--n0);
+}
+.tbl td {
+  padding: 15px 16px;                 /* research: >=16px sides, roomy rows */
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle; font-size: 13.5px;
+}
+.tbl tbody tr:last-child td { border-bottom: none; }
+.tbl tbody tr { transition: background .1s; }
+.tbl tbody tr:hover { background: #fafbfd; }
+.tbl th:last-child, .tbl td:last-child { text-align: right; }
+.tbl .money, .tbl td.money { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---------- form controls: one height, one language ---------- */
+input, select, textarea { border-color: var(--line); background: var(--n0); }
+input:hover, select:hover, textarea:hover { border-color: var(--n300); }
+select {
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%23667085' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat; background-position: right 13px center;
+  padding-right: 36px; cursor: pointer;
+}
+.filters input, .filters select { height: 42px; }
+
+/* ---------- buttons: flatter, less candy ---------- */
+.btn { box-shadow: none; padding: 10px 18px; }
+.btn:hover { transform: none; filter: brightness(.97); }
+.btn.ok, .btn:not(.ghost):not(.danger):not(.orange) { box-shadow: 0 1px 2px rgba(16,24,40,.06); }
+.btn.danger { box-shadow: none; }
+.chip { font-weight: 600; }
+.chip.on { box-shadow: none; }
+
+/* ---------- the bill editor: reads like a bill, not a form ---------- */
+.billedit {
+  border: 1px solid var(--line); border-radius: 14px; padding: 14px;
+  margin-top: 12px; background: var(--n50);
+}
+.bl {
+  display: grid; grid-template-columns: 1fr 74px 84px 88px 40px;
+  gap: 8px; align-items: center; margin-bottom: 8px;
+}
+.bl.head {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .4px;
+  color: var(--n500); text-transform: uppercase; margin-bottom: 6px;
+}
+.bl.head span:nth-child(4) { text-align: right; }
+.bl input { height: 40px; }
+.bl .money { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.billtot {
+  border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px;
+}
+@media (max-width: 640px) {
+  /* one garment = one small card. Named areas, not nth-child guessing —
+     the positional rules fought each other and squashed the name field. */
+  .bl.head { display: none; }
+  .bl {
+    grid-template-columns: 1fr 1fr auto;
+    grid-template-areas: "item item del" "qty rate amt";
+    gap: 8px; background: var(--n0); border: 1px solid var(--line);
+    border-radius: 12px; padding: 10px; margin-bottom: 10px;
+  }
+  .bl > input:nth-of-type(1) { grid-area: item; }
+  .bl > input:nth-of-type(2) { grid-area: qty; }
+  .bl > input:nth-of-type(3) { grid-area: rate; }
+  .bl > .money { grid-area: amt; align-self: center; text-align: right; }
+  .bl > .btn { grid-area: del; }
+}
+}
+
+/* ---------- inbox: one aligned height, calmer chrome ---------- */
+.inboxwrap { border-color: var(--line); border-radius: var(--radius-lg); }
+.th-head, .composer { background: #f7f8fa; }
+.th-head { border-bottom: 1px solid var(--line); }
+.composer { border-top: 1px solid var(--line); }
+.thread-item { padding: 11px 14px; }
+.bubble { box-shadow: 0 1px 1px rgba(16,24,40,.07); }
+
+/* ---------- table column discipline ----------
+   Identifiers, phones and money must never wrap — a broken invoice number
+   ("KK-2026 / 0805 / -01") is unreadable and unscannable. Names may wrap. */
+.tbl td b, .tbl td .money, .tbl .nowrap { white-space: nowrap; }
+.tbl td .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tbl th { white-space: nowrap; }
+.tbl td:first-child { width: 1%; white-space: nowrap; }
+/* keep the row's actions on one line and out of the content's way */
+.tbl td .act { justify-content: flex-end; flex-wrap: nowrap; gap: 6px; }
+.tbl td .act .btn { padding: 7px 12px; }
+/* status + payment pills side by side, not stacked */
+.pillrow { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* icon-only row actions: quiet by default, colour on intent */
+.act .btn.sm.ghost { min-width: 36px; padding: 7px 10px; }
+.act .btn.danger-ic { color: var(--danger); border-color: var(--line); }
+.act .btn.danger-ic:hover { background: var(--danger-50); border-color: var(--danger); color: var(--danger); }
+
+/* ---------- typography: stop shouting ----------
+   Letterspaced ALL-CAPS labels were the old app's signature; at this size
+   they are harder to read than plain sentence case, and every modern
+   dashboard reference drops them. Applied app-wide, not per page. */
+label, .bl.head, .tbl th, .kpi .lbl {
+  text-transform: none; letter-spacing: 0;
+}
+label { font-size: 11.5px; color: var(--n600); font-weight: 600; }
+.bl.head { font-size: 11.5px; color: var(--n500); }
+.modal h3 { font-size: 17px; letter-spacing: -.2px; }
+.modal .frm { gap: 14px; }
+
+/* ---------- media inside chat bubbles ----------
+   A raw <audio> control is ~54px tall and 300px wide — next to a two-line
+   text bubble it looked like a different app. Size it to the conversation. */
+.bubble audio { height: 38px; width: 232px; display: block; }
+.bubble video { display: block; border-radius: 10px; }
+.bubble img { border-radius: 10px; display: block; }
+.bubble.in audio::-webkit-media-controls-panel { background: #f3f5f7; }
+.bubble.out audio::-webkit-media-controls-panel { background: #d9fdd3; }
+/* a voice note's transcript sits under the player, like a caption */
+.bubble audio + * { margin-top: 6px; display: block; }
+
+/* ---------- wide tables scroll inside their card ----------
+   Forcing every header onto one line made the table wider than its card,
+   which pushed the page past the viewport (and got clipped, so content
+   simply vanished). Headers may wrap; a genuinely wide table scrolls
+   inside its own card instead of dragging the layout with it. */
+.tbl th { white-space: normal; }
+/* the table is usually inside a render div, so match any descendant */
+.card:has(.tbl) { overflow-x: auto; }
+/* A flex item's default min-width:auto refuses to shrink below its content,
+   so one wide table dragged the whole page past the viewport (where
+   overflow-x:hidden then clipped it). min-width:0 lets the page fit and
+   hands the scrolling to the card above. */
+.main { min-width: 0; }

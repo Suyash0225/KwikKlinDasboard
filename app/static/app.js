@@ -26,10 +26,13 @@ const T = {
 };
 
 const STATUS_LABEL = {
-  RECEIVED: "New", IN_WASH: "Washing", IN_DRY: "Drying", IN_IRON: "Ironing",
+  RECEIVED: "New", PICKUP_ASSIGNED: "Pickup lagaya", PICKED_UP: "Utha liya",
+  IN_WASH: "Washing", IN_DRY: "Drying", IN_IRON: "Ironing",
   READY: "Ready", OUT_FOR_DELIVERY: "Out for delivery", DELIVERED: "Delivered",
   ON_HOLD: "On hold", CANCELLED: "Cancelled",
 };
+// a status we forgot to name must still read as itself, never "undefined"
+const statusName = (s) => STATUS_LABEL[s] || String(s || "").replace(/_/g, " ").toLowerCase();
 const STATUS_SEQ = ["RECEIVED", "IN_WASH", "IN_DRY", "IN_IRON", "READY", "OUT_FOR_DELIVERY", "DELIVERED"];
 const SEGMENT_LABEL = {
   new: "New customers", active_regular: "Active regulars", at_risk: "At risk",
@@ -262,7 +265,7 @@ const kpi = (lbl, val, sub, click, icon = "📊", tint = "blue") =>
 function renderChips() {
   const by = DASH.counts.by_status || {};
   const chips = [["", `All active <b>${DASH.counts.active_total}</b>`]]
-    .concat(STATUS_SEQ.filter((s) => s !== "DELIVERED").map((s) => [s, `${STATUS_LABEL[s]} <b>${by[s] || 0}</b>`]));
+    .concat(STATUS_SEQ.filter((s) => s !== "DELIVERED").map((s) => [s, `${statusName(s)} <b>${by[s] || 0}</b>`]));
   $("dash-chips").innerHTML = chips
     .map(([v, h]) => `<span class="chip ${dashFilter.status === v ? "on" : ""}" onclick="dashFilter.status='${v}';dashFilter.page=1;renderChips();renderOrders()">${h}</span>`)
     .join("");
@@ -292,21 +295,21 @@ function renderOrders() {
         <td><b>${o.order_number}</b><div class="muted">${fmtDate(o.created_at)}</div></td>
         <td>${esc(o.customer)}<div class="muted">${esc(o.phone)}</div></td>
         <td style="max-width:190px"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
-        <td><span class="pill ${o.status}">${STATUS_LABEL[o.status]}</span>${isOverdue(o) ? ' <span class="pill UNPAID">Overdue</span>' : ""}</td>
+        <td><span class="pill ${o.status}">${statusName(o.status)}</span>${isOverdue(o) ? ' <span class="pill UNPAID">Overdue</span>' : ""}</td>
         <td><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span><div class="muted">${money(o.amount_paid)} / ${o.total_amount ? money(o.total_amount) : "—"}</div></td>
         <td>${fmtDate(o.expected_delivery)}</td>
         <td><div class="act">
-          <button class="btn sm ghost" onclick="statusModal('${o.order_number}','${o.status}')">Status</button>
-          <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button>
-          <button class="btn sm ghost" onclick="dateModal('${o.order_number}')">Date</button>
-          <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">👁</button>
-          <button class="btn sm ghost" onclick="jumpChat('${o.phone}')">💬</button>
+          <button class="btn sm ghost" title="Status badlo" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>
+          <button class="btn sm ghost" title="Payment lo" onclick="paymentModal('${o.order_number}')">₹</button>
+          <button class="btn sm ghost" title="Delivery date" onclick="dateModal('${o.order_number}')">📅</button>
+          <button class="btn sm ghost" title="Details" onclick="orderDetail('${o.order_number}')">👁</button>
+          <button class="btn sm ghost" title="Chat kholo" onclick="jumpChat('${o.phone}')">💬</button>
         </div></td>
       </tr>`).join("")}
     </tbody></table>
     <div class="rowcards">${rows.map((o) => `
       <div class="rowcard ${isOverdue(o) ? "overdue" : ""}">
-        <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${STATUS_LABEL[o.status]}</span></div>
+        <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${statusName(o.status)}</span></div>
         <div class="kv"><span>${esc(o.customer)}</span><span>${esc(o.phone)}</span></div>
         <div class="kv"><span class="muted">${esc(itemsText(o.items))}</span></div>
         <div class="kv"><span>Paid ${money(o.amount_paid)} of ${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
@@ -329,9 +332,9 @@ function renderOrders() {
 function statusModal(number, current) {
   const nexts = STATUS_SEQ.slice(STATUS_SEQ.indexOf(current) + 1).concat(["ON_HOLD", "CANCELLED"]);
   openModal(`<h3>Update status — ${number}</h3>
-    <p class="muted">Current: ${STATUS_LABEL[current]}. Customer is notified automatically on Ready / Out for delivery / Delivered.</p>
+    <p class="muted">Current: ${statusName(current)}. Customer is notified automatically on Ready / Out for delivery / Delivered.</p>
     <div class="frm" style="margin-top:10px">
-      <select id="st-new">${nexts.map((s) => `<option value="${s}">${STATUS_LABEL[s]}</option>`).join("")}</select>
+      <select id="st-new">${nexts.map((s) => `<option value="${s}">${statusName(s)}</option>`).join("")}</select>
     </div>
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
     <button class="btn" id="st-go">Update</button></div>`);
@@ -392,7 +395,7 @@ async function orderDetail(number) {
     const d = await api(`/orders/${number}`);
     const o = d.order;
     $("drawer-body").innerHTML = `
-      <h3>${o.order_number} <span class="pill ${o.status}">${STATUS_LABEL[o.status]}</span></h3>
+      <h3>${o.order_number} <span class="pill ${o.status}">${statusName(o.status)}</span></h3>
       <p class="muted">${esc(o.customer_name || "")} · ${esc(o.customer_phone)}</p><hr class="hr">
       <b>Items</b>
       ${(o.items || []).map((i) => `<div class="sumrow"><span>${i.qty} × ${esc(i.type || i.garment || i.service || "?")}</span><span>${i.amount != null ? money(i.amount) : ""}</span></div>`).join("")}
@@ -401,7 +404,7 @@ async function orderDetail(number) {
       <div class="sumrow total"><span>Total</span><span>${o.total_amount ? money(o.total_amount) : "—"}</span></div>
       <div class="sumrow"><span>Paid</span><span>${money(o.amount_paid)} <span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></span></div>
       <hr class="hr"><b>Timeline</b>
-      ${(d.history || []).map((h) => `<div class="sumrow"><span>${STATUS_LABEL[h.new_status] || h.new_status}</span><span class="muted">${fmtWhen(h.changed_at)} · ${esc(h.changed_by)}</span></div>`).join("")}
+      ${(d.history || []).map((h) => `<div class="sumrow"><span>${statusName(h.new_status) || h.new_status}</span><span class="muted">${fmtWhen(h.changed_at)} · ${esc(h.changed_by)}</span></div>`).join("")}
       ${o.notes ? `<hr class="hr"><b>Internal notes</b><p class="muted" style="white-space:pre-wrap">${esc(o.notes)}</p>` : ""}
       <div class="btnrow" style="margin-top:14px">
         <button class="btn ghost" onclick="printReceiptFromOrder('${o.order_number}')">🖨 Print</button>
@@ -591,16 +594,16 @@ function billRowHtml(o, kind) {
     <td>${esc(o.customer_name || o.customer_phone)}<div class="muted">${esc(o.customer_phone)}</div></td>
     <td style="max-width:180px"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
     <td class="money">${o.total_amount ? money(o.total_amount) : "—"}${due > 0 ? `<div class="muted">due ${money(due)}</div>` : ""}</td>
-    <td><span class="pill ${o.status}">${STATUS_LABEL[o.status]}</span> <span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></td>
+    <td><div class="pillrow"><span class="pill ${o.status}">${statusName(o.status)}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div></td>
     <td><div class="act">
-      <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">👁</button>
-      <button class="btn sm ghost" onclick="printReceiptFromOrder('${o.order_number}')">🖨</button>
-      <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button>
-      <button class="btn sm ghost" onclick="editBillModal('${o.order_number}')">Edit</button>
-      <button class="btn sm danger" onclick="deleteBillModal('${o.order_number}')">Delete</button>
+      <button class="btn sm ghost" title="Details" onclick="orderDetail('${o.order_number}')">👁</button>
+      <button class="btn sm ghost" title="Print" onclick="printReceiptFromOrder('${o.order_number}')">🖨</button>
+      <button class="btn sm ghost" title="Payment lo" onclick="paymentModal('${o.order_number}')">₹</button>
+      <button class="btn sm ghost" title="Bill edit karo" onclick="editBillModal('${o.order_number}')">✏️</button>
+      <button class="btn sm ghost danger-ic" title="Delete" onclick="deleteBillModal('${o.order_number}')">🗑</button>
     </div></td></tr>`;
   return `<div class="rowcard">
-    <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${STATUS_LABEL[o.status]}</span></div>
+    <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${statusName(o.status)}</span></div>
     <div class="kv"><span>${esc(o.customer_name || o.customer_phone)}</span><span>${fmtDate(o.created_at)}</span></div>
     <div class="kv"><span>${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
     <div class="act"><button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
@@ -613,19 +616,43 @@ function billRowHtml(o, kind) {
 /* ---- bill edit / delete ---- */
 function billByNumber(num) { return BILLS.find((b) => b.order_number === num); }
 
+/* Edit bill opens as a BILL: one row per garment with qty and rate, the
+   total adding itself up — not a box you retype text into. */
+let EB = { num: "", lines: [] };
+
 function editBillModal(num) {
   const o = billByNumber(num);
   if (!o) return;
-  const items = (o.items || []).map((i) => `${i.qty || 1} x ${i.type || i.garment || i.service || ""}`).join("\n");
-  openModal(`<h3>Edit bill — ${num}</h3>
+  EB = {
+    num,
+    lines: (o.items || []).map((i) => ({
+      item: i.type || i.garment || i.service || "",
+      qty: Number(i.qty) || 1,
+      rate: i.rate != null ? Number(i.rate) : "",
+    })),
+    paid: Number(o.amount_paid || 0),
+    total: o.total_amount != null ? Number(o.total_amount) : null,
+  };
+  if (!EB.lines.length) EB.lines.push({ item: "", qty: 1, rate: "" });
+
+  openModal(`<h3>Bill — ${num}</h3>
     <p class="muted">${esc(o.customer_name || o.customer_phone)} · ${fmtDate(o.created_at)}</p>
-    <div class="frm">
-      <div class="setfield"><label for="eb-items">Items (ek line mein ek: "2 x shirt")</label>
-        <textarea id="eb-items" rows="4">${esc(items)}</textarea></div>
+    <div class="billedit">
+      <div class="bl head"><span>Kapda</span><span>Qty</span><span>Rate</span><span>Amount</span><span></span></div>
+      <div id="eb-lines"></div>
+      <button class="btn ghost sm" onclick="ebAdd()" style="margin-top:8px">+ Kapda jodo</button>
+      <div class="billtot">
+        <div class="sumrow"><span>Total</span><span class="money" id="eb-sum">—</span></div>
+        <div class="sumrow"><span>Mila hua</span><span class="money">${money(EB.paid)}</span></div>
+        <div class="sumrow total"><span>Baaki</span><span class="money" id="eb-due">—</span></div>
+      </div>
+    </div>
+    <div class="frm" style="margin-top:14px">
       <div class="split2">
-        <div class="setfield"><label for="eb-total">Total (₹)</label>
-          <input id="eb-total" type="number" min="0" step="0.01" value="${o.total_amount || ""}">
-          <small>Mila hua: ${money(o.amount_paid)} — wo yahan se nahi badalta, Payment se badalta hai.</small></div>
+        <div class="setfield"><label for="eb-total">Total (₹) — apne aap jud jaata hai</label>
+          <input id="eb-total" type="number" min="0" step="0.01" value="${o.total_amount ?? ""}"
+                 oninput="EB.manual=true;ebCalc()">
+          <small>Rate na daalo to yahan khud likh sakte ho.</small></div>
         <div class="setfield"><label for="eb-date">Delivery date</label>
           <input id="eb-date" type="date" value="${o.expected_delivery || ""}"></div>
       </div>
@@ -637,21 +664,59 @@ function editBillModal(num) {
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" id="eb-save">Save changes</button>
     </div>`);
+  ebRender();
+
   $("eb-save").onclick = (e) => busy(e.target, async () => {
     $("eb-err").textContent = "";
+    const items = EB.lines
+      .filter((l) => (l.item || "").trim())
+      .map((l) => {
+        const row = { type: l.item.trim(), qty: Number(l.qty) || 1 };
+        if (l.rate !== "" && l.rate != null) row.rate = Number(l.rate);
+        return row;
+      });
+    if (!items.length) { $("eb-err").textContent = "Kam se kam ek kapda likhna hoga."; return; }
     const total = $("eb-total").value === "" ? null : parseFloat($("eb-total").value);
     if (total !== null && !(total >= 0)) { $("eb-err").textContent = "Total sahi nahi hai."; return; }
-    const items = $("eb-items").value.split("\n").map((l) => l.trim()).filter(Boolean)
-      .map((l) => {
-        const m = l.match(/^(\d+)\s*[x×]?\s*(.+)$/i);
-        return m ? { qty: parseInt(m[1]), type: m[2].trim() } : { qty: 1, type: l };
-      });
-    await api(`/orders/${num}`, { method: "PUT", body: {
+    await api(`/orders/${EB.num}`, { method: "PUT", body: {
       items, total_amount: total, expected_delivery: $("eb-date").value || null,
       notes: $("eb-notes").value, edited_by: "dashboard",
     }});
     closeModal(); toast("Bill updated"); loadBills(); loadDashboard();
   });
+}
+
+function ebRender() {
+  $("eb-lines").innerHTML = EB.lines.map((l, i) => `
+    <div class="bl">
+      <input value="${esc(l.item)}" placeholder="shirt / saree / blanket"
+             oninput="EB.lines[${i}].item=this.value">
+      <input type="number" min="0.1" step="0.5" value="${l.qty}"
+             oninput="EB.lines[${i}].qty=parseFloat(this.value)||0;ebCalc()">
+      <input type="number" min="0" step="1" value="${l.rate}" placeholder="—"
+             oninput="EB.lines[${i}].rate=this.value===''?'':parseFloat(this.value)||0;ebCalc()">
+      <span class="money" id="eb-amt-${i}">—</span>
+      <button class="btn sm ghost" title="Hatao" onclick="ebDel(${i})">✕</button>
+    </div>`).join("");
+  ebCalc();
+}
+function ebAdd() { EB.lines.push({ item: "", qty: 1, rate: "" }); ebRender(); }
+function ebDel(i) { EB.lines.splice(i, 1); if (!EB.lines.length) ebAdd(); else ebRender(); }
+
+function ebCalc() {
+  let sum = 0, anyRate = false;
+  EB.lines.forEach((l, i) => {
+    const amt = (Number(l.rate) || 0) * (Number(l.qty) || 0);
+    if (l.rate !== "" && l.rate != null) anyRate = true;
+    sum += amt;
+    const cell = $(`eb-amt-${i}`);
+    if (cell) cell.textContent = l.rate === "" || l.rate == null ? "—" : money(amt);
+  });
+  // rows win unless the owner typed a total himself
+  if (anyRate && !EB.manual) $("eb-total").value = sum ? sum.toFixed(2) : "";
+  const total = parseFloat($("eb-total").value);
+  $("eb-sum").textContent = isFinite(total) ? money(total) : "—";
+  $("eb-due").textContent = isFinite(total) ? money(Math.max(0, total - EB.paid)) : "—";
 }
 
 function deleteBillModal(num) {
@@ -660,21 +725,12 @@ function deleteBillModal(num) {
   const paid = Number(o.amount_paid || 0);
   openModal(`<h3>Delete bill ${num}?</h3>
     <p class="muted">${esc(o.customer_name || o.customer_phone)} · ${o.total_amount ? money(o.total_amount) : "—"}</p>
-    <p class="muted">Bill, uska status history${paid > 0 ? ` aur ${money(paid)} ka payment record` : ""} — sab hamesha ke liye chala jayega. Reports bhi badlengi.</p>
-    <div class="frm"><div class="setfield">
-      <label for="db-confirm">Confirm karne ke liye <b>${num}</b> type karo</label>
-      <input id="db-confirm" placeholder="${num}">
-      <small class="fielderr" id="db-err"></small>
-    </div></div>
+    <p class="muted">Bill, status history${paid > 0 ? ` aur ${money(paid)} ka payment record` : ""} — sab chala jayega, wapas nahi aayega.</p>
     <div class="btnrow">
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn danger" id="db-go">Delete bill</button>
+      <button class="btn danger" id="db-go">Haan, delete karo</button>
     </div>`);
   $("db-go").onclick = (e) => busy(e.target, async () => {
-    if ($("db-confirm").value.trim().toUpperCase() !== num.toUpperCase()) {
-      $("db-err").textContent = `Poora number type karo: ${num}`;
-      return;
-    }
     await api(`/orders/${num}?deleted_by=dashboard`, { method: "DELETE" });
     closeModal(); toast(`${num} deleted`); loadBills(); loadDashboard();
   });
@@ -766,20 +822,11 @@ function deleteCustomerModal(phone) {
     <p class="muted">${n
       ? `Unke <b>${n} bill</b>, payments, aur poori chat history bhi delete ho jayegi. Reports ke numbers badal jayenge.`
       : "Inka koi bill nahi hai. Chat history delete ho jayegi."}</p>
-    <div class="frm"><div class="setfield">
-      <label for="dc-confirm">Confirm karne ke liye <b>${esc(label)}</b> type karo</label>
-      <input id="dc-confirm" placeholder="${esc(label)}">
-      <small class="fielderr" id="dc-err"></small>
-    </div></div>
     <div class="btnrow">
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn danger" id="dc-go">Delete customer</button>
+      <button class="btn danger" id="dc-go">Haan, delete karo</button>
     </div>`);
   $("dc-go").onclick = (e) => busy(e.target, async () => {
-    if ($("dc-confirm").value.trim() !== label) {
-      $("dc-err").textContent = `Bilkul aisa type karo: ${label}`;
-      return;
-    }
     await api(`/admin/api/customers/${encodeURIComponent(phone)}?force=true`, { method: "DELETE" });
     closeModal(); toast(`${label} deleted`); loadCustomers(); loadDashboard();
   });
@@ -789,6 +836,23 @@ async function sendReminder(phone, amt) {
     await api("/admin/api/inbox/send", { method: "POST", body: { phone, text: `Namaste! Aapka ₹${amt} baaki hai. Jab suvidha ho, de dijiyega 🙏 — Kwik Klin` } });
     toast(T.reminderSent);
   } catch (e) { toast(e.message, true); }
+}
+
+/* Thread list previews: a file must read like WhatsApp's own list —
+   "🎤 Voice note", not "[audio:/admin/media/in-f7ed7c2...]". */
+const PREVIEW_ICON = {
+  image: "📷 Photo", audio: "🎤 Voice note", voice: "🎤 Voice note",
+  video: "🎥 Video", document: "📄 File", location: "📍 Location",
+  contact: "📇 Contact", reaction: "", button: "", template: "📑 Template",
+};
+function previewText(raw) {
+  const m = String(raw || "").match(/^\[(\w+)[:\]]([^\]]*)\]?\s*(.*)$/s);
+  if (!m) return raw || "";
+  const label = PREVIEW_ICON[m[1]];
+  if (label === undefined) return raw;          // unknown marker: show as-is
+  const rest = (m[3] || "").trim();
+  // a transcribed voice note shows the words, like WhatsApp shows a caption
+  return rest ? (label ? `${label}: ${rest}` : rest) : label;
 }
 
 /* Template bodies for the Inbox, so a sent template reads as the message
@@ -1091,7 +1155,7 @@ async function loadReports() {
       <div class="muted">${lbl}</div>
       <div style="font-size:11px" class="muted">R ${money(p.revenue)} · E ${money(p.expenses)} · P ${money(p.profit)}</div>
     </div>`).join("");
-  const statusPairs = Object.entries(DASH.counts.by_status || {}).map(([k, v]) => [STATUS_LABEL[k] || k, v]);
+  const statusPairs = Object.entries(DASH.counts.by_status || {}).map(([k, v]) => [statusName(k) || k, v]);
   const [sd, sl] = statusPairs.length ? donutHtml(statusPairs) : ["", ""];
   const top = (CUSTOMERS_CACHE || []).slice().sort((a, b) => Number(b.business) - Number(a.business)).slice(0, 8);
   $("rep-body").innerHTML = `
@@ -1891,7 +1955,7 @@ function renderThreads() {
         ${avatar(t.name)}
         <div style="flex:1;min-width:0">
           <div class="nm"><span>${esc(t.name)}${chip}</span><span class="t">${fmtWhen(t.last_at)}</span></div>
-          <div class="pv">${isUnread(t) ? '<b style="color:#00A884">● </b>' : ""}${t.last_direction === "OUTBOUND" ? "✓✓ " : ""}${esc(t.last_text)}</div>
+          <div class="pv">${isUnread(t) ? '<b style="color:#00A884">● </b>' : ""}${t.last_direction === "OUTBOUND" ? "✓✓ " : ""}${esc(previewText(t.last_text))}</div>
         </div>
       </div></div>`;
   }).join("") || `<div class="thread-item">${T.noData}</div>`;
