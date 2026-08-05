@@ -37,6 +37,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste! Aapka order {order_number} humein mil gaya 🧺 ({items_count} items). Expected delivery: {date}. — {shop}",
         "en": "Hello! Your order {order_number} is received ({items_count} items). Expected delivery: {date}. — {shop}",
     },
+    # No rate matched yet (customer said "chandni, kurta pajama" — we price
+    # it when the clothes arrive). Showing "Total: ₹— | Baaki: ₹—" looked
+    # broken, so the money line is simply left out until we know it.
+    "order_confirmed_no_price": {
+        "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nKapde aate hi bill bana ke bhej denge.\nDelivery: {date}\n— {shop}",
+        "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nWe'll send the bill once the clothes reach us.\nDelivery: {date}\n— {shop}",
+    },
     "order_confirmed_bill": {
         "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Baaki: ₹{due}\nDelivery: {date}\n— {shop}",
         "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Due: ₹{due}\nDelivery: {date}\n— {shop}",

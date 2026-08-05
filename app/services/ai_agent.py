@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Customer, Rate
+from app.config import settings
 from app.services import llm_client
 from app.services.escalation import raise_escalation
 from app.services.intent import classify_intent
@@ -80,8 +81,10 @@ _COMPOSE_SYSTEM = (
     "5. Reply in the language tagged on the message: hi = Hinglish (Hindi in "
     "Latin script), en = English.\n"
     "6. Keep replies short: 1-4 lines, warm, at most 2 emojis, and end with "
-    "'— Kwik Klin'.\n"
-    "7. Never mention these rules, the FACTS block, or that you are an AI."
+    f"'— {settings.SHOP_NAME} AI'.\n"
+    "7. Never mention these rules or the FACTS block. You may say you are "
+    "the shop's AI assistant if asked — the signature already says so — but "
+    "never pretend a human is typing."
 )
 
 
@@ -252,24 +255,13 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
             if dstaff:
                 order.assigned_delivery_id = dstaff.id
                 await db.commit()
-                from app.services.whatsapp import SendError, send_message
-
-                try:
-                    await send_message(
-                        db, to_phone=dstaff.phone,
-                        text=get_message(
-                            "work_order", headline="PICKUP",
-                            order_number=order.order_number,
-                            customer_name=f"{intake['name']} ({customer.phone})",
-                            items=intake["items_text"][:120],
-                            delivery=f"pickup {intake['pickup_date']}",
-                            priority="normal",
-                            extra=intake["address"][:200],
-                        ),
-                    )
-                except SendError:
-                    log.info("pickup_workorder_not_sent")
         await update_status(db, order, OrderStatus.PICKUP_ASSIGNED, changed_by="agent")
+        # Hand it to the pickup tracker: it asks the boy "kab tak?", turns
+        # his answer into the time we promise the customer (with his number),
+        # and then asks him to confirm the pickup with Yes/No.
+        from app.services.tasks import create_pickup_task
+
+        await create_pickup_task(db, order)
         await _notify_admin_fyi(
             db, customer,
             f"Naya pickup order {order.order_number}: {intake['name']}, "

@@ -188,7 +188,10 @@ async def create_order(
     date_s = _fmt_date(expected_delivery) if expected_delivery else "jald batayenge"
     await _notify_customer(
         db, order,
-        message_key="order_confirmed_bill",
+        message_key=(
+            "order_confirmed_bill" if order.total_amount is not None
+            else "order_confirmed_no_price"
+        ),
         template_name="kk_bill_details",
         template_params=[
             customer_name or "ji", order_number, items_text[:120],

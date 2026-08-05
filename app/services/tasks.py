@@ -146,6 +146,261 @@ async def _send_to_assignee(
         return False
 
 
+# --- pickup flow -----------------------------------------------------------
+# A new order is a promise to go and collect clothes. Instead of the owner
+# remembering to arrange it, the agent runs the whole exchange:
+#   1. ask the delivery boy "kab tak?"      (and FYI the owner)
+#   2. his answer becomes the customer's promised time + his number
+#   3. ask him "hua ya nahi?" with Yes/No, and move the order on Yes
+
+
+async def _delivery_staff(db: AsyncSession) -> Staff | None:
+    """Who collects: the configured default, else the only active DELIVERY."""
+    from app.models import StaffRole
+    from app.services import app_settings
+
+    phone = (await app_settings.get(db, "default_delivery_phone") or "").strip()
+    if phone:
+        st = (
+            await db.execute(select(Staff).where(Staff.phone == phone, Staff.is_active))
+        ).scalar_one_or_none()
+        if st is not None:
+            return st
+    rows = (
+        (
+            await db.execute(
+                select(Staff).where(Staff.role == StaffRole.DELIVERY, Staff.is_active)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return rows[0] if len(rows) == 1 else None
+
+
+async def create_pickup_task(db: AsyncSession, order) -> Task | None:
+    """Called right after an order is booked. Never raises — a hiccup here
+    must not undo a saved order."""
+    from app.models import Customer
+
+    try:
+        staff = await _delivery_staff(db)
+        if staff is None:
+            log.info("pickup_task_skipped_no_delivery_staff", order=order.order_number)
+            return None
+        customer = await db.get(Customer, order.customer_id)
+        who = (customer.name or customer.phone) if customer else "customer"
+        addr = (customer.address if customer and customer.address else "").strip()
+
+        task = Task(
+            code=await _next_code(db),
+            title=f"{who} ke yahan se pickup karna hai",
+            assigned_staff_id=staff.id,
+            order_id=order.id,
+            kind="pickup",
+            urgent=order.priority == "urgent",
+            created_by="agent",
+        )
+        db.add(task)
+        await db.commit()
+
+        ask = (
+            f"🧺 Naya pickup [{task.code}] — {order.order_number}\n"
+            f"{who} · {customer.phone if customer else ''}\n"
+            + (f"Pata: {addr}\n" if addr else "")
+            + "\nKab tak pickup kar loge? (jaise: sham tak / kal 11 baje)"
+        )
+        try:
+            await send_message(db, to_phone=staff.phone, text=ask, sent_by="bot")
+            task.last_ping_at = datetime.now(timezone.utc)
+            db.add(task)
+            await db.commit()
+        except (SendError, WindowClosedError):
+            log.info("pickup_ask_undelivered", code=task.code)
+
+        # owner sees it the moment it is arranged, without asking
+        try:
+            await send_message(
+                db, to_phone=settings.MANAGER_PHONE,
+                text=(
+                    f"🧺 {order.order_number} — {who} ka pickup {staff.name} ko de diya "
+                    f"[{task.code}]. Unse samay pooch liya hai, pata chalte hi "
+                    f"customer ko bata dunga."
+                ),
+            )
+        except SendError:
+            pass
+
+        await audit.record(
+            actor_role="system", actor="agent", action="pickup_task_created",
+            args={"code": task.code, "order": order.order_number, "staff": staff.name},
+            result="asked for ETA",
+        )
+        log.info("pickup_task_created", code=task.code, order=order.order_number)
+        return task
+    except Exception:
+        log.exception("pickup_task_failed", order=getattr(order, "order_number", "?"))
+        return None
+
+
+async def open_pickup_awaiting_eta(db: AsyncSession, staff_id) -> Task | None:
+    """A pickup this person has been asked about but not yet answered."""
+    return (
+        await db.execute(
+            select(Task)
+            .where(
+                Task.assigned_staff_id == staff_id,
+                Task.status == TASK_OPEN,
+                Task.kind == "pickup",
+                Task.eta_text.is_(None),
+            )
+            .order_by(Task.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def open_pickup_awaiting_confirm(db: AsyncSession, staff_id) -> Task | None:
+    """Their newest pickup that has a promised time but is not closed yet."""
+    return (
+        await db.execute(
+            select(Task)
+            .where(
+                Task.assigned_staff_id == staff_id,
+                Task.status == TASK_OPEN,
+                Task.kind == "pickup",
+            )
+            .order_by(Task.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def record_pickup_eta(db: AsyncSession, task: Task, eta_text: str) -> str:
+    """Save what the boy promised, tell the customer, then ask him to
+    confirm once it is done. Returns the reply for the staff member."""
+    from app.models import Customer, Order, OrderStatus
+
+    task.eta_text = eta_text.strip()[:120]
+    db.add(task)
+    await db.commit()
+
+    staff = await db.get(Staff, task.assigned_staff_id)
+    order = await db.get(Order, task.order_id) if task.order_id else None
+    customer = await db.get(Customer, order.customer_id) if order else None
+
+    # the customer hears a time and a name, not "jald batayenge"
+    if customer is not None:
+        text = (
+            f"Namaste{' ' + customer.name if customer.name else ''} ji! 🙏\n"
+            f"Aapka pickup schedule ho gaya hai — *{task.eta_text}*.\n"
+            f"{staff.name if staff else 'Hamare saathi'} aayenge, "
+            f"unka number: {staff.phone if staff else ''}\n"
+            f"Order: {order.order_number if order else ''}\n— Kwik Klin"
+        )
+        try:
+            await send_message(db, to_phone=customer.phone, text=text, sent_by="bot")
+        except WindowClosedError:
+            log.info("pickup_eta_customer_window_closed", code=task.code)
+        except SendError:
+            log.warning("pickup_eta_customer_send_failed", code=task.code)
+
+    # order moves to "someone is going to collect it"
+    if order is not None and order.status is OrderStatus.RECEIVED:
+        try:
+            from app.services import order_service
+
+            await order_service.update_status(
+                db, order, OrderStatus.PICKUP_ASSIGNED, changed_by=f"staff:{staff.name if staff else '?'}"
+            )
+        except Exception:
+            log.exception("pickup_status_move_failed", code=task.code)
+
+    # and the owner knows the promised time too
+    try:
+        await send_message(
+            db, to_phone=settings.MANAGER_PHONE,
+            text=(
+                f"⏱ {staff.name if staff else 'Staff'} ne bola: {task.eta_text} "
+                f"({task.code}{', ' + order.order_number if order else ''}). "
+                f"Customer ko bata diya."
+            ),
+        )
+    except SendError:
+        pass
+
+    await _ask_pickup_done(db, task, staff)
+    return (
+        f"👍 Note kar liya: {task.eta_text}. Customer ko bata diya.\n"
+        f"Pickup ho jaye to niche wale button se bata dena."
+    )
+
+
+async def _ask_pickup_done(db: AsyncSession, task: Task, staff: Staff | None) -> None:
+    """Yes/No buttons — one tap instead of typing."""
+    from app.services.whatsapp import Button
+
+    if staff is None:
+        return
+    try:
+        await send_message(
+            db, to_phone=staff.phone,
+            text=f"[{task.code}] Pickup ho gaya?",
+            buttons=[
+                Button(f"pickup_yes:{task.code}", "✅ Haan, ho gaya"),
+                Button(f"pickup_no:{task.code}", "❌ Abhi nahi"),
+            ],
+            sent_by="bot",
+        )
+    except (SendError, WindowClosedError):
+        log.info("pickup_confirm_buttons_not_sent", code=task.code)
+
+
+async def confirm_pickup(db: AsyncSession, task: Task, *, done: bool, by: str) -> str:
+    """Their Yes/No answer. Yes moves the order to PICKED_UP, which is what
+    starts the delivery-date clock the customer was promised."""
+    from app.models import Order, OrderStatus
+
+    order = await db.get(Order, task.order_id) if task.order_id else None
+    if not done:
+        task.last_ping_at = datetime.now(timezone.utc)
+        db.add(task)
+        await db.commit()
+        try:
+            await send_message(
+                db, to_phone=settings.MANAGER_PHONE,
+                text=f"⚠️ {by} ne bola pickup abhi nahi hua ({task.code}"
+                     + (f", {order.order_number}" if order else "") + ").",
+            )
+        except SendError:
+            pass
+        return "Theek hai, ho jaye to batana. Main thodi der baad phir poochh lunga."
+
+    await complete_task(db, task, reply="pickup ho gaya", by=by)
+    if order is not None and order.status in (OrderStatus.RECEIVED, OrderStatus.PICKUP_ASSIGNED):
+        try:
+            from app.services import order_service
+
+            if order.status is OrderStatus.RECEIVED:
+                await order_service.update_status(
+                    db, order, OrderStatus.PICKUP_ASSIGNED, changed_by=f"staff:{by}"
+                )
+            await order_service.update_status(
+                db, order, OrderStatus.PICKED_UP, changed_by=f"staff:{by}"
+            )
+        except Exception:
+            log.exception("pickup_done_status_move_failed", code=task.code)
+    try:
+        await send_message(
+            db, to_phone=settings.MANAGER_PHONE,
+            text=f"✅ {by} ne pickup kar liya ({task.code}"
+                 + (f", {order.order_number}" if order else "") + ").",
+        )
+    except SendError:
+        pass
+    return "👍 Shukriya! Kapde aa gaye — main aage ka dekh leta hoon."
+
+
 async def complete_task(
     db: AsyncSession, task: Task, *, reply: str | None = None, by: str = "staff"
 ) -> Task:

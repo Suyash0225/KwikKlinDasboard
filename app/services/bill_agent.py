@@ -220,6 +220,12 @@ async def handle_staff_message(
         if m_task:
             return await _close_task_by_code(db, sender_phone, sender_label, m_task.group(1))
 
+    # Pickup conversation: their tap on Yes/No, and their answer to
+    # "kab tak?". Both are deterministic — no LLM, no ambiguity.
+    pickup_reply = await _handle_pickup_exchange(db, sender_phone, sender_label, text or "")
+    if pickup_reply is not None:
+        return pickup_reply
+
     # Campaign approvals are deterministic commands, no LLM needed.
     if sender_label == "manager" and text:
         m = re.match(r"^\s*campaign\s+(yes|haan|nahi|no|skip)\s*$", text, re.I)
@@ -1072,6 +1078,54 @@ _URGENT_RE = re.compile(
 )
 # same shape as the webhook's matcher — order ids look like KK-20260801-01
 ORDER_NUMBER_RE = re.compile(r"\bKK-\d{8}-\d{2,}\b", re.IGNORECASE)
+
+
+# Their tap comes back as "[button:✅ Haan, ho gaya]"; DotPe sends the id.
+_PICKUP_YES_RE = re.compile(r"pickup_yes|haan,?\s*ho\s*gaya", re.I)
+_PICKUP_NO_RE = re.compile(r"pickup_no|abhi\s*nahi", re.I)
+# a plain "kal 11 baje" / "sham tak" is an ETA, not chatter
+_ETA_HINT_RE = re.compile(
+    r"\b(sham|shaam|subah|dopahar|raat|kal|parso|aaj|abhi|ghante|ghanta|min|baje|"
+    r"tak|nikal|jaa?\s*raha|pahunch)\b|\d{1,2}\s*(baje|bje|am|pm)",
+    re.I,
+)
+
+
+async def _handle_pickup_exchange(
+    db: AsyncSession, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """Drive the pickup mini-conversation. None = not part of it."""
+    from app.services import tasks as task_service
+
+    staff = (
+        await db.execute(select(Staff).where(Staff.phone == sender_phone))
+    ).scalar_one_or_none()
+    if staff is None:
+        return None
+
+    btn = re.match(r"^\s*\[button:([^\]]+)\]", text)
+    payload = btn.group(1) if btn else text
+
+    if btn and (_PICKUP_YES_RE.search(payload) or _PICKUP_NO_RE.search(payload)):
+        code = None
+        m_code = re.search(r"(T-\d+)", payload)
+        if m_code:
+            task = await task_service.get_by_code(db, m_code.group(1))
+        else:
+            # button titles carry no code — use their newest open pickup
+            task = await task_service.open_pickup_awaiting_confirm(db, staff.id)
+        if task is None:
+            return None
+        return await task_service.confirm_pickup(
+            db, task, done=bool(_PICKUP_YES_RE.search(payload)), by=staff.name or sender_label
+        )
+
+    # not a button: is this the answer to "kab tak pickup karoge?"
+    if text and not text.startswith("["):
+        pending = await task_service.open_pickup_awaiting_eta(db, staff.id)
+        if pending is not None and _ETA_HINT_RE.search(text):
+            return await task_service.record_pickup_eta(db, pending, text)
+    return None
 
 
 async def _close_task_by_code(

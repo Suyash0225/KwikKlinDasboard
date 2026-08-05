@@ -47,6 +47,14 @@ class Task(Base):
     )
     urgent: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
+    # 'general' | 'pickup' — a pickup task runs its own little conversation:
+    # ask the boy when, tell the customer that time, then ask did it happen
+    kind: Mapped[str] = mapped_column(
+        String(12), default="general", server_default="general", index=True
+    )
+    # what the staff member said when asked "kab tak?" ("sham tak", "kal 11 baje")
+    eta_text: Mapped[str | None] = mapped_column(String(120))
+
     created_by: Mapped[str] = mapped_column(String(40), default="owner")
     # whatever the assignee said back — the agent writes their reply here
     reply: Mapped[str | None] = mapped_column(Text)
