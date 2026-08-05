@@ -567,3 +567,105 @@ b.subhead { display: block; font-size: 13.5px; }
 }
 #receipt { display: none; }
 @media print { #receipt { display: block; } }
+
+/* ==========================================================================
+   MODERN REFRESH — sample, scoped to the Dashboard only.
+   Same palette, same fonts. Delete this whole block to revert.
+   What changes: quieter labels (sentence case, not shouted caps), a calmer
+   card surface (hairline border instead of a heavy drop shadow), a real
+   type hierarchy on the KPIs, and a table that reads like data instead of
+   a wall of buttons.
+   ========================================================================== */
+
+/* --- KPI cards --- */
+#sec-dashboard .kpis {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px; margin-bottom: 20px;
+}
+/* six KPIs auto-fitted into four columns leaves a ragged 4 + 2; an explicit
+   3 x 2 block reads as deliberate */
+@media (min-width: 900px) {
+  #sec-dashboard .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+#sec-dashboard .kpi {
+  padding: 18px 18px 16px;
+  border: 1px solid var(--n200);
+  border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(16,24,40,.04);
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+#sec-dashboard .kpi:hover {
+  transform: none;
+  border-color: var(--n300);
+  box-shadow: 0 4px 14px rgba(16,24,40,.07);
+}
+#sec-dashboard .kpi .lbl {
+  font-size: 12.5px; font-weight: 600; letter-spacing: 0;
+  text-transform: none; color: var(--n500); padding-right: 30px;
+}
+#sec-dashboard .kpi .val {
+  font-size: 30px; font-weight: 700; letter-spacing: -.6px;
+  margin-top: 8px; line-height: 1.15;
+}
+#sec-dashboard .kpi .sub { font-size: 12px; color: var(--n400); margin-top: 4px; }
+/* the emoji chip read as clip-art and each one rendered a different size;
+   a small tinted dot carries the same colour cue without the noise */
+#sec-dashboard .kico {
+  top: 18px; right: 18px; width: 10px; height: 10px; font-size: 0;
+  overflow: hidden; border-radius: 50%; opacity: .9;
+}
+#sec-dashboard .kico.orange { background: var(--brand); }
+#sec-dashboard .kico.green  { background: var(--ok); }
+#sec-dashboard .kico.blue   { background: var(--info); }
+#sec-dashboard .kico.amber  { background: var(--warn); }
+#sec-dashboard .kico.teal   { background: var(--teal); }
+#sec-dashboard .kico.red    { background: var(--danger); }
+
+/* --- cards + section headers --- */
+#sec-dashboard .card {
+  border: 1px solid var(--n200);
+  box-shadow: 0 1px 2px rgba(16,24,40,.04);
+  border-radius: 16px;
+}
+#sec-dashboard .card > b {
+  text-transform: none; letter-spacing: 0; font-size: 14.5px; color: var(--n800);
+}
+
+/* --- WhatsApp strip: one quiet line of stats --- */
+#sec-dashboard #wa-stats { font-size: 13px; color: var(--n600); padding: 14px 18px; }
+#sec-dashboard #wa-stats b { color: var(--n800); font-weight: 700; }
+
+/* --- filter chips --- */
+#sec-dashboard .chip {
+  border-radius: 10px; padding: 7px 13px; font-weight: 600; font-size: 12.5px;
+}
+#sec-dashboard .chip:hover { transform: none; background: var(--n50); }
+#sec-dashboard .chip.on {
+  background: var(--brand-50); color: var(--brand-600);
+  border-color: var(--brand); box-shadow: none;
+}
+
+/* --- orders table --- */
+#sec-dashboard .tbl th {
+  text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 600;
+  color: var(--n500); padding-bottom: 10px;
+}
+#sec-dashboard .tbl td { padding: 14px 12px; vertical-align: middle; }
+#sec-dashboard .tbl tbody tr { transition: background .12s; }
+#sec-dashboard .tbl tbody tr:hover { background: var(--n50); }
+/* an order number is an identifier — breaking it across two lines makes it
+   unreadable and unsearchable at a glance */
+#sec-dashboard .tbl td:first-child b,
+#sec-dashboard .tbl td:first-child {
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+/* five solid buttons per row shouted louder than the data; quiet them down
+   until hover so the eye lands on orders first */
+#sec-dashboard .tbl .act .btn {
+  background: var(--n0); color: var(--n600); border: 1px solid var(--n200);
+  box-shadow: none; font-weight: 600; border-radius: 9px;
+}
+#sec-dashboard .tbl .act .btn:hover {
+  border-color: var(--brand); color: var(--brand-600);
+  background: var(--brand-50); transform: none;
+}
