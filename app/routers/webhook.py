@@ -429,6 +429,12 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
                 marker = "image" if mtype in ("image", "sticker") else mtype
                 text = f"[{marker}:/admin/media/{fname}]"
                 extra = " ".join(x for x in (label, caption) if x)
+                # A voice note is a message, not an attachment — transcribe it
+                # so the agent can act on what was actually said.
+                if mtype in ("audio", "voice"):
+                    said = await _transcribe(Path(media_dir) / fname, part)
+                    if said:
+                        extra = said
                 if extra:
                     text += f" {extra}"
 
@@ -486,6 +492,13 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
     # Staff and the manager (whose number has a customer row from his own
     # tests) get the command agent: bill-by-text, delay + status updates.
     # A silent None means "not a command" — same as pre-Phase-4 behavior.
+    # A transcribed voice note is a MESSAGE: everything downstream should see
+    # the words. The stored row keeps the marker so the Inbox can still play
+    # the audio alongside what was said.
+    from app.services.ai_agent import _voice_transcript
+
+    spoken = _voice_transcript(text) or text
+
     is_manager = phone == normalize_phone(settings.MANAGER_PHONE)
     if staff is not None or is_manager:
         try:
@@ -493,7 +506,7 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
                 db,
                 sender_phone=phone,
                 sender_label=staff.name if staff else "manager",
-                text=text,
+                text=spoken,
             )
         except Exception:
             log.exception("staff_command_failed", phone=phone)
@@ -555,12 +568,12 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
             log.info("agent_paused_thread", phone=phone)
             return
         try:
-            if ORDER_NUMBER_RE.search(text):
-                reply = await _build_customer_reply(db, customer, text)
+            if ORDER_NUMBER_RE.search(spoken):
+                reply = await _build_customer_reply(db, customer, spoken)
             else:
-                reply = await build_ai_reply(db, customer, text)
+                reply = await build_ai_reply(db, customer, spoken)
                 if reply is None:
-                    reply = await _build_customer_reply(db, customer, text)
+                    reply = await _build_customer_reply(db, customer, spoken)
         except Exception:
             log.exception("reply_build_failed", phone=phone)
             reply = get_message("error_fallback")
@@ -626,6 +639,22 @@ def _status_reply(order) -> str:
 
 # WhatsApp message types that carry a downloadable file
 _MEDIA_TYPES = ("image", "sticker", "audio", "voice", "video", "document")
+
+
+async def _transcribe(path, part: dict) -> str | None:
+    """Read a downloaded voice note and turn it into text. Never raises —
+    an unreadable note falls back to the plain acknowledgement."""
+    try:
+        from app.services.llm_client import transcribe_audio
+
+        blob = path.read_bytes()
+        if not blob or len(blob) > 15_000_000:  # Gemini inline-data ceiling
+            return None
+        mime = (part.get("mime_type") or "audio/ogg").split(";")[0].strip()
+        return await transcribe_audio(blob, mime)
+    except Exception:
+        log.exception("voice_transcribe_error")
+        return None
 
 
 def _extract_text(msg: dict) -> str:

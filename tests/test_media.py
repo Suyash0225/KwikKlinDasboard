@@ -157,3 +157,104 @@ def test_extension_map_covers_the_common_types() -> None:
         ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"),
     ]:
         assert MEDIA_EXT[mime] == ext
+
+
+# --- voice notes are understood, not just filed ---
+
+async def test_voice_note_is_transcribed_and_acted_on(client, sent, monkeypatch) -> None:
+    """The words in a voice note must reach the agent as a real message."""
+    import app.routers.webhook as wh
+    import app.services.ai_agent as ai
+
+    async def fake_download(media_id, dest_dir):
+        from pathlib import Path
+
+        (Path(dest_dir) / "in-voice1.ogg").write_bytes(b"fake-ogg-bytes")
+        return "in-voice1.ogg"
+
+    async def fake_transcribe(blob, mime):
+        assert blob == b"fake-ogg-bytes"
+        assert mime == "audio/ogg"
+        return "Bhaiya do shirt aur ek pant dhulwana hai"
+
+    seen: dict = {}
+
+    async def fake_reply(db, customer, text, **kw):
+        seen["text"] = text
+        return "Ji bilkul, pickup laga dete hain."
+
+    monkeypatch.setattr("app.services.whatsapp.download_media", fake_download)
+    monkeypatch.setattr("app.services.llm_client.transcribe_audio", fake_transcribe)
+    monkeypatch.setattr(wh, "build_ai_reply", fake_reply)
+
+    body = _media_msg("audio", "wamid.TESTvoice1", mime_type="audio/ogg; codecs=opus")
+    r = await client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
+    )
+    assert r.status_code == 200
+
+    # stored so the Inbox can BOTH play the note and show what was said
+    async with async_session_factory() as s:
+        conv = (
+            await s.execute(
+                select(Conversation).where(Conversation.wa_message_id == "wamid.TESTvoice1")
+            )
+        ).scalars().one()
+    assert conv.message_text.startswith("[audio:/admin/media/in-voice1.ogg]")
+    assert "do shirt aur ek pant" in conv.message_text
+
+    # and the agent saw the WORDS, not the marker
+    assert seen.get("text") == "Bhaiya do shirt aur ek pant dhulwana hai"
+    assert any("pickup laga dete hain" in (c["text"] or "") for c in sent)
+
+
+def test_transcript_is_unwrapped_for_the_agent() -> None:
+    from app.services.ai_agent import _voice_transcript
+
+    assert _voice_transcript("[audio:/admin/media/x.ogg] kal aa jaana") == "kal aa jaana"
+    assert _voice_transcript("[voice:/admin/media/x.ogg] theek hai") == "theek hai"
+    # no transcript -> the caller must fall back to acknowledging the file
+    assert _voice_transcript("[audio:/admin/media/x.ogg]") is None
+    assert _voice_transcript("[document:/admin/media/x.pdf] bill.pdf") is None
+
+
+async def test_unclear_voice_note_falls_back_to_acknowledgement(
+    client, sent, monkeypatch
+) -> None:
+    """When we truly can't hear it, say so — never invent a message."""
+    async def fake_download(media_id, dest_dir):
+        from pathlib import Path
+
+        (Path(dest_dir) / "in-voice2.ogg").write_bytes(b"noise")
+        return "in-voice2.ogg"
+
+    async def unclear(blob, mime):
+        return None
+
+    monkeypatch.setattr("app.services.whatsapp.download_media", fake_download)
+    monkeypatch.setattr("app.services.llm_client.transcribe_audio", unclear)
+
+    body = _media_msg("audio", "wamid.TESTvoice2")
+    await client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
+    )
+    replies = [c for c in sent if c["to"] == TEST_CUSTOMER_PHONE]
+    assert replies and "voice note" in (replies[0]["text"] or "").lower()
+
+
+async def test_transcription_failure_never_loses_the_message(monkeypatch) -> None:
+    """A crash in transcription must not drop the customer's voice note."""
+    import app.routers.webhook as wh
+    from pathlib import Path
+
+    async def boom(blob, mime):
+        raise RuntimeError("gemini down")
+
+    monkeypatch.setattr("app.services.llm_client.transcribe_audio", boom)
+    p = Path(wh.__file__).resolve().parent.parent / "media" / "in-testcrash.ogg"
+    p.parent.mkdir(exist_ok=True)
+    p.write_bytes(b"x")
+    try:
+        assert await wh._transcribe(p, {"mime_type": "audio/ogg"}) is None
+    finally:
+        p.unlink(missing_ok=True)

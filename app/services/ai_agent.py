@@ -10,6 +10,8 @@ Safety design — every rule enforced in CODE, not just in the prompt:
   rule-based replies that worked before Phase 4 (ground rule #5).
 """
 
+import re
+
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -88,6 +90,15 @@ _COMPOSE_SYSTEM = (
 )
 
 
+_VOICE_RE = re.compile(r"^\[(?:audio|voice):/admin/media/[\w.\-]+\]\s*(.+)$", re.S)
+
+
+def _voice_transcript(text: str) -> str | None:
+    """The words out of a voice note, if we managed to hear them."""
+    m = _VOICE_RE.match(text or "")
+    return m.group(1).strip() if m else None
+
+
 def _media_ack(marker: str) -> str | None:
     """A human-sounding reply for a file/pin the bot can't read itself.
 
@@ -126,7 +137,13 @@ async def build_ai_reply(
     if not text:
         return None
     if text.startswith("["):
-        return _media_ack(text)
+        # A transcribed voice note IS the customer's message — answer it
+        # like typed text instead of just confirming the file arrived.
+        said = _voice_transcript(text)
+        if said:
+            text = said
+        else:
+            return _media_ack(text)
 
     # Global kill switch (Settings) — bot falls back to rule-based replies.
     from app.services import app_settings, audit

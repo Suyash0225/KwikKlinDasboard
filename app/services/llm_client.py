@@ -201,6 +201,45 @@ async def ask_json_image(
     return _parse_json(text, model)
 
 
+SUPPORTS_AUDIO = PROVIDER == "gemini"
+
+_TRANSCRIBE_SYSTEM = (
+    "You transcribe WhatsApp voice notes sent to a laundry shop in Varanasi, "
+    "India. Customers speak Hindi, Hinglish or English, often with background "
+    "noise.\n"
+    "Write ONLY what was said, verbatim, in Latin script (Hinglish) — do not "
+    "translate to English, do not answer, do not summarise, do not add "
+    "commentary or quotes. Keep numbers, names and addresses exactly as "
+    "spoken. If the audio is silent or nothing is intelligible, reply with "
+    "the single word: UNCLEAR"
+)
+
+
+async def transcribe_audio(audio_bytes: bytes, mime_type: str) -> str | None:
+    """Turn a voice note into text, or None if it can't be understood.
+
+    None means "we genuinely don't know what they said" — the caller must
+    fall back to acknowledging the note rather than inventing a message.
+    """
+    if not SUPPORTS_AUDIO:
+        return None
+    try:
+        with track("voice"):
+            out = await _generate(
+                _TRANSCRIBE_SYSTEM, "Transcribe this voice note.",
+                MODEL_SMART, 400, None, (mime_type, audio_bytes),
+            )
+    except LLMError:
+        log.warning("voice_transcribe_failed", mime=mime_type)
+        return None
+    text = (out or "").strip().strip('"')
+    if not text or text.upper().startswith("UNCLEAR"):
+        log.info("voice_transcribe_unclear")
+        return None
+    log.info("voice_transcribed", chars=len(text))
+    return text[:1000]
+
+
 # --------------------------------------------------------------------------
 # Gemini (REST via httpx — no SDK dependency)
 # --------------------------------------------------------------------------
