@@ -8,15 +8,29 @@ This API is internal — it is NOT exposed to customers or staff.
 import hmac
 import time
 from collections import defaultdict, deque
+from datetime import date
+from decimal import Decimal
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from sqlalchemy import select
+from pydantic import BaseModel, Field
+from sqlalchemy import delete as sa_delete, select, update as sa_update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import Customer, Order, OrderStatus, OrderStatusHistory
+from app.models import (
+    CouponRedemption,
+    Customer,
+    Escalation,
+    OpenQuestion,
+    Order,
+    OrderStatus,
+    OrderStatusHistory,
+    Payment,
+)
+from app.services import audit
 from app.schemas.orders import (
     DeliveryDateIn,
     OrderCreateIn,
@@ -196,6 +210,116 @@ async def get_order(order_number: str, db: AsyncSession = Depends(get_db)) -> di
             for h in history
         ],
     }
+
+
+class OrderEditIn(BaseModel):
+    """Fields an owner may correct on an existing bill.
+
+    Money RECEIVED is not here on purpose — amount_paid is derived from the
+    payments ledger, so a typo in a payment is fixed by the payment, not by
+    overwriting the total.
+    """
+
+    items: list | None = None
+    total_amount: Decimal | None = Field(default=None, ge=0)
+    discount_amount: Decimal | None = Field(default=None, ge=0)
+    gst_amount: Decimal | None = Field(default=None, ge=0)
+    expected_delivery: date | None = None
+    priority: str | None = Field(default=None, pattern="^(normal|urgent)$")
+    notes: str | None = None
+    edited_by: str = "dashboard"
+
+
+@router.put("/{order_number}", dependencies=[Depends(require_admin_key)])
+async def edit_order(
+    order_number: str, body: OrderEditIn, db: AsyncSession = Depends(get_db)
+) -> OrderOut:
+    """Correct a bill (wrong items, wrong amount, wrong date)."""
+    try:
+        order = await order_service.get_order(db, order_number)
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    before = {
+        "items": order.items, "total_amount": str(order.total_amount),
+        "expected_delivery": str(order.expected_delivery),
+    }
+    if body.items is not None:
+        order.items = body.items
+    if body.total_amount is not None:
+        order.total_amount = body.total_amount
+    if body.discount_amount is not None:
+        order.discount_amount = body.discount_amount
+    if body.gst_amount is not None:
+        order.gst_amount = body.gst_amount
+    if body.expected_delivery is not None:
+        order.expected_delivery = body.expected_delivery
+    if body.priority is not None:
+        order.priority = body.priority
+    if body.notes is not None:
+        order.notes = body.notes or None
+    # the total may now sit above/below what was already paid
+    order.recalculate_payment_status()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception("order_edit_failed", order_number=order_number)
+        raise HTTPException(status_code=400, detail="could not save the changes")
+
+    await audit.record(
+        actor_role="admin", actor=body.edited_by, action="order_edited",
+        args={"order": order_number, "before": before},
+        result=f"total ₹{order.total_amount} status {order.payment_status.name}",
+    )
+    log.info("order_edited", order_number=order_number, by=body.edited_by)
+    return await _order_out(db, order, include_notes=True)
+
+
+@router.delete("/{order_number}", dependencies=[Depends(require_admin_key)])
+async def delete_order(
+    order_number: str,
+    db: AsyncSession = Depends(get_db),
+    deleted_by: str = Query(default="dashboard"),
+) -> dict:
+    """Delete a bill entirely — for one entered by mistake.
+
+    Everything hanging off it goes too (payments, status history, coupon
+    redemptions), otherwise the DB would keep orphan money rows that still
+    show up in reports.
+    """
+    try:
+        order = await order_service.get_order(db, order_number)
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    oid = order.id
+    paid = order.amount_paid
+    await db.execute(sa_delete(Payment).where(Payment.order_id == oid))
+    await db.execute(sa_delete(OrderStatusHistory).where(OrderStatusHistory.order_id == oid))
+    await db.execute(sa_delete(CouponRedemption).where(CouponRedemption.order_id == oid))
+    await db.execute(sa_delete(Escalation).where(Escalation.order_id == oid))
+    await db.execute(
+        sa_update(OpenQuestion).where(OpenQuestion.order_id == oid).values(order_id=None)
+    )
+    await db.delete(order)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        log.exception("order_delete_failed", order_number=order_number)
+        raise HTTPException(
+            status_code=409,
+            detail="Is bill se juda purana record hai — delete nahi ho paya.",
+        )
+
+    await audit.record(
+        actor_role="admin", actor=deleted_by, action="order_deleted",
+        args={"order": order_number, "amount_paid": str(paid)},
+        result="deleted with payments and history",
+    )
+    log.info("order_deleted", order_number=order_number, by=deleted_by)
+    return {"ok": True, "deleted": order_number}
 
 
 @router.post("/{order_number}/status", dependencies=[Depends(require_admin_key)])

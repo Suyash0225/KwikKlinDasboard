@@ -594,6 +594,8 @@ function billRowHtml(o, kind) {
       <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">👁</button>
       <button class="btn sm ghost" onclick="printReceiptFromOrder('${o.order_number}')">🖨</button>
       <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button>
+      <button class="btn sm ghost" onclick="editBillModal('${o.order_number}')">Edit</button>
+      <button class="btn sm danger" onclick="deleteBillModal('${o.order_number}')">Delete</button>
     </div></td></tr>`;
   return `<div class="rowcard">
     <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${STATUS_LABEL[o.status]}</span></div>
@@ -601,7 +603,79 @@ function billRowHtml(o, kind) {
     <div class="kv"><span>${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
     <div class="act"><button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
     <button class="btn sm ghost" onclick="printReceiptFromOrder('${o.order_number}')">Print</button>
-    <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button></div></div>`;
+    <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button>
+    <button class="btn sm ghost" onclick="editBillModal('${o.order_number}')">Edit</button>
+    <button class="btn sm danger" onclick="deleteBillModal('${o.order_number}')">Delete</button></div></div>`;
+}
+
+/* ---- bill edit / delete ---- */
+function billByNumber(num) { return BILLS.find((b) => b.order_number === num); }
+
+function editBillModal(num) {
+  const o = billByNumber(num);
+  if (!o) return;
+  const items = (o.items || []).map((i) => `${i.qty || 1} x ${i.type || i.garment || i.service || ""}`).join("\n");
+  openModal(`<h3>Edit bill — ${num}</h3>
+    <p class="muted">${esc(o.customer_name || o.customer_phone)} · ${fmtDate(o.created_at)}</p>
+    <div class="frm">
+      <div class="setfield"><label for="eb-items">Items (ek line mein ek: "2 x shirt")</label>
+        <textarea id="eb-items" rows="4">${esc(items)}</textarea></div>
+      <div class="split2">
+        <div class="setfield"><label for="eb-total">Total (₹)</label>
+          <input id="eb-total" type="number" min="0" step="0.01" value="${o.total_amount || ""}">
+          <small>Mila hua: ${money(o.amount_paid)} — wo yahan se nahi badalta, Payment se badalta hai.</small></div>
+        <div class="setfield"><label for="eb-date">Delivery date</label>
+          <input id="eb-date" type="date" value="${o.expected_delivery || ""}"></div>
+      </div>
+      <div class="setfield"><label for="eb-notes">Internal note (customer ko kabhi nahi jaata)</label>
+        <input id="eb-notes" value="${esc(o.notes || "")}"></div>
+      <small class="fielderr" id="eb-err"></small>
+    </div>
+    <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="eb-save">Save changes</button>
+    </div>`);
+  $("eb-save").onclick = (e) => busy(e.target, async () => {
+    $("eb-err").textContent = "";
+    const total = $("eb-total").value === "" ? null : parseFloat($("eb-total").value);
+    if (total !== null && !(total >= 0)) { $("eb-err").textContent = "Total sahi nahi hai."; return; }
+    const items = $("eb-items").value.split("\n").map((l) => l.trim()).filter(Boolean)
+      .map((l) => {
+        const m = l.match(/^(\d+)\s*[x×]?\s*(.+)$/i);
+        return m ? { qty: parseInt(m[1]), type: m[2].trim() } : { qty: 1, type: l };
+      });
+    await api(`/orders/${num}`, { method: "PUT", body: {
+      items, total_amount: total, expected_delivery: $("eb-date").value || null,
+      notes: $("eb-notes").value, edited_by: "dashboard",
+    }});
+    closeModal(); toast("Bill updated"); loadBills(); loadDashboard();
+  });
+}
+
+function deleteBillModal(num) {
+  const o = billByNumber(num);
+  if (!o) return;
+  const paid = Number(o.amount_paid || 0);
+  openModal(`<h3>Delete bill ${num}?</h3>
+    <p class="muted">${esc(o.customer_name || o.customer_phone)} · ${o.total_amount ? money(o.total_amount) : "—"}</p>
+    <p class="muted">Bill, uska status history${paid > 0 ? ` aur ${money(paid)} ka payment record` : ""} — sab hamesha ke liye chala jayega. Reports bhi badlengi.</p>
+    <div class="frm"><div class="setfield">
+      <label for="db-confirm">Confirm karne ke liye <b>${num}</b> type karo</label>
+      <input id="db-confirm" placeholder="${num}">
+      <small class="fielderr" id="db-err"></small>
+    </div></div>
+    <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn danger" id="db-go">Delete bill</button>
+    </div>`);
+  $("db-go").onclick = (e) => busy(e.target, async () => {
+    if ($("db-confirm").value.trim().toUpperCase() !== num.toUpperCase()) {
+      $("db-err").textContent = `Poora number type karo: ${num}`;
+      return;
+    }
+    await api(`/orders/${num}?deleted_by=dashboard`, { method: "DELETE" });
+    closeModal(); toast(`${num} deleted`); loadBills(); loadDashboard();
+  });
 }
 function billsCsv() {
   dlCsvClient("bills.csv",
@@ -631,8 +705,10 @@ function renderCustomers() {
       <td class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</td>
       <td class="muted">${c.last_message_at ? fmtWhen(c.last_message_at) : "—"}</td>
       <td><div class="act">
-        ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}','${c.outstanding}')">Send payment reminder</button>` : ""}
+        ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}','${c.outstanding}')">Remind</button>` : ""}
         <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">💬</button>
+        <button class="btn sm ghost" onclick="editCustomerModal('${c.phone}')">Edit</button>
+        <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button>
       </div></td></tr>`).join("")}
     </tbody></table>
     <div class="rowcards">${rows.map((c) => `
@@ -640,7 +716,71 @@ function renderCustomers() {
       <div class="kv"><span>${c.phone}</span><span>${c.total_orders} orders</span></div>
       <div class="kv"><span>Business ${money(c.business)}</span><span>Paid ${money(c.paid)}</span></div>
       <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}','${c.outstanding}')">Remind</button>` : ""}
-      <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">Chat</button></div></div>`).join("")}</div>`;
+      <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">Chat</button>
+      <button class="btn sm ghost" onclick="editCustomerModal('${c.phone}')">Edit</button>
+      <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button></div></div>`).join("")}</div>`;
+}
+
+/* ---- customer edit / delete ---- */
+function customerByPhone(p) { return (CUSTOMERS_CACHE || []).find((c) => c.phone === p); }
+
+function editCustomerModal(phone) {
+  const c = customerByPhone(phone);
+  if (!c) return;
+  const digits = String(phone).replace(/^\+91/, "");
+  openModal(`<h3>Edit customer</h3>
+    <div class="frm">
+      <div class="setfield"><label for="ec-name">Name</label>
+        <input id="ec-name" value="${esc(c.name || "")}"></div>
+      <div class="setfield"><label for="ec-phone">Phone</label>
+        <input id="ec-phone" inputmode="numeric" value="${esc(digits)}">
+        <small>Number badalne par unki puri chat aur bills isi naye number se judenge.</small>
+        <small class="fielderr" id="ec-phone-err"></small></div>
+      <div class="setfield"><label for="ec-addr">Address</label>
+        <input id="ec-addr" value="${esc(c.address || "")}"></div>
+    </div>
+    <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="ec-save">Save changes</button>
+    </div>`);
+  $("ec-save").onclick = (e) => busy(e.target, async () => {
+    $("ec-phone-err").textContent = "";
+    const ph = $("ec-phone").value.replace(/\D/g, "");
+    if (ph.length !== 10) { $("ec-phone-err").textContent = "Phone 10 digit ka hona chahiye."; return; }
+    await api(`/admin/api/customers/${encodeURIComponent(phone)}`, { method: "PUT", body: {
+      name: $("ec-name").value, phone: ph, address: $("ec-addr").value,
+    }});
+    closeModal(); toast("Customer updated"); loadCustomers();
+  });
+}
+
+function deleteCustomerModal(phone) {
+  const c = customerByPhone(phone);
+  if (!c) return;
+  const label = c.name || c.phone;
+  const n = Number(c.total_orders || 0);
+  openModal(`<h3>Delete ${esc(label)}?</h3>
+    <p class="muted">${c.phone}</p>
+    <p class="muted">${n
+      ? `Unke <b>${n} bill</b>, payments, aur poori chat history bhi delete ho jayegi. Reports ke numbers badal jayenge.`
+      : "Inka koi bill nahi hai. Chat history delete ho jayegi."}</p>
+    <div class="frm"><div class="setfield">
+      <label for="dc-confirm">Confirm karne ke liye <b>${esc(label)}</b> type karo</label>
+      <input id="dc-confirm" placeholder="${esc(label)}">
+      <small class="fielderr" id="dc-err"></small>
+    </div></div>
+    <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn danger" id="dc-go">Delete customer</button>
+    </div>`);
+  $("dc-go").onclick = (e) => busy(e.target, async () => {
+    if ($("dc-confirm").value.trim() !== label) {
+      $("dc-err").textContent = `Bilkul aisa type karo: ${label}`;
+      return;
+    }
+    await api(`/admin/api/customers/${encodeURIComponent(phone)}?force=true`, { method: "DELETE" });
+    closeModal(); toast(`${label} deleted`); loadCustomers(); loadDashboard();
+  });
 }
 async function sendReminder(phone, amt) {
   try {

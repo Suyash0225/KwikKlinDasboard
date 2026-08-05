@@ -28,16 +28,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import (
+    CampaignRecipient,
     Conversation,
+    CouponRedemption,
     Customer,
     Direction,
     Escalation,
     Expense,
+    OpenQuestion,
     Order,
+    OrderStatusHistory,
+    Payment,
     Rate,
     Staff,
     StaffRole,
 )
+from app.services import audit
 from app.utils.phone import normalize_phone as _norm_phone
 from app.routers.orders import require_admin_key
 from app.services.order_service import ACTIVE_STATUSES, get_active_orders_for_phone
@@ -175,6 +181,120 @@ async def customers_list(
         }
         for c, active, total, biz, pd in rows
     ]
+
+
+class CustomerEditIn(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    phone: str | None = Field(default=None, min_length=6, max_length=20)
+    address: str | None = Field(default=None, max_length=400)
+
+
+async def _customer_by_phone(db: AsyncSession, phone: str) -> Customer:
+    try:
+        norm = _norm_phone(phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    cust = (
+        await db.execute(select(Customer).where(Customer.phone == norm))
+    ).scalar_one_or_none()
+    if cust is None:
+        raise HTTPException(status_code=404, detail=f"{norm} koi customer nahi hai")
+    return cust
+
+
+@router.put("/api/customers/{phone}", dependencies=[Depends(require_admin_key)])
+async def customer_edit(
+    phone: str, body: CustomerEditIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Fix a customer's name, number or address."""
+    cust = await _customer_by_phone(db, phone)
+    if body.name is not None:
+        cust.name = body.name.strip() or None
+    if body.address is not None:
+        cust.address = body.address.strip() or None
+    if body.phone is not None:
+        try:
+            new_phone = _norm_phone(body.phone)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if new_phone != cust.phone:
+            clash = (
+                await db.execute(
+                    select(Customer).where(Customer.phone == new_phone, Customer.id != cust.id)
+                )
+            ).scalar_one_or_none()
+            if clash is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{new_phone} pehle se {clash.name or 'ek customer'} ka number hai",
+                )
+            cust.phone = new_phone
+    await db.commit()
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="customer_edited",
+        args={"phone": cust.phone}, result=f"name={cust.name}",
+    )
+    log.info("customer_edited", phone=cust.phone)
+    return {"ok": True, "phone": cust.phone}
+
+
+@router.delete("/api/customers/{phone}", dependencies=[Depends(require_admin_key)])
+async def customer_delete(
+    phone: str,
+    db: AsyncSession = Depends(get_db),
+    force: bool = Query(default=False, description="also delete their orders"),
+) -> dict:
+    """Delete a customer. Refuses to silently take their order history with
+    them: if they have bills, the caller must pass force=true (the UI makes
+    the owner type the name and shows exactly what will go)."""
+    cust = await _customer_by_phone(db, phone)
+    order_ids = (
+        (await db.execute(select(Order.id).where(Order.customer_id == cust.id)))
+        .scalars()
+        .all()
+    )
+    if order_ids and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{cust.name or cust.phone} ke {len(order_ids)} bill hain. "
+                "Delete karne par wo bhi chale jayenge."
+            ),
+        )
+
+    if order_ids:
+        await db.execute(delete(Payment).where(Payment.order_id.in_(order_ids)))
+        await db.execute(
+            delete(OrderStatusHistory).where(OrderStatusHistory.order_id.in_(order_ids))
+        )
+        await db.execute(
+            delete(CouponRedemption).where(CouponRedemption.order_id.in_(order_ids))
+        )
+    await db.execute(delete(CouponRedemption).where(CouponRedemption.customer_id == cust.id))
+    await db.execute(delete(CampaignRecipient).where(CampaignRecipient.customer_id == cust.id))
+    await db.execute(delete(OpenQuestion).where(OpenQuestion.customer_id == cust.id))
+    await db.execute(delete(Escalation).where(Escalation.customer_id == cust.id))
+    # conversations need a participant (XOR constraint) — they go too
+    await db.execute(delete(Conversation).where(Conversation.customer_id == cust.id))
+    await db.execute(delete(Order).where(Order.customer_id == cust.id))
+    name, ph = cust.name, cust.phone
+    await db.delete(cust)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        log.exception("customer_delete_failed", phone=ph)
+        raise HTTPException(
+            status_code=409, detail="Purana record juda hua hai — delete nahi ho paya."
+        )
+
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="customer_deleted",
+        args={"phone": ph, "orders": len(order_ids)},
+        result=f"{name or ph} deleted",
+    )
+    log.info("customer_deleted", phone=ph, orders=len(order_ids))
+    return {"ok": True, "deleted": name or ph, "orders_deleted": len(order_ids)}
 
 
 # ---------- Expenses ----------
