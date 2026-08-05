@@ -21,6 +21,8 @@ Design rules enforced at this layer:
 import base64
 import json
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import httpx
 import structlog
@@ -59,6 +61,46 @@ class LLMUnavailable(LLMError):
 
     Callers must degrade to rule-based behavior, never crash.
     """
+
+
+async def _record_usage(
+    provider: str, model: str, in_tok: int, out_tok: int, latency_ms: int, ok: bool
+) -> None:
+    """Persist one call so the dashboard can answer 'kitna use hua'.
+
+    Never raises and never blocks the reply — a usage row is bookkeeping,
+    not part of answering the customer.
+    """
+    try:
+        from app.database import async_session_factory
+        from app.models import LlmUsage
+
+        async with async_session_factory() as db:
+            db.add(
+                LlmUsage(
+                    provider=provider, model=model, purpose=_purpose.get() or "other",
+                    input_tokens=int(in_tok or 0), output_tokens=int(out_tok or 0),
+                    latency_ms=latency_ms, ok=ok,
+                )
+            )
+            await db.commit()
+    except Exception:
+        log.exception("llm_usage_record_failed", model=model)
+
+
+# What the current call is for — set by callers via track(); read by the
+# recorder. A ContextVar keeps it correct under concurrent requests.
+_purpose: ContextVar[str] = ContextVar("llm_purpose", default="other")
+
+
+@contextmanager
+def track(purpose: str):
+    """Tag every LLM call inside this block, e.g. with track("reply"): ..."""
+    token = _purpose.set(purpose[:24])
+    try:
+        yield
+    finally:
+        _purpose.reset(token)
 
 
 async def _generate(
@@ -245,15 +287,25 @@ async def _gemini_generate(
         raise LLMError(f"gemini returned no text: {str(data)[:100]}") from exc
 
     usage = data.get("usageMetadata", {})
+    latency_ms = int((time.monotonic() - started) * 1000)
     log.info(
         "llm_call",
         provider="gemini",
         model=model,
         kind="json" if schema is not None else "text",
-        latency_ms=int((time.monotonic() - started) * 1000),
+        latency_ms=latency_ms,
         input_tokens=usage.get("promptTokenCount"),
         output_tokens=usage.get("candidatesTokenCount"),
     )
+    # guarded at the CALL SITE too: the reply must survive even a bug inside
+    # the recorder itself, not just a failed DB write
+    try:
+        await _record_usage(
+            "gemini", model, usage.get("promptTokenCount") or 0,
+            usage.get("candidatesTokenCount") or 0, latency_ms, True,
+        )
+    except Exception:
+        log.exception("llm_usage_record_crashed", model=model)
     return text
 
 
@@ -313,14 +365,22 @@ async def _anthropic_generate(
         raise LLMError(str(exc.message)) from exc
 
     text = "".join(b.text for b in resp.content if b.type == "text")
+    latency_ms = int((time.monotonic() - started) * 1000)
     log.info(
         "llm_call",
         provider="anthropic",
         model=model,
         kind="json" if output_config is not None else "text",
-        latency_ms=int((time.monotonic() - started) * 1000),
+        latency_ms=latency_ms,
         input_tokens=resp.usage.input_tokens,
         output_tokens=resp.usage.output_tokens,
         stop=resp.stop_reason,
     )
+    try:
+        await _record_usage(
+            "anthropic", model, resp.usage.input_tokens, resp.usage.output_tokens,
+            latency_ms, True,
+        )
+    except Exception:
+        log.exception("llm_usage_record_crashed", model=model)
     return text

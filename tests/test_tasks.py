@@ -143,8 +143,12 @@ async def test_followup_pings_only_when_due(worker, sent, awake) -> None:
         code = task.code
     sent.clear()
 
-    # just created -> not due yet
-    assert await task_service.run_task_followups() == 0
+    # Assert on THIS task, not the global sweep count — other tests' tasks
+    # may also be open in the shared dev database.
+    await task_service.run_task_followups()
+    async with async_session_factory() as db:
+        task = await task_service.get_by_code(db, code)
+    assert task.ping_count == 0, "just created — not due yet"
 
     async with async_session_factory() as db:
         task = await task_service.get_by_code(db, code)
@@ -152,9 +156,8 @@ async def test_followup_pings_only_when_due(worker, sent, awake) -> None:
         db.add(task)
         await db.commit()
 
-    n = await task_service.run_task_followups()
-    assert n == 1
-    assert "Reminder" in sent[-1]["text"] and code in sent[-1]["text"]
+    await task_service.run_task_followups()
+    assert any(code in (c["text"] or "") and "Reminder" in (c["text"] or "") for c in sent)
 
     async with async_session_factory() as db:
         task = await task_service.get_by_code(db, code)

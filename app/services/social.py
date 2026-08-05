@@ -98,16 +98,17 @@ async def _caption(db, theme_title: str, headline: str, subline: str) -> str:
     try:
         from app.services import llm_client
 
-        cap = await llm_client.ask(
-            system=(
-                "Write ONE short Instagram caption (max 4 lines + up to 6 "
-                "hashtags) for Kwik Klin laundry, Varanasi, in warm Hinglish. "
-                "Include WhatsApp number +91 96968 56069. No prices unless "
-                "given. " + (f"Owner's style rules: {extra}" if extra else "")
-            ),
-            user_text=f"Theme: {theme_title}. Headline: {headline}. Detail: {subline}.",
-            max_tokens=250,
-        )
+        with llm_client.track("social"):
+            cap = await llm_client.ask(
+                system=(
+                    "Write ONE short Instagram caption (max 4 lines + up to 6 "
+                    "hashtags) for Kwik Klin laundry, Varanasi, in warm Hinglish. "
+                    "Include WhatsApp number +91 96968 56069. No prices unless "
+                    "given. " + (f"Owner's style rules: {extra}" if extra else "")
+                ),
+                user_text=f"Theme: {theme_title}. Headline: {headline}. Detail: {subline}.",
+                max_tokens=250,
+            )
         return cap.strip() or fallback
     except LLMError:
         return fallback

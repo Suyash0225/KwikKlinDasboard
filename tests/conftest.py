@@ -167,8 +167,16 @@ async def _cleanup_test_rows():
     engine.dispose() at the end matters: pytest-asyncio gives each test its
     own event loop, and pooled asyncpg connections are loop-bound.
     """
+    from datetime import datetime, timezone
+
+    started = datetime.now(timezone.utc)
     yield
     async with async_session_factory() as s:
+        # Stubbed LLM calls still reach the usage recorder — without this the
+        # owner's AI-cost dashboard fills up with numbers from the test suite.
+        await s.execute(
+            sqltext("DELETE FROM llm_usage WHERE at >= :t"), {"t": started}
+        )
         await s.execute(
             sqltext("DELETE FROM conversations WHERE wa_message_id LIKE 'wamid.TEST%'")
         )

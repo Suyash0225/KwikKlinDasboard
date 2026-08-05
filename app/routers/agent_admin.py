@@ -612,6 +612,125 @@ async def _graph(method: str, path: str, **kw):
     return r.status_code, r.json()
 
 
+@router.get("/usage")
+async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(default=30, ge=1, le=180)) -> dict:
+    """AI usage and cost: today, this month, per model, and where it's going.
+
+    Money is derived here from the settings rate card, so correcting a rate
+    re-prices the whole history instead of leaving stale numbers behind.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import LlmUsage
+
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(IST)
+    day_start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    month_start = now_ist.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    window_start = (now_ist - timedelta(days=days)).astimezone(timezone.utc)
+
+    rates = await app_settings.get(db, "llm_rates") or {}
+    cap = int(await app_settings.get(db, "llm_daily_request_cap") or 0)
+    budget = float(await app_settings.get(db, "llm_monthly_budget_usd") or 0)
+
+    def _cost(model: str, tin: int, tout: int) -> float:
+        r = rates.get(model) or {}
+        return (tin / 1_000_000) * float(r.get("in", 0)) + (tout / 1_000_000) * float(r.get("out", 0))
+
+    async def _totals(since) -> dict:
+        rows = (
+            await db.execute(
+                select(
+                    LlmUsage.model,
+                    func.count().label("calls"),
+                    func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+                    func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+                )
+                .where(LlmUsage.at >= since)
+                .group_by(LlmUsage.model)
+            )
+        ).all()
+        by_model, calls, tin, tout, cost = [], 0, 0, 0, 0.0
+        for model, n, i, o in rows:
+            c = _cost(model, i, o)
+            by_model.append({
+                "model": model, "calls": n, "input_tokens": int(i),
+                "output_tokens": int(o), "cost_usd": round(c, 4),
+                "priced": bool((rates.get(model) or {}).get("in") or (rates.get(model) or {}).get("out")),
+            })
+            calls += n; tin += int(i); tout += int(o); cost += c
+        by_model.sort(key=lambda m: (-m["cost_usd"], -m["calls"]))
+        return {
+            "calls": calls, "input_tokens": tin, "output_tokens": tout,
+            "cost_usd": round(cost, 4), "by_model": by_model,
+        }
+
+    today, month = await _totals(day_start), await _totals(month_start)
+
+    # where the spend goes — useful for deciding what to trim
+    # grouped by purpose AND model — cost is per-model, so collapsing the
+    # model away first would price everything at zero
+    purpose_rows = (
+        await db.execute(
+            select(
+                LlmUsage.purpose, LlmUsage.model, func.count(),
+                func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+            )
+            .where(LlmUsage.at >= month_start)
+            .group_by(LlmUsage.purpose, LlmUsage.model)
+        )
+    ).all()
+    acc: dict[str, dict] = {}
+    for p, model, n, i, o in purpose_rows:
+        e = acc.setdefault(p, {"purpose": p, "calls": 0, "tokens": 0, "cost_usd": 0.0})
+        e["calls"] += n
+        e["tokens"] += int(i) + int(o)
+        e["cost_usd"] += _cost(model, int(i), int(o))
+    by_purpose = sorted(acc.values(), key=lambda x: -x["tokens"])
+    for e in by_purpose:
+        e["cost_usd"] = round(e["cost_usd"], 4)
+
+    # daily series for the chart
+    series_rows = (
+        await db.execute(
+            select(
+                func.date_trunc("day", LlmUsage.at).label("d"),
+                func.count(),
+                func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+            )
+            .where(LlmUsage.at >= window_start)
+            .group_by("d").order_by("d")
+        )
+    ).all()
+    series = [
+        {"date": d.date().isoformat(), "calls": n, "tokens": int(i) + int(o)}
+        for d, n, i, o in series_rows
+    ]
+
+    # simple run-rate projection for the rest of the month
+    day_of_month = now_ist.day
+    projected = round(month["cost_usd"] / day_of_month * 30, 4) if day_of_month else 0.0
+
+    from app.services.llm_client import MODEL_CHEAP, MODEL_SMART, PROVIDER
+
+    return {
+        "provider": PROVIDER,
+        "models": {"cheap": MODEL_CHEAP, "smart": MODEL_SMART},
+        "today": today,
+        "month": month,
+        "by_purpose": by_purpose,
+        "series": series,
+        "daily_request_cap": cap,
+        "calls_left_today": max(cap - today["calls"], 0) if cap else None,
+        "monthly_budget_usd": budget,
+        "projected_month_usd": projected,
+        # honest flag: free-tier models price at 0, so a 0 total is not a bug
+        "all_free": month["cost_usd"] == 0,
+    }
+
+
 class TaskIn(BaseModel):
     title: str = Field(min_length=2, max_length=2000)
     staff: str | None = None          # name or phone

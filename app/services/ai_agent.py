@@ -148,13 +148,14 @@ async def build_ai_reply(
     prompt += f"\nCUSTOMER MESSAGE (language={lang}):\n{text[:1000]}"
 
     try:
-        out = await llm_client.ask_json(
-            system=_COMPOSE_SYSTEM,
-            user_text=prompt,
-            schema=_REPLY_SCHEMA,
-            model=llm_client.MODEL_SMART,
-            max_tokens=400,
-        )
+        with llm_client.track("reply"):
+            out = await llm_client.ask_json(
+                system=_COMPOSE_SYSTEM,
+                user_text=prompt,
+                schema=_REPLY_SCHEMA,
+                model=llm_client.MODEL_SMART,
+                max_tokens=400,
+            )
     except LLMError as exc:
         log.warning("ai_compose_failed", error=str(exc)[:150])
         return None

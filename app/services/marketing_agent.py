@@ -137,12 +137,13 @@ async def _draft_copy(segment: str, offer: str) -> str:
         pass
     system = _COPY_SYSTEM + (f"\nOwner's style rules (follow them): {extra}" if extra else "")
     try:
-        copy = await llm_client.ask(
-            system=system,
-            user_text=f"Segment: {segment}. Offer: {offer}. Draft the message.",
-            model=llm_client.MODEL_SMART,
-            max_tokens=200,
-        )
+        with llm_client.track("marketing"):
+            copy = await llm_client.ask(
+                system=system,
+                user_text=f"Segment: {segment}. Offer: {offer}. Draft the message.",
+                model=llm_client.MODEL_SMART,
+                max_tokens=200,
+            )
         return copy.strip() or fallback
     except LLMError:
         return fallback

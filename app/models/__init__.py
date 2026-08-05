@@ -33,6 +33,7 @@ from app.models.payment import Payment
 from app.models.rate import Rate
 from app.models.staff import Staff
 from app.models.task import TASK_CANCELLED, TASK_DONE, TASK_OPEN, Task
+from app.models.usage import LlmUsage
 
 __all__ = [
     "AuditLog",
@@ -51,6 +52,7 @@ __all__ = [
     "Expense",
     "FaqEntry",
     "Lead",
+    "LlmUsage",
     "OpenQuestion",
     "Order",
     "OrderStatus",

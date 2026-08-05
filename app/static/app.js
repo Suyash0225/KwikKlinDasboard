@@ -143,7 +143,7 @@ function showLogin() {
 }
 
 /* ============================= router ============================= */
-const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "tasks", "agents", "training", "activity", "settings"];
+const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "tasks", "agents", "usage", "training", "activity", "settings"];
 const TITLES = {
   dashboard: ["Dashboard", "Today at a glance"],
   inbox: ["Inbox", "WhatsApp — see and reply yourself"],
@@ -155,6 +155,7 @@ const TITLES = {
   campaigns: ["Campaigns", "Segments, offers and results"],
   tasks: ["Tasks", "Kisko kya kaam diya — pending, hua, kisne kya kaha"],
   agents: ["Agents", "Your AI employees — health and controls"],
+  usage: ["AI usage", "Kitna AI use hua aur kitna kharch"],
   training: ["AI training", "Teach the agent your business"],
   activity: ["Activity", "Everything the agent did, and why"],
   settings: ["Settings", "Rates, staff, shop and agent"],
@@ -178,7 +179,7 @@ function go(sec, push = true) {
   }
   ({ dashboard: loadDashboard, inbox: loadThreads, newbill: initNewBill, bills: loadBills,
      customers: loadCustomers, expenses: loadExpenses, reports: loadReports,
-     campaigns: loadCampaigns, tasks: loadTasks, agents: loadAgents, training: loadTraining,
+     campaigns: loadCampaigns, tasks: loadTasks, agents: loadAgents, usage: loadUsage, training: loadTraining,
      activity: loadActivity, settings: loadSettings }[sec] || (() => {}))();
 }
 
@@ -806,6 +807,72 @@ async function loadTplPreview() {
     });
   } catch (e) { /* Meta down — names still show */ }
 }
+
+/* ============================= AI usage ============================= */
+const usd = (n) => "$" + Number(n || 0).toFixed(Number(n) >= 1 ? 2 : 4);
+const kTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n || 0));
+
+async function loadUsage() {
+  $("usage-kpis").innerHTML = skeleton(1);
+  $("usage-models").innerHTML = skeleton(3);
+  let u;
+  try { u = await api("/admin/api/usage"); }
+  catch (e) { $("usage-models").innerHTML = errBox(e.message, "loadUsage"); return; }
+
+  const capNote = u.daily_request_cap
+    ? `${u.calls_left_today} aur bache hain aaj`
+    : "koi limit set nahi";
+  const budgetNote = u.monthly_budget_usd
+    ? `budget ${usd(u.monthly_budget_usd)}` : "budget set nahi";
+
+  $("usage-kpis").innerHTML =
+    kpi("Aaj ke AI calls", u.today.calls, capNote, "", "⚡", "orange") +
+    kpi("Aaj ke tokens", kTok(u.today.input_tokens + u.today.output_tokens),
+        `in ${kTok(u.today.input_tokens)} · out ${kTok(u.today.output_tokens)}`, "", "🔤", "blue") +
+    kpi("Is mahine kharch", u.all_free ? "₹0 (free)" : usd(u.month.cost_usd),
+        u.all_free ? "free tier par ho" : budgetNote, "", "💰", "green") +
+    kpi("Is raftaar se mahina", u.all_free ? "₹0" : usd(u.projected_month_usd),
+        `${u.month.calls} calls ab tak`, "", "📈", "purple");
+
+  // simple bar chart — no library, scales to the busiest day
+  const s = u.series || [];
+  const max = Math.max(1, ...s.map((d) => d.calls));
+  $("usage-chart").innerHTML = s.length
+    ? `<div style="display:flex;align-items:flex-end;gap:3px;height:130px">` +
+      s.map((d) => `<div title="${d.date}: ${d.calls} calls, ${kTok(d.tokens)} tokens"
+        style="flex:1;min-width:0;background:var(--g-blue);border-radius:3px 3px 0 0;
+        height:${Math.max(3, (d.calls / max) * 100)}%"></div>`).join("") + `</div>
+      <div class="muted" style="display:flex;justify-content:space-between;margin-top:6px">
+        <span>${s[0].date.slice(5)}</span><span>aaj</span></div>`
+    : emptyBox("Abhi tak koi AI call record nahi hui.", "📊");
+
+  const rows = u.by_purpose || [];
+  const totTok = rows.reduce((a, r) => a + r.tokens, 0) || 1;
+  $("usage-purpose").innerHTML = rows.length
+    ? rows.map((r) => `
+      <div class="sumrow"><span>${esc(PURPOSE_LABEL[r.purpose] || r.purpose)}</span>
+        <span>${r.calls} calls · ${kTok(r.tokens)}${u.all_free ? "" : " · " + usd(r.cost_usd)}</span></div>
+      <div style="height:5px;background:var(--n100);border-radius:3px;margin-bottom:8px">
+        <div style="height:5px;width:${Math.round((r.tokens / totTok) * 100)}%;background:var(--g-orange);border-radius:3px"></div>
+      </div>`).join("")
+    : `<p class="muted">Is mahine abhi kuch nahi.</p>`;
+
+  $("usage-models").innerHTML = `
+    <p class="muted">Provider: <b>${esc(u.provider)}</b> · ${esc(u.models.smart)} / ${esc(u.models.cheap)}</p>
+    <table class="tbl"><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Kharch</th></tr></thead>
+    <tbody>${(u.month.by_model || []).map((m) => `<tr>
+      <td><b>${esc(m.model)}</b></td><td>${m.calls}</td>
+      <td>${kTok(m.input_tokens)}</td><td>${kTok(m.output_tokens)}</td>
+      <td class="money">${m.priced ? usd(m.cost_usd) : '<span class="muted">free</span>'}</td>
+    </tr>`).join("") || `<tr><td colspan="5" class="muted">Is mahine koi call nahi.</td></tr>`}</tbody></table>
+    <p class="muted" style="margin-top:10px">Rate card aur limit Settings mein badal sakte ho — puraana hisaab bhi naye rate se dobara jud jayega.</p>`;
+}
+
+const PURPOSE_LABEL = {
+  reply: "Customer ko jawab", intent: "Message samajhna", extract: "Bill/command padhna",
+  vision: "Photo se bill", query: "Aapke sawal", marketing: "Campaign likhna",
+  social: "Daily poster", other: "Baaki",
+};
 
 /* ============================= tasks ============================= */
 let TASKS = [], taskFilter = "OPEN";

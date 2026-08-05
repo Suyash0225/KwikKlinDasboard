@@ -31,6 +31,7 @@
       <div class="navsec">AGENT</div>
       <div data-s="tasks" onclick="go('tasks')">✅ Tasks</div>
       <div data-s="agents" onclick="go('agents')">🤖 Agents</div>
+      <div data-s="usage" onclick="go('usage')">📊 AI usage</div>
       <div data-s="training" onclick="go('training')">🎓 AI training</div>
       <div data-s="activity" onclick="go('activity')">🛰 Activity</div>
       <div class="navsec">SYSTEM</div>
@@ -330,6 +331,19 @@
           <div id="corr-list" style="margin-top:8px"></div>
         </div>
       </div>
+    </section>
+
+    <!-- AI usage -->
+    <section id="sec-usage" style="display:none">
+      <div class="pagehead"><div><h2>AI usage</h2><p>Kitna AI use hua, kitna kharch — aur is raftaar se mahine ka kitna</p></div>
+        <div class="actions"><button class="btn ghost" onclick="loadUsage()">↻ Refresh</button></div>
+      </div>
+      <div class="grid kpis" id="usage-kpis"></div>
+      <div class="split2">
+        <div class="card"><b>Roz ka use (30 din)</b><div id="usage-chart" style="margin-top:10px"></div></div>
+        <div class="card"><b>Kis kaam mein</b><div id="usage-purpose" style="margin-top:10px"></div></div>
+      </div>
+      <div class="card" style="margin-top:14px"><b>Model ke hisaab se</b><div id="usage-models" style="margin-top:10px"></div></div>
     </section>
 
     <!-- Tasks -->

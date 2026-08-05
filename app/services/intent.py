@@ -44,13 +44,14 @@ _SYSTEM = (
 async def classify_intent(text: str) -> dict | None:
     """Return {"intent": ..., "language": ...} or None if the LLM is down."""
     try:
-        result = await llm_client.ask_json(
-            system=_SYSTEM,
-            user_text=text[:1000],
-            schema=_SCHEMA,
-            model=llm_client.MODEL_CHEAP,
-            max_tokens=100,
-        )
+        with llm_client.track("intent"):
+            result = await llm_client.ask_json(
+                system=_SYSTEM,
+                user_text=text[:1000],
+                schema=_SCHEMA,
+                model=llm_client.MODEL_CHEAP,
+                max_tokens=100,
+            )
     except LLMError as exc:  # includes LLMUnavailable
         log.warning("intent_classify_failed", error=str(exc)[:150])
         return None

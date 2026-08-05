@@ -19,6 +19,22 @@ log = structlog.get_logger()
 
 # Single source of defaults — also drives the Settings UI.
 DEFAULTS: dict[str, Any] = {
+    # --- AI cost tracking ---
+    # Rate card in USD per MILLION tokens, per model. Gemini's free tier is
+    # 0 by design; put your real numbers here the day you start paying, and
+    # the whole usage history re-prices itself.
+    "llm_rates": {
+        "gemini-3.5-flash": {"in": 0.0, "out": 0.0},
+        "gemini-3.5-flash-lite": {"in": 0.0, "out": 0.0},
+        "claude-opus-5": {"in": 5.0, "out": 25.0},
+        "claude-sonnet-5": {"in": 3.0, "out": 15.0},
+        "claude-haiku-4-5": {"in": 1.0, "out": 5.0},
+    },
+    # Free-tier ceiling for the ACTIVE provider, requests per day.
+    # 0 = unknown/none, and the dashboard then shows usage without a bar.
+    "llm_daily_request_cap": 0,
+    # What you're willing to spend per month on AI (USD). 0 = no budget set.
+    "llm_monthly_budget_usd": 0.0,
     # operations
     "standup_hour": 10,             # daily staff standup (Asia/Kolkata hour)
     "turnaround_days": 2,           # default delivery = today + this
