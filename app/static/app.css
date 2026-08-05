@@ -684,3 +684,11 @@ b.subhead { display: block; font-size: 13.5px; }
   display: inline-block; background: rgba(0,0,0,.05); border-radius: 8px;
   padding: 3px 9px; font-weight: 600;
 }
+
+/* inbound files and pins: openable, not a dead [document] tag */
+.filechip {
+  display: inline-flex; align-items: center; gap: 7px; background: rgba(0,0,0,.05);
+  border-radius: 9px; padding: 9px 12px; color: inherit; font-weight: 600;
+  font-size: 13px; max-width: 250px; word-break: break-word;
+}
+.filechip:hover { background: rgba(0,0,0,.09); }

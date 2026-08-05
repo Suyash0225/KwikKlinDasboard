@@ -88,6 +88,28 @@ _COMPOSE_SYSTEM = (
 )
 
 
+def _media_ack(marker: str) -> str | None:
+    """A human-sounding reply for a file/pin the bot can't read itself.
+
+    Sending nothing looks broken to the customer; promising to 'process' it
+    would be a lie. So: confirm it arrived, say what happens next.
+    """
+    kind = marker[1:].split(":", 1)[0].split("]", 1)[0].strip().lower()
+    return {
+        "image": "Photo mil gayi 📷 Dekh kar bata denge.",
+        "audio": "Voice note mil gaya 🎧 Sun kar jawab denge — jaldi chahiye to likh bhi dijiye.",
+        "voice": "Voice note mil gaya 🎧 Sun kar jawab denge — jaldi chahiye to likh bhi dijiye.",
+        "video": "Video mil gaya 🎥 Dekh kar bata denge.",
+        "document": "File mil gayi 📄 Dekh kar bata denge.",
+        "location": "Location mil gaya 📍 Pickup ke liye note kar liya.",
+        "contact": "Number mil gaya 📇 Note kar liya.",
+        # a tap on our own button is handled elsewhere; never chat back at it
+        "button": None,
+        "interactive": None,
+        "reaction": None,
+    }.get(kind)
+
+
 async def build_ai_reply(
     db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False
 ) -> str | None:
@@ -98,9 +120,13 @@ async def build_ai_reply(
     but suppresses EVERY side effect — no escalations, no FYIs, no pausing —
     and annotates what would have happened instead.
     """
-    # Media/button markers like "[image:...]" are not conversational text.
-    if not text or text.startswith("["):
+    # Media/button markers like "[image:...]" are not conversational text —
+    # but silence is the wrong answer to a customer who just sent something.
+    # Acknowledge what arrived, then let the owner take it from there.
+    if not text:
         return None
+    if text.startswith("["):
+        return _media_ack(text)
 
     # Global kill switch (Settings) — bot falls back to rule-based replies.
     from app.services import app_settings, audit

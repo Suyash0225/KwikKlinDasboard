@@ -59,6 +59,7 @@ async def _escalations_for(customer_id) -> list[Escalation]:
 
 
 async def test_markers_and_empty_skip_ai(monkeypatch) -> None:
+    """Markers never reach the LLM — but a customer's file still gets a reply."""
     called = False
 
     async def fake_classify(text):
@@ -69,9 +70,13 @@ async def test_markers_and_empty_skip_ai(monkeypatch) -> None:
     monkeypatch.setattr(agent_module, "classify_intent", fake_classify)
     async with async_session_factory() as db:
         cust = await _seed_customer()
-        assert await build_ai_reply(db, cust, "[image:/admin/media/x.jpg]") is None
+        # a photo is acknowledged from a fixed string, not composed by the LLM
+        ack = await build_ai_reply(db, cust, "[image:/admin/media/x.jpg]")
+        assert ack and "Photo" in ack
+        # our own button tap is never chatted back at
+        assert await build_ai_reply(db, cust, "[button:rate_good] Good") is None
         assert await build_ai_reply(db, cust, "") is None
-    assert called is False
+    assert called is False, "no marker may cost an LLM call"
 
 
 async def test_classifier_down_returns_none(monkeypatch) -> None:

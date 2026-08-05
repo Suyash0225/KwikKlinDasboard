@@ -407,19 +407,30 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
 
     text = _extract_text(msg)
 
-    # Inbound photo: pull the file from Meta so the Inbox can show it.
-    if msg.get("type") == "image":
+    # Anything with a file — photo, voice note, PDF, video, sticker — is
+    # pulled from Meta so the Inbox can show or play it, exactly like
+    # WhatsApp does. Only text and taps have no file.
+    mtype = msg.get("type", "")
+    if mtype in _MEDIA_TYPES:
         from pathlib import Path
 
         from app.services.whatsapp import download_media
 
         media_dir = str(Path(__file__).resolve().parent.parent / "media")
-        media_id = msg.get("image", {}).get("id")
-        caption = msg.get("image", {}).get("caption", "")
+        part = msg.get(mtype, {}) or {}
+        media_id = part.get("id")
+        caption = part.get("caption") or ""
+        # documents carry the sender's own file name — keep it, it's the
+        # only human-readable label a PDF gets
+        label = part.get("filename") or ""
         if media_id:
             fname = await download_media(media_id, media_dir)
             if fname:
-                text = f"[image:/admin/media/{fname}]" + (f" {caption}" if caption else "")
+                marker = "image" if mtype in ("image", "sticker") else mtype
+                text = f"[{marker}:/admin/media/{fname}]"
+                extra = " ".join(x for x in (label, caption) if x)
+                if extra:
+                    text += f" {extra}"
 
     # Staff phone? Record against staff. Otherwise upsert customer.
     staff = (
@@ -613,6 +624,10 @@ def _status_reply(order) -> str:
     return get_message("status_reply", order_number=order.order_number, status_label=label)
 
 
+# WhatsApp message types that carry a downloadable file
+_MEDIA_TYPES = ("image", "sticker", "audio", "voice", "video", "document")
+
+
 def _extract_text(msg: dict) -> str:
     """Flatten Meta's message types to one text column.
 
@@ -630,4 +645,21 @@ def _extract_text(msg: dict) -> str:
         return f"[interactive:{inter.get('type')}]"
     if mtype == "button":  # template quick-reply buttons arrive as this type
         return f"[button:{msg.get('button', {}).get('payload')}] {msg.get('button', {}).get('text', '')}"
+    if mtype == "location":
+        # A shared pin IS the pickup address — keep it readable and mappable
+        loc = msg.get("location", {}) or {}
+        lat, lon = loc.get("latitude"), loc.get("longitude")
+        bits = [b for b in (loc.get("name"), loc.get("address")) if b]
+        where = " · ".join(bits) if bits else "Location"
+        return f"[location:{lat},{lon}] {where}"
+    if mtype == "contacts":
+        people = []
+        for c in msg.get("contacts", []) or []:
+            name = (c.get("name") or {}).get("formatted_name", "")
+            nums = ", ".join(p.get("phone", "") for p in (c.get("phones") or []))
+            people.append(" ".join(x for x in (name, nums) if x))
+        return "[contact] " + "; ".join(p for p in people if p)
+    if mtype == "reaction":
+        r = msg.get("reaction", {}) or {}
+        return f"[reaction] {r.get('emoji', '')}"
     return f"[{mtype}]"

@@ -46,6 +46,25 @@ GRAPH_URL = (
     f"https://graph.facebook.com/v21.0/{settings.WHATSAPP_PHONE_NUMBER_ID}/messages"
 )
 SERVICE_WINDOW = timedelta(hours=24)
+
+# Every media type WhatsApp can send, mapped to a real extension. Anything
+# missing still saves (see download_media) — this just keeps the common
+# ones openable by name.
+MEDIA_EXT = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+    "image/gif": ".gif",
+    "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a",
+    "audio/aac": ".aac", "audio/amr": ".amr", "audio/wav": ".wav",
+    "video/mp4": ".mp4", "video/3gpp": ".3gp", "video/quicktime": ".mov",
+    "application/pdf": ".pdf",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "text/plain": ".txt", "text/csv": ".csv", "application/zip": ".zip",
+}
 MAX_BUTTONS = 3
 MAX_BUTTON_TITLE = 20  # WhatsApp hard limit
 
@@ -316,7 +335,10 @@ async def download_media(media_id: str, dest_dir: str) -> str | None:
             if blob.status_code >= 400:
                 log.warning("media_download_failed", media_id=media_id, status=blob.status_code)
                 return None
-        ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(mime, ".bin")
+        ext = MEDIA_EXT.get(mime.split(";")[0].strip())
+        if not ext:
+            # unknown type: keep the subtype so the file is still openable
+            ext = "." + (mime.split("/")[-1].split(";")[0].strip() or "bin")[:8]
         name = f"in-{_uuid.uuid4().hex}{ext}"
         os.makedirs(dest_dir, exist_ok=True)
         with open(os.path.join(dest_dir, name), "wb") as fh:

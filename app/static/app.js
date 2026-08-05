@@ -1992,8 +1992,24 @@ async function openThread(phone, silent = false, push = true) {
     const img = raw.match(/^\[image:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
     const tpl = raw.match(/^\[template:([\w]+)\]\s*(.*)$/s);
     const btn = raw.match(/^\[button:([^\]]+)\]\s*(.*)$/s);
+    const med = raw.match(/^\[(audio|voice|video|document)\:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
+    const loc = raw.match(/^\[location:([-\d.]+),([-\d.]+)\]\s*(.*)$/s);
     if (img) {
       body = `<img src="${img[1]}?key=${encodeURIComponent(KEY)}" loading="lazy" width="280" height="210">${esc(img[2] || "")}`;
+    } else if (med) {
+      // play/open it right here, like WhatsApp — not a dead "[document]" tag
+      const url = `${med[2]}?key=${encodeURIComponent(KEY)}`;
+      const label = esc(med[3] || "");
+      if (med[1] === "audio" || med[1] === "voice") {
+        body = `<audio controls preload="none" src="${url}" style="max-width:250px"></audio>${label}`;
+      } else if (med[1] === "video") {
+        body = `<video controls preload="metadata" src="${url}" width="260" style="border-radius:8px"></video>${label}`;
+      } else {
+        body = `<a class="filechip" href="${url}" target="_blank" rel="noopener">📄 ${label || "File kholo"}</a>`;
+      }
+    } else if (loc) {
+      body = `<a class="filechip" target="_blank" rel="noopener"
+        href="https://www.google.com/maps/search/?api=1&query=${loc[1]},${loc[2]}">📍 ${esc(loc[3] || "Location")}</a>`;
     } else if (tpl) {
       // a template log line is unreadable as "[template:kk_thankyou_rating]" —
       // show the actual text the customer received, with its buttons
