@@ -215,6 +215,10 @@ async def handle_staff_message(
         m_done = re.match(r"^\s*done\s+(KK-\S+)\s*$", text, re.I)
         if m_done and sender_label != "manager":
             return await _apply_done(db, sender_phone, sender_label, m_done.group(1).upper())
+        # "done T-14" — closes an assigned task, also zero LLM
+        m_task = re.match(r"^\s*done\s+(T-?\d+)\s*$", text, re.I)
+        if m_task:
+            return await _close_task_by_code(db, sender_phone, sender_label, m_task.group(1))
 
     # Campaign approvals are deterministic commands, no LLM needed.
     if sender_label == "manager" and text:
@@ -282,6 +286,20 @@ async def handle_staff_message(
         reply = await _stage_payment(db, sender_phone, sender_label, extracted)
     elif action == "standup_reply" and sender_label != "manager":
         reply = await _apply_standup_reply(db, sender_phone, sender_label, extracted)
+
+    # Whatever a staff member says while they owe us an answer belongs on
+    # the task — the owner should see their words, not just "no reply yet".
+    if sender_label != "manager" and text and not text.startswith("["):
+        try:
+            from app.services import tasks as task_service
+
+            staff = (
+                await db.execute(select(Staff).where(Staff.phone == sender_phone))
+            ).scalar_one_or_none()
+            if staff is not None:
+                await task_service.note_reply(db, staff.id, text)
+        except Exception:
+            log.exception("task_note_reply_failed")
     if reply is not None:
         await audit.record(
             actor_role="admin" if sender_label == "manager" else "staff",
@@ -1048,6 +1066,45 @@ async def _manager_facts(db: AsyncSession) -> str:
     return "\n".join(lines)
 
 
+# "jaldi", "urgent", "abhi" -> the task gets a tighter follow-up clock
+_URGENT_RE = re.compile(
+    r"\b(urgent|jaldi|jldi|turant|abhi|asap|emergency|maang|manga|chahiye)\b", re.I
+)
+# same shape as the webhook's matcher — order ids look like KK-20260801-01
+ORDER_NUMBER_RE = re.compile(r"\bKK-\d{8}-\d{2,}\b", re.IGNORECASE)
+
+
+async def _close_task_by_code(
+    db: AsyncSession, sender_phone: str, sender_label: str, code: str
+) -> str:
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        return get_message("task_unknown_code", code=code.upper())
+    await task_service.complete_task(db, task, by=sender_label)
+    # keep the owner in the loop without him having to ask
+    try:
+        staff = await db.get(Staff, task.assigned_staff_id) if task.assigned_staff_id else None
+        await send_message(
+            db, to_phone=settings.MANAGER_PHONE,
+            text=f"✅ {staff.name if staff else sender_label} ne {task.code} kar diya: {task.title}",
+        )
+    except SendError:
+        log.info("task_done_owner_notify_failed", code=task.code)
+    return get_message("task_done_ack", code=task.code)
+
+
+async def _order_in_text(db: AsyncSession, text: str) -> Order | None:
+    """Pull a KK-... order out of free text so the task links to the bill."""
+    m = ORDER_NUMBER_RE.search(text or "")
+    if not m:
+        return None
+    return (
+        await db.execute(select(Order).where(Order.order_number == m.group(0).upper()))
+    ).scalar_one_or_none()
+
+
 async def _apply_relay(db: AsyncSession, sender_label: str, extracted: dict) -> str:
     """Forward a message to a staff member or the manager — known phones only."""
     target = extracted["relay_to"].strip()
@@ -1065,7 +1122,21 @@ async def _apply_relay(db: AsyncSession, sender_label: str, extracted: dict) -> 
             if s.name and (s.name.lower() in target.lower() or target.lower() in s.name.lower())
         ]
         if len(matches) == 1:
-            to_phone, to_name = matches[0].phone, matches[0].name
+            # A message to STAFF is work, not chatter: make it a tracked task
+            # so the agent chases it and the dashboard shows who owes what.
+            from app.services import tasks as task_service
+
+            urgent = bool(_URGENT_RE.search(message))
+            order = await _order_in_text(db, f"{message} {extracted.get('order_number', '')}")
+            task = await task_service.create_task(
+                db, title=message, staff=matches[0], order=order,
+                urgent=urgent, created_by=sender_label,
+            )
+            # last_ping_at is only stamped when the message actually went out
+            key = "task_assigned" if task.last_ping_at else "task_assigned_undelivered"
+            return get_message(
+                key, name=matches[0].name, code=task.code, message=message
+            )
         elif sender_label == "manager":
             # Only the ADMIN may message customers through the bot.
             cust_matches = (

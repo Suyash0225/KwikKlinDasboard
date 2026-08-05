@@ -196,6 +196,14 @@ async def _hourly_tick() -> None:
             await run_follow_up_pings()
     except Exception:
         log.exception("follow_up_pings_failed")
+    # assigned tasks: chase whoever owes an answer, hourly (the service
+    # itself decides who is actually due, and respects quiet hours)
+    try:
+        from app.services.tasks import run_task_followups
+
+        await run_task_followups()
+    except Exception:
+        log.exception("task_followups_failed")
     # 18:00 evening washer status round; 21:00 owner summary
     try:
         if now_ist.hour == 18:

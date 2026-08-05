@@ -143,7 +143,7 @@ function showLogin() {
 }
 
 /* ============================= router ============================= */
-const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "agents", "training", "activity", "settings"];
+const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "tasks", "agents", "training", "activity", "settings"];
 const TITLES = {
   dashboard: ["Dashboard", "Today at a glance"],
   inbox: ["Inbox", "WhatsApp — see and reply yourself"],
@@ -153,6 +153,7 @@ const TITLES = {
   expenses: ["Expenses", "Daily spend and categories"],
   reports: ["Reports", "Revenue, expenses and profit"],
   campaigns: ["Campaigns", "Segments, offers and results"],
+  tasks: ["Tasks", "Kisko kya kaam diya — pending, hua, kisne kya kaha"],
   agents: ["Agents", "Your AI employees — health and controls"],
   training: ["AI training", "Teach the agent your business"],
   activity: ["Activity", "Everything the agent did, and why"],
@@ -177,7 +178,7 @@ function go(sec, push = true) {
   }
   ({ dashboard: loadDashboard, inbox: loadThreads, newbill: initNewBill, bills: loadBills,
      customers: loadCustomers, expenses: loadExpenses, reports: loadReports,
-     campaigns: loadCampaigns, agents: loadAgents, training: loadTraining,
+     campaigns: loadCampaigns, tasks: loadTasks, agents: loadAgents, training: loadTraining,
      activity: loadActivity, settings: loadSettings }[sec] || (() => {}))();
 }
 
@@ -787,6 +788,154 @@ async function sendReminder(phone, amt) {
     await api("/admin/api/inbox/send", { method: "POST", body: { phone, text: `Namaste! Aapka ₹${amt} baaki hai. Jab suvidha ho, de dijiyega 🙏 — Kwik Klin` } });
     toast(T.reminderSent);
   } catch (e) { toast(e.message, true); }
+}
+
+/* Template bodies for the Inbox, so a sent template reads as the message
+   the customer actually got instead of "[template:kk_thankyou_rating]".
+   Meta is the source of truth; if it is unreachable the name chip still
+   renders, so the inbox never regresses to raw brackets. */
+let TPL_PREVIEW = {};
+async function loadTplPreview() {
+  if (Object.keys(TPL_PREVIEW).length) return;
+  try {
+    (await api("/admin/api/templates")).forEach((t) => {
+      TPL_PREVIEW[t.name] = {
+        body: t.body || "",
+        buttons: (t.buttons || []).map((b) => b.text || b.type || ""),
+      };
+    });
+  } catch (e) { /* Meta down — names still show */ }
+}
+
+/* ============================= tasks ============================= */
+let TASKS = [], taskFilter = "OPEN";
+
+async function loadTasks() {
+  $("task-list").innerHTML = skeleton(5);
+  try {
+    // STAFF is normally filled by the Settings page — the "naya kaam" form
+    // needs it here too, so fetch it if we came straight to Tasks
+    const [tasks, staff] = await Promise.all([
+      api("/admin/api/tasks?status=ALL&limit=200"),
+      STAFF.length ? Promise.resolve(STAFF) : api("/admin/api/staff"),
+    ]);
+    TASKS = tasks; STAFF = staff;
+  } catch (e) { $("task-list").innerHTML = errBox(e.message, "loadTasks"); return; }
+  renderTaskKpis(); renderTaskChips(); renderTasks();
+}
+
+function renderTaskKpis() {
+  const open = TASKS.filter((t) => t.status === "OPEN");
+  const stuck = open.filter((t) => t.escalated || t.age_hours >= 6);
+  const doneToday = TASKS.filter((t) => t.status === "DONE"
+    && t.completed_at && t.completed_at.slice(0, 10) === new Date().toISOString().slice(0, 10));
+  $("task-kpis").innerHTML =
+    kpi("Pending kaam", open.length, "", "", "📋", "orange") +
+    kpi("Atke hue", stuck.length, "6 ghante+ ya escalate hua", "", "🚨", "red") +
+    kpi("Aaj complete", doneToday.length, "", "", "✅", "green");
+}
+
+function renderTaskChips() {
+  const counts = {
+    OPEN: TASKS.filter((t) => t.status === "OPEN").length,
+    DONE: TASKS.filter((t) => t.status === "DONE").length,
+    ALL: TASKS.length,
+  };
+  $("task-chips").innerHTML = [["OPEN", "Pending"], ["DONE", "Ho gaye"], ["ALL", "Sab"]]
+    .map(([v, label]) => `<span class="chip ${taskFilter === v ? "on" : ""}"
+      onclick="taskFilter='${v}';renderTaskChips();renderTasks()">${label} <b>${counts[v]}</b></span>`)
+    .join("");
+}
+
+function renderTasks() {
+  const rows = TASKS.filter((t) => taskFilter === "ALL" || t.status === taskFilter);
+  if (!rows.length) {
+    $("task-list").innerHTML = emptyBox(
+      taskFilter === "OPEN" ? "Koi kaam pending nahi 🎉" : "Yahan kuch nahi hai.", "✅");
+    return;
+  }
+  $("task-list").innerHTML = `<div class="stafflist">` + rows.map((t) => {
+    const open = t.status === "OPEN";
+    const late = open && (t.escalated || t.age_hours >= 6);
+    return `
+    <div class="staffrow ${open ? "" : "off"}" style="${late ? "border-left:3px solid var(--danger)" : ""}">
+      <div class="who">
+        <div class="nm">${t.urgent ? "🔴 " : ""}${esc(t.title)}</div>
+        <div class="meta">
+          <span class="badge">${t.code}</span>
+          <span class="badge role">${t.staff ? esc(t.staff) : "kisi ko nahi diya"}</span>
+          ${t.order_number ? `<span class="badge">${t.order_number}</span>` : ""}
+          <span class="statuspill ${open ? "off" : "on"}">${
+            t.status === "OPEN" ? `${t.age_hours}h pending` : t.status === "DONE" ? "Ho gaya" : "Cancel"}</span>
+          ${t.ping_count ? `<span class="badge">${t.ping_count}x yaad dilaya</span>` : ""}
+          ${t.escalated ? `<span class="statuspill off" style="color:var(--danger)">aapko bataya</span>` : ""}
+        </div>
+        ${t.reply ? `<div class="muted" style="margin-top:6px">💬 ${esc(t.staff || "unhone")}: ${esc(t.reply)}</div>` : ""}
+      </div>
+      <div class="acts">
+        ${open ? `
+          <button class="btn sm ghost" onclick="pingTask('${t.code}')">Poochho</button>
+          <button class="btn sm" onclick="doneTask('${t.code}')">Ho gaya</button>
+          <button class="btn sm ghost" onclick="cancelTask('${t.code}')">Cancel</button>` : ""}
+      </div>
+    </div>`;
+  }).join("") + `</div>`;
+}
+
+async function pingTask(code) {
+  try { const r = await api(`/admin/api/tasks/${code}/ping`, { method: "POST" }); toast(r.detail); loadTasks(); }
+  catch (e) { toast(e.message, true); }
+}
+async function doneTask(code) {
+  try { await api(`/admin/api/tasks/${code}/done`, { method: "POST" }); toast(`${code} band`); loadTasks(); }
+  catch (e) { toast(e.message, true); }
+}
+function cancelTask(code) {
+  confirmDialog(`${code} cancel kar dein? Staff ko aur reminder nahi jayenge.`, async () => {
+    try { await api(`/admin/api/tasks/${code}/cancel`, { method: "POST" }); toast(`${code} cancel`); loadTasks(); }
+    catch (e) { toast(e.message, true); }
+  });
+}
+async function pingAllTasks(btn) {
+  await busy(btn, async () => {
+    const r = await api("/admin/api/jobs/task-followups", { method: "POST" });
+    toast(r.sent ? `${r.sent} logon ko yaad dilaya` : "Abhi kisi ko poochne ki zarurat nahi thi");
+    loadTasks();
+  });
+}
+
+function newTaskModal() {
+  const opts = (STAFF || []).filter((s) => s.is_active)
+    .map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+  openModal(`<h3>Naya kaam</h3>
+    <div class="frm">
+      <div class="setfield"><label for="nt-title">Kya karna hai</label>
+        <input id="nt-title" placeholder="Sharma ji ka order aaj hi deliver karna hai" autofocus>
+        <small>Seedhe unse baat karte hue likho — yahi message unke WhatsApp par jayega.</small>
+        <small class="fielderr" id="nt-err"></small></div>
+      <div class="split2">
+        <div class="setfield"><label for="nt-staff">Kisko</label>
+          <select id="nt-staff">${opts || '<option value="">koi staff nahi</option>'}</select></div>
+        <div class="setfield"><label for="nt-order">Order (optional)</label>
+          <input id="nt-order" placeholder="KK-20260805-01"></div>
+      </div>
+      <div class="setfield"><label for="nt-urgent">Urgent?</label>
+        <select id="nt-urgent"><option value="false">Normal</option><option value="true">Urgent — jaldi poochhunga</option></select></div>
+    </div>
+    <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="nt-go">Bhejo aur track karo</button>
+    </div>`);
+  $("nt-go").onclick = (e) => busy(e.target, async () => {
+    const title = $("nt-title").value.trim();
+    if (title.length < 2) { $("nt-err").textContent = "Kaam likhna zaroori hai."; return; }
+    const r = await api("/admin/api/tasks", { method: "POST", body: {
+      title, staff: $("nt-staff").value || null,
+      order_number: $("nt-order").value.trim() || null,
+      urgent: $("nt-urgent").value === "true",
+    }});
+    closeModal(); toast(`${r.code} bhej diya`); loadTasks();
+  });
 }
 
 /* ============================= expenses ============================= */
@@ -1649,6 +1798,7 @@ let THREADS = [], OPEN_PHONE = null, OPEN_THREAD = null, inboxTimer = null;
 const EMOJIS = ["😀","😄","😊","🙏","👍","👌","✅","❤️","🎉","😅","😂","🤝","🧺","👔","🧼","⏰","📅","💰","🛵","⚠️","❓","🌟"];
 async function loadThreads() {
   try { THREADS = await api("/admin/api/inbox/threads"); } catch (e) { $("th-list").innerHTML = errBox(e.message, "loadThreads"); return; }
+  loadTplPreview();  // fire-and-forget: makes template bubbles readable
   renderThreads(); updateUnreadBadge();
   if (OPEN_PHONE) openThread(OPEN_PHONE, true, false);
   clearTimeout(inboxTimer);
@@ -1771,8 +1921,22 @@ async function openThread(phone, silent = false, push = true) {
       chip = `<div class="daychip">${today ? "today" : fmtDate(m.at)}</div>`;
     }
     let body = esc(m.text || "");
-    const img = (m.text || "").match(/^\[image:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
-    if (img) body = `<img src="${img[1]}?key=${encodeURIComponent(KEY)}" loading="lazy" width="280" height="210">${esc(img[2] || "")}`;
+    const raw = m.text || "";
+    const img = raw.match(/^\[image:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
+    const tpl = raw.match(/^\[template:([\w]+)\]\s*(.*)$/s);
+    const btn = raw.match(/^\[button:([^\]]+)\]\s*(.*)$/s);
+    if (img) {
+      body = `<img src="${img[1]}?key=${encodeURIComponent(KEY)}" loading="lazy" width="280" height="210">${esc(img[2] || "")}`;
+    } else if (tpl) {
+      // a template log line is unreadable as "[template:kk_thankyou_rating]" —
+      // show the actual text the customer received, with its buttons
+      const t = TPL_PREVIEW[tpl[1]];
+      body = `<div class="tplmsg">${t ? esc(t.body) : esc(tpl[2] || tpl[1])}
+        <div class="tplname">📑 ${esc(tpl[1])}</div>
+        ${(t && t.buttons || []).map((b) => `<div class="tplbtn">${esc(b)}</div>`).join("")}</div>`;
+    } else if (btn) {
+      body = `<span class="tapped">👆 ${esc(btn[1])}</span>`;
+    }
     return `${chip}<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${body}
       <span class="bt">${fmtWhen(m.at)}${m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") : ""}</span></div>`;
   }).join("") || emptyBox("Chat appears here", "💬");

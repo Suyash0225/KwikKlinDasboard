@@ -29,6 +29,7 @@
       <div class="navsec">GROWTH</div>
       <div data-s="campaigns" onclick="go('campaigns')">📣 Campaigns</div>
       <div class="navsec">AGENT</div>
+      <div data-s="tasks" onclick="go('tasks')">✅ Tasks</div>
       <div data-s="agents" onclick="go('agents')">🤖 Agents</div>
       <div data-s="training" onclick="go('training')">🎓 AI training</div>
       <div data-s="activity" onclick="go('activity')">🛰 Activity</div>
@@ -329,6 +330,19 @@
           <div id="corr-list" style="margin-top:8px"></div>
         </div>
       </div>
+    </section>
+
+    <!-- Tasks -->
+    <section id="sec-tasks" style="display:none">
+      <div class="pagehead"><div><h2>Tasks</h2><p>Kisko kya kaam diya, hua ya nahi — agent khud follow-up karta hai</p></div>
+        <div class="actions">
+          <button class="btn ghost" onclick="pingAllTasks(this)">⏰ Sabse abhi poochho</button>
+          <button class="btn" onclick="newTaskModal()">➕ Naya kaam</button>
+        </div>
+      </div>
+      <div class="grid kpis" id="task-kpis"></div>
+      <div class="chips" id="task-chips"></div>
+      <div class="card"><div id="task-list"></div></div>
     </section>
 
     <!-- Activity -->

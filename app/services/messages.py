@@ -165,6 +165,22 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "✅ {name} ko bhej diya: \"{message}\"",
         "en": "✅ Sent to {name}: \"{message}\"",
     },
+    "task_assigned": {
+        "hi": "✅ {name} ko de diya [{code}]: \"{message}\"\nMain khud follow-up karta rahunga jab tak jawab na de.",
+        "en": "✅ Assigned to {name} [{code}]: \"{message}\"\nI'll keep following up until they reply.",
+    },
+    "task_assigned_undelivered": {
+        "hi": "⚠️ {code} save kar liya ({name}) par abhi unke paas message nahi ja paya — unka WhatsApp window band hai aur template bhi fail hua. Dashboard ke Tasks mein dikh raha hai; window khulte hi main bhej dunga.",
+        "en": "⚠️ Saved {code} for {name} but could not deliver it yet — their window is closed and the template failed. It's in Tasks; I'll send it once the window opens.",
+    },
+    "task_done_ack": {
+        "hi": "👍 {code} band kar diya. Shukriya!",
+        "en": "👍 {code} closed. Thanks!",
+    },
+    "task_unknown_code": {
+        "hi": "⚠️ {code} naam ka koi kaam nahi mila.",
+        "en": "⚠️ No task called {code}.",
+    },
     "relay_done_template": {
         "hi": "✅ {name} ka window band tha — template se bhej diya: \"{message}\"",
         "en": "✅ {name}'s window was closed — sent via template: \"{message}\"",

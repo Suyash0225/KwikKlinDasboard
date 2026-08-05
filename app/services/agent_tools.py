@@ -70,6 +70,18 @@ TOOL_SPECS = [
         "when": "owner asks to message/remind/ask a staff member (haan ping karo, pucho, bol do)",
         "args": "name + message (message ko seedhe unse baat karte hue likho)",
     },
+    {
+        "name": "assign_task",
+        "when": "owner gives someone WORK to do ('Ravi se bol do X ka order urgent hai', "
+                "'Ajit ko bol do pickup karna hai') — banta hai trackable kaam, agent khud "
+                "follow-up karega jab tak wo jawab na de",
+        "args": "name | kaam (seedhe unse baat karte hue likho, 'pucho ki' mat likho)",
+    },
+    {
+        "name": "task_list",
+        "when": "owner asks what work is pending, kiska kaam baaki hai, kaun kya kar raha hai",
+        "args": "open | done | staff naam (khali = sab open)",
+    },
 ]
 
 
@@ -442,7 +454,88 @@ async def _ping_staff(db: AsyncSession, args: str) -> str:
     return f"{st.name} ko bhej diya: {message}"
 
 
+async def _assign_task(db: AsyncSession, args: str) -> str:
+    """Give someone work and start tracking it. args: 'Name | what to do'."""
+    from app.services import tasks as task_service
+
+    name, _, what = args.partition("|")
+    name, what = name.strip(), what.strip()
+    if not name or not what:
+        return "Format: assign_task('Naam | kya karna hai')"
+
+    staff = await task_service.find_staff(db, name)
+    if staff is None:
+        names = ", ".join(
+            s.name for s in (await db.execute(select(Staff))).scalars().all() if s.name
+        )
+        return f"'{name}' saaf nahi hua. Staff hain: {names}"
+
+    import re as _re
+
+    urgent = bool(_re.search(r"urgent|jaldi|jldi|turant|abhi|maang", what, _re.I))
+    order = None
+    m = _re.search(r"\bKK-\d{8}-\d{2,}\b", what, _re.I)
+    if m:
+        order = (
+            await db.execute(select(Order).where(Order.order_number == m.group(0).upper()))
+        ).scalar_one_or_none()
+
+    task = await task_service.create_task(
+        db, title=what, staff=staff, order=order, urgent=urgent, created_by="owner"
+    )
+    return (
+        f"{staff.name} ko de diya [{task.code}]: {what}"
+        + (" (URGENT)" if urgent else "")
+        + ". Jawab na aane par main khud yaad dilata rahunga."
+    )
+
+
+async def _task_list(db: AsyncSession, args: str) -> str:
+    from app.models import TASK_DONE, TASK_OPEN, Task
+
+    f = (args or "open").strip().lower()
+    q = select(Task).order_by(Task.created_at.desc()).limit(25)
+    if f.startswith("done"):
+        q = q.where(Task.status == TASK_DONE)
+        title = "Ho chuke kaam"
+    elif f in ("", "open", "pending", "baaki"):
+        q = q.where(Task.status == TASK_OPEN)
+        title = "Pending kaam"
+    else:
+        from app.services import tasks as task_service
+
+        staff = await task_service.find_staff(db, f)
+        if staff is None:
+            return f"'{f}' naam ka koi staff nahi mila."
+        q = q.where(Task.assigned_staff_id == staff.id, Task.status == TASK_OPEN)
+        title = f"{staff.name} ke pending kaam"
+
+    rows = (await db.execute(q)).scalars().all()
+    if not rows:
+        return f"{title}: ek bhi nahi."
+    out = [f"{title} ({len(rows)}):"]
+    for t in rows:
+        who = "kisi ko nahi diya"
+        if t.assigned_staff_id:
+            st = await db.get(Staff, t.assigned_staff_id)
+            who = st.name if st else "?"
+        age_h = int((datetime.now(timezone.utc) - t.created_at).total_seconds() // 3600)
+        bits = [f"- [{t.code}] {who}: {t.title[:80]}", f"({age_h}h purana"]
+        if t.urgent:
+            bits.append(", URGENT")
+        if t.ping_count:
+            bits.append(f", {t.ping_count} baar yaad dilaya")
+        bits.append(")")
+        line = bits[0] + " " + "".join(bits[1:])
+        if t.reply:
+            line += f"\n    unhone kaha: {t.reply[:90]}"
+        out.append(line)
+    return "\n".join(out)
+
+
 _TOOLS = {
+    "assign_task": _assign_task,
+    "task_list": _task_list,
     "order_detail": _order_detail,
     "customer_detail": _customer_detail,
     "search_orders": _search_orders,

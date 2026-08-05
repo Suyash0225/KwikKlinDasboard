@@ -278,14 +278,35 @@ async def test_other_quiet_for_staff_loud_for_manager(monkeypatch) -> None:
         )
 
 
-async def test_relay_to_known_staff(monkeypatch) -> None:
+@pytest.fixture
+async def no_task_residue():
+    """Tasks created by a test must not pile up in the dev database."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import delete as _delete
+
+    from app.models import Task
+
+    t0 = datetime.now(timezone.utc)
+    yield
+    async with async_session_factory() as s:
+        await s.execute(_delete(Task).where(Task.created_at >= t0))
+        await s.commit()
+
+
+async def test_relay_to_known_staff_becomes_a_tracked_task(
+    monkeypatch, no_task_residue
+) -> None:
+    """Work handed to staff is tracked, not just forwarded and forgotten."""
+    import app.services.tasks as tasks_module
+
     calls: list[dict] = []
 
     async def fake_send(db, *, to_phone, text=None, **kw):
         calls.append({"to": to_phone, "text": text})
         return "wamid.RELAY"
 
-    monkeypatch.setattr(bill_module, "send_message", fake_send)
+    monkeypatch.setattr(tasks_module, "send_message", fake_send)
     _patch_extract(
         monkeypatch,
         _extract_result(
@@ -297,9 +318,10 @@ async def test_relay_to_known_staff(monkeypatch) -> None:
             db, sender_phone=SENDER, sender_label="manager", text="Ravi ko bata do order aya"
         )
     assert reply.startswith("✅") and "Ravi" in reply
+    assert "T-" in reply, "the owner gets a code he can follow up on"
     assert calls and calls[0]["to"] == "+918707093136"  # Ravi's seeded number
     assert "naya order aya hai" in calls[0]["text"]
-    assert "manager ki taraf se" in calls[0]["text"]
+    assert "done T-" in calls[0]["text"], "Ravi must know how to close it"
 
 
 async def test_relay_unknown_target_lists_staff(monkeypatch) -> None:
@@ -318,7 +340,12 @@ async def test_relay_unknown_target_lists_staff(monkeypatch) -> None:
     assert "nahi mila" in reply and "Ravi" in reply
 
 
-async def test_relay_window_closed_falls_back_to_template(monkeypatch) -> None:
+async def test_task_window_closed_falls_back_to_template(
+    monkeypatch, no_task_residue
+) -> None:
+    """Window shut -> WhatsApp forbids free-form, so the task rides an
+    approved template instead of silently never arriving."""
+    import app.services.tasks as tasks_module
     from app.services.whatsapp import WindowClosedError
 
     calls: list[dict] = []
@@ -329,7 +356,7 @@ async def test_relay_window_closed_falls_back_to_template(monkeypatch) -> None:
             raise WindowClosedError("24h window closed")
         return "wamid.TPL"
 
-    monkeypatch.setattr(bill_module, "send_message", fake_send)
+    monkeypatch.setattr(tasks_module, "send_message", fake_send)
     _patch_extract(
         monkeypatch,
         _extract_result(action="relay", relay_to="Ravi", relay_message="jaldi\naao bhai"),
@@ -338,13 +365,17 @@ async def test_relay_window_closed_falls_back_to_template(monkeypatch) -> None:
         reply = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="manager", text="Ravi ko bolo jaldi aao"
         )
-    assert "template se bhej diya" in reply
+    assert reply.startswith("✅"), "it did go out, just via a template"
     assert calls[1]["template_name"] == "kk_staff_alert"
-    # params must be single-line for Meta
+    # Meta rejects newlines inside template params
     assert "\n" not in calls[1]["template_params"][0]
+    assert "T-" in calls[1]["template_params"][0], "the code must survive the template"
 
 
-async def test_relay_totally_unreachable_reports_clearly(monkeypatch) -> None:
+async def test_task_totally_unreachable_is_reported_honestly(
+    monkeypatch, no_task_residue
+) -> None:
+    import app.services.tasks as tasks_module
     from app.services.whatsapp import SendError, WindowClosedError
 
     async def fake_send(db, *, template_name=None, **kw):
@@ -352,7 +383,7 @@ async def test_relay_totally_unreachable_reports_clearly(monkeypatch) -> None:
             raise WindowClosedError("24h window closed")
         raise SendError("template not approved yet")
 
-    monkeypatch.setattr(bill_module, "send_message", fake_send)
+    monkeypatch.setattr(tasks_module, "send_message", fake_send)
     _patch_extract(
         monkeypatch,
         _extract_result(action="relay", relay_to="Ravi", relay_message="jaldi aao"),
@@ -361,7 +392,9 @@ async def test_relay_totally_unreachable_reports_clearly(monkeypatch) -> None:
         reply = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="manager", text="Ravi ko bolo jaldi aao"
         )
-    assert "pehle wo bot ko" in reply
+    # never claim it was delivered when it wasn't — but the task is saved
+    assert "⚠️" in reply and "nahi ja paya" in reply
+    assert "T-" in reply
 
 
 async def test_bill_from_photo(monkeypatch) -> None:

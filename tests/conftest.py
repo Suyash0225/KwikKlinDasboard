@@ -129,6 +129,8 @@ def sent(monkeypatch) -> list[dict]:
 
     import app.services.bill_agent as bill_agent_module
     import app.services.escalation as escalation_module
+    import app.services.tasks as tasks_module
+    import app.services.whatsapp as whatsapp_module
     import app.services.work_orders as work_orders_module
 
     monkeypatch.setattr(webhook_module, "send_message", fake_send)
@@ -136,7 +138,26 @@ def sent(monkeypatch) -> list[dict]:
     monkeypatch.setattr(work_orders_module, "send_message", fake_send)
     monkeypatch.setattr(escalation_module, "send_message", fake_send)
     monkeypatch.setattr(bill_agent_module, "send_message", fake_send)
+    monkeypatch.setattr(tasks_module, "send_message", fake_send)
+    del whatsapp_module  # the real door stays intact — see _no_live_whatsapp
     return calls
+
+
+@pytest.fixture(autouse=True)
+def _no_live_whatsapp(monkeypatch):
+    """No test may reach Meta — block the HTTP door, not send_message itself.
+
+    Patching send_message would hide the window checks and the conversation
+    recording that several tests exist to verify. Blocking one layer lower
+    keeps all of that running while making a real API call impossible.
+    Tests that patch _post_with_retry themselves still win (applied later).
+    """
+    import app.services.whatsapp as whatsapp_module
+
+    async def _blocked(payload, to_phone):
+        return {"messages": [{"id": "wamid.TESTBLOCKED"}]}
+
+    monkeypatch.setattr(whatsapp_module, "_post_with_retry", _blocked)
 
 
 @pytest.fixture(autouse=True)

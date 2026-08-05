@@ -612,6 +612,128 @@ async def _graph(method: str, path: str, **kw):
     return r.status_code, r.json()
 
 
+class TaskIn(BaseModel):
+    title: str = Field(min_length=2, max_length=2000)
+    staff: str | None = None          # name or phone
+    order_number: str | None = None
+    urgent: bool = False
+
+
+@router.get("/tasks")
+async def list_tasks(
+    db: AsyncSession = Depends(get_db),
+    status: str = Query(default="OPEN", pattern="^(OPEN|DONE|CANCELLED|ALL)$"),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict]:
+    """Every assigned job with who owns it and how long it has been sitting."""
+    from datetime import datetime, timezone
+
+    from app.models import Order as _O, Staff as _S, Task
+
+    q = select(Task).order_by(Task.status, Task.urgent.desc(), Task.created_at.desc()).limit(limit)
+    if status != "ALL":
+        q = q.where(Task.status == status)
+    rows = (await db.execute(q)).scalars().all()
+
+    now = datetime.now(timezone.utc)
+    out = []
+    for t in rows:
+        staff = await db.get(_S, t.assigned_staff_id) if t.assigned_staff_id else None
+        order = await db.get(_O, t.order_id) if t.order_id else None
+        out.append(
+            {
+                "id": str(t.id), "code": t.code, "title": t.title,
+                "status": t.status, "urgent": t.urgent,
+                "staff": staff.name if staff else None,
+                "staff_phone": staff.phone if staff else None,
+                "order_number": order.order_number if order else None,
+                "reply": t.reply,
+                "ping_count": t.ping_count,
+                "escalated": t.escalated_at is not None,
+                "age_hours": int((now - t.created_at).total_seconds() // 3600),
+                "created_by": t.created_by,
+                "created_at": t.created_at.isoformat(),
+                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+            }
+        )
+    return out
+
+
+@router.post("/tasks", status_code=201)
+async def create_task_api(body: TaskIn, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.models import Order as _O
+    from app.services import tasks as task_service
+
+    staff = await task_service.find_staff(db, body.staff or "") if body.staff else None
+    if body.staff and staff is None:
+        raise HTTPException(status_code=400, detail=f"'{body.staff}' staff list mein nahi mila")
+    order = None
+    if body.order_number:
+        order = (
+            await db.execute(select(_O).where(_O.order_number == body.order_number.upper()))
+        ).scalar_one_or_none()
+        if order is None:
+            raise HTTPException(status_code=404, detail=f"{body.order_number} nahi mila")
+
+    task = await task_service.create_task(
+        db, title=body.title, staff=staff, order=order,
+        urgent=body.urgent, created_by="dashboard",
+    )
+    return {"code": task.code, "id": str(task.id)}
+
+
+@router.post("/tasks/{code}/done")
+async def complete_task_api(code: str, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    await task_service.complete_task(db, task, by="dashboard")
+    return {"ok": True}
+
+
+@router.post("/tasks/{code}/cancel")
+async def cancel_task_api(code: str, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    await task_service.cancel_task(db, task, by="dashboard")
+    return {"ok": True}
+
+
+@router.post("/tasks/{code}/ping")
+async def ping_task_api(code: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """'Abhi pooch lo' — nudge the assignee without waiting for the clock."""
+    from datetime import datetime, timezone
+
+    from app.models import Staff as _S
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    staff = await db.get(_S, task.assigned_staff_id) if task.assigned_staff_id else None
+    if staff is None:
+        raise HTTPException(status_code=400, detail="Ye kaam kisi ko assign nahi hai")
+    ok = await task_service._send_to_assignee(db, task, staff, first=False)
+    task.ping_count += 1
+    task.last_ping_at = datetime.now(timezone.utc)
+    db.add(task)
+    await db.commit()
+    return {"ok": ok, "detail": "bhej diya" if ok else "window band hai — nahi ja paya"}
+
+
+@router.post("/jobs/task-followups")
+async def trigger_task_followups() -> dict:
+    """Run the follow-up sweep now (the button next to the task list)."""
+    from app.services.tasks import run_task_followups
+
+    return {"sent": await run_task_followups()}
+
+
 @router.get("/leads")
 async def list_leads(
     db: AsyncSession = Depends(get_db),

@@ -24,8 +24,27 @@ STAFF_NAME = "Qatestwala"
 SILENCE_NOTE = f"({STAFF_NAME} ne iske baad se KOI JAWAB NAHI diya"
 
 
+async def _purge_qa_staff() -> None:
+    """Remove this fixture's rows wherever they came from — a run that died
+    mid-test used to leave the row behind and break every later run."""
+    from sqlalchemy import delete, select
+
+    from app.models import Task
+
+    async with async_session_factory() as s:
+        ids = (
+            await s.execute(select(Staff.id).where(Staff.phone == STAFF_PHONE))
+        ).scalars().all()
+        for sid in ids:
+            await s.execute(delete(Task).where(Task.assigned_staff_id == sid))
+            await s.execute(delete(Conversation).where(Conversation.staff_id == sid))
+        await s.execute(delete(Staff).where(Staff.phone == STAFF_PHONE))
+        await s.commit()
+
+
 @pytest.fixture
 async def qa_staff():
+    await _purge_qa_staff()
     async with async_session_factory() as s:
         from app.models import StaffRole
 
@@ -37,12 +56,7 @@ async def qa_staff():
         await s.commit()
         sid = st.id
     yield sid
-    async with async_session_factory() as s:
-        from sqlalchemy import delete
-
-        await s.execute(delete(Conversation).where(Conversation.staff_id == sid))
-        await s.execute(delete(Staff).where(Staff.id == sid))
-        await s.commit()
+    await _purge_qa_staff()
 
 
 # --- 1. relay rewrites imperatives into a direct question ---
@@ -65,7 +79,12 @@ async def test_relay_sends_rewritten_question(qa_staff, monkeypatch) -> None:
         sent.append({"to": to_phone, "text": text})
         return "wamid.TESTQ1"
 
+    # work for staff now goes out through the task tracker, so that is the
+    # module whose sender must be stubbed
+    import app.services.tasks as tasks_module
+
     monkeypatch.setattr(bill_agent, "send_message", fake_send)
+    monkeypatch.setattr(tasks_module, "send_message", fake_send)
     async with async_session_factory() as db:
         reply = await bill_agent._apply_relay(
             db, "manager",
@@ -73,6 +92,7 @@ async def test_relay_sends_rewritten_question(qa_staff, monkeypatch) -> None:
                 "relay_to": STAFF_NAME,
                 "relay_message": "Kya aapne Rahul ka pickup kar liya? Update bata dijiye.",
                 "staff_name": "",
+                "order_number": "",
             },
         )
     assert sent, "relay must actually send"

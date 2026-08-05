@@ -32,6 +32,7 @@ from app.models.order import Order, OrderStatusHistory, derive_payment_status
 from app.models.payment import Payment
 from app.models.rate import Rate
 from app.models.staff import Staff
+from app.models.task import TASK_CANCELLED, TASK_DONE, TASK_OPEN, Task
 
 __all__ = [
     "AuditLog",
@@ -63,6 +64,10 @@ __all__ = [
     "SettingKV",
     "Staff",
     "StaffRole",
+    "TASK_CANCELLED",
+    "TASK_DONE",
+    "TASK_OPEN",
+    "Task",
     "WebhookEvent",
     "derive_payment_status",
 ]
