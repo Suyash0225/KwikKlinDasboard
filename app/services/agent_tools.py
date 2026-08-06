@@ -94,11 +94,21 @@ TOOL_SPECS = [
                 "— tum khud database me daalte ho, ye kaam kisi staff ka nahi hai",
         "args": "phone | naam",
     },
+    {
+        "name": "set_shop_info",
+        "when": "owner tells you a SHOP detail to remember: khulne-band hone ka time, "
+                "dukaan ka address, contact number, ya default delivery din "
+                "('add kro office khulne ka time 11 se 6 ka hai') — customers ko "
+                "jawab dete waqt yahi use hota hai",
+        "args": "timing|address|phone|turnaround | value",
+    },
 ]
 
 # Tools that CHANGE data. The assistant may only claim something is done if
 # one of these actually ran — see bill_agent's unbacked-claim check.
-WRITE_TOOLS = {"add_expense", "add_customer", "assign_task", "ping_staff"}
+WRITE_TOOLS = {
+    "add_expense", "add_customer", "set_shop_info", "assign_task", "ping_staff",
+}
 
 
 def _tool_help() -> str:
@@ -668,10 +678,71 @@ async def _add_customer(db: AsyncSession, args: str) -> str:
     return f"Naya customer save kar diya: {name or '(bina naam)'} — {phone}."
 
 
+# Shop facts the owner may set by WhatsApp. Deliberately NOT here: UPI VPA,
+# GST% and anything else where a misheard word costs money or breaks the
+# books — those stay on the Settings page.
+_SHOP_FIELDS = {
+    "timing": "shop_hours", "timings": "shop_hours", "time": "shop_hours",
+    "hours": "shop_hours", "samay": "shop_hours", "khulne": "shop_hours",
+    "address": "shop_address", "pata": "shop_address", "location": "shop_address",
+    "phone": "shop_contact_phone", "number": "shop_contact_phone",
+    "contact": "shop_contact_phone", "mobile": "shop_contact_phone",
+    "turnaround": "turnaround_days", "delivery": "turnaround_days",
+    "days": "turnaround_days", "din": "turnaround_days",
+}
+_FIELD_LABEL = {
+    "shop_hours": "Shop ka time",
+    "shop_address": "Shop ka address",
+    "shop_contact_phone": "Shop ka contact number",
+    "turnaround_days": "Default delivery din",
+}
+
+
+async def _set_shop_info(db: AsyncSession, args: str) -> str:
+    """Store a shop detail the customer-facing bot will use. args: 'field | value'."""
+    from app.services import app_settings
+
+    field, _, value = args.partition("|")
+    field, value = field.strip().lower(), value.strip()
+    if not value:
+        return (
+            "Kya value set karni hai? Format: "
+            "set_shop_info('timing | subah 11 se shaam 6, Sunday band')"
+        )
+    key = _SHOP_FIELDS.get(field) or next(
+        (k for word, k in _SHOP_FIELDS.items() if word in field), None
+    )
+    if key is None:
+        return (
+            "Ye main abhi set nahi kar sakta. Sirf ye kar sakta hoon: timing, "
+            "address, phone, turnaround. Baaki Settings page se hota hai."
+        )
+
+    if key == "turnaround_days":
+        import re as _re
+
+        m = _re.search(r"\d+", value)
+        if not m or not (1 <= int(m.group(0)) <= 30):
+            return "Delivery din 1 se 30 ke beech hone chahiye."
+        stored: object = int(m.group(0))
+        shown = f"{stored} din"
+    else:
+        stored = value[:300]
+        shown = str(stored)
+
+    await app_settings.set_value(db, key, stored)
+    log.info("agent_shop_info_set", key=key)
+    return (
+        f"{_FIELD_LABEL[key]} save kar diya: {shown}. "
+        "Ab customer poochhega to bot yahi batayega."
+    )
+
+
 _TOOLS = {
     "assign_task": _assign_task,
     "add_expense": _add_expense,
     "add_customer": _add_customer,
+    "set_shop_info": _set_shop_info,
     "task_list": _task_list,
     "order_detail": _order_detail,
     "customer_detail": _customer_detail,

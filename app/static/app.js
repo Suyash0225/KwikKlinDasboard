@@ -1643,6 +1643,7 @@ async function loadSettings() {
     $("bp-name").value = "Kwik Klin";
     $("bp-gstin").value = s.shop_gstin || "";
     $("bp-phone").value = s.shop_contact_phone || "";
+    $("bp-hours").value = s.shop_hours || "";
     $("bp-address").value = s.shop_address || "";
     $("bp-upi").value = s.upi_vpa || "";
     $("bp-payee").value = s.upi_payee || "";
@@ -1657,6 +1658,7 @@ async function saveProfile(btn) {
     const pairs = [
       ["shop_gstin", $("bp-gstin").value.trim()],
       ["shop_contact_phone", $("bp-phone").value.trim()],
+      ["shop_hours", $("bp-hours").value.trim()],
       ["shop_address", $("bp-address").value.trim()],
       ["upi_vpa", $("bp-upi").value.trim()],
       ["upi_payee", $("bp-payee").value.trim()],

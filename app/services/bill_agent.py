@@ -11,6 +11,9 @@ model but EXECUTED only by our own code:
 Safety:
 - NOTHING is written to the DB without the confirm word ('haan') for bills;
   prices come ONLY from the rate card lookup in code, never from the model.
+- A bill PHOTO is only TRANSCRIBED by the model (it is not shown the rate
+  card); our code does the matching. A slip it cannot read asks the sender
+  instead of filling the bill with the shop's usual garments.
 - Drafts live in memory per sender phone for 30 minutes (single-process
   uvicorn — documented limitation, lost on restart, which is safe: worst
   case the manager re-sends the bill text).

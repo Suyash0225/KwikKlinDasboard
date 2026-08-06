@@ -143,6 +143,61 @@ async def test_add_customer_rejects_junk_numbers() -> None:
     assert "Number chahiye" in out
 
 
+# --------------------------- set_shop_info ---------------------------
+
+
+async def test_set_shop_timings_reaches_the_customer_bot() -> None:
+    """'add kro office khulne ka time 11 se 6' — asked 03 Aug, ignored then."""
+    from app.services import app_settings
+    from app.services.ai_agent import _build_facts
+
+    async with async_session_factory() as db:
+        before = await app_settings.get(db, "shop_hours")
+    try:
+        async with async_session_factory() as db:
+            out = await at.run_tool(
+                db, "set_shop_info", "timing | subah 11 se shaam 6, Sunday band"
+            )
+        assert "save kar diya" in out
+        async with async_session_factory() as db:
+            db.add(Customer(phone=WRITE_PHONE, name="Timing Poochne Wala"))
+            await db.commit()
+            cust = (
+                await db.execute(select(Customer).where(Customer.phone == WRITE_PHONE))
+            ).scalar_one()
+            facts = await _build_facts(db, cust)
+        assert "Shop timings: subah 11 se shaam 6, Sunday band" in facts
+    finally:
+        async with async_session_factory() as db:
+            await app_settings.set_value(db, "shop_hours", before)
+        await _clean()
+
+
+async def test_set_shop_info_validates_turnaround() -> None:
+    from app.services import app_settings
+
+    async with async_session_factory() as db:
+        before = await app_settings.get(db, "turnaround_days")
+    try:
+        async with async_session_factory() as db:
+            bad = await at.run_tool(db, "set_shop_info", "turnaround | 400 din")
+            good = await at.run_tool(db, "set_shop_info", "turnaround | 3 din")
+            now = await app_settings.get(db, "turnaround_days")
+        assert "1 se 30" in bad
+        assert "3 din" in good and now == 3
+    finally:
+        async with async_session_factory() as db:
+            await app_settings.set_value(db, "turnaround_days", before)
+
+
+async def test_set_shop_info_refuses_fields_it_must_not_touch() -> None:
+    """UPI and GST stay on the Settings page — a misheard word costs money."""
+    async with async_session_factory() as db:
+        out = await at.run_tool(db, "set_shop_info", "upi | wrong@okaxis")
+    assert "nahi kar sakta" in out
+    assert "Settings page" in out
+
+
 # --------------------- the "kar diya" safety net ---------------------
 
 

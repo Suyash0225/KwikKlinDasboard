@@ -397,23 +397,54 @@ async def test_task_totally_unreachable_is_reported_honestly(
     assert "T-" in reply
 
 
-async def test_bill_from_photo(monkeypatch) -> None:
+def _photo_result(**overrides) -> dict:
+    """What the vision model returns: a transcription, not a bill."""
+    base = {
+        "readable": True,
+        "customer_name": "",
+        "customer_phone": "",
+        "advance": 0,
+        "expected_delivery": "",
+        "lines": [],
+        "unreadable_note": "",
+    }
+    base.update(overrides)
+    return base
+
+
+def _line(**overrides) -> dict:
+    base = {"text": "", "garment": "", "service": "", "qty": 1, "unsure": False}
+    base.update(overrides)
+    return base
+
+
+def _with_photo(monkeypatch, result: dict, seen: dict | None = None):
+    """Put a fake slip on disk and mock the vision call. Returns the path."""
     media_dir = bill_module._MEDIA_DIR
     media_dir.mkdir(exist_ok=True)
     photo = media_dir / "test-billphoto.jpg"
     photo.write_bytes(b"fake-jpg")
-    seen: dict = {}
 
     async def fake_vision(**kw):
-        seen.update(kw)
-        return _extract_result(
-            action="new_bill",
-            customer_name="Photo Grahak",
-            customer_phone="9999900124",
-            items=[{"service": SERVICE, "garment": "Kurta", "qty": 3}],
-        )
+        if seen is not None:
+            seen.update(kw)
+        return result
 
     monkeypatch.setattr(bill_module.llm_client, "ask_json_image", fake_vision)
+    return photo
+
+
+async def test_bill_from_photo(monkeypatch) -> None:
+    seen: dict = {}
+    photo = _with_photo(
+        monkeypatch,
+        _photo_result(
+            customer_name="Photo Grahak",
+            customer_phone="9999900124",
+            lines=[_line(text="3 kurta", garment="Kurta", service=SERVICE, qty=3)],
+        ),
+        seen,
+    )
     try:
         async with async_session_factory() as db:
             reply = await handle_staff_message(
@@ -427,6 +458,91 @@ async def test_bill_from_photo(monkeypatch) -> None:
     assert seen["image_bytes"] == b"fake-jpg"
     assert "Bill bnao iska" in seen["user_text"]
     assert SENDER in _PENDING  # confirm loop still required
+    # The rate card must NOT be in the reader's context — that is what made
+    # it "recognise" shirt/pant on slips it could not actually read.
+    assert SERVICE not in seen["user_text"] and SERVICE not in seen["system"]
+
+
+async def test_photo_unreadable_asks_instead_of_inventing(monkeypatch) -> None:
+    photo = _with_photo(
+        monkeypatch,
+        _photo_result(readable=False, unreadable_note="photo dhundhli hai"),
+    )
+    try:
+        async with async_session_factory() as db:
+            reply = await handle_staff_message(
+                db, sender_phone=SENDER, sender_label="manager",
+                text="[image:/admin/media/test-billphoto.jpg] bill bana do",
+            )
+    finally:
+        photo.unlink(missing_ok=True)
+
+    assert reply is not None and "saaf nahi" in reply and "dhundhli" in reply
+    assert SENDER not in _PENDING  # nothing invented, nothing staged
+
+
+async def test_photo_unknown_garment_is_flagged_not_swapped(monkeypatch) -> None:
+    """An item that isn't on the rate card keeps the slip's own word."""
+    photo = _with_photo(
+        monkeypatch,
+        _photo_result(
+            customer_name="Verma ji",
+            customer_phone="9999900124",
+            lines=[
+                _line(text="2 topi", garment="Topi", qty=2, unsure=True),
+                _line(text="1 sherwanis", garment="Sherwanis", qty=1),
+            ],
+        ),
+    )
+    try:
+        async with async_session_factory() as db:
+            reply = await handle_staff_message(
+                db, sender_phone=SENDER, sender_label="manager",
+                text="[image:/admin/media/test-billphoto.jpg]",
+            )
+    finally:
+        photo.unlink(missing_ok=True)
+
+    assert reply is not None
+    # unknown word survives as written, marked — never turned into a shirt
+    assert "Topi" in reply and "⚠️" in reply and "❓" in reply
+    assert "Shirt" not in reply and "Pant" not in reply
+    # a plural spelling still finds its single rate-card row
+    assert "Sherwani" in reply and "₹300" in reply
+    draft = _PENDING[SENDER].draft
+    assert [i["garment"] for i in draft["items"]] == ["Topi", "Sherwani"]
+    assert draft["total"] == 300                 # unpriced item adds nothing
+
+
+async def test_photo_ambiguous_service_asks_which_one(monkeypatch) -> None:
+    """Kurta exists under several services — ask, don't pick one."""
+    photo = _with_photo(
+        monkeypatch,
+        _photo_result(
+            customer_phone="9999900124",
+            lines=[_line(text="2 kurta", garment="Kurta", qty=2)],
+        ),
+    )
+    try:
+        async with async_session_factory() as db:
+            reply = await handle_staff_message(
+                db, sender_phone=SENDER, sender_label="manager",
+                text="[image:/admin/media/test-billphoto.jpg]",
+            )
+    finally:
+        photo.unlink(missing_ok=True)
+
+    assert reply is not None and "kaunsi service" in reply
+    assert "Dry Clean" in reply and SERVICE in reply
+    assert _PENDING[SENDER].draft["total"] == 0  # never guesses a price
+
+
+def test_match_key_normalises_spelling_not_meaning() -> None:
+    k = bill_module._key
+    assert k("T-Shirt") == k("t shirt") == k("tshirts")
+    assert k("Pents") == k("pant") == k("PAINT")
+    assert k("Dry Clean") == k("dryclean")
+    assert k("Shirt") != k("Kurta")   # different garments never collapse
 
 
 async def test_photo_missing_file_stays_silent(monkeypatch) -> None:

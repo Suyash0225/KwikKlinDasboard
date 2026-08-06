@@ -378,6 +378,20 @@ async def _build_facts(db: AsyncSession, customer: Customer) -> str:
     except Exception:
         pass
 
+    # Shop profile — without this the bot could not answer "dukaan kab
+    # khulti hai" or "kahan hai", the two things a new customer asks first.
+    try:
+        for key, label in (
+            ("shop_hours", "Shop timings"),
+            ("shop_address", "Shop address"),
+            ("shop_contact_phone", "Shop contact number"),
+        ):
+            val = str(await app_settings.get(db, key) or "").strip()
+            if val:
+                lines.append(f"{label}: {val}")
+    except Exception:
+        pass
+
     active = await get_active_orders_for_phone(db, customer.phone)
     if active:
         lines.append("Customer's current orders:")

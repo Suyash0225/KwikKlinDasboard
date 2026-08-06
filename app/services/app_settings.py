@@ -59,6 +59,9 @@ DEFAULTS: dict[str, Any] = {
     # owner-edited customer message formats {message_key: text}
     "message_overrides": {},
     # business profile (Settings -> Business Profile & Invoices)
+    # Free text, not open/close times: real shops say "11 se 6, Sunday band"
+    # and pickup runs all day. Customers get this verbatim when they ask.
+    "shop_hours": "",
     "shop_address": "",
     "shop_gstin": "",
     "shop_contact_phone": "",

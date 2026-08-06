@@ -141,6 +141,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "📝 Bill draft — {customer_name}:",
         "en": "📝 Bill draft — {customer_name}:",
     },
+    "bill_draft_from_photo": {
+        "hi": "(parche se padha — neeche check kar lein)",
+        "en": "(read from the slip — please check below)",
+    },
+    "bill_draft_needs_answer": {
+        "hi": "❓/⚠️ wale item main sahi nahi padh paya — sahi likh dein (jaise '2 kurta dry clean'), phir 'haan'.",
+        "en": "I couldn't read the ❓/⚠️ items — send the correct line (e.g. '2 kurta dry clean'), then 'haan'.",
+    },
+    "bill_photo_unreadable": {
+        "hi": "📷 Parcha saaf nahi padh paya — isliye maine apne se kuch nahi likha. Ek saaf photo bhej dein, ya kapde type kar dein (jaise 'Sharma ji 3 shirt wash 2 saree dry clean'), main bill bana dunga.",
+        "en": "📷 I couldn't read the slip, so I've added nothing on my own. Send a clearer photo, or type the items (e.g. 'Sharma ji 3 shirt wash 2 saree dry clean') and I'll make the bill.",
+    },
     "bill_draft_total": {"hi": "Total: ₹{total}", "en": "Total: ₹{total}"},
     "bill_draft_advance": {"hi": "Advance: ₹{advance}", "en": "Advance: ₹{advance}"},
     "bill_draft_delivery": {
