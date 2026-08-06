@@ -914,7 +914,12 @@ _QUERY_SYSTEM = (
     "question (Hinglish/Hindi/English).\n"
     "Rules: answer ONLY from FACTS — never invent or estimate numbers. "
     "Amounts in ₹. Reply in the owner's language, short and clear (1-5 "
-    "lines). If the owner asks about a staff member (kya bola, jawab diya "
+    "lines). When the owner asks whether anything came in (koi inquiry, koi "
+    "message, kisi ne kuch pucha), answer from CUSTOMER MESSAGES and AAPKE "
+    "JAWAB KA INTEZAAR — list who and what, with the time. Say 'nahi aayi' "
+    "ONLY when those sections are actually empty; never assume nothing "
+    "happened because you can't see it. If the owner asks about a staff "
+    "member (kya bola, jawab diya "
     "ya nahi, pickup kia?), use the STAFF CHAT section: report what they "
     "last said and WHEN; if they have not replied since our last message, "
     "say exactly that (e.g. 'Superman ne 10:01 baje ke message ka abhi tak "
@@ -1040,9 +1045,57 @@ async def _manager_facts(db: AsyncSession) -> str:
         f"Kul customers: {customers_count}",
     ]
 
+    ist = timezone(timedelta(hours=5, minutes=30))
+    # CUSTOMER INQUIRIES: without these the owner asking "koi inquiry aayi
+    # hai?" got a confident "nahi" while a real one sat unanswered. Anyone
+    # who messaged in the last 24h belongs here, order or no order.
+    since = now - timedelta(hours=24)
+    inq = (
+        await db.execute(
+            select(Conversation, Customer)
+            .join(Customer, Customer.id == Conversation.customer_id)
+            .where(
+                Conversation.direction == Direction.INBOUND,
+                Conversation.created_at >= since,
+            )
+            .order_by(Conversation.created_at.desc())
+            .limit(15)
+        )
+    ).all()
+    lines.append(
+        f"CUSTOMER MESSAGES (pichhle 24 ghante, {len(inq)}):"
+        if inq else "CUSTOMER MESSAGES (pichhle 24 ghante): ek bhi nahi"
+    )
+    for c, cust in inq:
+        at = c.created_at.astimezone(ist).strftime("%d %b %H:%M")
+        who = cust.name or cust.phone
+        lines.append(f"- [{at}] {who} ({cust.phone}): {(c.message_text or '')[:140]}")
+
+    # OPEN ESCALATIONS: things the agent could not answer and handed over.
+    from app.models import Escalation, EscalationStatus
+
+    esc_rows = (
+        await db.execute(
+            select(Escalation)
+            .where(Escalation.status == EscalationStatus.OPEN)
+            .order_by(Escalation.created_at.desc())
+            .limit(10)
+        )
+    ).all()
+    if esc_rows:
+        lines.append(f"AAPKE JAWAB KA INTEZAAR ({len(esc_rows)}):")
+        for (e,) in esc_rows:
+            at = e.created_at.astimezone(ist).strftime("%d %b %H:%M")
+            who = "?"
+            if e.customer_id:
+                cu = await db.get(Customer, e.customer_id)
+                who = (cu.name or cu.phone) if cu else "?"
+            lines.append(f"- [{at}] {who}: {(e.question or '')[:160]}")
+    else:
+        lines.append("AAPKE JAWAB KA INTEZAAR: kuch nahi")
+
     # STAFF CHAT: last exchange per staff member, so "Superman ne jawab
     # diya?" has a real answer instead of a dashboard deflection.
-    ist = timezone(timedelta(hours=5, minutes=30))
     staff_rows = (
         await db.execute(select(Staff).where(Staff.is_active))
     ).scalars().all()

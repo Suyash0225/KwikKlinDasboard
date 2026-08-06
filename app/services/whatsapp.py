@@ -513,9 +513,17 @@ async def drain_outbound_queue() -> int:
                     enqueue_on_fail=False,
                 )
             except WindowClosedError as exc:
+                # A 24h window REOPENS the moment they message again, so a
+                # closed window is a wait, not a failure. Keep retrying on
+                # the normal backoff until the attempt cap.
                 await db.rollback()
-                row.status = "dead"
-                row.last_error = f"window closed: {exc}"
+                row.attempts += 1
+                row.last_error = f"window closed: {exc}"[:500]
+                if row.attempts >= MAX_OUTBOUND_ATTEMPTS:
+                    row.status = "dead"
+                    log.info("outbound_dead_window_never_opened", to=row.to_phone)
+                else:
+                    row.next_attempt_at = now + timedelta(seconds=min(900 * row.attempts, 21_600))
             except SendError as exc:
                 await db.rollback()
                 row.attempts += 1

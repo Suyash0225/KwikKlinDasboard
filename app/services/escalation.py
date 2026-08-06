@@ -18,6 +18,17 @@ from app.services.whatsapp import SendError, WindowClosedError, send_message
 log = structlog.get_logger()
 
 
+async def _queue_alert(db: AsyncSession, to_phone: str, alert: str) -> None:
+    """Hold an undeliverable alert in the outbound queue. Never raises."""
+    try:
+        from app.services.whatsapp import _enqueue_outbound
+
+        await _enqueue_outbound(db, to_phone, {"text": alert, "sent_by": "bot"})
+        log.info("escalation_alert_queued", to=to_phone)
+    except Exception:
+        log.exception("escalation_alert_queue_failed", to=to_phone)
+
+
 async def raise_escalation(
     db: AsyncSession,
     *,
@@ -64,10 +75,12 @@ async def raise_escalation(
                     template_params=[" ".join(alert.split())[:600]],
                 )
             except SendError:
-                log.warning("escalation_alert_not_sent", to=to_phone)
+                # Template unapproved too — park it so it goes out the
+                # moment their window reopens. An alert the owner never
+                # sees is how a real inquiry got lost.
+                await _queue_alert(db, to_phone, alert)
         except SendError:
-            # Send failed — the dashboard still shows the row.
-            log.warning("escalation_alert_not_sent", to=to_phone)
+            await _queue_alert(db, to_phone, alert)
         except Exception:
             log.exception("escalation_alert_failed", to=to_phone)
     return esc
