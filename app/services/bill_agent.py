@@ -259,10 +259,18 @@ async def handle_staff_message(
     try:
         if photo is not None:
             extracted = await _extract_from_photo(
-                db, photo.group(1), photo.group(2).strip(), _as_bill(pending)
+                db, photo.group(1), photo.group(2).strip()
             )
             if extracted is None:  # file missing on disk — nothing to read
                 return None
+            if not extracted["items"]:
+                # Could not read the slip. Say so and ask — NEVER fill the
+                # bill with the usual shirt/pant just to have something.
+                log.info("bill_photo_unreadable", note=extracted["note"][:120])
+                reply = get_message("bill_photo_unreadable")
+                if extracted["note"]:
+                    reply += f"\n({extracted['note'][:140]})"
+                return reply
         else:
             extracted = await _extract(db, text, _as_bill(pending), history)
     except LLMError as exc:
@@ -384,71 +392,179 @@ async def _extract(
     )
 
 
-_PHOTO_ADDENDUM = (
-    "\nA PHOTO of a handwritten Kwik Klin bill slip is attached. Read the "
-    "customer name, phone number (if written) and every item line (qty + "
-    "garment + service) from the slip; match items to the RATE CARD's exact "
-    "strings where possible. IGNORE any prices/amounts written on the slip — "
-    "the system prices everything from the rate card itself. The caption may "
-    "add corrections; it wins over the slip. Return action=new_bill."
+# Reading a slip is TRANSCRIPTION, not billing. The rate card is
+# deliberately NOT shown here: when it was, a hard-to-read slip made the
+# model emit plausible rate-card rows (shirt, pant) instead of what was
+# written. It reads the paper; our code does the rate-card matching after.
+_PHOTO_SYSTEM = (
+    "You are reading a PHOTO of a bill slip from Kwik Klin laundry "
+    "(Varanasi, India). Slips are handwritten in Hindi/Hinglish/English, "
+    "usually on a preprinted form.\n"
+    "Your ONLY job is to TRANSCRIBE what is actually written on THIS slip. "
+    "You are not making a bill and you have not been shown the shop's rate "
+    "card, so you can never supply an item from general knowledge of what "
+    "laundries wash.\n"
+    "Rules:\n"
+    "- One entry in `lines` per row that carries a HANDWRITTEN quantity or "
+    "tick. A preprinted garment name with nothing handwritten next to it is "
+    "part of the blank form — SKIP it. It is not an item.\n"
+    "- `text`: that row exactly as written, in the slip's own words (Latin "
+    "transliteration is fine). `garment`: just the garment word of that row. "
+    "`service`: only if the slip states it (wash / dry clean / iron / "
+    "press...), else \"\". `qty`: the handwritten number (1 if a row is "
+    "only ticked).\n"
+    "- Hard to read? Still write your best LITERAL reading and set "
+    "unsure=true. Never replace an unreadable word with a common laundry "
+    "item like shirt or pant.\n"
+    "- Blurred, dark, not a bill slip, or no handwritten item row visible: "
+    "set readable=false, lines=[] and say what the problem is in "
+    "unreadable_note (Hinglish, one line). Returning nothing is correct and "
+    "safe — inventing items is a serious error.\n"
+    "- Also read customer_name, customer_phone (digits as written), the "
+    "advance/jama amount (0 if none) and any delivery date as ISO "
+    "YYYY-MM-DD using TODAY. Use \"\" when it is not written.\n"
+    "- IGNORE every price, rate column and total on the slip — the system "
+    "prices the bill from its own rate card.\n"
+    "The staff member's caption wins wherever it conflicts with the slip."
 )
+
+_PHOTO_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "readable": {"type": "boolean"},
+        "customer_name": {"type": "string"},
+        "customer_phone": {"type": "string"},
+        "advance": {"type": "number"},
+        "expected_delivery": {"type": "string"},
+        "lines": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "garment": {"type": "string"},
+                    "service": {"type": "string"},
+                    "qty": {"type": "number"},
+                    "unsure": {"type": "boolean"},
+                },
+                "required": ["text", "garment", "service", "qty", "unsure"],
+                "additionalProperties": False,
+            },
+        },
+        "unreadable_note": {"type": "string"},
+    },
+    "required": [
+        "readable", "customer_name", "customer_phone", "advance",
+        "expected_delivery", "lines", "unreadable_note",
+    ],
+    "additionalProperties": False,
+}
 
 
 async def _extract_from_photo(
-    db: AsyncSession, filename: str, caption: str, pending: PendingBill | None
+    db: AsyncSession, filename: str, caption: str
 ) -> dict | None:
-    """Vision extraction from a bill photo. None if the file is gone."""
+    """Read a bill slip photo. None if the file is gone.
+
+    Returns the same shape the text extractor produces (so the draft path
+    is shared), plus what the slip literally said per item.
+    """
     path = _MEDIA_DIR / Path(filename).name  # traversal-safe
     if not path.exists():
         log.warning("bill_photo_missing", filename=filename)
         return None
     mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
 
-    rates = (
-        (await db.execute(select(Rate).where(Rate.is_active).order_by(Rate.service, Rate.garment)))
-        .scalars()
-        .all()
-    )
-    card = "\n".join(
-        f"- service={r.service!r} garment={r.garment!r} ₹{r.rate}/{r.unit}" for r in rates
-    )
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    prompt = f"RATE CARD:\n{card}\nTODAY: {today}\n"
-    if pending:
-        prompt += f"CURRENT DRAFT:\n{json.dumps(pending.draft, default=str)}\n"
-    prompt += f"STAFF CAPTION:\n{caption or '(none)'}"
-    return await llm_client.ask_json_image(
-        system=_EXTRACT_SYSTEM + _PHOTO_ADDENDUM,
-        user_text=prompt,
+    read = await llm_client.ask_json_image(
+        system=_PHOTO_SYSTEM,
+        user_text=f"TODAY: {today}\nSTAFF CAPTION:\n{caption or '(none)'}",
         image_bytes=path.read_bytes(),
         mime_type=mime,
-        schema=_EXTRACT_SCHEMA,
+        schema=_PHOTO_SCHEMA,
         model=llm_client.MODEL_SMART,
-        max_tokens=900,
     )
+
+    items = []
+    for ln in read.get("lines") or []:
+        qty = ln.get("qty") or 1
+        garment = (ln.get("garment") or "").strip()
+        text = (ln.get("text") or "").strip()
+        if not garment and not text:
+            continue
+        items.append(
+            {
+                "service": (ln.get("service") or "").strip(),
+                "garment": garment or text,
+                "qty": qty,
+                # what the paper actually said — shown back before 'haan'
+                "read_as": text or garment,
+                "unsure": bool(ln.get("unsure")),
+            }
+        )
+    log.info(
+        "bill_photo_read",
+        readable=bool(read.get("readable")),
+        lines=len(items),
+        unsure=sum(1 for i in items if i["unsure"]),
+    )
+    return {
+        "action": "new_bill",
+        "customer_name": (read.get("customer_name") or "").strip(),
+        "customer_phone": (read.get("customer_phone") or "").strip(),
+        "items": items,
+        "advance": read.get("advance") or 0,
+        "expected_delivery": (read.get("expected_delivery") or "").strip(),
+        "from_photo": True,
+        "note": (read.get("unreadable_note") or "").strip(),
+    }
+
+
+# Spelling variants of the SAME word only — never a mapping from one
+# garment to a different one (that would be guessing on the owner's behalf).
+_SPELLING = {
+    "pent": "pant", "paint": "pant", "pantt": "pant",
+    "sari": "saree", "sadi": "saree",
+    "jean": "jeans", "kurtha": "kurta", "shart": "shirt",
+    "dryclean": "dryclean", "drycleaning": "dryclean",
+}
+
+
+def _key(word: str) -> str:
+    """Match key: case/space/hyphen/plural-insensitive, applied to BOTH sides."""
+    k = re.sub(r"[^a-z0-9]+", "", (word or "").lower())
+    if len(k) > 3 and k.endswith("s"):
+        k = k[:-1]
+    return _SPELLING.get(k, k)
 
 
 async def _price_draft(db: AsyncSession, extracted: dict) -> dict:
-    """Price every item from the rate card — the model never sets prices."""
+    """Price every item from the rate card — the model never sets prices.
+
+    A garment we cannot match stays in the owner's own words with no price,
+    and a garment that exists under several services asks which one. We do
+    not silently pick a rate-card row that "looks close".
+    """
     rates = (
         (await db.execute(select(Rate).where(Rate.is_active))).scalars().all()
     )
-    by_key = {(r.service.lower(), r.garment.lower()): r for r in rates}
+    by_key = {(_key(r.service), _key(r.garment)): r for r in rates}
     items = []
     total = Decimal("0")
     for it in extracted["items"]:
-        qty = Decimal(str(it["qty"] or 1))
-        rate_row = by_key.get((it["service"].lower(), it["garment"].lower()))
-        if rate_row is None:
-            # garment-only fallback, but only when unambiguous
-            matches = [r for r in rates if r.garment.lower() == it["garment"].lower() and it["garment"]]
-            rate_row = matches[0] if len(matches) == 1 else None
+        qty = Decimal(str(it.get("qty") or 1))
+        g_key, s_key = _key(it.get("garment")), _key(it.get("service"))
+        rate_row = by_key.get((s_key, g_key)) if g_key else None
+        options = [r for r in rates if g_key and _key(r.garment) == g_key]
+        if rate_row is None and len(options) == 1:
+            # only one service exists for this garment — no choice to make
+            rate_row = options[0]
         rate = rate_row.rate if rate_row else None
         amount = (rate * qty) if rate is not None else None
         if amount is not None:
             total += amount
-        service = rate_row.service if rate_row else it["service"]
-        garment = rate_row.garment if rate_row else it["garment"]
+        service = rate_row.service if rate_row else (it.get("service") or "")
+        garment = rate_row.garment if rate_row else (it.get("garment") or "")
         items.append(
             {
                 # "type" is the canonical item key the dashboard/orders API
@@ -459,6 +575,10 @@ async def _price_draft(db: AsyncSession, extracted: dict) -> dict:
                 "qty": float(qty),
                 "rate": float(rate) if rate is not None else None,
                 "amount": float(amount) if amount is not None else None,
+                # review-only fields, stripped before the order is written
+                "read_as": (it.get("read_as") or "").strip(),
+                "unsure": bool(it.get("unsure")),
+                "options": sorted({r.service for r in options}) if rate_row is None else [],
             }
         )
     return {
@@ -468,19 +588,42 @@ async def _price_draft(db: AsyncSession, extracted: dict) -> dict:
         "advance": extracted["advance"] or 0,
         "expected_delivery": extracted["expected_delivery"],
         "total": float(total),
+        "from_photo": bool(extracted.get("from_photo")),
     }
+
+
+# Only these reach create_order — read_as/unsure/options are review aids.
+_ORDER_ITEM_KEYS = ("type", "service", "garment", "qty", "rate", "amount")
 
 
 def _draft_summary(draft: dict) -> str:
     lines = [get_message("bill_draft_header", customer_name=draft["customer_name"] or "?")]
+    if draft.get("from_photo"):
+        lines.append(get_message("bill_draft_from_photo"))
+    needs_answer = False
     for it in draft["items"]:
         qty = int(it["qty"]) if float(it["qty"]).is_integer() else it["qty"]
-        label = f"{it['service']}{' / ' + it['garment'] if it['garment'] else ''}"
+        label = f"{it['service']}{' / ' + it['garment'] if it['garment'] else ''}".strip(" /")
+        read_as = (it.get("read_as") or "").strip()
+        # show the slip's own words whenever we mapped them to something else
+        if read_as and _key(read_as) != _key(it["garment"] or "") and _key(read_as) not in _key(label):
+            label += f' (parche pe: "{read_as[:40]}")'
+        if it.get("unsure"):
+            label += " ❓"
+            needs_answer = True
         if it["amount"] is not None:
             lines.append(f"• {qty} × {label} — ₹{it['amount']:g}")
+        elif it.get("options"):
+            needs_answer = True
+            lines.append(
+                f"• {qty} × {label} — ❓ kaunsi service? ({' / '.join(it['options'])})"
+            )
         else:
+            needs_answer = True
             lines.append(f"• {qty} × {label} — ⚠️ rate card mein nahi")
     lines.append(get_message("bill_draft_total", total=f"{draft['total']:g}"))
+    if needs_answer:
+        lines.append(get_message("bill_draft_needs_answer"))
     if draft["advance"]:
         lines.append(get_message("bill_draft_advance", advance=f"{draft['advance']:g}"))
     if draft["expected_delivery"]:
@@ -512,10 +655,13 @@ async def _finalize_bill(
         exp = date.today() + timedelta(days=days)
 
     total = Decimal(str(d["total"])) if d["total"] else None
+    order_items = [
+        {k: v for k, v in it.items() if k in _ORDER_ITEM_KEYS} for it in d["items"]
+    ]
     order = await create_order(
         db,
         customer_phone=phone,
-        items=d["items"],
+        items=order_items,
         customer_name=d["customer_name"] or None,
         total_amount=total,
         expected_delivery=exp,
@@ -919,6 +1065,14 @@ _QUERY_SYSTEM = (
     "JAWAB KA INTEZAAR — list who and what, with the time. Say 'nahi aayi' "
     "ONLY when those sections are actually empty; never assume nothing "
     "happened because you can't see it. If the owner asks about a staff "
+    "NEVER say a job is done unless a TOOL result in this conversation says "
+    "so. Kharcha likhna and customer save karna are YOUR OWN jobs — use "
+    "add_expense / add_customer, never hand them to a staff member. If there "
+    "is genuinely no tool for what the owner wants, say plainly that you "
+    "cannot do it yet ('ye main abhi nahi kar sakta') and, if it is a shop "
+    "SETTING (timings, rates, discounts), tell him the Settings page can do "
+    "it — that is the ONLY time you may mention the dashboard. A false 'kar "
+    "diya' is the worst thing you can do. If the owner asks about a staff "
     "member (kya bola, jawab diya "
     "ya nahi, pickup kia?), use the STAFF CHAT section: report what they "
     "last said and WHEN; if they have not replied since our last message, "
@@ -943,6 +1097,26 @@ _STEP_SCHEMA = {
 
 MAX_TOOL_ROUNDS = 3
 
+# "add kar diya", "save kar liya", "note kar diya" — a claim that the shop's
+# DATA changed. Owner-facing lies like this cost more than a wrong number:
+# he stops checking. If no write tool ran, the claim is fiction.
+_DONE_CLAIM = re.compile(
+    r"(kharch|expense|customer|entry|register|database|record|note|save|add|"
+    r"likh|update)[^.\n]{0,40}?"
+    r"(kar\s*d[iy]|kr\s*d[iy]|kar\s*l[iy]|kr\s*l[iy]|likh\s*d[iy]|daal\s*d[iy]|"
+    r"jod\s*d[iy]|bana\s*d[iy]|ho\s*gay|done|added|saved)",
+    re.I,
+)
+
+
+def _unbacked_claim(answer: str, used: list[str]) -> bool:
+    """Did it say the data changed without any tool having changed it?"""
+    from app.services import agent_tools
+
+    if set(used) & agent_tools.WRITE_TOOLS:
+        return False
+    return bool(_DONE_CLAIM.search(answer))
+
 
 async def _answer_manager_query(db: AsyncSession, text: str) -> str | None:
     """Owner asked something free-form.
@@ -964,8 +1138,11 @@ async def _answer_manager_query(db: AsyncSession, text: str) -> str | None:
     )
     convo = f"SNAPSHOT:\n{facts}\n\nOWNER'S MESSAGE:\n{text[:500]}"
     used: list[str] = []
+    challenged = False
+    rounds, done = MAX_TOOL_ROUNDS, 0
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    while done < rounds:
+        done += 1
         step = await llm_client.ask_json(
             system=system, user_text=convo, schema=_STEP_SCHEMA,
             model=llm_client.MODEL_SMART, max_tokens=700,
@@ -973,6 +1150,19 @@ async def _answer_manager_query(db: AsyncSession, text: str) -> str | None:
         tool = (step.get("tool") or "").strip()
         answer = (step.get("answer") or "").strip()
         if not tool:
+            if answer and not challenged and _unbacked_claim(answer, used):
+                # It just told the owner the books were updated while nothing
+                # was written. Make it either do it or admit it can't.
+                challenged = True
+                rounds += 1   # the challenge gets its own round, not a tool's
+                log.warning("manager_query_unbacked_claim", claim=answer[:160])
+                convo += (
+                    "\n\nSYSTEM: tumne kaha kaam ho gaya, lekin koi write tool "
+                    "nahi chala — database mein KUCH NAHI badla. Ya to abhi "
+                    "sahi tool chalao (add_expense / add_customer / assign_task), "
+                    "ya owner ko saaf bolo ki ye tum nahi kar sakte. Jhooth mat bolo."
+                )
+                continue
             if answer:
                 log.info("manager_query_answered", chars=len(answer), tools=used)
                 return answer

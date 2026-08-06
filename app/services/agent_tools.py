@@ -82,7 +82,23 @@ TOOL_SPECS = [
         "when": "owner asks what work is pending, kiska kaam baaki hai, kaun kya kar raha hai",
         "args": "open | done | staff naam (khali = sab open)",
     },
+    {
+        "name": "add_expense",
+        "when": "owner says money was SPENT ('100 ka petrol dala', 'bijli ka bill 2000 "
+                "diya', 'salary de di') — tum khud kharcha likhte ho, kisi ko bolna nahi hai",
+        "args": "amount | kis cheez ka (jaise '100 | petrol')",
+    },
+    {
+        "name": "add_customer",
+        "when": "owner says save/add a customer ('is number ko X ke naam se save kar do') "
+                "— tum khud database me daalte ho, ye kaam kisi staff ka nahi hai",
+        "args": "phone | naam",
+    },
 ]
+
+# Tools that CHANGE data. The assistant may only claim something is done if
+# one of these actually ran — see bill_agent's unbacked-claim check.
+WRITE_TOOLS = {"add_expense", "add_customer", "assign_task", "ping_staff"}
 
 
 def _tool_help() -> str:
@@ -533,8 +549,129 @@ async def _task_list(db: AsyncSession, args: str) -> str:
     return "\n".join(out)
 
 
+# The dashboard's own category list — an expense the agent writes must land
+# in the same buckets the Expenses page and the reports already chart.
+EXPENSE_CATEGORIES = (
+    "Detergent", "Electricity", "Rent", "Salary", "Transport", "Maintenance", "Other",
+)
+_CATEGORY_HINTS = (
+    ("Transport", ("petrol", "diesel", "fuel", "gaadi", "gadi", "bike", "scooty",
+                   "auto", "rickshaw", "tempo", "transport", "delivery", "van")),
+    ("Detergent", ("detergent", "surf", "soap", "sabun", "powder", "chemical",
+                   "starch", "bleach", "neel", "kharid")),
+    ("Electricity", ("bijli", "electric", "current", "light bill", "meter")),
+    ("Rent", ("rent", "kiraya", "kiraaya", "kiray")),
+    ("Salary", ("salary", "tankhwah", "tankhwa", "pagar", "wages", "majduri", "mazduri")),
+    ("Maintenance", ("repair", "marammat", "maintenance", "machine", "mistri",
+                     "service", "spare", "parts")),
+)
+
+
+def _guess_category(text: str) -> str:
+    low = text.lower()
+    for cat, words in _CATEGORY_HINTS:
+        if any(w in low for w in words):
+            return cat
+    return "Other"
+
+
+async def _add_expense(db: AsyncSession, args: str) -> str:
+    """Write a real expense row. args: 'amount | kis cheez ka'."""
+    import re as _re
+
+    head, _, rest = args.partition("|")
+    note = rest.strip() or head.strip()
+    # The amount field must BE an amount. Loosely grabbing the first digit it
+    # could find turned "time 11 se 6 settings me add kar do" into a ₹11
+    # expense — a junk row in the owner's books is worse than a refusal.
+    bare = _re.sub(r"(?i)\b(rs\.?|inr|rupa?ye?|rupees?)\b|[₹,]", "", head).strip()
+    if _re.fullmatch(r"\d+(?:\.\d+)?", bare):
+        amount = Decimal(bare)
+    else:
+        nums = set(_re.findall(r"\d+(?:\.\d+)?", args))
+        if len(nums) != 1:
+            return (
+                "Kitne rupaye ka kharcha hua? Format: add_expense('100 | petrol'). "
+                "Agar ye kharcha hai hi nahi to ye tool mat chalao."
+            )
+        amount = Decimal(nums.pop())
+    if amount <= 0:
+        return "Kharcha 0 se zyada hona chahiye."
+
+    cat = next(
+        (c for c in EXPENSE_CATEGORIES if c.lower() == note.lower().strip()),
+        _guess_category(note or args),
+    )
+    today = datetime.now(IST).date()
+    exp = Expense(
+        category=cat,
+        amount=amount,
+        spent_on=today,
+        description=note[:300] or None,
+    )
+    db.add(exp)
+    await db.commit()
+
+    month_total = (
+        await db.execute(
+            select(func.coalesce(func.sum(Expense.amount), 0)).where(
+                Expense.spent_on >= today.replace(day=1)
+            )
+        )
+    ).scalar_one()
+    log.info("agent_expense_added", amount=str(amount), category=cat)
+    return (
+        f"Kharcha likh diya: {_money_fmt(amount)} — {cat}"
+        + (f" ({note[:60]})" if note else "")
+        + f", {today.strftime('%d %b')}. Is mahine ka kul kharcha ab "
+        f"{_money_fmt(month_total)} hai."
+    )
+
+
+async def _add_customer(db: AsyncSession, args: str) -> str:
+    """Create (or name) a customer. args: 'phone | naam' — either order."""
+    parts = [p.strip() for p in args.split("|") if p.strip()]
+    phone_raw, name = "", ""
+    for p in parts:
+        digits = "".join(ch for ch in p if ch.isdigit())
+        if len(digits) >= 10 and not phone_raw:
+            phone_raw = digits
+        elif not name:
+            name = p
+    if not phone_raw:
+        return "Number chahiye. Format: add_customer('9984601311 | Rahul Shah')"
+
+    try:
+        phone = normalize_phone(phone_raw)
+    except ValueError:
+        return f"'{phone_raw}' sahi mobile number nahi lag raha."
+
+    existing = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if existing is not None:
+        if not name or (existing.name or "").lower() == name.lower():
+            return f"{existing.name or 'Ye number'} ({phone}) pehle se database mein hai."
+        was = existing.name
+        existing.name = name[:120]
+        await db.commit()
+        log.info("agent_customer_renamed", phone=phone, name=name)
+        return (
+            f"{phone} ka naam {name} save kar diya"
+            + (f" (pehle '{was}' tha)." if was else ".")
+        )
+
+    cust = Customer(phone=phone, name=(name[:120] or None))
+    db.add(cust)
+    await db.commit()
+    log.info("agent_customer_added", phone=phone, name=name)
+    return f"Naya customer save kar diya: {name or '(bina naam)'} — {phone}."
+
+
 _TOOLS = {
     "assign_task": _assign_task,
+    "add_expense": _add_expense,
+    "add_customer": _add_customer,
     "task_list": _task_list,
     "order_detail": _order_detail,
     "customer_detail": _customer_detail,

@@ -146,7 +146,8 @@ async def test_projection_and_cap(client) -> None:
         await _add(model="test-model")
         u = (await client.get("/admin/api/usage", headers=H)).json()
         assert u["daily_request_cap"] == 50
-        assert u["calls_left_today"] == 50 - u["today"]["calls"]
+        # never negative — a busy day past the cap reads "0 left", not "-3"
+        assert u["calls_left_today"] == max(50 - u["today"]["calls"], 0)
         assert u["projected_month_usd"] >= 0
     finally:
         async with async_session_factory() as db:
