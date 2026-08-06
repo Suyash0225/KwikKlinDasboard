@@ -765,6 +765,9 @@ select {
 .chip.on { box-shadow: none; }
 
 /* ---------- the bill editor: reads like a bill, not a form ---------- */
+/* garment names carry their service ("Shirt — ₹80" under Dry Clean), so the
+   bill modal gets more room than a plain confirm dialog needs */
+.modal:has(.billedit) { max-width: 640px; }
 .billedit {
   border: 1px solid var(--line); border-radius: 14px; padding: 14px;
   margin-top: 12px; background: var(--n50);
@@ -778,8 +781,12 @@ select {
   color: var(--n500); text-transform: uppercase; margin-bottom: 6px;
 }
 .bl.head span:nth-child(4) { text-align: right; }
-.bl input { height: 40px; }
+.bl input, .bl select { height: 40px; min-width: 0; }
 .bl .money { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+/* the kapda cell is either a rate-card select or a free-text box + a way back */
+.bl .kapdanew { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.bl .kapdanew input { flex: 1; }
+.bl .kapdanew .btn { padding: 0 12px; height: 40px; }
 .billtot {
   border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px;
 }
@@ -793,12 +800,13 @@ select {
     gap: 8px; background: var(--n0); border: 1px solid var(--line);
     border-radius: 12px; padding: 10px; margin-bottom: 10px;
   }
-  .bl > input:nth-of-type(1) { grid-area: item; }
-  .bl > input:nth-of-type(2) { grid-area: qty; }
-  .bl > input:nth-of-type(3) { grid-area: rate; }
+  /* by class, not position — the kapda cell is a select or a wrapper div,
+     so nth-of-type would silently hand its area to the qty box */
+  .bl > .kapda { grid-area: item; }
+  .bl > .k-qty { grid-area: qty; }
+  .bl > .k-rate { grid-area: rate; }
   .bl > .money { grid-area: amt; align-self: center; text-align: right; }
   .bl > .btn { grid-area: del; }
-}
 }
 
 /* ---------- inbox: one aligned height, calmer chrome ---------- */

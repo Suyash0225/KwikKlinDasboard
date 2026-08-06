@@ -620,20 +620,23 @@ function billByNumber(num) { return BILLS.find((b) => b.order_number === num); }
    total adding itself up — not a box you retype text into. */
 let EB = { num: "", lines: [] };
 
-function editBillModal(num) {
+async function editBillModal(num) {
   const o = billByNumber(num);
   if (!o) return;
+  await ensureRates();
   EB = {
     num,
     lines: (o.items || []).map((i) => ({
       item: i.type || i.garment || i.service || "",
+      service: i.service || "",
+      unit: i.unit || "pc",
       qty: Number(i.qty) || 1,
       rate: i.rate != null ? Number(i.rate) : "",
     })),
     paid: Number(o.amount_paid || 0),
     total: o.total_amount != null ? Number(o.total_amount) : null,
   };
-  if (!EB.lines.length) EB.lines.push({ item: "", qty: 1, rate: "" });
+  if (!EB.lines.length) EB.lines.push(ebBlank());
 
   openModal(`<h3>Bill — ${num}</h3>
     <p class="muted">${esc(o.customer_name || o.customer_phone)} · ${fmtDate(o.created_at)}</p>
@@ -673,6 +676,10 @@ function editBillModal(num) {
       .map((l) => {
         const row = { type: l.item.trim(), qty: Number(l.qty) || 1 };
         if (l.rate !== "" && l.rate != null) row.rate = Number(l.rate);
+        // keep what the rate card told us, so the receipt and the next
+        // edit still know which service this garment was billed under
+        if (l.service) row.service = l.service;
+        if (l.unit) row.unit = l.unit;
         return row;
       });
     if (!items.length) { $("eb-err").textContent = "Kam se kam ek kapda likhna hoga."; return; }
@@ -686,21 +693,82 @@ function editBillModal(num) {
   });
 }
 
+/* The kapda field is the rate card, not a typing box: pick the garment and
+   its price comes along. Two things must never be lost — an item that is
+   NOT on the card (old bill, one-off) stays selected as-is, and the last
+   option drops the row back to free text so a new kapda is always billable. */
+const ebBlank = () => ({ item: "", service: "", unit: "pc", qty: 1, rate: "" });
+const kapdaList = () => RATES.filter((r) => r.is_active && (r.garment || "").trim());
+
+async function ensureRates() {
+  // Bill history can be opened without ever visiting New bill
+  if (RATES.length) return;
+  try { RATES = await api("/admin/api/rates"); } catch (e) { RATES = []; }
+}
+
+function ebKapda(l, i) {
+  const list = kapdaList();
+  if (l.custom || !list.length) {
+    return `<div class="kapda kapdanew">
+      <input id="eb-item-${i}" value="${esc(l.item)}" placeholder="kapde ka naam"
+             oninput="EB.lines[${i}].item=this.value">
+      ${list.length ? `<button class="btn sm ghost" title="List se chuno" onclick="ebFromList(${i})">☰</button>` : ""}
+    </div>`;
+  }
+  const cur = (l.item || "").trim();
+  const hit = list.findIndex((r) =>
+    r.garment.toLowerCase() === cur.toLowerCase() && (!l.service || r.service === l.service));
+  let opts = `<option value=""${cur ? "" : " selected"}>Kapda chuno…</option>`;
+  if (cur && hit < 0) opts += `<option value="keep" selected>${esc(cur)}</option>`;
+  let svc = null;
+  list.forEach((r, n) => {
+    if (r.service !== svc) {
+      if (svc !== null) opts += "</optgroup>";
+      svc = r.service;
+      opts += `<optgroup label="${esc(svc)}">`;
+    }
+    opts += `<option value="${n}"${n === hit ? " selected" : ""}>${esc(r.garment)} — ₹${r.rate}${r.unit === "kg" ? "/kg" : ""}</option>`;
+  });
+  if (svc !== null) opts += "</optgroup>";
+  opts += `<option value="new">➕ Naya kapda — list me nahi hai</option>`;
+  return `<select class="kapda" onchange="ebPick(${i},this.value)">${opts}</select>`;
+}
+
+function ebPick(i, val) {
+  const l = EB.lines[i];
+  if (val === "keep") return;
+  if (val === "new") {
+    l.custom = true; l.item = ""; l.service = "";
+    // a price that came with the old garment is meaningless for a new one
+    if (l.fromCard) { l.rate = ""; l.fromCard = false; }
+    ebRender();
+    const box = $("eb-item-" + i); if (box) box.focus();
+    return;
+  }
+  if (val === "") { l.item = ""; l.service = ""; ebRender(); return; }
+  const r = kapdaList()[parseInt(val)];
+  if (!r) return;
+  l.item = r.garment; l.service = r.service; l.unit = r.unit;
+  l.rate = parseFloat(r.rate);   // card price, still editable in the Rate box
+  l.fromCard = true;
+  ebRender();
+}
+function ebFromList(i) { EB.lines[i].custom = false; ebRender(); }
+
 function ebRender() {
   $("eb-lines").innerHTML = EB.lines.map((l, i) => `
     <div class="bl">
-      <input value="${esc(l.item)}" placeholder="shirt / saree / blanket"
-             oninput="EB.lines[${i}].item=this.value">
-      <input type="number" min="0.1" step="0.5" value="${l.qty}"
+      ${ebKapda(l, i)}
+      <input class="k-qty" type="number" min="0.1" step="0.5" value="${l.qty}"
              oninput="EB.lines[${i}].qty=parseFloat(this.value)||0;ebCalc()">
-      <input type="number" min="0" step="1" value="${l.rate}" placeholder="—"
+      <input class="k-rate" type="number" min="0" step="1" value="${l.rate}" placeholder="—"
              oninput="EB.lines[${i}].rate=this.value===''?'':parseFloat(this.value)||0;ebCalc()">
       <span class="money" id="eb-amt-${i}">—</span>
       <button class="btn sm ghost" title="Hatao" onclick="ebDel(${i})">✕</button>
     </div>`).join("");
   ebCalc();
 }
-function ebAdd() { EB.lines.push({ item: "", qty: 1, rate: "" }); ebRender(); }
+function ebAdd() { EB.lines.push(ebBlank()); ebRender(); }
 function ebDel(i) { EB.lines.splice(i, 1); if (!EB.lines.length) ebAdd(); else ebRender(); }
 
 function ebCalc() {
