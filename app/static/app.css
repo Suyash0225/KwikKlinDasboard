@@ -846,6 +846,49 @@ label { font-size: 11.5px; color: var(--n600); font-weight: 600; }
 .modal h3 { font-size: 17px; letter-spacing: -.2px; }
 .modal .frm { gap: 14px; }
 
+/* ---------- activity: one event, one block ----------
+   Scanning the log means reading down a column of "what happened" — the
+   icon column keeps that column straight, the chips carry the details
+   that used to be a JSON blob. */
+.actday {
+  font-size: 11.5px; font-weight: 700; color: var(--n500);
+  margin: 18px 2px 8px; letter-spacing: .2px;
+}
+.actday:first-child { margin-top: 0; }
+.actrow {
+  display: flex; gap: 12px; align-items: flex-start;
+  background: var(--n0); border: 1px solid var(--line); border-radius: 14px;
+  padding: 12px 14px; margin-bottom: 8px;
+}
+.actrow.bad { border-color: #fecdca; background: #fffbfa; }
+.actico {
+  width: 34px; height: 34px; flex: 0 0 34px; border-radius: 10px;
+  background: var(--n50); border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+.actbody { flex: 1; min-width: 0; }
+/* time stays pinned top-right at every width — it must never be the thing
+   that wraps, or the column of times stops being scannable */
+.acthead { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; }
+.actwho { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.acthead .muted { font-size: 12px; }
+.acttime { flex: 0 0 auto; font-size: 12px; color: var(--n500); white-space: nowrap; }
+.actres { font-size: 13px; margin-top: 4px; line-height: 1.5; overflow-wrap: anywhere; }
+.actquote {
+  font-size: 12.5px; color: var(--n600); margin-top: 4px; padding-left: 10px;
+  border-left: 2px solid var(--line); font-style: italic; overflow-wrap: anywhere;
+}
+.actchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.actchip {
+  font-size: 11px; background: var(--n50); border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px 9px; color: var(--n700);
+}
+.actchip i { font-style: normal; color: var(--n500); margin-right: 5px; }
+.actchip.urgent { background: #fef3f2; border-color: #fecdca; color: #b42318; font-weight: 600; }
+@media (max-width: 640px) {
+  .actrow { padding: 11px 12px; gap: 10px; }
+}
+
 /* ---------- media inside chat bubbles ----------
    A raw <audio> control is ~54px tall and 300px wide — next to a two-line
    text bubble it looked like a different app. Size it to the conversation. */

@@ -76,12 +76,24 @@ const fmtDate = (iso) => {
   const d = new Date(iso);
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 };
-const fmtWhen = (iso) => {
+/* Clock only. A chat bubble under a "05 Aug" day header that also says
+   "05 Aug" tells you nothing — you want the time. */
+const fmtClock = (iso) =>
+  new Date(iso).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+const dayName = (iso) => {
   const d = new Date(iso), now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  return sameDay
-    ? d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+  const kal = new Date(now); kal.setDate(kal.getDate() - 1);
+  if (d.toDateString() === now.toDateString()) return "Aaj";
+  if (d.toDateString() === kal.toDateString()) return "Kal";
+  return "";
+};
+const fmtWhen = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const named = dayName(iso);
+  if (named === "Aaj") return fmtClock(iso);
+  if (named === "Kal") return "Kal";
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 };
 function toast(msg, err = false) {
   const t = document.createElement("div");
@@ -1588,19 +1600,100 @@ async function saveAgentSettings(btn) {
   });
 }
 
-/* ============================= activity ============================= */
+/* ============================= activity =============================
+   One event = one block. The log used to print raw JSON next to a raw
+   action name ({"code":"T-3","staff":"Taskram"}), which is a developer's
+   view of the shop. Same rows, told as sentences. */
+const ACT_META = {
+  new_bill: ["🧾", "Bill draft banaya"],
+  create_bill: ["🧾", "Bill bana"],
+  order_edited: ["✏️", "Bill edit hua"],
+  order_deleted: ["🗑", "Bill delete hua"],
+  customer_edited: ["✏️", "Customer edit hua"],
+  customer_deleted: ["🗑", "Customer delete hua"],
+  relay: ["📨", "Message pahunchaya"],
+  task_created: ["📋", "Kaam diya"],
+  task_completed: ["✅", "Kaam pura hua"],
+  pickup_task_created: ["🛺", "Pickup laga"],
+  status_update: ["🔄", "Status badla"],
+  delay_update: ["⏳", "Delivery aage badhi"],
+  assign_staff: ["👷", "Staff ko diya"],
+  done_command: ["✅", "Staff ne done bola"],
+  standup: ["📣", "Subah ka standup"],
+  payment_reminders: ["💰", "Payment reminder"],
+  delivery_nudges: ["🔔", "Delivery nudge"],
+  ai_reply: ["🤖", "Customer ko jawab"],
+  escalated: ["🔔", "Aapko bheja"],
+  complaint_escalated: ["😞", "Shikayat aayi"],
+  admin_fyi: ["ℹ️", "Aapko FYI"],
+  rating: ["⭐", "Rating mila"],
+  lead_created: ["🌱", "Nayi inquiry"],
+  hot_lead_digest: ["🌱", "Lead digest"],
+  campaign_sent: ["📢", "Campaign gaya"],
+  campaign_approved: ["👍", "Campaign approve hua"],
+  daily_social: ["📸", "Daily post"],
+  taught_via_whatsapp: ["🎓", "WhatsApp se sikhaya"],
+  training_doc_uploaded: ["📄", "Training file chadhi"],
+  message_format_edited: ["💬", "Message format badla"],
+  message_format_reset: ["↩️", "Message format reset"],
+  template_submitted: ["📑", "Template Meta ko bheja"],
+  agent_paused: ["⏸", "Agent roka"],
+  agent_resumed: ["▶️", "Agent chalu"],
+  tunnel_heal: ["🔧", "Tunnel theek kiya"],
+};
+// args worth showing as chips, in the order they read best
+const ACT_CHIPS = ["order", "order_number", "code", "staff", "staff_name", "relay_to",
+  "customer", "customer_name", "new_status", "new_date", "total", "rating",
+  "campaign", "theme", "key", "document", "name", "date", "open", "orders", "items"];
+
+function actMeta(action) {
+  return ACT_META[action] || ["🔹", action.replace(/_/g, " ")];
+}
+function actChips(args) {
+  if (!args || typeof args !== "object") return "";
+  const out = [];
+  for (const k of ACT_CHIPS) {
+    const v = args[k];
+    if (v === undefined || v === null || v === "" || typeof v === "object") continue;
+    out.push(`<span class="actchip"><i>${esc(k.replace(/_/g, " "))}</i>${esc(String(v)).slice(0, 40)}</span>`);
+  }
+  if (args.urgent === true) out.push('<span class="actchip urgent">urgent</span>');
+  return out.length ? `<div class="actchips">${out.join("")}</div>` : "";
+}
+
 async function loadActivity() {
   $("act-list").innerHTML = skeleton(6);
   try {
     const role = $("act-role").value;
     const rows = await api("/admin/api/activity" + (role ? `?role=${role}` : ""));
     if (!rows.length) { $("act-list").innerHTML = emptyBox("No agent activity yet.", "🤖"); return; }
-    $("act-list").innerHTML = rows.map((r) => `
-      <div class="sumrow" style="align-items:flex-start;border-bottom:1px solid var(--n100);padding:8px 0">
-        <span style="flex:1"><b>${esc(r.action)}</b> <span class="tag">${r.role}</span> ${r.actor ? `<span class="muted">${esc(r.actor)}</span>` : ""}
-          ${r.args ? `<div class="muted" style="font-size:11.5px">${esc(JSON.stringify(r.args)).slice(0, 160)}</div>` : ""}
-          ${r.result ? `<div style="font-size:12px">${esc(r.result).slice(0, 200)}</div>` : ""}</span>
-        <span class="muted" style="flex-shrink:0">${fmtWhen(r.at)}</span></div>`).join("");
+    let lastDay = "";
+    $("act-list").innerHTML = rows.map((r) => {
+      const [icon, label] = actMeta(r.action);
+      const a = r.args || {};
+      // the customer's own words matter more than any label we invent
+      const quote = a.text || a.question || a.relay_message || "";
+      let head = "";
+      const day = new Date(r.at).toDateString();
+      if (day !== lastDay) {
+        lastDay = day;
+        head = `<div class="actday">${dayName(r.at) || fmtDate(r.at)}</div>`;
+      }
+      return `${head}
+        <div class="actrow${r.ok === false ? " bad" : ""}">
+          <div class="actico">${icon}</div>
+          <div class="actbody">
+            <div class="acthead">
+              <span class="actwho"><b>${esc(label)}</b>
+                <span class="tag">${esc(r.role || "")}</span>
+                ${r.actor ? `<span class="muted">${esc(r.actor)}</span>` : ""}</span>
+              <span class="acttime">${fmtClock(r.at)}</span></div>
+            ${r.result ? `<div class="actres">${esc(String(r.result)).slice(0, 400)}</div>` : ""}
+            ${quote ? `<div class="actquote">${esc(String(quote)).slice(0, 220)}</div>` : ""}
+            ${actChips(a)}
+          </div>
+        </div>`;
+    }).join("");
   } catch (e) { $("act-list").innerHTML = errBox(e.message, "loadActivity"); }
 }
 
@@ -2118,8 +2211,7 @@ async function openThread(phone, silent = false, push = true) {
     const day = new Date(m.at).toDateString();
     if (day !== lastDay) {
       lastDay = day;
-      const today = new Date().toDateString() === day;
-      chip = `<div class="daychip">${today ? "today" : fmtDate(m.at)}</div>`;
+      chip = `<div class="daychip">${dayName(m.at) || fmtDate(m.at)}</div>`;
     }
     let body = esc(m.text || "");
     const raw = m.text || "";
@@ -2155,7 +2247,7 @@ async function openThread(phone, silent = false, push = true) {
       body = `<span class="tapped">👆 ${esc(btn[1])}</span>`;
     }
     return `${chip}<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${body}
-      <span class="bt">${fmtWhen(m.at)}${m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") : ""}</span></div>`;
+      <span class="bt">${fmtClock(m.at)}${m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") : ""}</span></div>`;
   }).join("") || emptyBox("Chat appears here", "💬");
   log.innerHTML = html;
   sessionStorage.setItem("kk_thread_" + phone, html);
