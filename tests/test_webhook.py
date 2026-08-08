@@ -172,7 +172,111 @@ async def test_staff_message_goes_to_staff_row_no_ack(client, sent) -> None:
     assert sent == [], "staff messages must not be acked"
 
 
+# --- who is this number? ---
+
+async def _inbound_from(client, text: str, profile: str | None, wamid: str):
+    msg = {
+        "id": wamid, "from": TEST_CUSTOMER_PHONE_RAW, "type": "text",
+        "text": {"body": text},
+    }
+    contacts = (
+        [{"wa_id": TEST_CUSTOMER_PHONE_RAW, "profile": {"name": profile}}]
+        if profile is not None else None
+    )
+    body = meta_payload(messages=[msg], contacts=contacts)
+    r = await client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
+    )
+    assert r.status_code == 200
+
+
+async def _customer():
+    async with async_session_factory() as s:
+        return (
+            await s.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one_or_none()
+
+
+async def test_unknown_number_is_named_from_its_whatsapp_profile(client, sent) -> None:
+    """Meta introduces the sender — no reason to store a bare number."""
+    await _inbound_from(client, "bhaiya kitna lagega?", "Sharma Ji", "wamid.TESTname1")
+    c = await _customer()
+    assert c is not None and c.name == "Sharma Ji"
+
+
+async def test_profile_name_fills_a_blank_but_never_overwrites(client, sent) -> None:
+    """The shop's own name for a customer always wins."""
+    await _inbound_from(client, "hello", None, "wamid.TESTname2")
+    assert (await _customer()).name is None
+
+    await _inbound_from(client, "hello again", "Whatsapp Naam", "wamid.TESTname3")
+    assert (await _customer()).name == "Whatsapp Naam", "khali jagah bharni chahiye"
+
+    async with async_session_factory() as s:
+        cust = (
+            await s.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one()
+        cust.name = "Dukaan Wala Naam"
+        await s.commit()
+    await _inbound_from(client, "aur ek", "Whatsapp Naam", "wamid.TESTname4")
+    assert (await _customer()).name == "Dukaan Wala Naam", "shop ka naam nahi badalna chahiye"
+
+
+async def test_a_number_is_not_a_name(client, sent) -> None:
+    """Plenty of people set their own number as their WhatsApp name."""
+    await _inbound_from(client, "hi", "+91 98765 43210", "wamid.TESTname5")
+    assert (await _customer()).name is None
+
+
 # --- statuses ---
+
+async def test_status_receipt_moves_the_ticks_forward_only(client, sent) -> None:
+    """✓ sent -> ✓✓ delivered -> blue ✓✓ read, and never backwards.
+
+    Meta can deliver these out of order; a 'delivered' arriving after 'read'
+    must not un-read the message in the Inbox.
+    """
+    from app.models import Customer, Direction
+
+    wamid = "wamid.TESTtick-1"
+    async with async_session_factory() as s:
+        cust = Customer(phone=TEST_CUSTOMER_PHONE, name="Tick Grahak")
+        s.add(cust)
+        await s.flush()
+        s.add(
+            Conversation(
+                customer_id=cust.id, direction=Direction.OUTBOUND,
+                message_text="aapka order taiyar hai", wa_message_id=wamid,
+                sent_by="bot", status="sent",
+            )
+        )
+        await s.commit()
+
+    async def _post(status: str) -> None:
+        body = meta_payload(
+            statuses=[{"id": wamid, "status": status, "recipient_id": TEST_CUSTOMER_PHONE_RAW}]
+        )
+        r = await client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
+        )
+        assert r.status_code == 200
+
+    async def _status() -> str:
+        async with async_session_factory() as s:
+            row = (
+                await s.execute(
+                    select(Conversation).where(Conversation.wa_message_id == wamid)
+                )
+            ).scalar_one()
+            return row.status
+
+    await _post("delivered")
+    assert await _status() == "delivered"
+    await _post("read")
+    assert await _status() == "read"
+    await _post("delivered")           # late duplicate
+    assert await _status() == "read", "read message must not go back to delivered"
+
 
 async def test_status_receipt_stores_nothing(client, sent) -> None:
     body = meta_payload(

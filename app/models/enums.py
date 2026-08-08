@@ -29,6 +29,10 @@ class OrderStatus(enum.Enum):
 class StaffRole(enum.Enum):
     WASHER = "WASHER"
     DELIVERY = "DELIVERY"
+    # The shop's owner/manager side. An ADMIN is not a worker: they get every
+    # escalation, every new order and every payment, and their WhatsApp
+    # messages carry manager powers.
+    ADMIN = "ADMIN"
 
 
 class PaymentStatus(enum.Enum):

@@ -72,9 +72,10 @@ async def test_pickup_task_asks_the_boy_and_tells_the_owner(boy, sent) -> None:
     assert num in to_boy[0]["text"]
     assert "Archana Sharma" in to_boy[0]["text"]
 
+    # he also gets a "naya order" FYI first — the pickup line is what matters
     to_owner = [c for c in sent if c["to"] == settings.MANAGER_PHONE]
     assert to_owner, "the owner is told it has been arranged"
-    assert task.code in to_owner[0]["text"]
+    assert any(task.code in c["text"] for c in to_owner)
 
 
 async def test_boys_answer_becomes_the_customers_promise(boy, sent) -> None:

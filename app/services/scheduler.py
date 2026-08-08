@@ -204,6 +204,14 @@ async def _hourly_tick() -> None:
         await run_task_followups()
     except Exception:
         log.exception("task_followups_failed")
+    # live customer conversations that went quiet: one warm, useful nudge
+    # while their window is open (engage.py decides who is actually due)
+    try:
+        from app.services.engage import run_conversation_followups
+
+        await run_conversation_followups()
+    except Exception:
+        log.exception("conversation_followups_failed")
     # 18:00 evening washer status round; 21:00 owner summary
     try:
         if now_ist.hour == 18:
@@ -310,6 +318,9 @@ async def run_follow_up_pings() -> int:
     from app.models import OrderStatusHistory
     from app.services.work_orders import send_work_order
 
+    from app.models import TASK_OPEN, Task
+    from app.services.tasks import JOB_KINDS
+
     now = datetime.now(timezone.utc)
     now_ist = datetime.now(IST)
     if _in_quiet_hours(now_ist):
@@ -317,7 +328,7 @@ async def run_follow_up_pings() -> int:
     window_key = now_ist.strftime("%Y-%m-%d-%H")
     sends = 0
     async with async_session_factory() as db:
-        for status, (stale_h, _role, question) in _PING_RULES.items():
+        for status, (stale_h, role, question) in _PING_RULES.items():
             rows = (
                 (await db.execute(select(Order).where(Order.status == status)))
                 .scalars()
@@ -351,11 +362,25 @@ async def run_follow_up_pings() -> int:
                                 await _unclaim(
                                     f"esc6h:{o.order_number}:{now_ist.strftime('%Y-%m-%d')}"
                                 )
+                # A live pickup/delivery task already has its own follow-up
+                # clock — two reminders for one job reads as spam.
+                job_open = (
+                    await db.execute(
+                        select(Task.id).where(
+                            Task.order_id == o.id,
+                            Task.kind.in_(JOB_KINDS),
+                            Task.status == TASK_OPEN,
+                        )
+                    )
+                ).first()
+                if job_open is not None:
+                    continue
                 if not await _claim(f"ping:{o.order_number}:{window_key}"):
                     continue
                 outcome = await send_work_order(
                     db, o, headline=f"⏰ Reminder: {question}",
                     extra="Ho gaya to reply karein: done " + o.order_number,
+                    role=role,
                 )
                 if outcome in ("sent", "sent_template"):
                     sends += 1
@@ -494,8 +519,17 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
     today_key = now_ist.strftime("%Y-%m-%d")
     sends = 0
     async with async_session_factory() as db:
+        # Workers only — the owner gets the day summary, not a work list.
+        from app.models import StaffRole
+
         staff_rows = (
-            (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
+            (
+                await db.execute(
+                    select(Staff).where(Staff.is_active, Staff.role != StaffRole.ADMIN)
+                )
+            )
+            .scalars()
+            .all()
         )
         default_phone = await app_settings.get(db, "default_washer_phone")
         for st in staff_rows:

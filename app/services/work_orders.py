@@ -27,8 +27,21 @@ def items_summary(order: Order) -> str:
     return ", ".join(parts) or "items dashboard par"
 
 
-async def resolve_worker(db: AsyncSession, order: Order) -> Staff | None:
-    """Assigned washer, else the default washer from Settings."""
+async def resolve_worker(db: AsyncSession, order: Order, role: str = "WASHER") -> Staff | None:
+    """Who this instruction belongs to.
+
+    role="DELIVERY" -> the assigned delivery boy, else the shop's delivery
+    person. Pickup and delivery reminders used to land on the WASHER, so the
+    boy who actually goes out never heard them.
+    """
+    if role == "DELIVERY":
+        if order.assigned_delivery_id:
+            st = await db.get(Staff, order.assigned_delivery_id)
+            if st:
+                return st
+        from app.services import team
+
+        return await team.delivery_staff(db)
     if order.assigned_washer_id:
         st = await db.get(Staff, order.assigned_washer_id)
         if st:
@@ -42,14 +55,14 @@ async def resolve_worker(db: AsyncSession, order: Order) -> Staff | None:
 
 
 async def send_work_order(
-    db: AsyncSession, order: Order, *, headline: str, extra: str = ""
+    db: AsyncSession, order: Order, *, headline: str, extra: str = "", role: str = "WASHER"
 ) -> str:
     """Send a complete work order to the responsible staff member.
 
     Returns 'sent' | 'sent_template' | 'no_staff' | 'failed' — caller
     reports it honestly to the admin. Never raises.
     """
-    staff = await resolve_worker(db, order)
+    staff = await resolve_worker(db, order, role)
     if staff is None:
         log.warning("work_order_no_staff", order_number=order.order_number)
         return "no_staff"

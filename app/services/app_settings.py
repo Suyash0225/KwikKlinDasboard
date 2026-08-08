@@ -81,6 +81,24 @@ DEFAULTS: dict[str, Any] = {
     "google_review_link_2": "",  # doosri listing — customers me rotate hota hai
     "tone": "friendly",               # formal | professional | friendly | casual
     "emoji_level": "minimal",         # off | minimal | expressive
+    # --- live-conversation follow-ups (app/services/engage.py) ---
+    # A customer wrote, the thread went quiet, no order came of it: nudge
+    # them warmly while their 24h window is still open. Capped on purpose —
+    # pinging a silent person all day earns blocks, and blocks kill the
+    # WhatsApp number. Set engage_max_followups to 0 to switch it off.
+    "engage_followups_enabled": True,
+    "engage_gap_hours": 6,            # min hours of silence before a nudge
+    "engage_max_followups": 2,        # per conversation, resets when they reply
+    # --- kis dukaan ka deployment hai ---
+    # Ek instance ek shop ka data rakhta hai. Sirf ISI tenant ke users ko
+    # /admin dashboard ka data milta hai; baaki (naye signup) ko welcome page.
+    # Khali = sabse purana tenant home maana jayega.
+    "home_tenant_slug": "",
+    # Public URL sthir hai (Tailscale Funnel / apna domain / VM)?
+    # True hone par tunnel-guard cloudflare tunnel banana BAND kar deta hai —
+    # warna wo har blip par naya trycloudflare URL bana kar aapka sthir URL
+    # overwrite kar deta, aur Meta ka webhook bhi wahin mod deta.
+    "public_url_fixed": False,
 }
 
 

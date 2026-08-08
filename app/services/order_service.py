@@ -203,7 +203,33 @@ async def create_order(
         due=due_s,
         date=date_s,
     )
+
+    # The owner side hears about every new order without asking — unless he
+    # is the one who just booked it (no point echoing his own message back).
+    try:
+        await _notify_admins_fyi(
+            db, created_by,
+            f"🧾 Naya order {order_number} — {customer.name or phone}\n"
+            f"{items_text[:120]}\nBill ₹{total_s}"
+            + (f", advance ₹{advance_s}" if advance_amt else "")
+            + f"\nDelivery: {date_s} · banaya: {created_by}",
+        )
+    except Exception:
+        log.exception("order_admin_fyi_failed", order_number=order_number)
     return order
+
+
+# Actors that ARE the owner side — telling them what they just did is noise.
+_OWNER_ACTORS = {"manager", "dashboard", "admin"}
+
+
+async def _notify_admins_fyi(db: AsyncSession, actor: str, text: str) -> None:
+    """FYI to the admins, skipped when the admin himself did it."""
+    if (actor or "").strip().lower() in _OWNER_ACTORS:
+        return
+    from app.services import team
+
+    await team.notify_admins(db, text)
 
 
 async def update_status(
@@ -277,6 +303,17 @@ async def update_status(
         new=new_status.name,
         changed_by=changed_by,
     )
+
+    # Kapde taiyar = ab delivery ka sawaal. Owner's rule (06 Aug): delivery
+    # boy se turant pucho "kab tak?", jawab DB mein rakho, owner ko batao.
+    # Best-effort: a hiccup here must never undo a committed status change.
+    if new_status is OrderStatus.READY:
+        try:
+            from app.services.tasks import create_delivery_task
+
+            await create_delivery_task(db, order)
+        except Exception:
+            log.exception("delivery_task_hook_failed", order_number=order.order_number)
 
     if new_status is OrderStatus.PICKED_UP:
         await _notify_customer(
@@ -400,6 +437,19 @@ async def record_payment(
         method=method.name,
         payment_status=order.payment_status.name,
     )
+
+    # Paisa aaya — owner ko turant pata chale (jab tak usne khud na likha ho).
+    due = (order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0"))
+    try:
+        await _notify_admins_fyi(
+            db, recorded_by,
+            f"💰 {order.order_number} — ₹{amount} {method.name} mila"
+            + (f" ({note[:60]})" if note else "")
+            + f".\nAb tak ₹{order.amount_paid or 0}, baaki ₹{max(due, Decimal('0'))} "
+            f"({order.payment_status.name}) · likha: {recorded_by}",
+        )
+    except Exception:
+        log.exception("payment_admin_fyi_failed", order_number=order.order_number)
     return order
 
 

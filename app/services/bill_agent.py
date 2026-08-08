@@ -1289,8 +1289,14 @@ async def _manager_facts(db: AsyncSession) -> str:
 
     # STAFF CHAT: last exchange per staff member, so "Superman ne jawab
     # diya?" has a real answer instead of a dashboard deflection.
+    # Workers only: the owner asking "kisne kya bola" means his staff, not
+    # his own thread with the agent.
+    from app.models import StaffRole
+
     staff_rows = (
-        await db.execute(select(Staff).where(Staff.is_active))
+        await db.execute(
+            select(Staff).where(Staff.is_active, Staff.role != StaffRole.ADMIN)
+        )
     ).scalars().all()
     if staff_rows:
         lines.append("STAFF CHAT (aakhri messages, IST time ke saath):")
@@ -1327,8 +1333,9 @@ ORDER_NUMBER_RE = re.compile(r"\bKK-\d{8}-\d{2,}\b", re.IGNORECASE)
 
 
 # Their tap comes back as "[button:✅ Haan, ho gaya]"; DotPe sends the id.
-_PICKUP_YES_RE = re.compile(r"pickup_yes|haan,?\s*ho\s*gaya", re.I)
-_PICKUP_NO_RE = re.compile(r"pickup_no|abhi\s*nahi", re.I)
+# Same buttons serve pickup AND delivery ("ho gaya" / "ho gayi").
+_PICKUP_YES_RE = re.compile(r"pickup_yes|job_yes|haan,?\s*ho\s*ga(ya|yi)", re.I)
+_PICKUP_NO_RE = re.compile(r"pickup_no|job_no|abhi\s*nahi", re.I)
 # a plain "kal 11 baje" / "sham tak" is an ETA, not chatter
 _ETA_HINT_RE = re.compile(
     r"\b(sham|shaam|subah|dopahar|raat|kal|parso|aaj|abhi|ghante|ghanta|min|baje|"
@@ -1428,15 +1435,34 @@ async def _apply_relay(db: AsyncSession, sender_label: str, extracted: dict) -> 
 
             urgent = bool(_URGENT_RE.search(message))
             order = await _order_in_text(db, f"{message} {extracted.get('order_number', '')}")
+            if order is None and extracted.get("customer_name"):
+                # "Shaurya ka aaj urgent chahiye, Ajit ko bol do" — no order
+                # number typed, so find it the same way every other command does
+                order, _err = await _find_order_flex(db, extracted)
             task = await task_service.create_task(
                 db, title=message, staff=matches[0], order=order,
                 urgent=urgent, created_by=sender_label,
             )
+            # "urgent" must land in the DATA too, not only in a WhatsApp
+            # message — otherwise the dashboard and the morning standup
+            # still show it as an ordinary order.
+            note = ""
+            if order is not None and urgent and order.priority != "urgent":
+                order.priority = "urgent"
+                stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+                line = f"[{stamp} {sender_label}] URGENT: {message}"
+                order.notes = f"{order.notes}\n{line}" if order.notes else line
+                await db.commit()
+                note = f"\n🔴 {order.order_number} ko URGENT mark kar diya."
+                log.info(
+                    "relay_marked_order_urgent",
+                    order_number=order.order_number, by=sender_label,
+                )
             # last_ping_at is only stamped when the message actually went out
             key = "task_assigned" if task.last_ping_at else "task_assigned_undelivered"
             return get_message(
                 key, name=matches[0].name, code=task.code, message=message
-            )
+            ) + note
         elif sender_label == "manager":
             # Only the ADMIN may message customers through the bot.
             cust_matches = (

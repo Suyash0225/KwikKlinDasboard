@@ -93,6 +93,24 @@ class Settings(BaseSettings):
     FOLLOWUP_DAYS: int = Field(default=14, ge=1, le=365)
 
     # --- Runtime ---
+    # --- Selling the software (Razorpay) ---
+    # Khali chhodne par billing OFF rehta hai: signup phir bhi chalta hai,
+    # tenant trial mein baith jaata hai. Isse local dev bina keys ke chalta hai.
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+    # Razorpay dashboard mein webhook banate waqt jo secret set karo, wahi.
+    RAZORPAY_WEBHOOK_SECRET: str = ""
+    # Public URL jahan checkout/callback wapas aayega (tunnel ya domain).
+    APP_BASE_URL: str = "http://127.0.0.1:8000"
+
+    # --- Google se login ---
+    # Google Cloud Console -> APIs & Services -> Credentials -> OAuth client ID
+    # (type: Web application). Redirect URI wahan EXACTLY ye daalein:
+    #   <APP_BASE_URL>/api/auth/google/callback
+    # Khali chhodne par Google button page par dikhta hi nahi.
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+
     ENVIRONMENT: Literal["development", "production"] = "development"
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 

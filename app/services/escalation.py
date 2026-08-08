@@ -2,7 +2,7 @@
 
 raise_escalation() NEVER raises — an escalation failure must not break the
 webhook or an in-flight reply. The DB row is the source of truth; the
-WhatsApp alerts to manager (+ optional CC, Ravi) are best-effort.
+WhatsApp alerts are best-effort and go to the whole team (see team.py).
 """
 
 import uuid
@@ -10,7 +10,6 @@ import uuid
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.models import Customer, Escalation
 from app.services.messages import get_message
 from app.services.whatsapp import SendError, WindowClosedError, send_message
@@ -61,7 +60,14 @@ async def raise_escalation(
         phone=customer.phone if customer else "-",
         question=question[:300],
     )
-    for to_phone in (settings.MANAGER_PHONE, settings.ESCALATION_CC_PHONE):
+    # Owner's rule (06 Aug): a customer problem goes to the WHOLE team —
+    # the admins and every active staff member — not just two numbers in
+    # .env. Whoever is free answers first; nobody can say "mujhe pata nahi".
+    from app.services import team
+
+    recipients = await team.alert_recipients(db)
+    log.info("escalation_alert_fanout", count=len(recipients))
+    for to_phone, _name in recipients:
         if not to_phone:
             continue
         try:

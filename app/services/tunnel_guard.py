@@ -29,11 +29,20 @@ _DETACHED = 0x00000008 | 0x00000200
 
 
 async def check_and_heal() -> str:
-    """'ok' | new public URL | 'failed' | 'no_cloudflared'."""
+    """'ok' | new public URL | 'failed' | 'no_cloudflared' | 'down_fixed'."""
     async with async_session_factory() as db:
         base = (await app_settings.get(db, "public_base_url") or "").rstrip("/")
+        fixed = bool(await app_settings.get(db, "public_url_fixed"))
     if base and await _alive(base):
         return "ok"
+
+    # Sthir URL (Tailscale Funnel / domain / VM): yahan cloudflare tunnel
+    # banana sabse bada nuksan hoga — wo aapka URL badal dega aur Meta ka
+    # webhook bhi apni taraf mod lega. Sirf batao, chhedo mat.
+    if fixed:
+        log.error("public_url_down_but_fixed", url=base or None)
+        await _tell_owner_fixed_down(base)
+        return "down_fixed"
 
     log.warning("tunnel_dead_healing", old=base or None)
     if not shutil.which("cloudflared"):
@@ -126,6 +135,37 @@ async def _update_meta_webhook(url: str) -> bool:
             log.exception("meta_webhook_update_failed", )
         await asyncio.sleep(8)
     return False
+
+
+async def _tell_owner_fixed_down(url: str) -> None:
+    """Sthir URL neeche hai. Ghante mein ek baar batao — har 10 min nahi,
+    warna ye khud ek spam ban jayega."""
+    global _LAST_DOWN_ALERT
+
+    now = time.monotonic()
+    if now - _LAST_DOWN_ALERT < 3600:
+        return
+    _LAST_DOWN_ALERT = now
+    try:
+        from app.services.whatsapp import SendError, send_message
+
+        async with async_session_factory() as db:
+            await send_message(
+                db, to_phone=settings.MANAGER_PHONE,
+                text=(
+                    f"⚠️ Public URL jawab nahi de raha:\n{url or '(set nahi)'}\n\n"
+                    "Laptop/Tailscale chalu hai? Tab tak WhatsApp ke message "
+                    "andar nahi aayenge. (Maine khud kuch nahi badla — URL "
+                    "fixed mark kiya hua hai.)"
+                ),
+            )
+    except SendError:
+        log.info("fixed_down_notify_skipped")
+    except Exception:
+        log.exception("fixed_down_notify_failed")
+
+
+_LAST_DOWN_ALERT = 0.0
 
 
 async def _tell_owner(url: str, meta_ok: bool) -> None:

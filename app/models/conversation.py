@@ -51,6 +51,16 @@ class Conversation(Base):
     # NULL on inbound rows (sender is the participant) and on old rows.
     sent_by: Mapped[str | None] = mapped_column(String(40))
 
+    # Delivery state of an OUTBOUND message, straight from Meta's status
+    # webhook: sent -> delivered -> read (or failed). This is what the
+    # Inbox's ✓ / ✓✓ / blue ✓✓ means — before it existed the UI drew a blue
+    # double tick on everything, which claimed messages were read that were
+    # never even delivered. NULL on inbound and on rows sent before this.
+    status: Mapped[str | None] = mapped_column(String(12))
+
+    # wamid of the message this one quotes (WhatsApp reply). NULL = not a reply.
+    reply_to_wamid: Mapped[str | None] = mapped_column(String(120))
+
     # Filled by Phase 4 (intent classification). Plain string, not an enum,
     # so adding new intents never needs a migration.
     intent: Mapped[str | None] = mapped_column(String(50))

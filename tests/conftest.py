@@ -48,6 +48,8 @@ async def purge_phones(*phones: str) -> None:
             f"DELETE FROM coupon_redemptions WHERE customer_id IN {sub}",
             f"DELETE FROM campaign_recipients WHERE customer_id IN {sub}",
             f"DELETE FROM open_questions WHERE customer_id IN {sub}",
+            # pickup/delivery tasks point at orders — they must go first
+            f"DELETE FROM tasks WHERE order_id IN {orders_sub}",
             f"DELETE FROM escalations WHERE customer_id IN {sub}",
             f"DELETE FROM conversations WHERE customer_id IN {sub}",
             f"DELETE FROM orders WHERE customer_id IN {sub}",
@@ -65,8 +67,16 @@ def sign_body(body: bytes) -> str:
     return f"sha256={digest}"
 
 
-def meta_payload(messages: list | None = None, statuses: list | None = None) -> bytes:
-    """Build a Meta webhook body in their entry/changes/value shape."""
+def meta_payload(
+    messages: list | None = None,
+    statuses: list | None = None,
+    contacts: list | None = None,
+) -> bytes:
+    """Build a Meta webhook body in their entry/changes/value shape.
+
+    contacts carries the sender's WhatsApp profile name, exactly as Meta
+    sends it: [{"wa_id": "9199...", "profile": {"name": "Sharma Ji"}}].
+    """
     value: dict = {
         "messaging_product": "whatsapp",
         "metadata": {"phone_number_id": settings.WHATSAPP_PHONE_NUMBER_ID},
@@ -75,6 +85,8 @@ def meta_payload(messages: list | None = None, statuses: list | None = None) -> 
         value["messages"] = messages
     if statuses:
         value["statuses"] = statuses
+    if contacts:
+        value["contacts"] = contacts
     return json.dumps(
         {
             "object": "whatsapp_business_account",
@@ -130,6 +142,7 @@ def sent(monkeypatch) -> list[dict]:
     import app.services.bill_agent as bill_agent_module
     import app.services.escalation as escalation_module
     import app.services.tasks as tasks_module
+    import app.services.team as team_module
     import app.services.whatsapp as whatsapp_module
     import app.services.work_orders as work_orders_module
 
@@ -139,6 +152,8 @@ def sent(monkeypatch) -> list[dict]:
     monkeypatch.setattr(escalation_module, "send_message", fake_send)
     monkeypatch.setattr(bill_agent_module, "send_message", fake_send)
     monkeypatch.setattr(tasks_module, "send_message", fake_send)
+    # every "owner ko bata do" goes through team.notify_admins
+    monkeypatch.setattr(team_module, "send_message", fake_send)
     del whatsapp_module  # the real door stays intact — see _no_live_whatsapp
     return calls
 
@@ -152,10 +167,15 @@ def _no_live_whatsapp(monkeypatch):
     keeps all of that running while making a real API call impossible.
     Tests that patch _post_with_retry themselves still win (applied later).
     """
+    import uuid as _uuid
+
     import app.services.whatsapp as whatsapp_module
 
+    # Meta hands out a UNIQUE id per message; returning a constant made the
+    # second send collide on uq_conversations_wa_message_id. Unique across
+    # the whole run, not just one test — rows outlive the test that made them.
     async def _blocked(payload, to_phone):
-        return {"messages": [{"id": "wamid.TESTBLOCKED"}]}
+        return {"messages": [{"id": f"wamid.TESTBLOCKED{_uuid.uuid4().hex[:12]}"}]}
 
     monkeypatch.setattr(whatsapp_module, "_post_with_retry", _blocked)
 

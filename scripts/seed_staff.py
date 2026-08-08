@@ -3,13 +3,18 @@
 Run:
     .venv\\Scripts\\python.exe -m scripts.seed_staff
 
-Staff facts (decided 2026-08-01 with the owner):
+Staff facts (decided 2026-08-01, updated 2026-08-06 with the owner):
+- Suyash (+918933871103) — ADMIN, the owner. Same number as MANAGER_PHONE,
+  but he is a PERSON in the system too: the agent reports every order,
+  payment and problem to him, and his WhatsApp messages carry manager
+  powers (see app/services/team.py).
 - Ravi  (+918707093136) — title "Assistant Manager". In bot terms his role is
   WASHER: he runs the wash/dry/iron workflow, gets the daily 10:00 check-in,
-  and answers order-status questions. He ALSO receives escalation CCs —
-  that part is Phase 3 logic, not a column here.
-- Ajit  (+919336393612) — DELIVERY. The bot addresses him as "Superman"
-  (owner's instruction), so that is his stored name.
+  and answers order-status questions.
+- Ajit  (+919336393612) — DELIVERY. Every pickup and every delivery is asked
+  of him by name; his answer ("sham tak") is stored on the task.
+
+All three receive customer escalations (owner's rule, 06 Aug).
 """
 
 import asyncio
@@ -26,8 +31,9 @@ configure_logging()
 log = structlog.get_logger()
 
 STAFF: list[dict[str, str | StaffRole]] = [
+    {"phone": "8933871103", "name": "Suyash", "role": StaffRole.ADMIN},
     {"phone": "8707093136", "name": "Ravi", "role": StaffRole.WASHER},
-    {"phone": "9336393612", "name": "Superman", "role": StaffRole.DELIVERY},
+    {"phone": "9336393612", "name": "Ajit", "role": StaffRole.DELIVERY},
 ]
 
 

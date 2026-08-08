@@ -37,13 +37,21 @@ async def _cleanup():
 
 
 # --- notification policy ---
+# These tests are about what the CUSTOMER hears. Internal traffic (the
+# owner's FYI, the delivery boy's "kab tak?") is asserted in test_team.py,
+# so filter to this phone instead of counting every message that went out.
+
+
+def _to_customer(sent) -> list[dict]:
+    return [c for c in sent if c["to"] == PHONE]
+
 
 async def test_create_order_notifies_confirmation(sent) -> None:
     async with async_session_factory() as db:
         order = await create_order(db, customer_phone=PHONE, items=ITEMS, created_by="test")
-    assert len(sent) == 1
-    assert sent[0]["to"] == PHONE
-    assert order.order_number in sent[0]["text"]
+    mine = _to_customer(sent)
+    assert len(mine) == 1
+    assert order.order_number in mine[0]["text"]
 
 
 async def test_milestones_notify_but_wash_stages_silent(sent) -> None:
@@ -54,15 +62,17 @@ async def test_milestones_notify_but_wash_stages_silent(sent) -> None:
         await update_status(db, order, S.IN_WASH, changed_by="test")
         await update_status(db, order, S.IN_DRY, changed_by="test")
         await update_status(db, order, S.IN_IRON, changed_by="test")
-        assert sent == [], "wash/dry/iron must be silent"
+        assert _to_customer(sent) == [], "wash/dry/iron must be silent"
 
         await update_status(db, order, S.READY, changed_by="test")
-        assert len(sent) == 1 and "taiyar" in sent[0]["text"]
+        mine = _to_customer(sent)
+        assert len(mine) == 1 and "taiyar" in mine[0]["text"]
 
         await update_status(db, order, S.OUT_FOR_DELIVERY, changed_by="test")
         await update_status(db, order, S.DELIVERED, changed_by="test")
-        assert len(sent) == 3
-        assert "Dhanyawad" in sent[-1]["text"]
+        mine = _to_customer(sent)
+        assert len(mine) == 3
+        assert "Dhanyawad" in mine[-1]["text"]
 
 
 async def test_create_notification_has_bill_details(sent) -> None:
@@ -73,8 +83,9 @@ async def test_create_notification_has_bill_details(sent) -> None:
             db, customer_phone=PHONE, items=ITEMS, created_by="test",
             total_amount=Decimal("350"), advance_hint=Decimal("100"),
         )
-    assert len(sent) == 1
-    text = sent[0]["text"]
+    mine = _to_customer(sent)
+    assert len(mine) == 1
+    text = mine[0]["text"]
     assert "350" in text and "100" in text and "250" in text  # total/advance/due
 
 

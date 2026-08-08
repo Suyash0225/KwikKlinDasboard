@@ -92,6 +92,18 @@ class WindowClosedError(SendError):
     """Free-form send attempted outside the 24h window. Use a template."""
 
 
+def _template_log(name: str, params: list[str] | None) -> str:
+    """What we store for a template send, so the Inbox stays readable.
+
+    "[template:kk_staff_alert]" on its own told the owner nothing — the
+    PARAMS are the message (Meta fills them on delivery), so they belong in
+    the log line too. The dashboard substitutes them back into the approved
+    body; the marker keeps the 'Template' badge working.
+    """
+    joined = " | ".join((p or "").strip() for p in (params or []))
+    return f"[template:{name}] {joined}".strip()
+
+
 async def send_message(
     db: AsyncSession,
     *,
@@ -102,6 +114,7 @@ async def send_message(
     template_params: list[str] | None = None,
     sent_by: str = "bot",
     enqueue_on_fail: bool = True,
+    reply_to: str | None = None,
 ) -> str:
     """Send one WhatsApp message. Returns Meta's wa_message_id.
 
@@ -109,6 +122,9 @@ async def send_message(
       text                      -> free-form text        (window required)
       text + buttons            -> interactive buttons    (window required)
       template_name [+ params]  -> template               (always allowed)
+
+    reply_to: a wamid to quote, so the recipient sees which message this
+    answers — the same as swiping to reply in WhatsApp.
 
     Raises WindowClosedError / SendError. Never returns silently on failure.
     """
@@ -164,7 +180,7 @@ async def send_message(
                     TEMPLATES[template_name]["language"],
                     template_params,
                 )
-                logged_text = f"[template:{template_name}]"
+                logged_text = _template_log(template_name, template_params)
             else:
                 assert text is not None
                 wa_message_id = await dotpe.send_text(to_phone, text)
@@ -172,15 +188,20 @@ async def send_message(
         except dotpe.DotpeError as exc:
             raise SendError(str(exc)) from exc
         log.info("whatsapp_sent", to=to_phone, provider="dotpe", wa_message_id=wa_message_id)
-        await _record_outbound(db, customer, staff, logged_text, wa_message_id, to_phone, sent_by)
+        await _record_outbound(
+        db, customer, staff, logged_text, wa_message_id, to_phone, sent_by, reply_to
+    )
         return wa_message_id
 
     # --- build payload (Meta direct) ---
     payload: dict = {"messaging_product": "whatsapp", "to": to_phone.lstrip("+")}
+    if reply_to:
+        # Meta shows this message quoting the one being answered.
+        payload["context"] = {"message_id": reply_to}
     if template_name:
         payload["type"] = "template"
         payload["template"] = build_template(template_name, template_params)
-        logged_text = f"[template:{template_name}]"
+        logged_text = _template_log(template_name, template_params)
     elif buttons:
         payload["type"] = "interactive"
         payload["interactive"] = {
@@ -224,7 +245,9 @@ async def send_message(
         wa_message_id=wa_message_id,
     )
 
-    await _record_outbound(db, customer, staff, logged_text, wa_message_id, to_phone, sent_by)
+    await _record_outbound(
+        db, customer, staff, logged_text, wa_message_id, to_phone, sent_by, reply_to
+    )
     return wa_message_id
 
 
@@ -236,8 +259,13 @@ async def _record_outbound(
     wa_message_id: str,
     to_phone: str,
     sent_by: str,
+    reply_to: str | None = None,
 ) -> None:
-    """Record an outbound message in conversations (needs a participant row)."""
+    """Record an outbound message in conversations (needs a participant row).
+
+    status starts at "sent" — Meta's status webhook moves it to delivered
+    and read, which is what the Inbox ticks show.
+    """
     if customer or staff:
         db.add(
             Conversation(
@@ -247,6 +275,8 @@ async def _record_outbound(
                 message_text=logged_text,
                 wa_message_id=wa_message_id,
                 sent_by=sent_by,
+                status="sent",
+                reply_to_wamid=reply_to,
             )
         )
         await db.commit()

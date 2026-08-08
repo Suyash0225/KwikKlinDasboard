@@ -374,14 +374,27 @@ async def _process_payload(payload: dict, db: AsyncSession) -> None:
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
             value = change.get("value", {})
+            # Meta names the sender for us: every inbound batch carries the
+            # WhatsApp profile name next to the number. Without this an
+            # unknown number stayed "+9198..." forever and the owner had to
+            # ask "aap kaun?" to a person WhatsApp had already introduced.
+            profiles = {
+                str(c.get("wa_id") or ""): ((c.get("profile") or {}).get("name") or "")
+                for c in value.get("contacts", []) or []
+            }
             for msg in value.get("messages", []):
-                await _handle_inbound_message(msg, db)
+                await _handle_inbound_message(
+                    msg, db, profile_name=profiles.get(str(msg.get("from") or ""), "")
+                )
             for status in value.get("statuses", []):
                 log.info(
                     "whatsapp_status",
                     wa_message_id=status.get("id"),
                     status=status.get("status"),
                     recipient=status.get("recipient_id"),
+                )
+                await _record_delivery_status(
+                    db, status.get("id", ""), status.get("status", "")
                 )
                 # campaign delivered/read tracking — never breaks the webhook
                 try:
@@ -394,8 +407,58 @@ async def _process_payload(payload: dict, db: AsyncSession) -> None:
                     log.exception("campaign_status_track_failed")
 
 
-async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
-    """Store one inbound message; open the sender's 24h window."""
+# WhatsApp's ladder. A status may arrive out of order (read before
+# delivered on a fast phone) — never walk a message backwards.
+_STATUS_RANK = {"sent": 1, "delivered": 2, "read": 3, "failed": 4}
+
+
+async def _record_delivery_status(db: AsyncSession, wamid: str, status: str) -> None:
+    """Move an outbound message's tick forward. Never breaks the webhook."""
+    status = (status or "").strip().lower()
+    if not wamid or status not in _STATUS_RANK:
+        return
+    try:
+        row = (
+            await db.execute(
+                select(Conversation).where(Conversation.wa_message_id == wamid)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return  # a campaign send or an old row — nothing to tick
+        if _STATUS_RANK.get(row.status or "", 0) >= _STATUS_RANK[status]:
+            return
+        row.status = status
+        await db.commit()
+    except Exception:
+        log.exception("delivery_status_record_failed", wa_message_id=wamid)
+
+
+# A WhatsApp profile name is whatever the person typed for themselves —
+# emojis, shop slogans, an empty string. Keep it human and bounded, and
+# never accept something that is just their own number back.
+def _clean_profile_name(raw: str) -> str:
+    """Make a WhatsApp display name safe to store, or "" if it is useless.
+
+    People put emojis, shop slogans or their own number in that field.
+    Strip the invisible junk, cap the length, and refuse a 'name' that is
+    just digits — saving a number as a name helps nobody.
+    """
+    name = "".join(ch for ch in str(raw or "") if ch.isprintable())
+    name = " ".join(name.split())[:120]
+    if len(re.sub(r"\D", "", name)) >= 8 and not re.search(r"[^\W\d_]", name):
+        return ""
+    return name
+
+
+async def _handle_inbound_message(
+    msg: dict, db: AsyncSession, profile_name: str = ""
+) -> None:
+    """Store one inbound message; open the sender's 24h window.
+
+    profile_name is the sender's WhatsApp display name, which Meta sends
+    with every inbound batch. We use it ONLY to fill a blank — a name the
+    shop typed itself always wins.
+    """
     wa_message_id = msg.get("id")
     raw_from = msg.get("from", "")
 
@@ -448,13 +511,22 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
             await db.execute(select(Customer).where(Customer.phone == phone))
         ).scalar_one_or_none()
         if customer is None:
-            customer = Customer(phone=phone)
+            customer = Customer(phone=phone, name=_clean_profile_name(profile_name) or None)
             db.add(customer)
             # flush() runs the INSERT now so customer.id exists — without
             # this, the Conversation below would get customer_id=None and
             # trip the XOR check constraint.
             await db.flush()
-            log.info("customer_created_from_inbound", phone=phone)
+            log.info(
+                "customer_created_from_inbound", phone=phone,
+                named=bool(customer.name),
+            )
+        elif not (customer.name or "").strip():
+            # we met them before but never learned a name — WhatsApp has one
+            got = _clean_profile_name(profile_name)
+            if got:
+                customer.name = got
+                log.info("customer_named_from_whatsapp", phone=phone, name=got)
 
     now = datetime.now(timezone.utc)
     participant = staff or customer
@@ -468,6 +540,9 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
             direction=Direction.INBOUND,
             message_text=text,
             wa_message_id=wa_message_id,
+            # they swiped-to-reply on one of our messages: keep the link so
+            # the Inbox shows WHICH message they are answering
+            reply_to_wamid=(msg.get("context") or {}).get("id"),
         )
     )
     try:
@@ -499,13 +574,20 @@ async def _handle_inbound_message(msg: dict, db: AsyncSession) -> None:
 
     spoken = _voice_transcript(text) or text
 
-    is_manager = phone == normalize_phone(settings.MANAGER_PHONE)
+    # An ADMIN staff row (the owner, Suyash) carries manager powers even
+    # though he is in the staff table — otherwise adding him as a person
+    # would quietly demote him to a washerman.
+    from app.models import StaffRole
+
+    is_manager = phone == normalize_phone(settings.MANAGER_PHONE) or (
+        staff is not None and staff.role is StaffRole.ADMIN
+    )
     if staff is not None or is_manager:
         try:
             command_reply = await handle_staff_message(
                 db,
                 sender_phone=phone,
-                sender_label=staff.name if staff else "manager",
+                sender_label="manager" if is_manager else staff.name,
                 text=spoken,
             )
         except Exception:

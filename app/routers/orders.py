@@ -12,7 +12,7 @@ from datetime import date
 from decimal import Decimal
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import delete as sa_delete, select, update as sa_update
 from sqlalchemy.exc import IntegrityError
@@ -67,16 +67,50 @@ def _auth_throttled(ip: str) -> bool:
     return len(attempts) >= _AUTH_MAX_FAILURES
 
 
-async def require_admin_key(request: Request, x_api_key: str = Header(default="")) -> None:
-    """Dependency: reject any request without the correct X-API-Key.
+async def require_admin_key(
+    request: Request,
+    x_api_key: str = Header(default=""),
+    kk_session: str = Cookie(default=""),
+) -> None:
+    """This shop's data — nobody else's.
 
-    Constant-time compare (no timing side channel) + per-IP throttle
-    (10 wrong keys in 10 min -> 429 until the window clears).
+    Two ways in, and BOTH are scoped to this deployment's own shop:
+
+    1. a login session whose user belongs to the HOME tenant (browser), or
+    2. the X-API-Key (scripts, and the owner's own tooling).
+
+    A session belonging to some OTHER tenant — anyone who just signed up on
+    the public page — is refused with 403. That hole is how a brand-new
+    signup was able to open this shop's dashboard: the page only ever
+    checked the API key, and a browser that already had the owner's key
+    cached sailed straight in.
     """
     ip = request.client.host if request.client else "?"
     if _auth_throttled(ip):
         log.warning("admin_api_throttled", ip=ip)
         raise HTTPException(status_code=429, detail="too many failed attempts — wait 10 minutes")
+
+    # 1. session first — that is what a real browser user has
+    if kk_session:
+        from app.database import async_session_factory
+        from app.services import auth as auth_service
+
+        async with async_session_factory() as db:
+            user = await auth_service.user_for_token(db, kk_session)
+            if user is not None:
+                if await auth_service.is_home_user(db, user):
+                    request.state.user_email = user.email
+                    return
+                log.warning(
+                    "cross_tenant_dashboard_blocked",
+                    user=user.email, path=request.url.path,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Ye dashboard aapke account ka nahi hai.",
+                )
+
+    # 2. API key
     if not hmac.compare_digest(x_api_key, settings.ADMIN_API_KEY):
         _FAILED_AUTH[ip].append(time.monotonic())
         log.warning("admin_api_bad_key", ip=ip, path=request.url.path)

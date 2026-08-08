@@ -12,14 +12,25 @@ payment derivation, notifications) applies automatically.
 
 import csv
 import io
+import re
 import uuid as uuid_module
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi import (
+    APIRouter,
+    Cookie,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -469,13 +480,13 @@ async def rate_update(rate_id: str, body: RateUpdateIn, db: AsyncSession = Depen
 class StaffIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     phone: str
-    role: str = Field(pattern="^(WASHER|DELIVERY)$")
+    role: str = Field(pattern="^(WASHER|DELIVERY|ADMIN)$")
 
 
 class StaffUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=120)
     phone: str | None = Field(default=None, min_length=6, max_length=20)
-    role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY)$")
+    role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY|ADMIN)$")
     is_active: bool | None = None
 
 
@@ -728,13 +739,52 @@ def _window_state(last_inbound: datetime | None) -> dict:
 @router.get("/api/inbox/threads", dependencies=[Depends(require_admin_key)])
 async def inbox_threads(
     db: AsyncSession = Depends(get_db),
-    limit: int = Query(default=200, ge=1, le=500),
-) -> list[dict]:
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    q: str = Query(default=""),
+) -> dict:
     """Participants with conversation history, newest activity first.
 
-    Capped (default 200 threads) so a 10k-customer DB can't blow up the
-    response — the UI's search hits the API, not this list."""
-    threads: list[dict] = []
+    Paged: the list loads 50 at a time as the owner scrolls, so a shop with
+    500+ imported contacts opens as fast as one with five.
+
+    q searches name and phone ACROSS the whole customer/staff book, not just
+    the page in hand — including people who have never messaged (a fresh
+    Excel import), so the owner can find them and start a chat.
+
+    One PERSON is one thread. The owner (and any staff member who ever
+    messaged as a customer) has both a customer row and a staff row for the
+    same number; listing both showed him twice with half his history each.
+    """
+    # phone -> thread, merged across the customer and staff sides
+    by_phone: dict[str, dict] = {}
+
+    def _add(entry: dict, last_inbound) -> None:
+        entry["_last_inbound"] = last_inbound
+        old = by_phone.get(entry["phone"])
+        if old is None:
+            by_phone[entry["phone"]] = entry
+            return
+        # newest message wins the preview; the staff/admin row wins the name
+        newest = entry if entry["last_at"] > old["last_at"] else old
+        ident = entry if entry["kind"] in ("staff", "admin") else old
+        stamps = [s for s in (entry["_last_inbound"], old["_last_inbound"]) if s]
+        by_phone[entry["phone"]] = {
+            **newest,
+            "kind": ident["kind"],
+            "name": ident["name"],
+            "_last_inbound": max(stamps) if stamps else None,
+        }
+
+    term = (q or "").strip()
+    digits = re.sub(r"\D", "", term)
+
+    def _match(model):
+        like = f"%{term}%"
+        conds = [model.name.ilike(like)]
+        if digits:
+            conds.append(model.phone.ilike(f"%{digits}%"))
+        return or_(*conds)
 
     # last message per customer
     last_at = (
@@ -746,20 +796,21 @@ async def inbox_threads(
         .group_by(Conversation.customer_id)
         .subquery()
     )
-    rows = (
-        await db.execute(
-            select(Customer, Conversation)
-            .join(last_at, last_at.c.customer_id == Customer.id)
-            .join(
-                Conversation,
-                (Conversation.customer_id == Customer.id)
-                & (Conversation.created_at == last_at.c.last_at),
-            )
+    q_cust = (
+        select(Customer, Conversation)
+        .join(last_at, last_at.c.customer_id == Customer.id)
+        .join(
+            Conversation,
+            (Conversation.customer_id == Customer.id)
+            & (Conversation.created_at == last_at.c.last_at),
         )
-    ).all()
+    )
+    if term:
+        q_cust = q_cust.where(_match(Customer))
+    rows = (await db.execute(q_cust)).all()
     manager_phone = normalize_phone(settings.MANAGER_PHONE)
     for cust, conv in rows:
-        threads.append(
+        _add(
             {
                 # The owner's own number has a customer row from his tests —
                 # label him as the boss, not a customer.
@@ -769,8 +820,8 @@ async def inbox_threads(
                 "last_text": conv.message_text[:80],
                 "last_at": conv.created_at.isoformat(),
                 "last_direction": conv.direction.name,
-                "window": _window_state(cust.last_message_at),
-            }
+            },
+            cust.last_message_at,
         )
 
     last_at_s = (
@@ -782,32 +833,78 @@ async def inbox_threads(
         .group_by(Conversation.staff_id)
         .subquery()
     )
-    rows_s = (
-        await db.execute(
-            select(Staff, Conversation)
-            .join(last_at_s, last_at_s.c.staff_id == Staff.id)
-            .join(
-                Conversation,
-                (Conversation.staff_id == Staff.id)
-                & (Conversation.created_at == last_at_s.c.last_at),
-            )
+    q_staff = (
+        select(Staff, Conversation)
+        .join(last_at_s, last_at_s.c.staff_id == Staff.id)
+        .join(
+            Conversation,
+            (Conversation.staff_id == Staff.id)
+            & (Conversation.created_at == last_at_s.c.last_at),
         )
-    ).all()
+    )
+    if term:
+        q_staff = q_staff.where(_match(Staff))
+    rows_s = (await db.execute(q_staff)).all()
     for st, conv in rows_s:
-        threads.append(
+        _add(
             {
-                "kind": "staff",
+                "kind": "admin" if st.role is StaffRole.ADMIN else "staff",
                 "phone": st.phone,
                 "name": st.name,
                 "last_text": conv.message_text[:80],
                 "last_at": conv.created_at.isoformat(),
                 "last_direction": conv.direction.name,
-                "window": _window_state(st.last_message_at),
-            }
+            },
+            st.last_message_at,
         )
 
+    threads = [
+        {**t, "window": _window_state(t.pop("_last_inbound"))}
+        for t in by_phone.values()
+    ]
     threads.sort(key=lambda t: t["last_at"], reverse=True)
-    return threads[:limit]
+
+    # Searching also reaches contacts who have NEVER messaged — a fresh
+    # Excel import is 500 people with no history, and "not in the chat list"
+    # must not mean "unreachable". They sort after real conversations.
+    if term:
+        found = {t["phone"] for t in threads}
+        silent = (
+            (
+                await db.execute(
+                    select(Customer)
+                    .where(_match(Customer))
+                    .order_by(Customer.name.nulls_last())
+                    .limit(200)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for c in silent:
+            if c.phone in found:
+                continue
+            threads.append(
+                {
+                    "kind": "admin" if c.phone == manager_phone else "customer",
+                    "phone": c.phone,
+                    "name": c.name or c.phone,
+                    "last_text": "",
+                    "last_at": "",
+                    "last_direction": "",
+                    "no_messages": True,
+                    "window": _window_state(c.last_message_at),
+                }
+            )
+
+    total = len(threads)
+    page = threads[offset : offset + limit]
+    return {
+        "threads": page,
+        "total": total,
+        "has_more": offset + len(page) < total,
+        "offset": offset,
+    }
 
 
 @router.get("/api/inbox/thread", dependencies=[Depends(require_admin_key)])
@@ -822,28 +919,38 @@ async def inbox_thread(
         phone = normalize_phone(phone)
     except ValueError:
         raise HTTPException(status_code=404, detail=f"invalid phone {phone!r}")
+    # One number can be BOTH a staff member and a customer (the owner, or a
+    # staff member who once wrote in as one). Show the whole conversation,
+    # not the half that happens to match the row we looked up first.
     staff = (
         await db.execute(select(Staff).where(Staff.phone == phone))
     ).scalar_one_or_none()
-    customer = None
-    if staff is None:
-        customer = (
-            await db.execute(select(Customer).where(Customer.phone == phone))
-        ).scalar_one_or_none()
-        if customer is None:
-            raise HTTPException(status_code=404, detail=f"no thread for {phone}")
+    customer = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if staff is None and customer is None:
+        raise HTTPException(status_code=404, detail=f"no thread for {phone}")
 
-    participant = staff or customer
-    cond = (
-        Conversation.staff_id == staff.id
-        if staff
-        else Conversation.customer_id == customer.id
-    )
+    sides = []
+    if staff is not None:
+        sides.append(Conversation.staff_id == staff.id)
+    if customer is not None:
+        sides.append(Conversation.customer_id == customer.id)
+    cond = or_(*sides) if len(sides) > 1 else sides[0]
     msgs = (
         await db.execute(
             select(Conversation).where(cond).order_by(Conversation.created_at.desc()).limit(limit)
         )
     ).scalars().all()
+
+    # the window is open if EITHER row heard from them inside 24h
+    stamps = [
+        s for s in (
+            staff.last_message_at if staff else None,
+            customer.last_message_at if customer else None,
+        ) if s
+    ]
+    last_inbound = max(stamps) if stamps else None
 
     active_orders = []
     if customer:
@@ -854,7 +961,7 @@ async def inbox_thread(
         ]
 
     if staff:
-        kind = "staff"
+        kind = "admin" if staff.role is StaffRole.ADMIN else "staff"
     elif phone == normalize_phone(settings.MANAGER_PHONE):
         kind = "admin"
     else:
@@ -863,7 +970,7 @@ async def inbox_thread(
         "kind": kind,
         "phone": phone,
         "name": (staff.name if staff else (customer.name or customer.phone)),
-        "window": _window_state(participant.last_message_at),
+        "window": _window_state(last_inbound),
         "active_orders": active_orders,
         "messages": [
             {
@@ -871,6 +978,10 @@ async def inbox_thread(
                 "text": m.message_text,
                 "sent_by": m.sent_by,
                 "at": m.created_at.isoformat(),
+                # ✓ sent / ✓✓ delivered / blue ✓✓ read — Meta's word, not a guess
+                "status": m.status,
+                "wamid": m.wa_message_id,
+                "reply_to": m.reply_to_wamid,
             }
             for m in reversed(msgs)
         ],
@@ -880,6 +991,8 @@ async def inbox_thread(
 class InboxSendIn(BaseModel):
     phone: str
     text: str = Field(min_length=1, max_length=4000)
+    # wamid being quoted — WhatsApp shows it above the reply
+    reply_to: str | None = Field(default=None, max_length=120)
 
 
 @router.post("/api/inbox/send", dependencies=[Depends(require_admin_key)])
@@ -890,7 +1003,10 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     try:
-        wa_id = await send_message(db, to_phone=to_phone, text=body.text, sent_by="manager")
+        wa_id = await send_message(
+            db, to_phone=to_phone, text=body.text, sent_by="manager",
+            reply_to=(body.reply_to or None),
+        )
     except WindowClosedError:
         raise HTTPException(
             status_code=409,
@@ -899,6 +1015,60 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
     except SendError as exc:
         raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {exc}")
     return {"wa_message_id": wa_id, "at": datetime.now(timezone.utc).isoformat()}
+
+
+class InboxPingIn(BaseModel):
+    phone: str
+
+
+@router.post("/api/inbox/ping", dependencies=[Depends(require_admin_key)])
+async def inbox_ping(body: InboxPingIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Nudge this person — 'bhai, jawab do'.
+
+    A staff member with open work is reminded of that work by name; anyone
+    else gets a short, polite poke. Outside the 24h window we fall back to
+    the approved template, so a nudge is never silently swallowed.
+    """
+    try:
+        to_phone = normalize_phone(body.phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    staff = (
+        await db.execute(select(Staff).where(Staff.phone == to_phone))
+    ).scalar_one_or_none()
+    text = "🔔 Namaste! Ek chhota sa reminder — jawab ka intezaar hai. 🙏"
+    if staff is not None:
+        from app.services import tasks as task_service
+
+        open_tasks = await task_service.open_tasks_for_staff(db, staff.id)
+        if open_tasks:
+            t = open_tasks[0]
+            text = (
+                f"🔔 {staff.name}, yaad dila raha hoon [{t.code}]: {t.title}\n"
+                f"Ho gaya ho to reply karein: done {t.code}"
+            )
+        else:
+            text = f"🔔 {staff.name}, ek update chahiye tha — kya status hai?"
+
+    try:
+        wa_id = await send_message(db, to_phone=to_phone, text=text, sent_by="manager")
+    except WindowClosedError:
+        try:
+            wa_id = await send_message(
+                db, to_phone=to_phone,
+                template_name="kk_staff_alert",
+                template_params=[" ".join(text.split())[:600]],
+                sent_by="manager",
+            )
+        except SendError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Window band hai aur template bhi nahi gaya: {exc}",
+            )
+    except SendError as exc:
+        raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {exc}")
+    return {"wa_message_id": wa_id, "text": text}
 
 
 class TemplateSendIn(BaseModel):
@@ -999,6 +1169,182 @@ async def customers_bulk(body: BulkCustomersIn, db: AsyncSession = Depends(get_d
     return {"added": added, "skipped_existing": skipped, "invalid": bad[:10]}
 
 
+# Header names the owner's own files actually use — Excel exports from a
+# phone, a shop register, a previous CRM. Matched case/space-insensitively.
+_IMPORT_HEADERS = {
+    "phone": ("phone", "mobile", "number", "mobileno", "phoneno", "contact",
+              "whatsapp", "mob", "no", "cell", "नंबर", "मोबाइल"),
+    "name": ("name", "customer", "customername", "fullname", "party", "client",
+             "naam", "नाम"),
+    "address": ("address", "addr", "pata", "location", "पता"),
+}
+
+
+def _import_col(header: str) -> str | None:
+    key = re.sub(r"[^a-z0-9ऀ-ॿ]", "", str(header or "").lower())
+    for field, names in _IMPORT_HEADERS.items():
+        if key in names:
+            return field
+    return None
+
+
+def _import_rows(raw: bytes, filename: str) -> list[list[str]]:
+    """Rows of cells from a .csv/.xlsx upload. Raises HTTPException on junk."""
+    name = (filename or "").lower()
+    if name.endswith((".xlsx", ".xlsm")):
+        try:
+            import openpyxl
+        except ImportError:
+            raise HTTPException(
+                status_code=400,
+                detail="Excel padhne ki library nahi hai — file ko CSV mein save karke bhejein.",
+            )
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Excel file kharab lag rahi hai.")
+        ws = wb[wb.sheetnames[0]]
+        return [
+            ["" if c is None else str(c).strip() for c in row]
+            for row in ws.iter_rows(values_only=True)
+        ]
+    if name.endswith(".xls"):
+        raise HTTPException(
+            status_code=400,
+            detail="Purana .xls format nahi padh sakta — Excel se 'Save as .xlsx' ya CSV karein.",
+        )
+    # CSV / TSV: try the common encodings before giving up
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise HTTPException(status_code=400, detail="File ka text padha nahi ja saka.")
+    sample = text[:2000]
+    delim = "\t" if sample.count("\t") > sample.count(",") else ","
+    return [
+        [str(c).strip() for c in row]
+        for row in csv.reader(io.StringIO(text), delimiter=delim)
+    ]
+
+
+@router.post("/api/customers/import-file", dependencies=[Depends(require_admin_key)])
+async def customers_import_file(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Import contacts from an Excel/CSV file.
+
+    Works with or without a header row: with one we read the phone/name/
+    address columns by name, without one we take the first cell that looks
+    like a number as the phone and the longest other cell as the name. A row
+    we cannot read is REPORTED back, never silently dropped — the owner must
+    know which of his 500 lines did not make it.
+    """
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="File khali hai.")
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File 5MB se badi hai.")
+    rows = _import_rows(raw, file.filename or "")
+    if not rows:
+        raise HTTPException(status_code=400, detail="File mein koi row nahi mili.")
+
+    # header row? only if at least one cell maps to a known column AND that
+    # row has no valid phone in it (a data row can carry the word "mobile")
+    cols: dict[int, str] = {}
+    start = 0
+    first = rows[0]
+    mapped = {i: _import_col(c) for i, c in enumerate(first)}
+    if any(v for v in mapped.values()):
+        cols = {i: v for i, v in mapped.items() if v}
+        start = 1
+
+    added = updated = skipped = 0
+    bad: list[str] = []
+    seen: set[str] = set()
+    for n, row in enumerate(rows[start:], start=start + 1):
+        if not any(str(c).strip() for c in row):
+            continue
+        phone_raw, name, address = "", "", ""
+        if cols:
+            for i, field in cols.items():
+                val = row[i].strip() if i < len(row) else ""
+                if field == "phone":
+                    phone_raw = val
+                elif field == "name":
+                    name = val
+                else:
+                    address = val
+        if not phone_raw:
+            # no header (or an empty phone cell): first number-ish cell wins
+            for cell in row:
+                digits = re.sub(r"\D", "", str(cell))
+                if 10 <= len(digits) <= 15:
+                    phone_raw = str(cell)
+                    break
+            if not name:
+                others = [
+                    str(c).strip() for c in row
+                    if str(c).strip() and str(c).strip() != phone_raw
+                    and not str(c).strip().replace(" ", "").isdigit()
+                ]
+                name = max(others, key=len) if others else ""
+        try:
+            phone = normalize_phone(re.sub(r"[^\d+]", "", phone_raw))
+        except ValueError:
+            bad.append(f"line {n}: {' | '.join(str(c) for c in row)[:60]}")
+            continue
+        if phone in seen:
+            skipped += 1
+            continue
+        seen.add(phone)
+
+        existing = (
+            await db.execute(select(Customer).where(Customer.phone == phone))
+        ).scalar_one_or_none()
+        if existing is None:
+            db.add(
+                Customer(
+                    phone=phone,
+                    name=(name[:120] or None),
+                    address=(address[:400] or None),
+                )
+            )
+            added += 1
+        else:
+            # only FILL blanks — an import must not overwrite what the shop
+            # already knows about a customer
+            touched = False
+            if name and not existing.name:
+                existing.name, touched = name[:120], True
+            if address and not existing.address:
+                existing.address, touched = address[:400], True
+            updated += touched
+            skipped += not touched
+    await db.commit()
+    log.info(
+        "customers_file_import",
+        file=file.filename, added=added, updated=updated,
+        skipped=skipped, bad=len(bad),
+    )
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="customers_import_file",
+        args={"file": (file.filename or "")[:80], "rows": len(rows) - start},
+        result=f"added={added} updated={updated} skipped={skipped} bad={len(bad)}",
+    )
+    return {
+        "added": added,
+        "updated": updated,
+        "skipped_existing": skipped,
+        "invalid": bad[:15],
+        "invalid_total": len(bad),
+        "rows_read": len(rows) - start,
+    }
+
+
 @router.post("/api/inbox/send-media", dependencies=[Depends(require_admin_key)])
 async def inbox_send_media(
     phone: str = Form(...),
@@ -1047,13 +1393,32 @@ async def inbox_send_media(
 
 
 @router.get("/media/{name}")
-async def serve_media(name: str, key: str = Query(default="")) -> FileResponse:
-    """Serve chat media to the Inbox. <img> tags can't send headers, so auth
-    is the admin key as a query param."""
+async def serve_media(
+    name: str,
+    key: str = Query(default=""),
+    kk_session: str = Cookie(default=""),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    """Serve chat media to the Inbox.
+
+    Do raste, dono is dukaan tak seemit:
+    1. login session ka cookie — browser <img> tag ke saath khud bhejta hai
+    2. ?key=<ADMIN_API_KEY> — scripts aur purana rasta
+
+    Session wala rasta isliye zaroori hai ki jab se asli login aaya, browser
+    ke paas admin key hoti hi nahi — har photo 401 deti thi aur Inbox mein
+    toota hua dabba dikhta tha.
+    """
     import hmac as _hmac
 
-    if not _hmac.compare_digest(key, settings.ADMIN_API_KEY):
-        raise HTTPException(status_code=401, detail="key chahiye")
+    allowed = bool(key) and _hmac.compare_digest(key, settings.ADMIN_API_KEY)
+    if not allowed and kk_session:
+        from app.services import auth as auth_service
+
+        user = await auth_service.user_for_token(db, kk_session)
+        allowed = await auth_service.is_home_user(db, user)
+    if not allowed:
+        raise HTTPException(status_code=401, detail="key ya login chahiye")
     # basename() guard: no traversal
     safe = Path(name).name
     path = _MEDIA_DIR / safe
@@ -1062,20 +1427,87 @@ async def serve_media(name: str, key: str = Query(default="")) -> FileResponse:
     return FileResponse(path)
 
 
+# Phone se aayi UI reports. File hi kaafi hai — ye diagnostic hai, business
+# data nahi. Ring buffer: sirf aakhri 60 rakhi jaati hain, taaki koi ise
+# bhar kar disk na bhar de.
+_UI_REPORTS = Path(__file__).resolve().parent.parent / "media" / "ui-reports.jsonl"
+_UI_KEEP = 60
+
+
+@router.post("/api/ui-report")
+async def ui_report(request: Request) -> dict:
+    """`?probe=1` se aayi report — kya viewport se bahar nikla, kaunsa
+    tap-target chhota hai, kya JS error aaya.
+
+    Jaan-boojh kar bina login ke: public signup page bhi mobile par toot
+    sakta hai, aur wahan session hota hi nahi. Size aur count dono capped
+    hain, isliye ise bhar kar disk nahi bhari ja sakti.
+    """
+    import json as _json
+
+    raw = await request.body()
+    if len(raw) > 24_000:
+        raise HTTPException(status_code=413, detail="report too big")
+    try:
+        body = _json.loads(raw.decode())
+    except Exception:
+        raise HTTPException(status_code=400, detail="bad json")
+
+    body["at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        _UI_REPORTS.parent.mkdir(exist_ok=True)
+        lines = []
+        if _UI_REPORTS.exists():
+            lines = _UI_REPORTS.read_text(encoding="utf-8").splitlines()[-(_UI_KEEP - 1):]
+        lines.append(_json.dumps(body, ensure_ascii=False))
+        _UI_REPORTS.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        log.exception("ui_report_write_failed")
+        return {"ok": False}
+
+    log.info(
+        "ui_report",
+        section=body.get("section"), vw=(body.get("viewport") or {}).get("w"),
+        overflow=len(body.get("overflow") or []),
+        tiny=len(body.get("tiny_taps") or []),
+        errors=len(body.get("errors") or []),
+    )
+    return {"ok": True}
+
+
 @router.get("")
-async def dashboard_page() -> Response:
-    """The dashboard page — asset links get an mtime version stamp so the
-    browser can never serve a stale app.js/app.css against fresh HTML
-    (that mix = dead buttons + broken styling)."""
+async def dashboard_page(
+    kk_session: str = Cookie(default=""), db: AsyncSession = Depends(get_db)
+) -> Response:
+    """The dashboard page.
+
+    This deployment holds ONE shop's data. A logged-in user from any other
+    tenant (i.e. anyone who just signed up on the public page) is sent to
+    their own welcome page instead — they must never even see this screen,
+    let alone the data behind it.
+
+    Asset links get an mtime version stamp so the browser can never serve a
+    stale app.js/app.css against fresh HTML (that mix = dead buttons +
+    broken styling).
+    """
+    if kk_session:
+        from app.services import auth as auth_service
+
+        user = await auth_service.user_for_token(db, kk_session)
+        if user is not None and not await auth_service.is_home_user(db, user):
+            log.info("cross_tenant_dashboard_redirect", user=user.email)
+            return RedirectResponse(url="/welcome", status_code=303)
+
     html = _DASHBOARD_FILE.read_text(encoding="utf-8")
     static_dir = _DASHBOARD_FILE.parent
     v = int(max(
         (static_dir / "app.js").stat().st_mtime,
         (static_dir / "app.css").stat().st_mtime,
+        (static_dir / "mobile.css").stat().st_mtime,
     ))
     import re as _re
 
-    html = _re.sub(r"(app\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
+    html = _re.sub(r"((?:app|mobile)\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
     return Response(
         content=html, media_type="text/html",
         headers={"Cache-Control": "no-cache"},
