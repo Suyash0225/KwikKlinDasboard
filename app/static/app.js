@@ -520,14 +520,19 @@ async function initNewBill() {
       `<option value="${i}">${esc(p.name)} (${p.type === "percent" ? p.value + "%" : "₹" + p.value})</option>`).join("");
   calcBill();
 }
-function applyPreset() {
+/* Discount rules, made predictable:
+   - a PRESET owns the discount: it fills the ₹ field, keeps it in sync as
+     items change (a 10% preset stays 10%), and locks manual entry
+   - "No discount" unlocks the ₹ field for manual entry
+   - the note under the field says which one is actually applied
+   - a coupon is validated at save by the server (noted in the UI) */
+function activePreset() {
   const i = $("nb-preset").value;
-  if (i === "") { $("nb-disc").value = ""; calcBill(); return; }
-  const p = (SETTINGS_CACHE.discount_presets || [])[parseInt(i)];
-  if (!p) return;
-  let sub = 0;
-  LINES.forEach((l) => { sub += (parseFloat(l.rate) || 0) * (parseFloat(l.qty) || 0); });
-  $("nb-disc").value = p.type === "percent" ? Math.round(sub * p.value) / 100 : p.value;
+  if (i === "") return null;
+  return (SETTINGS_CACHE.discount_presets || [])[parseInt(i)] || null;
+}
+function applyPreset() {
+  if (!activePreset()) $("nb-disc").value = "";
   calcBill();
 }
 function addLine() { LINES.push({ service: "", garment: "", qty: 1, rate: "", amount: 0 }); renderLines(); }
@@ -538,18 +543,25 @@ const garmentsFor = (svc) => RATES.filter((r) => r.is_active && r.service === sv
 function renderLines() {
   $("nb-lines").innerHTML = LINES.map((l, i) => `
     <div class="lineitem">
-      <select onchange="LINES[${i}].service=this.value;LINES[${i}].garment='';lineRate(${i})">
-        <option value="">Service…</option>
-        ${services().map((s) => `<option ${l.service === s ? "selected" : ""}>${esc(s)}</option>`).join("")}
-      </select>
-      <select onchange="LINES[${i}].garment=this.value;lineRate(${i})">
-        <option value="">Item…</option>
-        ${garmentsFor(l.service).map((r) => `<option value="${esc(r.garment)}" ${l.garment === r.garment ? "selected" : ""}>${esc(r.garment || "(per kg)")} — ₹${r.rate}/${r.unit}</option>`).join("")}
-      </select>
-      <input type="number" min="0.1" step="0.1" value="${l.qty}" onchange="LINES[${i}].qty=parseFloat(this.value)||1;calcBill()" title="Qty / kg">
-      <input type="number" min="0" step="0.01" value="${l.rate}" placeholder="Rate" onchange="LINES[${i}].rate=parseFloat(this.value)||0;calcBill()">
-      <div class="money" id="nb-amt-${i}">${money(l.amount)}</div>
-      <button class="btn sm danger del" onclick="delLine(${i})">✕</button>
+      <div class="lf lf-service"><span class="ll">Service</span>
+        <select aria-label="Service" onchange="LINES[${i}].service=this.value;LINES[${i}].garment='';lineRate(${i})">
+          <option value="">Service…</option>
+          ${services().map((s) => `<option ${l.service === s ? "selected" : ""}>${esc(s)}</option>`).join("")}
+        </select></div>
+      <div class="lf lf-item"><span class="ll">Item</span>
+        <select aria-label="Item" onchange="LINES[${i}].garment=this.value;lineRate(${i})">
+          <option value="">Item…</option>
+          ${garmentsFor(l.service).map((r) => `<option value="${esc(r.garment)}" ${l.garment === r.garment ? "selected" : ""}>${esc(r.garment || "(per kg)")} — ₹${r.rate}/${r.unit}</option>`).join("")}
+        </select></div>
+      <div class="lf lf-qty"><span class="ll">Qty / kg</span>
+        <input type="number" min="0.1" step="0.1" value="${l.qty}" aria-label="Quantity" title="Qty / kg"
+          onchange="LINES[${i}].qty=parseFloat(this.value)||1;calcBill()"></div>
+      <div class="lf lf-rate"><span class="ll">Rate ₹</span>
+        <input type="number" min="0" step="0.01" value="${l.rate}" placeholder="Rate" aria-label="Rate in rupees"
+          onchange="LINES[${i}].rate=parseFloat(this.value)||0;calcBill()"></div>
+      <div class="lf lf-amt"><span class="ll">Amount</span>
+        <div class="money" id="nb-amt-${i}">${money(l.amount)}</div></div>
+      <button class="btn sm danger del" aria-label="Remove item" title="Remove item" onclick="delLine(${i})">✕</button>
     </div>`).join("");
   calcBill();
 }
@@ -566,7 +578,22 @@ function calcBill() {
     sub += l.amount;
     const el = $("nb-amt-" + i); if (el) el.textContent = money(l.amount);
   });
-  const disc = parseFloat($("nb-disc").value) || 0;
+  // preset owns the discount and tracks the subtotal live; manual otherwise
+  const p = activePreset();
+  const discEl = $("nb-disc");
+  let disc;
+  if (p) {
+    disc = p.type === "percent" ? Math.round(sub * p.value) / 100 : Math.min(p.value, sub);
+    discEl.value = disc || "";
+    discEl.disabled = true;
+  } else {
+    discEl.disabled = false;
+    disc = parseFloat(discEl.value) || 0;
+  }
+  const dnote = $("nb-disc-note");
+  if (dnote) dnote.textContent = p
+    ? `${p.name} applied${p.type === "percent" ? ` (${p.value}% of subtotal)` : ""} — manual entry is off`
+    : (disc ? "Manual discount applied" : "");
   const pct = (parseFloat(SETTINGS_CACHE.gst_percent) || 18) / 100;
   const gst = $("nb-gst").checked ? Math.round((sub - disc) * pct * 100) / 100 : 0;
   const total = Math.max(0, sub - disc + gst);
@@ -583,6 +610,7 @@ function calcBill() {
    Rows are picked by INDEX into this array instead. */
 let AC_HITS = [];
 function custAc() {
+  const err = $("nb-phone-err"); if (err) err.textContent = "";
   const q = $("nb-phone").value.trim().toLowerCase();
   const box = $("nb-ac");
   if (!q || !CUSTOMERS_CACHE) { box.innerHTML = ""; return; }
@@ -599,14 +627,28 @@ function pickCust(i) {
 
 async function saveBill(btn) {
   await busy(btn, async () => {
+    // inline validation: the mistake is shown AT the field, not only a toast
+    $("nb-phone-err").textContent = ""; $("nb-items-err").textContent = "";
     const t = calcBill();
     const phone = $("nb-phone").value.trim();
-    if (!phone) throw new Error("Customer phone is required");
+    if (!phone) {
+      $("nb-phone-err").textContent = "Customer mobile number is required.";
+      $("nb-phone").focus();
+      return;
+    }
+    if (phone.replace(/\D/g, "").length < 10) {
+      $("nb-phone-err").textContent = "That number looks too short — 10 digits needed.";
+      $("nb-phone").focus();
+      return;
+    }
     const items = LINES.filter((l) => l.service && (l.garment || l.service.toLowerCase().includes("kg"))).map((l) => {
       const r = RATES.find((x) => x.service === l.service && x.garment === l.garment) || {};
       return { type: l.garment || l.service, service: l.service, qty: l.qty, rate: l.rate, amount: l.amount, unit: r.unit || "pc" };
     });
-    if (!items.length) throw new Error("Add at least one item");
+    if (!items.length) {
+      $("nb-items-err").textContent = "Add at least one item — pick a service and an item.";
+      return;
+    }
     const body = {
       customer_phone: phone, customer_name: $("nb-name").value.trim() || null, items,
       total_amount: t.total, discount_amount: t.disc || null, gst_amount: t.gst || null,
@@ -618,7 +660,8 @@ async function saveBill(btn) {
     toast(T.billCreated + " — " + out.order_number);
     showBillSuccess(out);
     LINES = []; addLine();
-    ["nb-phone", "nb-name", "nb-disc", "nb-adv", "nb-notes", "nb-coupon"].forEach((id) => ($(id).value = ""));
+    ["nb-phone", "nb-name", "nb-disc", "nb-adv", "nb-notes", "nb-coupon", "nb-preset"].forEach((id) => ($(id).value = ""));
+    calcBill();   // re-enables the manual discount field after a preset
     loadDashboard();
   });
 }

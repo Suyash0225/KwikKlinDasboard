@@ -536,9 +536,36 @@ a { color: var(--brand-600); text-decoration: none; }
 
 /* ---------- new bill ---------- */
 .billgrid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
-/* phone: ek item = do line; desktop: one 6-column row (>=768) */
-.lineitem { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; margin-bottom: 8px; }
-.lineitem .del { grid-column: 2; justify-self: end; }
+/* Item rows: stacked mini-cards until 1280px — the Service/Item selects
+   get the FULL card width, so "Dry Clean" / "Kurta pajama" never truncate.
+   From 1280px: one aligned 6-column row under the .lineshead labels. */
+.lineshead { display: none; }
+.lineitem {
+  position: relative; display: grid; gap: 6px 8px;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-areas: "service service service" "item item item" "qty rate amt";
+  background: var(--n50); border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px; padding-right: 52px; margin-bottom: 10px;
+}
+.lineitem .lf { min-width: 0; }
+.lineitem .lf-service { grid-area: service; }
+.lineitem .lf-item { grid-area: item; }
+.lineitem .lf-qty { grid-area: qty; }
+.lineitem .lf-rate { grid-area: rate; }
+.lineitem .lf-amt { grid-area: amt; }
+.lineitem .ll {
+  display: block; font-size: .6875rem; font-weight: 600;
+  color: var(--n500); margin-bottom: 3px;
+}
+.lineitem select, .lineitem input { width: 100%; }
+.lineitem .lf-amt .money {
+  display: flex; align-items: center; justify-content: flex-end;
+  min-height: 44px; font-size: .9375rem; font-weight: 700;
+}
+.lineitem .del {
+  position: absolute; top: 8px; right: 8px;
+  min-width: 36px; min-height: 36px; padding: 0;
+}
 .autocomplete { position: relative; }
 .acp { position: absolute; top: 100%; left: 0; right: 0; background: var(--n0); border: 1px solid var(--n200); border-radius: 0 0 10px 10px; box-shadow: var(--shadow); z-index: 30; max-height: 220px; overflow-y: auto; }
 .acp div { padding: 12px; min-height: var(--tap); display: flex; align-items: center; cursor: pointer; font-size: 13px; }
@@ -547,7 +574,14 @@ a { color: var(--brand-600); text-decoration: none; }
   font-size: 13.5px; flex-wrap: wrap; align-items: center;
 }
 .sumrow > * { min-width: 0; overflow-wrap: anywhere; }
-.sumrow.total { font-size: 17px; font-weight: 800; border-top: 1px solid var(--n200); padding-top: 9px; margin-top: 5px; }
+.sumrow.total { font-size: 1.125rem; font-weight: 800; border-top: 2px solid var(--n300); padding-top: 10px; margin-top: 6px; }
+/* Due = what the counter actually collects — it must be unmissable */
+.sumrow.due {
+  background: var(--brand-50); border: 1px solid #ffd9c8; border-radius: 10px;
+  padding: 10px 12px; margin-top: 8px;
+  font-size: 1.1875rem; font-weight: 800; color: var(--brand-600);
+}
+.sumrow.due .money { font-size: inherit; font-weight: inherit; color: inherit; }
 /* Save bill: sticky above the tab bar on phones — thumb-zone, no hunting */
 .savebar { position: sticky; bottom: calc(var(--tabbar-h) + 12px + env(safe-area-inset-bottom)); z-index: 5; margin-top: 10px; }
 .savebar .btn { width: 100%; min-height: 48px; box-shadow: 0 8px 22px rgba(18,183,106,.35); }
@@ -874,10 +908,9 @@ select {
   .split2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .filters input, .filters select { flex: 0 1 auto; min-width: 130px; height: 42px; min-height: 42px; }
 
-  /* new bill: entry + totals side by side, one 6-column row per garment */
+  /* new bill: entry + totals side by side (item rows stay stacked cards
+     until 1280px — the left column is too narrow for 6 aligned columns) */
   .billgrid { grid-template-columns: 1fr 320px; }
-  .lineitem { grid-template-columns: 1.2fr 1.2fr 64px 80px 84px 30px; }
-  .lineitem .del { grid-column: auto; justify-self: auto; }
   .savebar { position: static; }
   .savebar .btn { box-shadow: var(--shadow-green); }
 
@@ -960,6 +993,26 @@ select {
 @media (min-width: 1280px) {
   .main { padding: 24px 32px 90px; }
   .threads { width: 320px; }
+
+  /* item rows become one aligned row; minmax keeps selects wide enough
+     that the selected value is always fully visible */
+  .lineshead {
+    display: grid; gap: 8px;
+    grid-template-columns: minmax(120px, 1.1fr) minmax(150px, 1.4fr) 64px 84px 90px 36px;
+    font-size: .6875rem; font-weight: 700; color: var(--n500);
+    padding: 8px 2px 6px;
+  }
+  .lineshead span:nth-child(5) { text-align: right; }
+  .lineitem {
+    position: static;
+    grid-template-columns: minmax(120px, 1.1fr) minmax(150px, 1.4fr) 64px 84px 90px 36px;
+    grid-template-areas: "service item qty rate amt del";
+    background: none; border: none; border-radius: 0;
+    padding: 0; margin-bottom: 8px; align-items: center;
+  }
+  .lineitem .ll { display: none; }
+  .lineitem .lf-amt .money { min-height: 0; }
+  .lineitem .del { position: static; grid-area: del; justify-self: end; }
 }
 
 /* ==========================================================================

@@ -128,11 +128,14 @@
               <label>Mobile number *</label>
               <input id="nb-phone" type="tel" inputmode="numeric" placeholder="98765 43210" oninput="custAc()" autocomplete="off">
               <div class="acp" id="nb-ac"></div>
+              <small class="fielderr" id="nb-phone-err"></small>
             </div>
             <div><label>Name</label><input id="nb-name" placeholder="Customer name"></div>
           </div>
           <hr class="hr"><b>🧺 Items</b>
+          <div class="lineshead" aria-hidden="true"><span>Service</span><span>Item</span><span>Qty / kg</span><span>Rate ₹</span><span>Amount</span><span></span></div>
           <div id="nb-lines" style="margin-top:8px"></div>
+          <small class="fielderr" id="nb-items-err"></small>
           <button class="btn ghost sm" onclick="addLine()">+ Add item</button>
           <hr class="hr">
           <div class="split2">
@@ -143,14 +146,16 @@
         <div class="card">
           <b>💰 Totals</b>
           <div class="sumrow" style="margin-top:8px"><span>Subtotal</span><span class="money" id="nb-sub">₹0</span></div>
-          <div class="sumrow"><span>Discount preset</span><span style="max-width:150px"><select id="nb-preset" onchange="applyPreset()"><option value="">No discount</option></select></span></div>
-          <div class="sumrow"><span>Discount (₹)</span><span style="max-width:110px"><input id="nb-disc" type="number" min="0" oninput="calcBill()"></span></div>
+          <div class="sumrow"><span><label for="nb-preset" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Discount preset</label></span><span style="max-width:150px"><select id="nb-preset" onchange="applyPreset()"><option value="">No discount</option></select></span></div>
+          <div class="sumrow"><span><label for="nb-disc" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Discount (₹)</label></span><span style="max-width:110px"><input id="nb-disc" type="number" min="0" aria-label="Manual discount in rupees" oninput="calcBill()"></span></div>
+          <div class="muted" id="nb-disc-note" style="font-size:11.5px;min-height:16px"></div>
           <div class="sumrow"><span><label style="display:inline"><input type="checkbox" id="nb-gst" onchange="calcBill()"> GST 18%</label></span><span class="money" id="nb-gstamt">₹0</span></div>
-          <div class="sumrow"><span>Coupon code</span><span style="max-width:130px"><input id="nb-coupon" placeholder="e.g. OFF10"></span></div>
+          <div class="sumrow"><span><label for="nb-coupon" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Coupon code</label></span><span style="max-width:130px"><input id="nb-coupon" placeholder="e.g. OFF10" aria-label="Coupon code"></span></div>
+          <div class="muted" style="font-size:11.5px">Coupon is checked &amp; applied when you save.</div>
           <div class="sumrow total"><span>Total</span><span id="nb-total">₹0</span></div>
           <div class="sumrow"><span>Advance (₹)</span><span style="max-width:110px"><input id="nb-adv" type="number" min="0" oninput="calcBill()"></span></div>
           <div class="sumrow"><span>Advance mode</span><span style="max-width:110px"><select id="nb-advmode"><option value="CASH">Cash</option><option value="UPI">UPI</option></select></span></div>
-          <div class="sumrow"><span>Due</span><span class="money" id="nb-due">₹0</span></div>
+          <div class="sumrow due"><span>Due</span><span class="money" id="nb-due">₹0</span></div>
           <div class="savebar"><button class="btn" onclick="saveBill(this)">💾 Save bill</button></div>
           <p class="muted" style="margin-top:8px">Saving notifies the customer on WhatsApp and sends the work order to staff.</p>
         </div>
