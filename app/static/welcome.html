@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kwik Klin — Aapka account taiyar ho raha hai</title>
+<title>Kwik Klin — Your account is being set up</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%BA%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<!-- fonts async — pehla paint system font mein, Poppins aate hi swap -->
+<!-- fonts async — first paint in the system font, swaps to Poppins when it arrives -->
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap"
       rel="stylesheet" media="print" onload="this.media='all';this.onload=null">
 <noscript><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
@@ -55,23 +55,23 @@
 <div class="wrap">
   <div class="card">
     <div class="tick">✓</div>
-    <h1 id="hi">Account ban gaya!</h1>
-    <p class="sub" id="sub">Aapka account taiyar hai. Ab hum aapki dukaan set up kar rahe hain.</p>
+    <h1 id="hi">Account created!</h1>
+    <p class="sub" id="sub">Your account is ready. We are now setting up your shop.</p>
 
     <div class="meta" id="meta"></div>
 
-    <h2>Aage kya hoga</h2>
+    <h2>What happens next</h2>
     <ol>
-      <li class="done"><b>✓ Account ban gaya</b> — aap login kar sakte hain</li>
-      <li><b>WhatsApp connect</b> — aapka business number jodenge (~20 minute)</li>
-      <li><b>Rate card</b> — aapke daam bharenge (Excel ho to bhej dijiye)</li>
-      <li><b>Staff jodenge</b> — kaun dhulai karta hai, kaun delivery</li>
-      <li><b>Pehla bill</b> — hum saath mein banayenge, phir aap chalu</li>
+      <li class="done"><b>✓ Account created</b> — you can log in</li>
+      <li><b>WhatsApp connect</b> — we link your business number (~20 minutes)</li>
+      <li><b>Rate card</b> — we enter your prices (send an Excel if you have one)</li>
+      <li><b>Add your staff</b> — who washes, who delivers</li>
+      <li><b>First bill</b> — we make it together, then you are off</li>
     </ol>
 
     <div class="foot">
-      Setup ke liye hum aapko <b id="ph">aapke number</b> par WhatsApp karenge.
-      Koi sawaal ho to wahin pooch lijiyega.
+      We will WhatsApp you on <b id="ph">your number</b> for the setup.
+      Any questions — just ask us right there.
     </div>
   </div>
 </div>
@@ -100,20 +100,20 @@ async function logout() {
     const d = await api("/api/me");
     const t = d.tenant || {};
     document.getElementById("hi").textContent =
-      `Swagat hai, ${d.user.name || ""}!`;
+      `Welcome, ${d.user.name || ""}!`;
     document.getElementById("sub").textContent =
-      `${t.shop_name || "Aapki dukaan"} ka account taiyar hai. Setup hum kar rahe hain.`;
+      `${t.shop_name || "Your shop"} is ready. We are doing the setup.`;
     const chips = [`<span class="chip plan">${esc(t.plan_name || "")} plan</span>`];
     if (t.status === "trial" && t.trial_ends_at) {
       const days = Math.max(0, Math.ceil((new Date(t.trial_ends_at) - new Date()) / 86400000));
-      chips.push(`<span class="chip trial">${days} din free trial baaki</span>`);
+      chips.push(`<span class="chip trial">${days} days of free trial left</span>`);
     } else if (t.status === "active") {
-      chips.push(`<span class="chip trial">Subscription chalu</span>`);
+      chips.push(`<span class="chip trial">Subscription active</span>`);
     } else if (t.status) {
       chips.push(`<span class="chip">${esc(t.status)}</span>`);
     }
     document.getElementById("meta").innerHTML = chips.join("");
-    if (d.user.email) document.getElementById("ph").textContent = "aapke WhatsApp number";
+    if (d.user.email) document.getElementById("ph").textContent = "your WhatsApp number";
   } catch (e) {
     location.href = "/#login";   // session nahi hai
   }

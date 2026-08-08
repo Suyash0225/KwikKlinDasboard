@@ -54,7 +54,7 @@
   <!-- ======== main ======== -->
   <main class="main">
     <div class="topbar">
-      <button class="burger" aria-label="Menu kholo" onclick="toggleSidebar()">☰</button>
+      <button class="burger" aria-label="Open menu" onclick="toggleSidebar()">☰</button>
       <h2 id="mob-title">Dashboard</h2>
     </div>
 
@@ -65,7 +65,7 @@
       <!-- static skeletons paint on slow 4G before app.js + the API answer;
            loadDashboard() replaces them with real numbers -->
       <div class="grid kpis" id="kpis"><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div></div>
-      <div class="card" id="wa-stats" style="margin-bottom:14px"><span class="muted">📱 WhatsApp stats load ho rahe…</span></div>
+      <div class="card" id="wa-stats" style="margin-bottom:14px"><span class="muted">📱 Loading WhatsApp stats…</span></div>
       <div class="chips" id="dash-chips"></div>
       <div class="filters">
         <input type="search" placeholder="Search name, phone or order…" oninput="dashFilter.q=this.value;dashFilter.page=1;renderOrdersDeb()">
@@ -94,17 +94,17 @@
             <button class="th-ico" onclick="newChatModal()" title="New chat">✚</button>
             <button class="th-ico" onclick="bulkImportModal()" title="Bulk import numbers">⋮</button>
           </div>
-          <div class="th-search"><input id="th-search" type="search" placeholder="Naam ya number se dhoondhein" oninput="threadSearch(this.value)"></div>
+          <div class="th-search"><input id="th-search" type="search" placeholder="Search by name or number" oninput="threadSearch(this.value)"></div>
           <div id="th-list" style="flex:1;overflow-y:auto" onscroll="onThreadScroll(this)"><div style="padding:12px"><div class="skel skelrow"></div><div class="skel skelrow"></div><div class="skel skelrow"></div></div></div>
         </div>
         <div class="chatpane" style="position:relative">
           <div class="chathead" id="chat-head"><span class="muted">Pick a conversation on the left…</span></div>
           <div class="chatlog" id="chat-log"></div>
-          <div class="newmsg-pill" id="newmsg-pill" onclick="scrollChatBottom()">⬇ Naye messages</div>
+          <div class="newmsg-pill" id="newmsg-pill" onclick="scrollChatBottom()">⬇ New messages</div>
           <div class="replybar" id="reply-bar"></div>
           <div class="composer" style="position:relative">
             <div class="emojis" id="emoji-pal"></div>
-            <button class="btn ghost sm" onclick="tplSendModal()" title="Template bhejo (window band ho tab bhi)">📑</button>
+            <button class="btn ghost sm" onclick="tplSendModal()" title="Send a template (works even when the window is closed)">📑</button>
             <button class="btn ghost sm" onclick="toggleEmojis()">😊</button>
             <label class="btn ghost sm" style="cursor:pointer">📎<input type="file" accept="image/*" style="display:none" onchange="sendMedia(this)"></label>
             <input type="text" id="chat-input" enterkeyhint="send" placeholder="Type a message" onkeydown="if(event.key==='Enter')sendChat()">
@@ -224,7 +224,7 @@
             <div><label>Name</label><input id="camp-name" placeholder="diwali-offer"></div>
             <div><label>Audience segment</label><select id="camp-seg"></select></div>
             <div><label>Message — use {name} for the customer's name</label>
-              <textarea id="camp-msg" rows="3" placeholder="Namaste {name}! …"></textarea></div>
+              <textarea id="camp-msg" rows="3" placeholder="Hello {name}! …"></textarea></div>
             <div><label>Coupon code (optional)</label><input id="camp-coupon" placeholder="OFF10"></div>
             <button class="btn" onclick="createCampaign(this)">Save as draft</button>
           </div>
@@ -260,7 +260,7 @@
               </select></div>
             </div>
             <div><label>Body — use {{1}}, {{2}} for variables · <span id="tpl-count" class="muted">0/1024</span></label>
-              <textarea id="tpl-body" rows="4" placeholder="Namaste {{1}}! Aapke liye khaas offer…" oninput="tplPreview()"></textarea></div>
+              <textarea id="tpl-body" rows="4" placeholder="Hello {{1}}! A special offer for you…" oninput="tplPreview()"></textarea></div>
             <div><label>Sample values (comma separated — Meta review ke liye)</label>
               <input id="tpl-samples" placeholder="Sharma ji, 10%" oninput="tplPreview()"></div>
             <!-- pre-approved template ka body Meta fix karta hai — AI wala sign
@@ -274,7 +274,7 @@
             <label>Live preview</label>
             <div style="background:#e5ddd5;border-radius:12px;padding:18px;min-height:220px">
               <div style="background:#fff;border-radius:10px;padding:10px 12px;max-width:300px;box-shadow:0 1px 2px rgba(0,0,0,.15);font-size:13.5px">
-                <div id="tplp-body" style="white-space:pre-wrap">Namaste…</div>
+                <div id="tplp-body" style="white-space:pre-wrap">Hello…</div>
                 <div id="tplp-footer" class="muted" style="font-size:11px;margin-top:6px"></div>
                 <div id="tplp-btns"></div>
               </div>
@@ -308,7 +308,7 @@
             <textarea id="tr-staff-inst" rows="3" placeholder="e.g. Always confirm the delivery date when creating bills."></textarea></div>
         </div>
         <div style="margin-top:10px"><label>Marketing message style (campaign copy)</label>
-          <textarea id="tr-mkt-inst" rows="2" placeholder="e.g. Hamesha 'ji' laga ke baat karo, festival ka zikr karo, English words kam."></textarea></div>
+          <textarea id="tr-mkt-inst" rows="2" placeholder="e.g. Always address customers respectfully, mention festivals, keep messages short."></textarea></div>
         <p class="muted" style="margin-top:6px">🔒 Locked rules always win: no invented prices, no other customer's data, no unapproved discounts, no promises the database doesn't support.</p>
         <button class="btn" style="margin-top:8px" onclick="saveAgentSettings(this)">Save</button>
       </div>
@@ -350,23 +350,23 @@
 
     <!-- AI usage -->
     <section id="sec-usage" style="display:none">
-      <div class="pagehead"><div><h2>AI usage</h2><p>Kitna AI use hua, kitna kharch — aur is raftaar se mahine ka kitna</p></div>
+      <div class="pagehead"><div><h2>AI usage</h2><p>How much AI was used, what it cost — and the monthly run rate</p></div>
         <div class="actions"><button class="btn ghost" onclick="loadUsage()">↻ Refresh</button></div>
       </div>
       <div class="grid kpis" id="usage-kpis"></div>
       <div class="split2">
-        <div class="card"><b>Roz ka use (30 din)</b><div id="usage-chart" style="margin-top:10px"></div></div>
-        <div class="card"><b>Kis kaam mein</b><div id="usage-purpose" style="margin-top:10px"></div></div>
+        <div class="card"><b>Daily usage (30 days)</b><div id="usage-chart" style="margin-top:10px"></div></div>
+        <div class="card"><b>By purpose</b><div id="usage-purpose" style="margin-top:10px"></div></div>
       </div>
-      <div class="card" style="margin-top:14px"><b>Model ke hisaab se</b><div id="usage-models" style="margin-top:10px"></div></div>
+      <div class="card" style="margin-top:14px"><b>By model</b><div id="usage-models" style="margin-top:10px"></div></div>
     </section>
 
     <!-- Tasks -->
     <section id="sec-tasks" style="display:none">
-      <div class="pagehead"><div><h2>Tasks</h2><p>Kisko kya kaam diya, hua ya nahi — agent khud follow-up karta hai</p></div>
+      <div class="pagehead"><div><h2>Tasks</h2><p>Who was given what, done or not — the agent follows up on its own</p></div>
         <div class="actions">
-          <button class="btn ghost" onclick="pingAllTasks(this)">⏰ Sabse abhi poochho</button>
-          <button class="btn" onclick="newTaskModal()">➕ Naya kaam</button>
+          <button class="btn ghost" onclick="pingAllTasks(this)">⏰ Ping everyone now</button>
+          <button class="btn" onclick="newTaskModal()">➕ New task</button>
         </div>
       </div>
       <div class="grid kpis" id="task-kpis"></div>
@@ -408,7 +408,7 @@
             <div><label>Default delivery boy</label><select id="set-delivery"></select></div>
           </div>
           <div style="margin-top:10px"><label>Shop timings (the bot tells customers this)</label>
-            <input id="bp-hours" placeholder="Subah 11 se shaam 6 baje tak, Sunday band"></div>
+            <input id="bp-hours" placeholder="11 am to 6 pm, closed on Sundays"></div>
           <div style="margin-top:10px"><label>Physical shop address (prints on receipts)</label>
             <textarea id="bp-address" rows="2" placeholder="Shop no., road, Varanasi"></textarea></div>
           <div class="split2" style="margin-top:10px">
@@ -439,7 +439,7 @@
       <div id="st-pricing" style="display:none">
         <div class="card" style="margin-bottom:14px">
           <b>🔥 Piece-based pricing rate matrix</b>
-          <p class="muted" style="margin-top:4px">Har kapde ka rate, har service mein — cell mein likho, apne aap save. New bills use these rates, never old ones.</p>
+          <p class="muted" style="margin-top:4px">Every garment's rate for every service — type in a cell, it saves automatically. New bills use these rates, never old ones.</p>
           <div class="filters" style="margin-top:8px">
             <input id="rm-garment" placeholder="New garment name" style="min-width:150px">
             <button class="btn sm orange" onclick="rmAddGarment()">+ Add item</button>
@@ -551,7 +551,7 @@
           </div>
           <div class="setfield">
             <label for="sf-role">Role</label>
-            <select id="sf-role"><option value="WASHER">Washer (washing &amp; ironing)</option><option value="DELIVERY">Delivery</option><option value="ADMIN">Admin (owner — sab kuch)</option></select>
+            <select id="sf-role"><option value="WASHER">Washer (washing &amp; ironing)</option><option value="DELIVERY">Delivery</option><option value="ADMIN">Admin (owner — full access)</option></select>
             <small>Washers get wash and iron jobs, delivery gets pickups and drops.</small>
           </div>
           <div class="setfield addbtn">
@@ -562,15 +562,15 @@
       </div>
       <div class="card">
         <b>💾 Backups</b>
-        <p class="muted" style="margin-top:4px">Poore business ka JSON backup — customers, bills, payments, rates, gyaan, sab.</p>
+        <p class="muted" style="margin-top:4px">Full JSON backup of the business — customers, bills, payments, rates, knowledge, everything.</p>
         <button class="btn ghost" style="margin-top:8px" onclick="dlServer('/admin/api/backup.json','kwikklin-backup.json')">⬇ Download backup (.json)</button>
       </div>
       </div>
 
       <div id="st-messages" style="display:none">
       <div class="card" style="margin-bottom:14px">
-        <b>✉️ Message formats — likho apne andaaz mein</b>
-        <p class="muted" style="margin-top:4px">Ye messages customers ko free-form (window open) mein jate hain. Edit karo — turant lagoo, koi approval nahi chahiye. <b>{placeholders}</b> apni jagah asli value ban jate hain.</p>
+        <b>✉️ Message formats — write them your way</b>
+        <p class="muted" style="margin-top:4px">These go to customers as free-form messages (while the 24h window is open). Edit freely — changes apply instantly, no approval needed. <b>{placeholders}</b> are replaced with real values.</p>
         <div class="filters" style="margin-top:8px">
           <select id="mf-key" style="min-width:240px" onchange="mfPick()"></select>
           <span id="mf-flag"></span>
@@ -615,7 +615,7 @@
   </div>
 </div>
 
-<div id="offline-bar">📴 Internet nahi hai — messages queue ho rahe hain, connection aate hi chale jayenge</div>
+<div id="offline-bar">📴 No internet — messages are queued and will send as soon as you're back online</div>
 
 <!-- overlays -->
 <div class="overlay" id="modal-ov" onclick="if(event.target===this)closeModal()"><div class="modal" id="modal-body"></div></div>

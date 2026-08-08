@@ -98,7 +98,7 @@ async def _create_shop(
     yahi se guzarta hai — warna do jagah do niyam ban jaate."""
     email = (email or "").strip().lower()
     if "@" not in email or " " in email:
-        raise HTTPException(status_code=400, detail="Email sahi nahi lag raha")
+        raise HTTPException(status_code=400, detail="That email doesn't look right")
     try:
         phone_n = normalize_phone(phone)
     except ValueError as exc:
@@ -113,9 +113,9 @@ async def _create_shop(
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Is number par '{dupe.shop_name}' ka account pehle se hai"
+                f"This number already has an account for '{dupe.shop_name}'"
                 + (f" ({dupe.owner_email})" if dupe.owner_email else "")
-                + ". Login karein, ya password bhool gaye ho to humein bataiye."
+                + ". Please Login — or tell us if you forgot the password."
             ),
         )
 
@@ -198,7 +198,7 @@ async def checkout(
 ) -> dict:
     """Razorpay order — checkout isi par khulta hai."""
     if p.tenant is None:
-        raise HTTPException(status_code=400, detail="Tenant nahi mila")
+        raise HTTPException(status_code=400, detail="Tenant not found")
     try:
         out = await billing.create_order(p.tenant, body.plan, annual=body.annual)
     except RuntimeError as exc:
@@ -229,7 +229,7 @@ async def checkout_confirm(
     )
     if not ok:
         log.warning("rzp_bad_checkout_signature", tenant=p.tenant.slug if p.tenant else "?")
-        raise HTTPException(status_code=400, detail="Payment verify nahi hua")
+        raise HTTPException(status_code=400, detail="Payment could not be verified")
     return {"verified": True, "status": p.tenant.status if p.tenant else None}
 
 
@@ -283,7 +283,7 @@ async def login(
     ip = request.client.host if request.client else "?"
     if auth.throttled(ip):
         raise HTTPException(
-            status_code=429, detail="Bahut baar galat — 10 minute baad try karein"
+            status_code=429, detail="Too many wrong attempts — try again in 10 minutes"
         )
     email = (body.email or "").strip().lower()
     user = (
@@ -296,7 +296,7 @@ async def login(
     ):
         auth.note_failure(ip)
         log.warning("login_failed", email=email[:60], ip=ip)
-        raise HTTPException(status_code=401, detail="Email ya password galat hai")
+        raise HTTPException(status_code=401, detail="Email or password is incorrect")
 
     auth.clear_failures(ip)
     token = await auth.start_session(
@@ -388,7 +388,7 @@ async def change_password(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     if not auth.verify_password(body.current_password, p.user.password_hash):
-        raise HTTPException(status_code=401, detail="Purana password galat hai")
+        raise HTTPException(status_code=401, detail="The old password is incorrect")
     p.user.password_hash = auth.hash_password(body.new_password)
     p.user.must_change_password = False
     await db.commit()
@@ -413,7 +413,7 @@ async def google_start(db: AsyncSession = Depends(get_db)) -> Response:
     """Consent screen par bhej do, CSRF state cookie ke saath."""
     if not google_auth.enabled():
         raise HTTPException(
-            status_code=503, detail="Google login abhi configure nahi hai"
+            status_code=503, detail="Google login is not configured yet"
         )
     state = google_auth.new_state()
     base = await google_auth.public_base(db)
@@ -535,16 +535,16 @@ async def signup_google(
     raw = request.cookies.get(google_auth.PENDING_COOKIE, "")
     if not raw:
         raise HTTPException(
-            status_code=400, detail="Google login purana ho gaya — dobara karein"
+            status_code=400, detail="Google login expired — please try again"
         )
     try:
         pend = json.loads(raw)
         email = (pend["email"] or "").strip().lower()
         sub = str(pend.get("sub") or "")
     except Exception:
-        raise HTTPException(status_code=400, detail="Google login padha nahi gaya")
+        raise HTTPException(status_code=400, detail="Could not read the Google login")
     if not email:
-        raise HTTPException(status_code=400, detail="Google se email nahi mila")
+        raise HTTPException(status_code=400, detail="Google did not return an email")
 
     tenant, user = await _create_shop(
         db,
@@ -606,7 +606,7 @@ async def create_user(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     if body.role not in ROLES:
-        raise HTTPException(status_code=400, detail=f"Role in mein se ek: {', '.join(ROLES)}")
+        raise HTTPException(status_code=400, detail=f"Role must be one of: {', '.join(ROLES)}")
     plan = plans.get(p.tenant.plan if p.tenant else "starter")
     count = (
         await db.execute(
@@ -617,7 +617,7 @@ async def create_user(
         nxt = plans.next_plan_after(plan.code)
         raise HTTPException(
             status_code=402,
-            detail=f"{plan.name} plan mein {plan.max_staff} log tak hi ho sakte hain."
+            detail=f"The {plan.name} plan allows up to {plan.max_staff} team members."
                    + (f" {plans.get(nxt).name} par jaayein." if nxt else ""),
         )
     email = body.email.strip().lower()
@@ -627,7 +627,7 @@ async def create_user(
         )
     ).scalar_one_or_none()
     if dupe is not None:
-        raise HTTPException(status_code=409, detail="Ye email pehle se hai")
+        raise HTTPException(status_code=409, detail="This email is already registered")
 
     temp = auth.temp_password()
     db.add(

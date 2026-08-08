@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kwik Klin — Laundry ka apna WhatsApp CRM</title>
+<title>Kwik Klin — The WhatsApp CRM for laundries</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%BA%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<!-- fonts async — pehla paint system font mein, Poppins aate hi swap -->
+<!-- fonts async — first paint in the system font, swaps to Poppins when it arrives -->
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap"
       rel="stylesheet" media="print" onload="this.media='all';this.onload=null">
 <noscript><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
@@ -93,25 +93,25 @@
   <div class="logo"><div class="badge">KK</div><div>Kwik Klin<small>LAUNDRY PRO</small></div></div>
   <div class="spacer"></div>
   <button class="btn ghost" onclick="show('login')">Login</button>
-  <button class="btn" onclick="show('signup')">Shuru karein</button>
+  <button class="btn" onclick="show('signup')">Get started</button>
 </div></header>
 
 <section class="hero"><div class="wrap">
-  <h1>Aapki dukaan ka <span>WhatsApp</span> khud kaam karega</h1>
-  <p>Order lena, bill banana, customer ko status batana, staff se kaam karvana —
-     sab WhatsApp par. Aap sirf dukaan chalaiye.</p>
+  <h1>Your shop's <span>WhatsApp</span> runs itself</h1>
+  <p>Taking orders, making bills, updating customers, chasing staff —
+     all on WhatsApp. You just run the shop.</p>
   <div class="pills">
-    <span class="pill">🤖 AI khud jawab deta hai</span>
-    <span class="pill">📸 Parche ki photo se bill</span>
-    <span class="pill">🧾 Udhaar ka poora hisaab</span>
-    <span class="pill">🔁 Purane customer wapas</span>
+    <span class="pill">🤖 AI replies on its own</span>
+    <span class="pill">📸 Bill from a photo of the slip</span>
+    <span class="pill">🧾 Every due tracked</span>
+    <span class="pill">🔁 Old customers brought back</span>
   </div>
 </div></section>
 
 <section class="wrap">
   <div class="cycle">
-    <button id="cy-m" class="on" onclick="setCycle(false)">Mahina</button>
-    <button id="cy-a" onclick="setCycle(true)">Saal (2 mahine free)</button>
+    <button id="cy-m" class="on" onclick="setCycle(false)">Monthly</button>
+    <button id="cy-a" onclick="setCycle(true)">Yearly (2 months free)</button>
   </div>
   <div class="plans" id="plans"></div>
   <p class="note" id="note"></p>
@@ -120,29 +120,29 @@
 <!-- signup -->
 <section class="wrap" id="pane-signup" style="display:none">
   <div class="card">
-    <h2>Account banaiye</h2>
-    <p class="sub">14 din free — card ki zaroorat nahi. Pasand aaye to phir paisa.</p>
+    <h2>Create your account</h2>
+    <p class="sub">14 days free — no card needed. Pay only if you love it.</p>
     <div id="gsignup" style="display:none">
-      <button class="gbtn" onclick="location.href='/api/auth/google/start'"><svg viewBox="0 0 48 48"><path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-2.7-.4-3.9H24v7.1h12.1c-.2 1.8-1.6 4.6-4.5 6.4l6.9 5.3c4.1-3.8 6.6-9.3 6.6-14.9z"/><path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-6.9-5.3c-1.8 1.3-4.3 2.2-7.6 2.2-5.8 0-10.7-3.8-12.5-9.1l-7.1 5.5C8.1 41.1 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.5 28.5c-.5-1.4-.7-2.9-.7-4.5s.3-3.1.7-4.5l-7.1-5.5C2.9 17 2 20.4 2 24s.9 7 2.4 10z"/><path fill="#EA4335" d="M24 9.9c4.1 0 6.9 1.8 8.5 3.3l6.2-6C34.9 3.7 29.9 1.5 24 1.5 15.4 1.5 8.1 6.4 4.4 14l7.1 5.5C13.3 14.2 18.2 9.9 24 9.9z"/></svg>Google se account banaiye</button>
-      <div class="or">ya</div>
+      <button class="gbtn" onclick="location.href='/api/auth/google/start'"><svg viewBox="0 0 48 48"><path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-2.7-.4-3.9H24v7.1h12.1c-.2 1.8-1.6 4.6-4.5 6.4l6.9 5.3c4.1-3.8 6.6-9.3 6.6-14.9z"/><path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-6.9-5.3c-1.8 1.3-4.3 2.2-7.6 2.2-5.8 0-10.7-3.8-12.5-9.1l-7.1 5.5C8.1 41.1 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.5 28.5c-.5-1.4-.7-2.9-.7-4.5s.3-3.1.7-4.5l-7.1-5.5C2.9 17 2 20.4 2 24s.9 7 2.4 10z"/><path fill="#EA4335" d="M24 9.9c4.1 0 6.9 1.8 8.5 3.3l6.2-6C34.9 3.7 29.9 1.5 24 1.5 15.4 1.5 8.1 6.4 4.4 14l7.1 5.5C13.3 14.2 18.2 9.9 24 9.9z"/></svg>Sign up with Google</button>
+      <div class="or">or</div>
     </div>
     <div class="gnote" id="gnote" style="display:none"></div>
-    <label>Dukaan ka naam *</label><input id="s-shop" autocomplete="organization" placeholder="Kwik Klin Laundry">
+    <label>Shop name *</label><input id="s-shop" autocomplete="organization" placeholder="Kwik Klin Laundry">
     <div class="row">
-      <div><label>Aapka naam *</label><input id="s-name" placeholder="Suyash"></div>
-      <div><label>Shehar</label><input id="s-city" placeholder="Varanasi"></div>
+      <div><label>Your name *</label><input id="s-name" placeholder="Suyash"></div>
+      <div><label>City</label><input id="s-city" placeholder="Varanasi"></div>
     </div>
     <div class="row">
       <div><label>WhatsApp number *</label><input id="s-phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="98765 43210"></div>
-      <div><label>Email *</label><input id="s-email" type="email" autocomplete="email" placeholder="aap@email.com"></div>
+      <div><label>Email *</label><input id="s-email" type="email" autocomplete="email" placeholder="you@email.com"></div>
     </div>
     <div class="row">
       <div><label>Plan</label><select id="s-plan"></select></div>
       <div><label>Password * (8+)</label><input id="s-pass" type="password" autocomplete="new-password" placeholder="••••••••"></div>
     </div>
     <div class="msg" id="s-msg"></div>
-    <button class="btn" style="width:100%;margin-top:18px" id="s-go" onclick="doSignup()">Free trial shuru karein</button>
-    <div class="switch">Pehle se account hai? <a onclick="show('login')">Login karein</a></div>
+    <button class="btn" style="width:100%;margin-top:18px" id="s-go" onclick="doSignup()">Start your free trial</button>
+    <div class="switch">Already have an account? <a onclick="show('login')">Log in</a></div>
   </div>
 </section>
 
@@ -150,21 +150,21 @@
 <section class="wrap" id="pane-login" style="display:none">
   <div class="card">
     <h2>Login</h2>
-    <p class="sub">Apne email aur password se andar aaiye.</p>
+    <p class="sub">Sign in with your email and password.</p>
     <div id="glogin" style="display:none">
-      <button class="gbtn" onclick="location.href='/api/auth/google/start'"><svg viewBox="0 0 48 48"><path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-2.7-.4-3.9H24v7.1h12.1c-.2 1.8-1.6 4.6-4.5 6.4l6.9 5.3c4.1-3.8 6.6-9.3 6.6-14.9z"/><path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-6.9-5.3c-1.8 1.3-4.3 2.2-7.6 2.2-5.8 0-10.7-3.8-12.5-9.1l-7.1 5.5C8.1 41.1 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.5 28.5c-.5-1.4-.7-2.9-.7-4.5s.3-3.1.7-4.5l-7.1-5.5C2.9 17 2 20.4 2 24s.9 7 2.4 10z"/><path fill="#EA4335" d="M24 9.9c4.1 0 6.9 1.8 8.5 3.3l6.2-6C34.9 3.7 29.9 1.5 24 1.5 15.4 1.5 8.1 6.4 4.4 14l7.1 5.5C13.3 14.2 18.2 9.9 24 9.9z"/></svg>Google se login karein</button>
-      <div class="or">ya</div>
+      <button class="gbtn" onclick="location.href='/api/auth/google/start'"><svg viewBox="0 0 48 48"><path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-2.7-.4-3.9H24v7.1h12.1c-.2 1.8-1.6 4.6-4.5 6.4l6.9 5.3c4.1-3.8 6.6-9.3 6.6-14.9z"/><path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-6.9-5.3c-1.8 1.3-4.3 2.2-7.6 2.2-5.8 0-10.7-3.8-12.5-9.1l-7.1 5.5C8.1 41.1 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.5 28.5c-.5-1.4-.7-2.9-.7-4.5s.3-3.1.7-4.5l-7.1-5.5C2.9 17 2 20.4 2 24s.9 7 2.4 10z"/><path fill="#EA4335" d="M24 9.9c4.1 0 6.9 1.8 8.5 3.3l6.2-6C34.9 3.7 29.9 1.5 24 1.5 15.4 1.5 8.1 6.4 4.4 14l7.1 5.5C13.3 14.2 18.2 9.9 24 9.9z"/></svg>Log in with Google</button>
+      <div class="or">or</div>
     </div>
-    <label>Email</label><input id="l-email" type="email" autocomplete="email" placeholder="aap@email.com">
+    <label>Email</label><input id="l-email" type="email" autocomplete="email" placeholder="you@email.com">
     <label>Password</label><input id="l-pass" type="password" autocomplete="current-password" placeholder="••••••••"
       onkeydown="if(event.key==='Enter')doLogin()">
     <div class="msg" id="l-msg"></div>
     <button class="btn" style="width:100%;margin-top:18px" id="l-go" onclick="doLogin()">Login</button>
-    <div class="switch">Naya hai? <a onclick="show('signup')">Account banaiye</a></div>
+    <div class="switch">New here? <a onclick="show('signup')">Create an account</a></div>
   </div>
 </section>
 
-<footer><div class="wrap">Kwik Klin · Varanasi · WhatsApp par bana, dukaandaar ke liye bana</div></footer>
+<footer><div class="wrap">Kwik Klin · Varanasi · Built on WhatsApp, built for shop owners</div></footer>
 
 <script>
 let PLANS = [], ANNUAL = false, META = {}, GOOGLE_SIGNUP = false;
@@ -177,7 +177,7 @@ async function api(path, body, method) {
     credentials: "same-origin",
   });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.detail || "Kuch gadbad ho gayi");
+  if (!r.ok) throw new Error(d.detail || "Something went wrong");
   return d;
 }
 const $ = (id) => document.getElementById(id);
@@ -194,14 +194,14 @@ function setCycle(annual) {
 function renderPlans() {
   $("plans").innerHTML = PLANS.map((p) => `
     <div class="plan ${p.popular ? "pop" : ""}">
-      ${p.popular ? '<span class="tag">Sabse zyada liya jaane wala</span>' : ""}
+      ${p.popular ? '<span class="tag">Most popular</span>' : ""}
       <h3>${esc(p.name)}</h3>
       <div class="tl">${esc(p.tagline)}</div>
       <div class="price">₹${ANNUAL ? Math.round(p.annual_inr / 12).toLocaleString("en-IN")
-                                    : p.price_inr.toLocaleString("en-IN")}<small>/mahina</small></div>
-      <div class="save">${ANNUAL ? "₹" + p.annual_saving_inr.toLocaleString("en-IN") + " saal mein bachat" : ""}</div>
+                                    : p.price_inr.toLocaleString("en-IN")}<small>/month</small></div>
+      <div class="save">${ANNUAL ? "₹" + p.annual_saving_inr.toLocaleString("en-IN") + " saved per year" : ""}</div>
       <ul>${p.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
-      <button class="btn ${p.popular ? "" : "ghost"}" onclick="pick('${p.code}')">Ye chunein</button>
+      <button class="btn ${p.popular ? "" : "ghost"}" onclick="pick('${p.code}')">Choose this</button>
     </div>`).join("");
 }
 
@@ -234,15 +234,15 @@ async function doSignup() {
     password: $("s-pass").value,
   };
   if (!body.shop_name || !body.owner_name || !body.phone) {
-    return msg("s-msg", "* wale sab khane bharna zaroori hai");
+    return msg("s-msg", "Please fill every field marked *");
   }
   if (!GOOGLE_SIGNUP && !body.email) {
-    return msg("s-msg", "Email bharna zaroori hai");
+    return msg("s-msg", "Email is required");
   }
   if (!GOOGLE_SIGNUP && (body.password || "").length < 8) {
-    return msg("s-msg", "Password kam se kam 8 characters ka rakhein");
+    return msg("s-msg", "Password must be at least 8 characters");
   }
-  btn.disabled = true; btn.textContent = "Ban raha hai…";
+  btn.disabled = true; btn.textContent = "Creating…";
   try {
     if (GOOGLE_SIGNUP) {
       // email Google se aata hai, form se NAHI — warna koi bhi kisi aur ka
@@ -251,7 +251,7 @@ async function doSignup() {
         shop_name: body.shop_name, owner_name: body.owner_name,
         phone: body.phone, city: body.city, plan: body.plan,
       });
-      msg("s-msg", "Ho gaya! Aage badh rahe hain…", true);
+      msg("s-msg", "Done! Taking you in…", true);
       return setTimeout(() => (location.href = d.next_url || "/welcome"), 700);
     }
     await api("/api/signup", body);
@@ -259,22 +259,22 @@ async function doSignup() {
     // Kahan jaana hai ye SERVER batata hai: naye client ko apna welcome
     // page milta hai, kisi aur ki dukaan ka dashboard nahi.
     const d = await api("/api/login", { email: body.email, password: body.password });
-    msg("s-msg", "Ho gaya! Aage badh rahe hain…", true);
+    msg("s-msg", "Done! Taking you in…", true);
     setTimeout(() => (location.href = d.next_url || "/welcome"), 700);
   } catch (e) {
     msg("s-msg", e.message);
-    btn.disabled = false; btn.textContent = "Free trial shuru karein";
+    btn.disabled = false; btn.textContent = "Start your free trial";
   }
 }
 
 async function doLogin() {
   const btn = $("l-go");
-  btn.disabled = true; btn.textContent = "Ek minute…";
+  btn.disabled = true; btn.textContent = "One moment…";
   try {
     const d = await api("/api/login", {
       email: $("l-email").value.trim(), password: $("l-pass").value,
     });
-    msg("l-msg", "Swagat hai, " + (d.user.name || "") + "!", true);
+    msg("l-msg", "Welcome back, " + (d.user.name || "") + "!", true);
     setTimeout(() => (location.href = d.next_url || "/welcome"), 500);
   } catch (e) {
     msg("l-msg", e.message);
@@ -291,9 +291,9 @@ async function doLogin() {
       (p) => `<option value="${p.code}">${esc(p.name)} — ₹${p.price_inr}/mahina</option>`
     ).join("");
     $("note").textContent =
-      `Sab plans par ek baar ka setup ₹${META.setup_fee_inr} — WhatsApp connect, rate card, `
-      + `staff setup aur training hum karke dete hain. Daam GST (${META.gst_percent}%) ke bina. `
-      + `${META.trial_days} din free, card ki zaroorat nahi.`;
+      `All plans have a one-time ₹${META.setup_fee_inr} setup — we do the WhatsApp connect, rate card, `
+      + `staff setup and training for you. Prices exclude GST (${META.gst_percent}%). `
+      + `${META.trial_days} days free, no card needed.`;
     // Google button tabhi dikhta hai jab server par configure ho
     if (META.google_login) {
       $("gsignup").style.display = "";
@@ -311,8 +311,8 @@ async function doLogin() {
       $("s-pass").closest("div").style.display = "none";
       $("gsignup").style.display = "none";
       $("gnote").style.display = "";
-      $("gnote").textContent = `Google se ${pend.email} verify ho gaya. Ab bas dukaan ki detail bhar dijiye.`;
-      $("s-go").textContent = "Dukaan banaiye";
+      $("gnote").textContent = `${pend.email} is verified via Google. Just fill in your shop details.`;
+      $("s-go").textContent = "Create your shop";
       show("signup");
       $("s-shop").focus();
     }
@@ -322,7 +322,7 @@ async function doLogin() {
     if (err) { show("login"); msg("l-msg", err); }
     else if (location.hash === "#login") show("login");
   } catch (e) {
-    $("plans").innerHTML = `<p class="note">Plans load nahi ho paye: ${esc(e.message)}</p>`;
+    $("plans").innerHTML = `<p class="note">Could not load plans: ${esc(e.message)}</p>`;
   }
 })();
 </script>

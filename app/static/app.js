@@ -26,7 +26,7 @@ const T = {
 };
 
 const STATUS_LABEL = {
-  RECEIVED: "New", PICKUP_ASSIGNED: "Pickup lagaya", PICKED_UP: "Utha liya",
+  RECEIVED: "New", PICKUP_ASSIGNED: "Pickup assigned", PICKED_UP: "Picked up",
   IN_WASH: "Washing", IN_DRY: "Drying", IN_IRON: "Ironing",
   READY: "Ready", OUT_FOR_DELIVERY: "Out for delivery", DELIVERED: "Delivered",
   ON_HOLD: "On hold", CANCELLED: "Cancelled",
@@ -82,17 +82,17 @@ const fmtClock = (iso) =>
   new Date(iso).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
 const dayName = (iso) => {
   const d = new Date(iso), now = new Date();
-  const kal = new Date(now); kal.setDate(kal.getDate() - 1);
-  if (d.toDateString() === now.toDateString()) return "Aaj";
-  if (d.toDateString() === kal.toDateString()) return "Kal";
+  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === now.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
   return "";
 };
 const fmtWhen = (iso) => {
   if (!iso) return "—";
   const d = new Date(iso);
   const named = dayName(iso);
-  if (named === "Aaj") return fmtClock(iso);
-  if (named === "Kal") return "Kal";
+  if (named === "Today") return fmtClock(iso);
+  if (named === "Yesterday") return "Yesterday";
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 };
 function toast(msg, err = false) {
@@ -198,9 +198,9 @@ const TITLES = {
   expenses: ["Expenses", "Daily spend and categories"],
   reports: ["Reports", "Revenue, expenses and profit"],
   campaigns: ["Campaigns", "Segments, offers and results"],
-  tasks: ["Tasks", "Kisko kya kaam diya — pending, hua, kisne kya kaha"],
+  tasks: ["Tasks", "Who was given what — pending, done, and replies"],
   agents: ["Agents", "Your AI employees — health and controls"],
-  usage: ["AI usage", "Kitna AI use hua aur kitna kharch"],
+  usage: ["AI usage", "How much AI was used and what it cost"],
   training: ["AI training", "Teach the agent your business"],
   activity: ["Activity", "Everything the agent did, and why"],
   settings: ["Settings", "Rates, staff, shop and agent"],
@@ -300,7 +300,7 @@ async function loadWaStats() {
         ${s.meta_ok ? "" : '<span class="pill UNPAID">Meta API unreachable</span>'}
       </div>`;
   } catch (e) {
-    $("wa-stats").innerHTML = `<span class="muted">📱 WhatsApp stats nahi mile: ${esc(e.message)}</span>`;
+    $("wa-stats").innerHTML = `<span class="muted">📱 Could not load WhatsApp stats: ${esc(e.message)}</span>`;
   }
 }
 
@@ -362,7 +362,7 @@ function renderOrders() {
           <button class="btn sm ghost" title="Payment lo" aria-label="Payment lo" onclick="paymentModal('${o.order_number}')">₹</button>
           <button class="btn sm ghost" title="Delivery date" aria-label="Delivery date" onclick="dateModal('${o.order_number}')">📅</button>
           <button class="btn sm ghost" title="Details" aria-label="Details" onclick="orderDetail('${o.order_number}')">👁</button>
-          <button class="btn sm ghost" title="Chat kholo" aria-label="Chat kholo" onclick="jumpChat('${o.phone}')">💬</button>
+          <button class="btn sm ghost" title="Open chat" aria-label="Open chat" onclick="jumpChat('${o.phone}')">💬</button>
         </div></td>
       </tr>`).join("")}
     </tbody></table>
@@ -411,7 +411,7 @@ function paymentModal(number) {
   const due = o && o.total_amount
     ? Math.max(0, Number(o.total_amount) - Number(o.amount_paid || 0)) : "";
   const hint = o && o.total_amount
-    ? `<div class="muted">Baki: ${money(due)} (bill ${money(o.total_amount)}, mila ${money(o.amount_paid || 0)}) — advance/extra bhi chalega</div>` : "";
+    ? `<div class="muted">Due: ${money(due)} (bill ${money(o.total_amount)}, received ${money(o.amount_paid || 0)}) — advance/extra is fine too</div>` : "";
   openModal(`<h3>Collect payment — ${number}</h3>
     <div class="frm">
       <div><label>Amount (₹)</label><input id="pm-amt" type="number" min="1" step="0.01" value="${due || ""}" autofocus></div>
@@ -658,7 +658,7 @@ function billRowHtml(o, kind) {
       <button class="btn sm ghost" title="Details" aria-label="Details" onclick="orderDetail('${o.order_number}')">👁</button>
       <button class="btn sm ghost" title="Print" aria-label="Print" onclick="printReceiptFromOrder('${o.order_number}')">🖨</button>
       <button class="btn sm ghost" title="Payment lo" aria-label="Payment lo" onclick="paymentModal('${o.order_number}')">₹</button>
-      <button class="btn sm ghost" title="Bill edit karo" aria-label="Bill edit karo" onclick="editBillModal('${o.order_number}')">✏️</button>
+      <button class="btn sm ghost" title="Edit bill" aria-label="Edit bill" onclick="editBillModal('${o.order_number}')">✏️</button>
       <button class="btn sm ghost danger-ic" title="Delete" aria-label="Delete" onclick="deleteBillModal('${o.order_number}')">🗑</button>
     </div></td></tr>`;
   return `<div class="rowcard">
@@ -700,25 +700,25 @@ async function editBillModal(num) {
   openModal(`<h3>Bill — ${num}</h3>
     <p class="muted">${esc(o.customer_name || o.customer_phone)} · ${fmtDate(o.created_at)}</p>
     <div class="billedit">
-      <div class="bl head"><span>Kapda</span><span>Qty</span><span>Rate</span><span>Amount</span><span></span></div>
+      <div class="bl head"><span>Item</span><span>Qty</span><span>Rate</span><span>Amount</span><span></span></div>
       <div id="eb-lines"></div>
-      <button class="btn ghost sm" onclick="ebAdd()" style="margin-top:8px">+ Kapda jodo</button>
+      <button class="btn ghost sm" onclick="ebAdd()" style="margin-top:8px">+ Add item</button>
       <div class="billtot">
         <div class="sumrow"><span>Total</span><span class="money" id="eb-sum">—</span></div>
-        <div class="sumrow"><span>Mila hua</span><span class="money">${money(EB.paid)}</span></div>
-        <div class="sumrow total"><span>Baaki</span><span class="money" id="eb-due">—</span></div>
+        <div class="sumrow"><span>Received</span><span class="money">${money(EB.paid)}</span></div>
+        <div class="sumrow total"><span>Due</span><span class="money" id="eb-due">—</span></div>
       </div>
     </div>
     <div class="frm" style="margin-top:14px">
       <div class="split2">
-        <div class="setfield"><label for="eb-total">Total (₹) — apne aap jud jaata hai</label>
+        <div class="setfield"><label for="eb-total">Total (₹) — adds up automatically</label>
           <input id="eb-total" type="number" min="0" step="0.01" value="${o.total_amount ?? ""}"
                  oninput="EB.manual=true;ebCalc()">
-          <small>Rate na daalo to yahan khud likh sakte ho.</small></div>
+          <small>No rates entered? You can type the total here yourself.</small></div>
         <div class="setfield"><label for="eb-date">Delivery date</label>
           <input id="eb-date" type="date" value="${o.expected_delivery || ""}"></div>
       </div>
-      <div class="setfield"><label for="eb-notes">Internal note (customer ko kabhi nahi jaata)</label>
+      <div class="setfield"><label for="eb-notes">Internal note (never sent to the customer)</label>
         <input id="eb-notes" value="${esc(o.notes || "")}"></div>
       <small class="fielderr" id="eb-err"></small>
     </div>
@@ -741,9 +741,9 @@ async function editBillModal(num) {
         if (l.unit) row.unit = l.unit;
         return row;
       });
-    if (!items.length) { $("eb-err").textContent = "Kam se kam ek kapda likhna hoga."; return; }
+    if (!items.length) { $("eb-err").textContent = "Add at least one item."; return; }
     const total = $("eb-total").value === "" ? null : parseFloat($("eb-total").value);
-    if (total !== null && !(total >= 0)) { $("eb-err").textContent = "Total sahi nahi hai."; return; }
+    if (total !== null && !(total >= 0)) { $("eb-err").textContent = "That total doesn't look right."; return; }
     await api(`/orders/${EB.num}`, { method: "PUT", body: {
       items, total_amount: total, expected_delivery: $("eb-date").value || null,
       notes: $("eb-notes").value, edited_by: "dashboard",
@@ -769,15 +769,15 @@ function ebKapda(l, i) {
   const list = kapdaList();
   if (l.custom || !list.length) {
     return `<div class="kapda kapdanew">
-      <input id="eb-item-${i}" value="${esc(l.item)}" placeholder="kapde ka naam"
+      <input id="eb-item-${i}" value="${esc(l.item)}" placeholder="garment name"
              oninput="EB.lines[${i}].item=this.value">
-      ${list.length ? `<button class="btn sm ghost" title="List se chuno" onclick="ebFromList(${i})">☰</button>` : ""}
+      ${list.length ? `<button class="btn sm ghost" title="Pick from list" onclick="ebFromList(${i})">☰</button>` : ""}
     </div>`;
   }
   const cur = (l.item || "").trim();
   const hit = list.findIndex((r) =>
     r.garment.toLowerCase() === cur.toLowerCase() && (!l.service || r.service === l.service));
-  let opts = `<option value=""${cur ? "" : " selected"}>Kapda chuno…</option>`;
+  let opts = `<option value=""${cur ? "" : " selected"}>Pick a garment…</option>`;
   if (cur && hit < 0) opts += `<option value="keep" selected>${esc(cur)}</option>`;
   let svc = null;
   list.forEach((r, n) => {
@@ -789,7 +789,7 @@ function ebKapda(l, i) {
     opts += `<option value="${n}"${n === hit ? " selected" : ""}>${esc(r.garment)} — ₹${r.rate}${r.unit === "kg" ? "/kg" : ""}</option>`;
   });
   if (svc !== null) opts += "</optgroup>";
-  opts += `<option value="new">➕ Naya kapda — list me nahi hai</option>`;
+  opts += `<option value="new">➕ New garment — not on the list</option>`;
   return `<select class="kapda" onchange="ebPick(${i},this.value)">${opts}</select>`;
 }
 
@@ -852,10 +852,10 @@ function deleteBillModal(num) {
   const paid = Number(o.amount_paid || 0);
   openModal(`<h3>Delete bill ${num}?</h3>
     <p class="muted">${esc(o.customer_name || o.customer_phone)} · ${o.total_amount ? money(o.total_amount) : "—"}</p>
-    <p class="muted">Bill, status history${paid > 0 ? ` aur ${money(paid)} ka payment record` : ""} — sab chala jayega, wapas nahi aayega.</p>
+    <p class="muted">The bill, its status history${paid > 0 ? ` and the ${money(paid)} payment record` : ""} — all gone, and there is no undo.</p>
     <div class="btnrow">
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn danger" id="db-go">Haan, delete karo</button>
+      <button class="btn danger" id="db-go">Yes, delete it</button>
     </div>`);
   $("db-go").onclick = (e) => busy(e.target, async () => {
     await api(`/orders/${num}?deleted_by=dashboard`, { method: "DELETE" });
@@ -908,7 +908,7 @@ function renderCustomers() {
   const rows = all.slice(0, CUST_SHOWN);
   const more = all.length > rows.length || CUST_MAYBE_MORE;
   const moreBtn = more
-    ? `<div style="padding:12px;text-align:center"><button class="btn ghost sm" onclick="custMore(this)">⬇ Aur dikhao (${rows.length}${CUST_MAYBE_MORE ? "+" : " / " + all.length})</button></div>`
+    ? `<div style="padding:12px;text-align:center"><button class="btn ghost sm" onclick="custMore(this)">⬇ Show more (${rows.length}${CUST_MAYBE_MORE ? "+" : " / " + all.length})</button></div>`
     : "";
   $("cust-list").innerHTML = `
     <table class="tbl"><thead><tr><th>Customer</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Last seen</th><th>Actions</th></tr></thead>
@@ -948,7 +948,7 @@ function editCustomerModal(phone) {
         <input id="ec-name" value="${esc(c.name || "")}"></div>
       <div class="setfield"><label for="ec-phone">Phone</label>
         <input id="ec-phone" type="tel" inputmode="numeric" value="${esc(digits)}">
-        <small>Number badalne par unki puri chat aur bills isi naye number se judenge.</small>
+        <small>Changing the number moves their whole chat and all bills to the new number.</small>
         <small class="fielderr" id="ec-phone-err"></small></div>
       <div class="setfield"><label for="ec-addr">Address</label>
         <input id="ec-addr" value="${esc(c.address || "")}"></div>
@@ -960,7 +960,7 @@ function editCustomerModal(phone) {
   $("ec-save").onclick = (e) => busy(e.target, async () => {
     $("ec-phone-err").textContent = "";
     const ph = $("ec-phone").value.replace(/\D/g, "");
-    if (ph.length !== 10) { $("ec-phone-err").textContent = "Phone 10 digit ka hona chahiye."; return; }
+    if (ph.length !== 10) { $("ec-phone-err").textContent = "Phone must be 10 digits."; return; }
     await api(`/admin/api/customers/${encodeURIComponent(phone)}`, { method: "PUT", body: {
       name: $("ec-name").value, phone: ph, address: $("ec-addr").value,
     }});
@@ -976,11 +976,11 @@ function deleteCustomerModal(phone) {
   openModal(`<h3>Delete ${esc(label)}?</h3>
     <p class="muted">${c.phone}</p>
     <p class="muted">${n
-      ? `Unke <b>${n} bill</b>, payments, aur poori chat history bhi delete ho jayegi. Reports ke numbers badal jayenge.`
-      : "Inka koi bill nahi hai. Chat history delete ho jayegi."}</p>
+      ? `Their <b>${n} bill(s)</b>, payments and full chat history will be deleted too. Report numbers will change.`
+      : "They have no bills. Their chat history will be deleted."}</p>
     <div class="btnrow">
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn danger" id="dc-go">Haan, delete karo</button>
+      <button class="btn danger" id="dc-go">Yes, delete them</button>
     </div>`);
   $("dc-go").onclick = (e) => busy(e.target, async () => {
     await api(`/admin/api/customers/${encodeURIComponent(phone)}?force=true`, { method: "DELETE" });
@@ -1063,19 +1063,19 @@ async function loadUsage() {
   catch (e) { $("usage-models").innerHTML = errBox(e.message, "loadUsage"); return; }
 
   const capNote = u.daily_request_cap
-    ? `${u.calls_left_today} aur bache hain aaj`
-    : "koi limit set nahi";
+    ? `${u.calls_left_today} left today`
+    : "no limit set";
   const budgetNote = u.monthly_budget_usd
-    ? `budget ${usd(u.monthly_budget_usd)}` : "budget set nahi";
+    ? `budget ${usd(u.monthly_budget_usd)}` : "no budget set";
 
   $("usage-kpis").innerHTML =
-    kpi("Aaj ke AI calls", u.today.calls, capNote, "", "⚡", "orange") +
-    kpi("Aaj ke tokens", kTok(u.today.input_tokens + u.today.output_tokens),
+    kpi("AI calls today", u.today.calls, capNote, "", "⚡", "orange") +
+    kpi("Tokens today", kTok(u.today.input_tokens + u.today.output_tokens),
         `in ${kTok(u.today.input_tokens)} · out ${kTok(u.today.output_tokens)}`, "", "🔤", "blue") +
-    kpi("Is mahine kharch", u.all_free ? "₹0 (free)" : usd(u.month.cost_usd),
-        u.all_free ? "free tier par ho" : budgetNote, "", "💰", "green") +
-    kpi("Is raftaar se mahina", u.all_free ? "₹0" : usd(u.projected_month_usd),
-        `${u.month.calls} calls ab tak`, "", "📈", "purple");
+    kpi("Spend this month", u.all_free ? "₹0 (free)" : usd(u.month.cost_usd),
+        u.all_free ? "on the free tier" : budgetNote, "", "💰", "green") +
+    kpi("Monthly at this rate", u.all_free ? "₹0" : usd(u.projected_month_usd),
+        `${u.month.calls} calls so far`, "", "📈", "purple");
 
   // simple bar chart — no library, scales to the busiest day
   const s = u.series || [];
@@ -1088,8 +1088,8 @@ async function loadUsage() {
         style="flex:1;min-width:0;background:var(--g-blue);border-radius:3px 3px 0 0;cursor:pointer;
         height:${Math.max(3, (d.calls / max) * 100)}%"></div>`).join("") + `</div>
       <div class="muted" style="display:flex;justify-content:space-between;margin-top:6px">
-        <span>${s[0].date.slice(5)}</span><span>aaj</span></div>`
-    : emptyBox("Abhi tak koi AI call record nahi hui.", "📊");
+        <span>${s[0].date.slice(5)}</span><span>today</span></div>`
+    : emptyBox("No AI calls recorded yet.", "📊");
 
   const rows = u.by_purpose || [];
   const totTok = rows.reduce((a, r) => a + r.tokens, 0) || 1;
@@ -1100,30 +1100,30 @@ async function loadUsage() {
       <div style="height:5px;background:var(--n100);border-radius:3px;margin-bottom:8px">
         <div style="height:5px;width:${Math.round((r.tokens / totTok) * 100)}%;background:var(--g-orange);border-radius:3px"></div>
       </div>`).join("")
-    : `<p class="muted">Is mahine abhi kuch nahi.</p>`;
+    : `<p class="muted">Nothing this month yet.</p>`;
 
   // table on wide screens + stacked cards on phones — .tbl is hidden <768px
   const byModel = u.month.by_model || [];
   $("usage-models").innerHTML = `
     <p class="muted">Provider: <b>${esc(u.provider)}</b> · ${esc(u.models.smart)} / ${esc(u.models.cheap)}</p>
-    <table class="tbl"><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Kharch</th></tr></thead>
+    <table class="tbl"><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Cost</th></tr></thead>
     <tbody>${byModel.map((m) => `<tr>
       <td><b>${esc(m.model)}</b></td><td>${m.calls}</td>
       <td>${kTok(m.input_tokens)}</td><td>${kTok(m.output_tokens)}</td>
       <td class="money">${m.priced ? usd(m.cost_usd) : '<span class="muted">free</span>'}</td>
-    </tr>`).join("") || `<tr><td colspan="5" class="muted">Is mahine koi call nahi.</td></tr>`}</tbody></table>
+    </tr>`).join("") || `<tr><td colspan="5" class="muted">No calls this month.</td></tr>`}</tbody></table>
     <div class="rowcards">${byModel.map((m) => `
       <div class="rowcard"><div class="r1"><b>${esc(m.model)}</b>
         <span class="money">${m.priced ? usd(m.cost_usd) : "free"}</span></div>
       <div class="kv"><span>${m.calls} calls</span><span>in ${kTok(m.input_tokens)} · out ${kTok(m.output_tokens)}</span></div>
-      </div>`).join("") || `<p class="muted">Is mahine koi call nahi.</p>`}</div>
-    <p class="muted" style="margin-top:10px">Rate card aur limit Settings mein badal sakte ho — puraana hisaab bhi naye rate se dobara jud jayega.</p>`;
+      </div>`).join("") || `<p class="muted">No calls this month.</p>`}</div>
+    <p class="muted" style="margin-top:10px">Rates and limits can be changed in Settings — past usage is re-priced with the new rates too.</p>`;
 }
 
 const PURPOSE_LABEL = {
-  reply: "Customer ko jawab", intent: "Message samajhna", extract: "Bill/command padhna",
-  vision: "Photo se bill", query: "Aapke sawal", marketing: "Campaign likhna",
-  social: "Daily poster", other: "Baaki",
+  reply: "Customer replies", intent: "Understanding messages", extract: "Reading bills/commands",
+  vision: "Bill from photo", query: "Your questions", marketing: "Writing campaigns",
+  social: "Daily poster", other: "Other",
 };
 
 /* ============================= tasks ============================= */
@@ -1149,9 +1149,9 @@ function renderTaskKpis() {
   const doneToday = TASKS.filter((t) => t.status === "DONE"
     && t.completed_at && t.completed_at.slice(0, 10) === new Date().toISOString().slice(0, 10));
   $("task-kpis").innerHTML =
-    kpi("Pending kaam", open.length, "", "", "📋", "orange") +
-    kpi("Atke hue", stuck.length, "6 ghante+ ya escalate hua", "", "🚨", "red") +
-    kpi("Aaj complete", doneToday.length, "", "", "✅", "green");
+    kpi("Pending tasks", open.length, "", "", "📋", "orange") +
+    kpi("Stuck", stuck.length, "6h+ old or escalated", "", "🚨", "red") +
+    kpi("Done today", doneToday.length, "", "", "✅", "green");
 }
 
 function renderTaskChips() {
@@ -1160,7 +1160,7 @@ function renderTaskChips() {
     DONE: TASKS.filter((t) => t.status === "DONE").length,
     ALL: TASKS.length,
   };
-  $("task-chips").innerHTML = [["OPEN", "Pending"], ["DONE", "Ho gaye"], ["ALL", "Sab"]]
+  $("task-chips").innerHTML = [["OPEN", "Pending"], ["DONE", "Done"], ["ALL", "All"]]
     .map(([v, label]) => `<span class="chip ${taskFilter === v ? "on" : ""}"
       onclick="taskFilter='${v}';renderTaskChips();renderTasks()">${label} <b>${counts[v]}</b></span>`)
     .join("");
@@ -1170,7 +1170,7 @@ function renderTasks() {
   const rows = TASKS.filter((t) => taskFilter === "ALL" || t.status === taskFilter);
   if (!rows.length) {
     $("task-list").innerHTML = emptyBox(
-      taskFilter === "OPEN" ? "Koi kaam pending nahi 🎉" : "Yahan kuch nahi hai.", "✅");
+      taskFilter === "OPEN" ? "No pending tasks 🎉" : "Nothing here.", "✅");
     return;
   }
   $("task-list").innerHTML = `<div class="stafflist">` + rows.map((t) => {
@@ -1182,19 +1182,19 @@ function renderTasks() {
         <div class="nm">${t.urgent ? "🔴 " : ""}${esc(t.title)}</div>
         <div class="meta">
           <span class="badge">${t.code}</span>
-          <span class="badge role">${t.staff ? esc(t.staff) : "kisi ko nahi diya"}</span>
+          <span class="badge role">${t.staff ? esc(t.staff) : "unassigned"}</span>
           ${t.order_number ? `<span class="badge">${t.order_number}</span>` : ""}
           <span class="statuspill ${open ? "off" : "on"}">${
-            t.status === "OPEN" ? `${t.age_hours}h pending` : t.status === "DONE" ? "Ho gaya" : "Cancel"}</span>
-          ${t.ping_count ? `<span class="badge">${t.ping_count}x yaad dilaya</span>` : ""}
-          ${t.escalated ? `<span class="statuspill off" style="color:var(--danger)">aapko bataya</span>` : ""}
+            t.status === "OPEN" ? `${t.age_hours}h pending` : t.status === "DONE" ? "Done" : "Cancelled"}</span>
+          ${t.ping_count ? `<span class="badge">reminded ${t.ping_count}x</span>` : ""}
+          ${t.escalated ? `<span class="statuspill off" style="color:var(--danger)">escalated to you</span>` : ""}
         </div>
-        ${t.reply ? `<div class="muted" style="margin-top:6px">💬 ${esc(t.staff || "unhone")}: ${esc(t.reply)}</div>` : ""}
+        ${t.reply ? `<div class="muted" style="margin-top:6px">💬 ${esc(t.staff || "they")}: ${esc(t.reply)}</div>` : ""}
       </div>
       <div class="acts">
         ${open ? `
-          <button class="btn sm ghost" onclick="pingTask('${t.code}')">Poochho</button>
-          <button class="btn sm" onclick="doneTask('${t.code}')">Ho gaya</button>
+          <button class="btn sm ghost" onclick="pingTask('${t.code}')">Ask</button>
+          <button class="btn sm" onclick="doneTask('${t.code}')">Done</button>
           <button class="btn sm ghost" onclick="cancelTask('${t.code}')">Cancel</button>` : ""}
       </div>
     </div>`;
@@ -1206,19 +1206,19 @@ async function pingTask(code) {
   catch (e) { toast(e.message, true); }
 }
 async function doneTask(code) {
-  try { await api(`/admin/api/tasks/${code}/done`, { method: "POST" }); toast(`${code} band`); loadTasks(); }
+  try { await api(`/admin/api/tasks/${code}/done`, { method: "POST" }); toast(`${code} closed`); loadTasks(); }
   catch (e) { toast(e.message, true); }
 }
 function cancelTask(code) {
-  confirmDialog(`${code} cancel kar dein? Staff ko aur reminder nahi jayenge.`, async () => {
-    try { await api(`/admin/api/tasks/${code}/cancel`, { method: "POST" }); toast(`${code} cancel`); loadTasks(); }
+  confirmDialog(`Cancel ${code}? The staff member will get no more reminders.`, async () => {
+    try { await api(`/admin/api/tasks/${code}/cancel`, { method: "POST" }); toast(`${code} cancelled`); loadTasks(); }
     catch (e) { toast(e.message, true); }
   });
 }
 async function pingAllTasks(btn) {
   await busy(btn, async () => {
     const r = await api("/admin/api/jobs/task-followups", { method: "POST" });
-    toast(r.sent ? `${r.sent} logon ko yaad dilaya` : "Abhi kisi ko poochne ki zarurat nahi thi");
+    toast(r.sent ? `Reminded ${r.sent} people` : "Nobody needed a reminder right now");
     loadTasks();
   });
 }
@@ -1226,34 +1226,34 @@ async function pingAllTasks(btn) {
 function newTaskModal() {
   const opts = (STAFF || []).filter((s) => s.is_active)
     .map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
-  openModal(`<h3>Naya kaam</h3>
+  openModal(`<h3>New task</h3>
     <div class="frm">
-      <div class="setfield"><label for="nt-title">Kya karna hai</label>
-        <input id="nt-title" placeholder="Sharma ji ka order aaj hi deliver karna hai" autofocus>
-        <small>Seedhe unse baat karte hue likho — yahi message unke WhatsApp par jayega.</small>
+      <div class="setfield"><label for="nt-title">What needs doing</label>
+        <input id="nt-title" placeholder="Deliver Sharma ji's order today itself" autofocus>
+        <small>Write it as if you're talking to them — this exact message goes to their WhatsApp.</small>
         <small class="fielderr" id="nt-err"></small></div>
       <div class="split2">
-        <div class="setfield"><label for="nt-staff">Kisko</label>
-          <select id="nt-staff">${opts || '<option value="">koi staff nahi</option>'}</select></div>
+        <div class="setfield"><label for="nt-staff">Assign to</label>
+          <select id="nt-staff">${opts || '<option value="">no staff yet</option>'}</select></div>
         <div class="setfield"><label for="nt-order">Order (optional)</label>
           <input id="nt-order" placeholder="KK-20260805-01"></div>
       </div>
       <div class="setfield"><label for="nt-urgent">Urgent?</label>
-        <select id="nt-urgent"><option value="false">Normal</option><option value="true">Urgent — jaldi poochhunga</option></select></div>
+        <select id="nt-urgent"><option value="false">Normal</option><option value="true">Urgent — follow up sooner</option></select></div>
     </div>
     <div class="btnrow">
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn" id="nt-go">Bhejo aur track karo</button>
+      <button class="btn" id="nt-go">Send and track</button>
     </div>`);
   $("nt-go").onclick = (e) => busy(e.target, async () => {
     const title = $("nt-title").value.trim();
-    if (title.length < 2) { $("nt-err").textContent = "Kaam likhna zaroori hai."; return; }
+    if (title.length < 2) { $("nt-err").textContent = "Please write the task."; return; }
     const r = await api("/admin/api/tasks", { method: "POST", body: {
       title, staff: $("nt-staff").value || null,
       order_number: $("nt-order").value.trim() || null,
       urgent: $("nt-urgent").value === "true",
     }});
-    closeModal(); toast(`${r.code} bhej diya`); loadTasks();
+    closeModal(); toast(`${r.code} sent`); loadTasks();
   });
 }
 
@@ -1532,7 +1532,7 @@ async function loadAgents() {
   catch (e) { $("agents-body").innerHTML = errBox(e.message, "loadAgents"); return; }
   const sv = d.service, mk = d.marketing;
   const segTop = Object.entries(mk.segments).filter(([, v]) => v > 0)
-    .map(([k, v]) => `${SEGMENT_LABEL[k] || k}: <b>${v}</b>`).join(" · ") || "koi segment nahi";
+    .map(([k, v]) => `${SEGMENT_LABEL[k] || k}: <b>${v}</b>`).join(" · ") || "no segments yet";
   const budgetPct = Math.min(100, Math.round((mk.month.messages_used / Math.max(1, mk.month.budget)) * 100));
   $("agents-body").innerHTML = `
     <div class="split2">
@@ -1556,7 +1556,7 @@ async function loadAgents() {
           <button class="btn sm" onclick="go('training')">🎓 Train</button>
           <button class="btn sm ghost" onclick="go('activity')">🛰 Activity</button>
         </div>
-        <p class="muted" style="margin-top:8px">WhatsApp se train: <b>test customer</b> → sawal → <b>sikhao: sahi jawaab</b> → <b>test band</b></p>
+        <p class="muted" style="margin-top:8px">Train from WhatsApp: <b>test customer</b> → ask a question → <b>sikhao: the right answer</b> → <b>test band</b></p>
       </div>
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -1578,7 +1578,7 @@ async function loadAgents() {
           <button class="btn sm" onclick="go('campaigns')">📣 Campaigns</button>
           <button class="btn sm ghost" onclick="go('settings')">⚙️ Limits</button>
         </div>
-        <p class="muted" style="margin-top:8px">WhatsApp se: <b>test marketing</b> (preview) · <b>social bhejo</b> (aaj ka poster) · <b>campaign nahi</b> (brake)</p>
+        <p class="muted" style="margin-top:8px">From WhatsApp: <b>test marketing</b> (preview) · <b>social bhejo</b> (today's poster) · <b>campaign nahi</b> (stop)</p>
       </div>
     </div>
     <div class="card" style="margin-top:14px">
@@ -1587,7 +1587,7 @@ async function loadAgents() {
         <span class="tag">LLM: ${esc(d.health.llm_provider)}</span>
         <span class="tag">Public URL: ${d.health.public_url_set ? "✅ set" : "❌ missing"}</span>
         <span class="tag">Standup: ${d.health.standup_hour}:00 IST</span>
-        <span class="tag">Turnaround: ${d.health.turnaround_days} din</span>
+        <span class="tag">Turnaround: ${d.health.turnaround_days} days</span>
       </div>
     </div>`;
 }
@@ -1713,41 +1713,41 @@ async function saveAgentSettings(btn) {
    action name ({"code":"T-3","staff":"Taskram"}), which is a developer's
    view of the shop. Same rows, told as sentences. */
 const ACT_META = {
-  new_bill: ["🧾", "Bill draft banaya"],
-  create_bill: ["🧾", "Bill bana"],
-  order_edited: ["✏️", "Bill edit hua"],
-  order_deleted: ["🗑", "Bill delete hua"],
-  customer_edited: ["✏️", "Customer edit hua"],
-  customer_deleted: ["🗑", "Customer delete hua"],
-  relay: ["📨", "Message pahunchaya"],
-  task_created: ["📋", "Kaam diya"],
-  task_completed: ["✅", "Kaam pura hua"],
-  pickup_task_created: ["🛺", "Pickup laga"],
-  status_update: ["🔄", "Status badla"],
-  delay_update: ["⏳", "Delivery aage badhi"],
-  assign_staff: ["👷", "Staff ko diya"],
-  done_command: ["✅", "Staff ne done bola"],
-  standup: ["📣", "Subah ka standup"],
+  new_bill: ["🧾", "Bill drafted"],
+  create_bill: ["🧾", "Bill created"],
+  order_edited: ["✏️", "Bill edited"],
+  order_deleted: ["🗑", "Bill deleted"],
+  customer_edited: ["✏️", "Customer edited"],
+  customer_deleted: ["🗑", "Customer deleted"],
+  relay: ["📨", "Message relayed"],
+  task_created: ["📋", "Task assigned"],
+  task_completed: ["✅", "Task completed"],
+  pickup_task_created: ["🛺", "Pickup scheduled"],
+  status_update: ["🔄", "Status changed"],
+  delay_update: ["⏳", "Delivery pushed back"],
+  assign_staff: ["👷", "Assigned to staff"],
+  done_command: ["✅", "Staff said done"],
+  standup: ["📣", "Morning standup"],
   payment_reminders: ["💰", "Payment reminder"],
   delivery_nudges: ["🔔", "Delivery nudge"],
-  ai_reply: ["🤖", "Customer ko jawab"],
-  escalated: ["🔔", "Aapko bheja"],
-  complaint_escalated: ["😞", "Shikayat aayi"],
-  admin_fyi: ["ℹ️", "Aapko FYI"],
-  rating: ["⭐", "Rating mila"],
-  lead_created: ["🌱", "Nayi inquiry"],
+  ai_reply: ["🤖", "Replied to customer"],
+  escalated: ["🔔", "Escalated to you"],
+  complaint_escalated: ["😞", "Complaint received"],
+  admin_fyi: ["ℹ️", "FYI to you"],
+  rating: ["⭐", "Rating received"],
+  lead_created: ["🌱", "New inquiry"],
   hot_lead_digest: ["🌱", "Lead digest"],
-  campaign_sent: ["📢", "Campaign gaya"],
-  campaign_approved: ["👍", "Campaign approve hua"],
+  campaign_sent: ["📢", "Campaign sent"],
+  campaign_approved: ["👍", "Campaign approved"],
   daily_social: ["📸", "Daily post"],
-  taught_via_whatsapp: ["🎓", "WhatsApp se sikhaya"],
-  training_doc_uploaded: ["📄", "Training file chadhi"],
-  message_format_edited: ["💬", "Message format badla"],
+  taught_via_whatsapp: ["🎓", "Taught via WhatsApp"],
+  training_doc_uploaded: ["📄", "Training file uploaded"],
+  message_format_edited: ["💬", "Message format edited"],
   message_format_reset: ["↩️", "Message format reset"],
-  template_submitted: ["📑", "Template Meta ko bheja"],
-  agent_paused: ["⏸", "Agent roka"],
-  agent_resumed: ["▶️", "Agent chalu"],
-  tunnel_heal: ["🔧", "Tunnel theek kiya"],
+  template_submitted: ["📑", "Template sent to Meta"],
+  agent_paused: ["⏸", "Agent paused"],
+  agent_resumed: ["▶️", "Agent resumed"],
+  tunnel_heal: ["🔧", "Tunnel repaired"],
 };
 // args worth showing as chips, in the order they read best
 const ACT_CHIPS = ["order", "order_number", "code", "staff", "staff_name", "relay_to",
@@ -1783,7 +1783,7 @@ async function loadActivity(reset = true) {
     const rows = await api("/admin/api/activity?" + p);
     if (!rows.length) { $("act-list").innerHTML = emptyBox("No agent activity yet.", "🤖"); return; }
     const moreBtn = rows.length >= ACT_LIMIT && ACT_LIMIT < ACT_MAX
-      ? `<div style="padding:12px;text-align:center"><button class="btn ghost sm" onclick="actMore(this)">⬇ Aur dikhao (${rows.length} dikh rahe)</button></div>`
+      ? `<div style="padding:12px;text-align:center"><button class="btn ghost sm" onclick="actMore(this)">⬇ Show more (${rows.length} shown)</button></div>`
       : "";
     let lastDay = "";
     $("act-list").innerHTML = rows.map((r) => {
@@ -1950,7 +1950,7 @@ function rmAddGarment() {
   if (!g) return;
   RM_EXTRA_G.push(g); $("rm-garment").value = "";
   renderRateMatrix();
-  toast("Ab kisi bhi service ke cell mein rate likho — save ho jayega");
+  toast("Now type a rate in any service cell — it saves automatically");
 }
 function rmAddService() {
   const s = $("rm-service").value.trim();
@@ -2282,7 +2282,7 @@ function renderThreads() {
   const items = rows.map((t) => {
     const chip = t.kind === "staff" ? '<span class="staff-chip">staff</span>' : t.kind === "admin" ? '<span class="staff-chip">👑 you</span>' : "";
     const preview = t.no_messages
-      ? `<span class="pv-none">Abhi koi message nahi — tap karke shuru karein</span>`
+      ? `<span class="pv-none">No messages yet — tap to start</span>`
       : `${isUnread(t) ? '<b style="color:#00A884">● </b>' : ""}${
           t.last_direction === "OUTBOUND" ? "✓✓ " : ""}${esc(previewText(t.last_text))}`;
     return `<div class="thread-item ${t.phone === OPEN_PHONE ? "on" : ""}"
@@ -2296,12 +2296,12 @@ function renderThreads() {
       </div></div>`;
   }).join("");
   const footer = TH_MORE
-    ? `<div class="th-more" onclick="loadMoreThreads()">⬇ Aur dikhao (${rows.length}/${TH_TOTAL})</div>`
+    ? `<div class="th-more" onclick="loadMoreThreads()">⬇ Show more (${rows.length}/${TH_TOTAL})</div>`
     : rows.length
-      ? `<div class="th-end">${rows.length} ${TH_QUERY ? "mile" : "chat"}</div>`
+      ? `<div class="th-end">${rows.length} ${TH_QUERY ? "found" : "chats"}</div>`
       : "";
   const html = (items || `<div class="thread-item">${
-    TH_QUERY ? "Kuch nahi mila" : T.noData}</div>`) + footer;
+    TH_QUERY ? "No matches" : T.noData}</div>`) + footer;
   if (html === LAST_TH_HTML) return;          // data wahi ka wahi — repaint kyun?
   const el = $("th-list");
   const keep = el.scrollTop;
@@ -2436,7 +2436,7 @@ async function openThread(phone, silent = false, push = true) {
       } else if (med[1] === "video") {
         body = `<video controls preload="metadata" src="${url}" width="260" style="border-radius:8px"></video>${label}`;
       } else {
-        body = `<a class="filechip" href="${url}" target="_blank" rel="noopener">📄 ${label || "File kholo"}</a>`;
+        body = `<a class="filechip" href="${url}" target="_blank" rel="noopener">📄 ${label || "Open file"}</a>`;
       }
     } else if (loc) {
       body = `<a class="filechip" target="_blank" rel="noopener"
@@ -2471,7 +2471,7 @@ async function openThread(phone, silent = false, push = true) {
     const quoted = m.reply_to && BY_WAMID[m.reply_to];
     // one line, on purpose — see the note in the template branch above
     const quote = quoted
-      ? `<div class="quoted"><span>${quoted.direction === "INBOUND" ? esc(d.name) : "Aap"}</span>${esc(oneLine(quoted.text)).slice(0, 90)}</div>`
+      ? `<div class="quoted"><span>${quoted.direction === "INBOUND" ? esc(d.name) : "You"}</span>${esc(oneLine(quoted.text)).slice(0, 90)}</div>`
       : "";
     const meta = `<span class="bt">${fmtClock(m.at)}${
       m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") + ticks(m.status) : ""
@@ -2534,7 +2534,7 @@ function replyTo(wamid) {
   if (!m) return;
   REPLY_TO = wamid;
   const bar = $("reply-bar");
-  bar.innerHTML = `<div class="rq"><span>${m.direction === "INBOUND" ? esc(OPEN_THREAD?.name || "Unhone") : "Aap"}</span>
+  bar.innerHTML = `<div class="rq"><span>${m.direction === "INBOUND" ? esc(OPEN_THREAD?.name || "They") : "You"}</span>
       ${esc(oneLine(m.text)).slice(0, 110)}</div>
     <button class="rx" onclick="cancelReply()" aria-label="Cancel reply">✕</button>`;
   bar.classList.add("show");
@@ -2551,7 +2551,7 @@ async function pingThread(btn) {
   if (!OPEN_PHONE) return;
   await busy(btn, async () => {
     const r = await api("/admin/api/inbox/ping", { method: "POST", body: { phone: OPEN_PHONE } });
-    toast("🔔 Ping bhej diya: " + oneLine(r.text).slice(0, 60));
+    toast("🔔 Ping sent: " + oneLine(r.text).slice(0, 60));
     openThread(OPEN_PHONE, true, false);
   });
 }
@@ -2565,7 +2565,7 @@ async function sendChat() {
   cancelReply();
   if (!navigator.onLine) {
     saveOutbox([...outbox(), { phone: OPEN_PHONE, text, reply_to: replyTo }]);
-    toast("Offline — message queue mein hai, net aate hi jayega");
+    toast("Offline — message is queued, it will send once you're back online");
     return;
   }
   try {
@@ -2582,7 +2582,7 @@ function newChatModal() {
       <div><label>Mobile number</label><input id="nc-phone" type="tel" inputmode="numeric" placeholder="98765 43210" autofocus></div>
       <div><label>Name (optional)</label><input id="nc-name" placeholder="Customer name"></div>
     </div>
-    <p class="muted">Naya number ho to pehla message sirf <b>approved template</b> se ja sakta hai (WhatsApp ka niyam) — chat khulne par 📑 button use karo.</p>
+    <p class="muted">For a brand-new number the first message can only be an <b>approved template</b> (WhatsApp's rule) — use the 📑 button once the chat opens.</p>
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
     <button class="btn" id="nc-go">Open chat</button></div>`);
   $("nc-go").onclick = (e) => busy(e.target, async () => {
@@ -2597,20 +2597,20 @@ function newChatModal() {
 /* template picker send (works outside the 24h window) */
 let TPL_CACHE = [];
 async function tplSendModal() {
-  if (!OPEN_PHONE) { toast("Pehle koi chat kholo", true); return; }
-  openModal(`<h3>📑 Template bhejo</h3><div class="frm" id="tps-body">${skeleton(2)}</div>`);
+  if (!OPEN_PHONE) { toast("Open a chat first", true); return; }
+  openModal(`<h3>📑 Send template</h3><div class="frm" id="tps-body">${skeleton(2)}</div>`);
   let note = "";
   try {
     TPL_CACHE = (await api("/admin/api/templates")).filter((t) => t.status === "APPROVED");
-    if (!TPL_CACHE.length) note = "⚠️ Meta par abhi koi template APPROVED nahi — bhejne par fail ho sakta hai.";
+    if (!TPL_CACHE.length) note = "⚠️ No template is APPROVED at Meta yet — sending may fail.";
     if (!TPL_CACHE.length) TPL_CACHE = await api("/admin/api/templates/registry");
   } catch (e) {
     // Meta down/blocked -> local registry, honest warning
     try { TPL_CACHE = await api("/admin/api/templates/registry"); } catch (e2) { TPL_CACHE = []; }
-    note = "⚠️ Meta API abhi unreachable — list local registry se hai, send try hoga par fail ho sakta hai.";
+    note = "⚠️ Meta API is unreachable — this list is from the local registry; sending may fail.";
   }
   if (!TPL_CACHE.length) {
-    $("tps-body").innerHTML = `<p class="muted">Koi template nahi mila.</p>
+    $("tps-body").innerHTML = `<p class="muted">No templates found.</p>
       <div class="btnrow"><button class="btn ghost" onclick="closeModal()">OK</button></div>`;
     return;
   }
@@ -2630,7 +2630,7 @@ async function tplSendModal() {
     const n = (t.body.match(/\{\{\d+\}\}/g) || []).length;
     const params = [];
     for (let i = 1; i <= n; i++) params.push($("tps-p" + i).value.trim());
-    if (params.some((p) => !p)) throw new Error("Sab variables bharo");
+    if (params.some((p) => !p)) throw new Error("Fill in all the variables");
     await api("/admin/api/inbox/send-template", { method: "POST",
       body: { phone: OPEN_PHONE, template_name: t.name, params } });
     closeModal(); toast(T.sent); openThread(OPEN_PHONE, true, false);
@@ -2665,19 +2665,19 @@ function bulkImportModal() {
     <div id="bi-pane-file">
       <label class="dropzone" id="bi-drop">
         <input type="file" id="bi-file" accept=".csv,.tsv,.xlsx,.xlsm,text/csv" style="display:none">
-        <div class="dz-in"><b>📄 File chunein ya yahan drop karein</b>
-          <span class="muted">.xlsx ya .csv — 5MB tak</span></div>
+        <div class="dz-in"><b>📄 Choose a file or drop it here</b>
+          <span class="muted">.xlsx or .csv — up to 5MB</span></div>
       </label>
       <div id="bi-file-name" class="muted" style="margin-top:8px"></div>
-      <p class="muted" style="margin-top:10px">Column ka naam <b>phone / mobile / number</b>, <b>name</b>, <b>address</b>
-        ho to apne aap pehchan lunga. Heading na ho to bhi chalega — jo cell number jaisa dikhega wahi number maanunga.
-        Jo pehle se hain unka data <b>overwrite nahi</b> hoga, sirf khali jagah bharunga.</p>
+      <p class="muted" style="margin-top:10px">Columns named <b>phone / mobile / number</b>, <b>name</b>, <b>address</b>
+        are detected automatically. No headings? Also fine — any cell that looks like a number is treated as one.
+        Existing contacts are <b>never overwritten</b> — only their blank fields are filled in.</p>
     </div>
     <div id="bi-pane-text" style="display:none">
       <div class="frm">
-        <textarea id="bi-text" rows="8" placeholder="Ek line mein ek number:\n9876543210\nSharma ji, 9812345678\nSeema Mam, 98111 22333"></textarea>
+        <textarea id="bi-text" rows="8" placeholder="One number per line:\n9876543210\nSharma ji, 9812345678\nSeema Mam, 98111 22333"></textarea>
       </div>
-      <p class="muted">Format: sirf number, ya 'naam, number'.</p>
+      <p class="muted">Format: just the number, or 'name, number'.</p>
     </div>
     <div id="bi-result"></div>
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
@@ -2700,7 +2700,7 @@ function bulkImportModal() {
     let r;
     if (BI_MODE === "file") {
       const f = fileIn.files?.[0];
-      if (!f) { toast("Pehle file chunein", true); return; }
+      if (!f) { toast("Choose a file first", true); return; }
       const fd = new FormData();
       fd.append("file", f);
       r = await api("/admin/api/customers/import-file", { method: "POST", body: fd });
@@ -2711,14 +2711,14 @@ function bulkImportModal() {
     // don't bury it in a toast that disappears.
     const badTotal = r.invalid_total ?? (r.invalid || []).length;
     $("bi-result").innerHTML = `<div class="imp-res">
-      <div class="imp-row"><b>${r.added}</b> naye contact jude</div>
-      ${r.updated ? `<div class="imp-row"><b>${r.updated}</b> ka adhura data bhara</div>` : ""}
-      <div class="imp-row muted">${r.skipped_existing} pehle se the</div>
-      ${badTotal ? `<div class="imp-row bad"><b>${badTotal}</b> line samajh nahi aayi:
+      <div class="imp-row"><b>${r.added}</b> new contacts added</div>
+      ${r.updated ? `<div class="imp-row"><b>${r.updated}</b> had blanks filled in</div>` : ""}
+      <div class="imp-row muted">${r.skipped_existing} already existed</div>
+      ${badTotal ? `<div class="imp-row bad"><b>${badTotal}</b> line(s) could not be read:
         <ul>${(r.invalid || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
-        ${badTotal > (r.invalid || []).length ? `<span class="muted">…aur ${badTotal - r.invalid.length}</span>` : ""}</div>` : ""}
+        ${badTotal > (r.invalid || []).length ? `<span class="muted">…and ${badTotal - r.invalid.length} more</span>` : ""}</div>` : ""}
     </div>`;
-    toast(`${r.added} naye contact jude`);
+    toast(`${r.added} new contacts added`);
     if (CURRENT === "customers") loadCustomers();
     if (CURRENT === "inbox") loadThreads();
   });
@@ -2829,7 +2829,7 @@ function startUiProbe() {
   banner.style.cssText =
     "position:fixed;left:8px;right:8px;bottom:8px;z-index:9999;background:#111B21;color:#fff;" +
     "padding:10px 12px;border-radius:10px;font:600 13px/1.4 system-ui;text-align:center";
-  banner.textContent = "🔎 UI probe chal raha hai…";
+  banner.textContent = "🔎 UI probe running…";
   document.body.appendChild(banner);
 
   const send = async (label) => {
@@ -2852,10 +2852,10 @@ function startUiProbe() {
       body.overflow.forEach((o) => (by[o.why] = (by[o.why] || 0) + 1));
       const bits = Object.entries(by).map(([k, v]) => `${v} ${k}`);
       banner.textContent =
-        `✅ ${label}: ` + (bits.join(", ") || "layout theek") +
-        `, ${body.tiny_taps.length} chhote button, ${body.errors.length} error`;
+        `✅ ${label}: ` + (bits.join(", ") || "layout ok") +
+        `, ${body.tiny_taps.length} small buttons, ${body.errors.length} errors`;
     } catch (e) {
-      banner.textContent = "⚠️ Report nahi ja payi: " + e.message;
+      banner.textContent = "⚠️ Could not send report: " + e.message;
     }
   };
 
