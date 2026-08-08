@@ -36,6 +36,7 @@
   --shadow-pop: 0 10px 26px rgba(246,90,43,.32);
   --shadow-green: 0 10px 26px rgba(18,183,106,.3);
   --sidebar-w: 244px;
+  --content-max: 1400px;   /* content column cap; centred on ultra-wide screens */
   /* spacing scale — use these, not magic numbers */
   --s1: .25rem; --s2: .5rem; --s3: .875rem; --s4: 1.25rem; --s5: 1.625rem;
   --pad: 1.25rem;           /* the single spacing step cards use */
@@ -127,7 +128,7 @@ a { color: var(--brand-600); text-decoration: none; }
 /* Main column: base = full width under a sticky top bar, with clearance for
    the bottom tab bar. Safe-area insets keep content off notches. */
 .main {
-  flex: 1; min-width: 0; max-width: 1400px;
+  flex: 1; min-width: 0; max-width: var(--content-max);
   margin-left: 0;
   padding: var(--s3)
            max(var(--s3), env(safe-area-inset-right))
@@ -972,7 +973,15 @@ select {
   .side-ov, .side-ov.open { display: none; }
   .topbar { display: none; }
   .tabbar { display: none; }
-  .main { margin-left: var(--sidebar-w); padding: 22px 26px 90px; }
+  /* Centre the content in the space AFTER the fixed sidebar. The max(0px,…)
+     term is 0 until the viewport exceeds sidebar + content-max (~1644px), so
+     every width up to a large laptop is byte-for-byte unchanged; only genuine
+     ultra-wide monitors gain symmetric margins instead of a huge right gap. */
+  .main {
+    margin-left: calc(var(--sidebar-w) + max(0px, (100vw - var(--sidebar-w) - var(--content-max)) / 2));
+    margin-right: auto;
+    padding: 22px 26px 90px;
+  }
   .threads { width: 300px; }
   .staffrow .acts .btn { min-height: var(--tap); }
   .inboxwrap { height: calc(100dvh - 150px); }
