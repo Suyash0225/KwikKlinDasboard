@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Kwik Klin — Laundry Pro</title>
+<meta name="description" content="Kwik Klin Laundry Pro — WhatsApp-first admin panel: orders, bills, customers, campaigns and an AI agent for the shop.">
+<meta name="theme-color" content="#0d1526">
+<link rel="manifest" href="/admin/static/manifest.json">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%BA%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -68,8 +71,8 @@
       <div class="card" id="wa-stats" style="margin-bottom:14px"><span class="muted">📱 Loading WhatsApp stats…</span></div>
       <div class="chips" id="dash-chips"></div>
       <div class="filters">
-        <input type="search" placeholder="Search name, phone or order…" oninput="dashFilter.q=this.value;dashFilter.page=1;renderOrdersDeb()">
-        <select onchange="dashFilter.pay=this.value;dashFilter.page=1;renderOrders()">
+        <input type="search" aria-label="Search orders" placeholder="Search name, phone or order…" oninput="dashFilter.q=this.value;dashFilter.page=1;renderOrdersDeb()">
+        <select aria-label="Payment filter" onchange="dashFilter.pay=this.value;dashFilter.page=1;renderOrders()">
           <option value="">All payments</option><option value="PAID">Paid</option>
           <option value="PARTIAL">Partial</option><option value="UNPAID">Unpaid</option>
         </select>
@@ -91,10 +94,10 @@
           <div class="th-head">
             <div class="kkav">KK</div>
             <div class="spacer"></div>
-            <button class="th-ico" onclick="newChatModal()" title="New chat">✚</button>
-            <button class="th-ico" onclick="bulkImportModal()" title="Bulk import numbers">⋮</button>
+            <button class="th-ico" onclick="newChatModal()" title="New chat" aria-label="New chat">✚</button>
+            <button class="th-ico" onclick="bulkImportModal()" title="Bulk import numbers" aria-label="Bulk import numbers">⋮</button>
           </div>
-          <div class="th-search"><input id="th-search" type="search" placeholder="Search by name or number" oninput="threadSearch(this.value)"></div>
+          <div class="th-search"><input id="th-search" type="search" aria-label="Search chats" placeholder="Search by name or number" oninput="threadSearch(this.value)"></div>
           <div id="th-list" style="flex:1;overflow-y:auto" onscroll="onThreadScroll(this)"><div style="padding:12px"><div class="skel skelrow"></div><div class="skel skelrow"></div><div class="skel skelrow"></div></div></div>
         </div>
         <div class="chatpane" style="position:relative">
@@ -104,10 +107,10 @@
           <div class="replybar" id="reply-bar"></div>
           <div class="composer" style="position:relative">
             <div class="emojis" id="emoji-pal"></div>
-            <button class="btn ghost sm" onclick="tplSendModal()" title="Send a template (works even when the window is closed)">📑</button>
-            <button class="btn ghost sm" onclick="toggleEmojis()">😊</button>
-            <label class="btn ghost sm" style="cursor:pointer">📎<input type="file" accept="image/*" style="display:none" onchange="sendMedia(this)"></label>
-            <input type="text" id="chat-input" enterkeyhint="send" placeholder="Type a message" onkeydown="if(event.key==='Enter')sendChat()">
+            <button class="btn ghost sm" onclick="tplSendModal()" title="Send a template (works even when the window is closed)" aria-label="Send a template">📑</button>
+            <button class="btn ghost sm" onclick="toggleEmojis()" title="Emoji" aria-label="Emoji picker">😊</button>
+            <label class="btn ghost sm" style="cursor:pointer" title="Attach a photo" aria-label="Attach a photo">📎<input type="file" accept="image/*" style="display:none" onchange="sendMedia(this)" aria-label="Photo to send"></label>
+            <input type="text" id="chat-input" aria-label="Message" enterkeyhint="send" placeholder="Type a message" onkeydown="if(event.key==='Enter')sendChat()">
             <button class="btn" onclick="sendChat()" title="Send" aria-label="Send">➤</button>
           </div>
         </div>
@@ -159,20 +162,20 @@
       <div class="pagehead"><div><h2>Bill history</h2><p>Every order, filterable</p></div>
         <div class="actions"><button class="btn ghost" onclick="billsCsv()">⬇ CSV</button></div></div>
       <div class="filters">
-        <input type="search" placeholder="Search…" oninput="billFilter.q=this.value;billFilter.page=1;renderBillsDeb()">
-        <select onchange="billFilter.status=this.value;billFilter.page=1;renderBills()">
+        <input type="search" aria-label="Search bills" placeholder="Search…" oninput="billFilter.q=this.value;billFilter.page=1;renderBillsDeb()">
+        <select aria-label="Status filter" onchange="billFilter.status=this.value;billFilter.page=1;renderBills()">
           <option value="">All statuses</option>
           <option value="RECEIVED">New</option><option value="IN_WASH">Washing</option>
           <option value="IN_IRON">Ironing</option><option value="READY">Ready</option>
           <option value="OUT_FOR_DELIVERY">Out for delivery</option>
           <option value="DELIVERED">Delivered</option><option value="CANCELLED">Cancelled</option>
         </select>
-        <select onchange="billFilter.pay=this.value;billFilter.page=1;renderBills()">
+        <select aria-label="Payment filter" onchange="billFilter.pay=this.value;billFilter.page=1;renderBills()">
           <option value="">All payments</option><option value="PAID">Paid</option>
           <option value="PARTIAL">Partial</option><option value="UNPAID">Unpaid</option>
         </select>
-        <input type="date" onchange="billFilter.from=this.value;renderBills()" title="From date">
-        <input type="date" onchange="billFilter.to=this.value;renderBills()" title="To date">
+        <input type="date" onchange="billFilter.from=this.value;renderBills()" title="From date" aria-label="From date">
+        <input type="date" onchange="billFilter.to=this.value;renderBills()" title="To date" aria-label="To date">
       </div>
       <div class="card listcard"><div id="bills-list"></div></div>
       <div class="pager" id="bills-pager"></div>
@@ -182,7 +185,7 @@
     <section id="sec-customers" style="display:none">
       <div class="pagehead"><div><h2>Customers</h2><p>Ledger — sorted by highest outstanding first</p></div>
         <div class="actions"><button class="btn ghost" onclick="bulkImportModal()">📥 Bulk import numbers</button></div></div>
-      <div class="filters"><input id="cust-search" type="search" placeholder="Search name or number…" oninput="custSearchDeb()"></div>
+      <div class="filters"><input id="cust-search" type="search" aria-label="Search customers" placeholder="Search name or number…" oninput="custSearchDeb()"></div>
       <div class="card listcard"><div id="cust-list"></div></div>
     </section>
 
@@ -193,10 +196,10 @@
       <div class="card" style="margin-bottom:14px">
         <b>Add expense</b>
         <div class="filters" style="margin-top:8px">
-          <select id="exp-cat"></select>
-          <input id="exp-amt" type="number" inputmode="decimal" min="1" placeholder="Amount (₹)">
-          <input id="exp-date" type="date">
-          <input id="exp-desc" placeholder="Description (optional)" style="flex:1">
+          <select id="exp-cat" aria-label="Expense category"></select>
+          <input id="exp-amt" type="number" inputmode="decimal" min="1" placeholder="Amount (₹)" aria-label="Expense amount in rupees">
+          <input id="exp-date" type="date" aria-label="Expense date">
+          <input id="exp-desc" placeholder="Description (optional)" aria-label="Expense description" style="flex:1">
           <button class="btn" onclick="saveExpense(this)">Save expense</button>
         </div>
       </div>
@@ -329,9 +332,9 @@
         <div class="card">
           <b>📚 Knowledge (FAQ)</b>
           <div class="frm" style="margin-top:8px">
-            <input id="faq-q" placeholder="Question — e.g. What are your timings?">
-            <textarea id="faq-a" rows="2" placeholder="Answer — e.g. 9am to 9pm, all days"></textarea>
-            <div class="filters"><select id="faq-aud"><option value="customer">For customers</option><option value="staff">For staff</option><option value="all">Everyone</option></select>
+            <input id="faq-q" placeholder="Question — e.g. What are your timings?" aria-label="FAQ question">
+            <textarea id="faq-a" rows="2" placeholder="Answer — e.g. 9am to 9pm, all days" aria-label="FAQ answer"></textarea>
+            <div class="filters"><select id="faq-aud" aria-label="FAQ audience"><option value="customer">For customers</option><option value="staff">For staff</option><option value="all">Everyone</option></select>
             <button class="btn sm" onclick="addFaq(this)">Add</button></div>
           </div>
           <div id="faq-list" style="margin-top:8px"></div>
@@ -339,8 +342,8 @@
         <div class="card">
           <b>✏️ Corrections — “when asked X, reply like Y”</b>
           <div class="frm" style="margin-top:8px">
-            <input id="corr-q" placeholder="When a customer asks…">
-            <textarea id="corr-a" rows="2" placeholder="The reply should be…"></textarea>
+            <input id="corr-q" placeholder="When a customer asks…" aria-label="When a customer asks">
+            <textarea id="corr-a" rows="2" placeholder="The reply should be…" aria-label="The reply should be"></textarea>
             <button class="btn sm" onclick="addCorr(this)">Add</button>
           </div>
           <div id="corr-list" style="margin-top:8px"></div>
@@ -378,7 +381,7 @@
     <section id="sec-activity" style="display:none">
       <div class="pagehead"><div><h2>Activity</h2><p>Every message, tool call and escalation — what the agent did, and why</p></div>
         <div class="actions">
-          <select id="act-role" onchange="loadActivity()">
+          <select id="act-role" aria-label="Role filter" onchange="loadActivity()">
             <option value="">All roles</option><option value="admin">Admin</option>
             <option value="staff">Staff</option><option value="customer">Customer</option>
             <option value="system">System</option>
@@ -427,9 +430,9 @@
         <div class="card">
           <b>🏷️ Discount offers setup</b>
           <div class="filters" style="margin-top:10px">
-            <input id="dp-name" placeholder="Offer name (e.g. Welcome 10% Off)" style="min-width:190px">
-            <select id="dp-type" style="min-width:120px"><option value="percent">Percentage (%)</option><option value="flat">Flat ₹</option></select>
-            <input id="dp-val" type="number" min="1" placeholder="Value" style="width:90px">
+            <input id="dp-name" placeholder="Offer name (e.g. Welcome 10% Off)" aria-label="Offer name" style="min-width:190px">
+            <select id="dp-type" aria-label="Discount type" style="min-width:120px"><option value="percent">Percentage (%)</option><option value="flat">Flat ₹</option></select>
+            <input id="dp-val" type="number" min="1" placeholder="Value" aria-label="Discount value" style="width:90px">
             <button class="btn sm orange" onclick="addPreset(this)">+ Add offer</button>
           </div>
           <div id="dp-list" style="margin-top:10px"></div>
@@ -441,9 +444,9 @@
           <b>🔥 Piece-based pricing rate matrix</b>
           <p class="muted" style="margin-top:4px">Every garment's rate for every service — type in a cell, it saves automatically. New bills use these rates, never old ones.</p>
           <div class="filters" style="margin-top:8px">
-            <input id="rm-garment" placeholder="New garment name" style="min-width:150px">
+            <input id="rm-garment" placeholder="New garment name" aria-label="New garment name" style="min-width:150px">
             <button class="btn sm orange" onclick="rmAddGarment()">+ Add item</button>
-            <input id="rm-service" placeholder="New service name" style="min-width:150px">
+            <input id="rm-service" placeholder="New service name" aria-label="New service name" style="min-width:150px">
             <button class="btn sm ghost" onclick="rmAddService()">+ Add service</button>
           </div>
           <div id="rate-matrix" style="margin-top:10px;overflow-x:auto"></div>
@@ -572,11 +575,11 @@
         <b>✉️ Message formats — write them your way</b>
         <p class="muted" style="margin-top:4px">These go to customers as free-form messages (while the 24h window is open). Edit freely — changes apply instantly, no approval needed. <b>{placeholders}</b> are replaced with real values.</p>
         <div class="filters" style="margin-top:8px">
-          <select id="mf-key" style="min-width:240px" onchange="mfPick()"></select>
+          <select id="mf-key" aria-label="Message format" style="min-width:240px" onchange="mfPick()"></select>
           <span id="mf-flag"></span>
         </div>
         <div class="frm">
-          <textarea id="mf-text" rows="4"></textarea>
+          <textarea id="mf-text" rows="4" aria-label="Message text"></textarea>
           <div class="muted" id="mf-ph" style="font-size:11.5px"></div>
           <div class="act">
             <button class="btn sm" onclick="mfSave(this)">Save</button>

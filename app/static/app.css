@@ -37,9 +37,9 @@
   --shadow-green: 0 10px 26px rgba(18,183,106,.3);
   --sidebar-w: 244px;
   /* spacing scale — use these, not magic numbers */
-  --s1: 4px; --s2: 8px; --s3: 14px; --s4: 20px; --s5: 26px;
-  --pad: 20px;              /* the single spacing step cards use */
-  --tap: 44px;              /* minimum touch target */
+  --s1: .25rem; --s2: .5rem; --s3: .875rem; --s4: 1.25rem; --s5: 1.625rem;
+  --pad: 1.25rem;           /* the single spacing step cards use */
+  --tap: 2.75rem;           /* minimum touch target (44px at default zoom) */
   --tabbar-h: 64px;         /* bottom tab bar clearance on phones */
   --font: "Poppins", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
@@ -49,17 +49,18 @@
    hai, jisse scroll BODY ke andar hota hai, page ka nahi. Nateeja: phone ka
    address bar chhupta nahi, window.scrollTo bekaar ho jaata hai, aur
    document.scrollHeight hamesha 800 batata hai chahe content 1973px ka ho. */
+html { font-size: 100%; }  /* rem base — user font-size settings are respected */
 html, body { min-height: 100%; overflow-x: hidden; }
 body {
   font-family: var(--font); background: var(--n50); color: var(--n800);
-  font-size: 14px; line-height: 1.45;
+  font-size: .875rem; line-height: 1.45;
   touch-action: manipulation; -webkit-tap-highlight-color: transparent;
 }
 button { font-family: inherit; }
 /* 16px base = iOS focus par zoom NAHI karta. Desktop (fine pointer) end mein
    wapas 13.5px ho jaata hai — file ke aakhri block mein. */
 input, select, textarea {
-  font-family: inherit; font-size: 16px; color: var(--n800);
+  font-family: inherit; font-size: 1rem; color: var(--n800);
   border: 1.5px solid var(--line); border-radius: var(--radius-sm);
   padding: 10px 13px; background: var(--n0); width: 100%;
   transition: border-color .15s, box-shadow .15s, background .15s;
@@ -144,7 +145,7 @@ a { color: var(--brand-600); text-decoration: none; }
   min-width: var(--tap); min-height: var(--tap);
   display: inline-flex; align-items: center; justify-content: center; border-radius: 12px;
 }
-.topbar h2 { font-size: 17px; }
+.topbar h2 { font-size: 1.0625rem; }
 
 /* ---------- page header ---------- */
 .pagehead { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
@@ -180,7 +181,7 @@ a { color: var(--brand-600); text-decoration: none; }
 .kpi { cursor: pointer; transition: transform .14s, box-shadow .14s; position: relative; border-radius: var(--radius-lg); padding: var(--s4); }
 .kpi .lbl { font-size: 11px; letter-spacing: .3px; color: var(--n500); font-weight: 600; padding-right: 44px; }
 .kpi .val {
-  font-size: 22px; font-weight: 800; color: var(--n900);
+  font-size: clamp(1.375rem, 1.05rem + 1.3vw, 1.875rem); font-weight: 800; color: var(--n900);
   font-variant-numeric: tabular-nums; margin-top: 8px; letter-spacing: -.5px;
   overflow-wrap: anywhere;
 }
@@ -214,7 +215,7 @@ a { color: var(--brand-600); text-decoration: none; }
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   border: none; border-radius: 999px; padding: 10px 18px;
   min-height: var(--tap); min-width: var(--tap);
-  font-size: 13.5px; font-weight: 700; cursor: pointer; transition: all .14s;
+  font-size: .84375rem; font-weight: 700; cursor: pointer; transition: all .14s;
   background: var(--g-green); color: #fff; white-space: nowrap;
   box-shadow: 0 1px 2px rgba(16,24,40,.06); font-family: var(--font);
 }
@@ -335,7 +336,7 @@ a { color: var(--brand-600); text-decoration: none; }
 }
 /* andar ka koi hissa apna alag scroll na banaye */
 .modal .frm, .modal .billedit { overflow: visible; max-height: none; }
-.modal h3 { font-size: 17px; margin-bottom: 12px; letter-spacing: -.2px; }
+.modal h3 { font-size: 1.0625rem; margin-bottom: 12px; letter-spacing: -.2px; }
 .modal .frm { display: grid; gap: 14px; }
 /* Save/Cancel neeche chipke rahenge — dhoondhna na pade */
 .modal .btnrow {
@@ -823,7 +824,7 @@ select {
    ========================================================================== */
 @media (max-width: 767.98px) {
   body.chat-open .chatpane {
-    display: flex !important; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
     z-index: 70; background: var(--n0);
     height: 100dvh; padding-top: env(safe-area-inset-top);
   }
@@ -851,7 +852,7 @@ select {
 
   /* page heading wapas — bade screen par topbar nahi hota */
   .pagehead { margin-bottom: 18px; }
-  .pagehead h2 { display: block; font-size: 24px; font-weight: 800; color: var(--n900); letter-spacing: -.3px; }
+  .pagehead h2 { display: block; font-size: clamp(1.25rem, 1rem + 1vw, 1.5rem); font-weight: 800; color: var(--n900); letter-spacing: -.3px; }
   .pagehead p { display: block; color: var(--n500); font-size: 13px; margin-top: 2px; }
   .pagehead .actions { margin-left: 0; }
 
@@ -861,7 +862,7 @@ select {
   .card.listcard .rowcards { display: none; }
 
   .kpis { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
-  .kpi .val { font-size: 27px; overflow-wrap: normal; }
+  .kpi .val { overflow-wrap: normal; }
   .split2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .filters input, .filters select { flex: 0 1 auto; min-width: 130px; height: 42px; min-height: 42px; }
 
@@ -999,8 +1000,8 @@ select {
    match, so tablets keep their 44px targets. Last in file: wins ties.
    ========================================================================== */
 @media (min-width: 1024px) and (pointer: fine) {
-  input, select, textarea { font-size: 13.5px; }
-  label { font-size: 11.5px; }
+  input, select, textarea { font-size: .84375rem; }
+  label { font-size: .71875rem; }
   .btn { min-height: 0; min-width: 0; padding: 10px 18px; }
   .btn.sm { padding: 6px 13px; font-size: 12px; }
   .act .btn.sm.ghost { min-width: 36px; padding: 7px 10px; }
@@ -1085,4 +1086,28 @@ select {
   #receipt, #receipt * { visibility: visible; }
   #receipt { display: block; position: absolute; left: 0; top: 0; width: 80mm; font-size: 11px; font-family: monospace; padding: 4mm; }
   .sidebar, .tabbar, .topbar { display: none !important; }
+}
+
+/* ==========================================================================
+   ACCESSIBILITY
+   ========================================================================== */
+
+/* keyboard: the nav / tab bar items are divs — app.js gives them tabindex,
+   this makes the focus ring visible on them (and everything else). */
+.nav div[data-s]:focus-visible, .tabbar div:focus-visible,
+.sheet-grid div:focus-visible, .thread-item:focus-visible,
+.logout:focus-visible, .chip:focus-visible,
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--brand); outline-offset: -2px;
+}
+
+/* Reduced motion: soften every transition/animation for users who ask.
+   (!important is the point here — this must beat every declaration.) */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }

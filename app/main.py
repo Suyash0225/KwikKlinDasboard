@@ -127,6 +127,21 @@ app.mount(
 )
 
 
+# PWA service worker. Served from /admin/sw.js (not /admin/static/...) with a
+# Service-Worker-Allowed header so its scope can cover the whole /admin app.
+# no-cache: a deployed SW update must be picked up on the next visit.
+@app.get("/admin/sw.js", include_in_schema=False)
+async def service_worker():
+    from fastapi.responses import Response as _Resp
+
+    sw = Path(__file__).resolve().parent / "static" / "sw.js"
+    return _Resp(
+        content=sw.read_text(encoding="utf-8"),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/admin"},
+    )
+
+
 # Public page: pricing + signup + login. Yahi wo darwaza hai jahan se ek
 # nayi laundry andar aati hai (app/static/join.html).
 _JOIN_FILE = Path(__file__).resolve().parent / "static" / "join.html"

@@ -69,6 +69,13 @@ async function api(path, opts = {}) {
 /* helpers */
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/* Junk customer records exist ("." / "—" / blank names). Anywhere a name is
+   shown, fall back to the phone number instead of a dot or a blank. */
+const JUNK_NAME = /^[\s.\-—–_,'"]*$/;
+const displayName = (name, phone) => {
+  const n = String(name || "").trim();
+  return JUNK_NAME.test(n) ? (phone || "—") : n;
+};
 const inr = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 });
 const money = (v) => "₹" + inr.format(Number(v || 0));
 const fmtDate = (iso) => {
@@ -352,8 +359,8 @@ function renderOrders() {
     <tbody>${rows.map((o) => `
       <tr class="${isOverdue(o) ? "overdue" : ""}">
         <td><b>${o.order_number}</b><div class="muted">${fmtDate(o.created_at)}</div></td>
-        <td>${esc(o.customer)}<div class="muted">${esc(o.phone)}</div></td>
-        <td style="max-width:190px"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
+        <td>${esc(displayName(o.customer, o.phone))}<div class="muted">${esc(o.phone)}</div></td>
+        <td style="max-width:190px" title="${esc(itemsText(o.items))}"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
         <td><span class="pill ${o.status}">${statusName(o.status)}</span>${isOverdue(o) ? ' <span class="pill UNPAID">Overdue</span>' : ""}</td>
         <td><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span><div class="muted">${money(o.amount_paid)} / ${o.total_amount ? money(o.total_amount) : "—"}</div></td>
         <td>${fmtDate(o.expected_delivery)}</td>
@@ -369,7 +376,7 @@ function renderOrders() {
     <div class="rowcards">${rows.map((o) => `
       <div class="rowcard ${isOverdue(o) ? "overdue" : ""}">
         <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${statusName(o.status)}</span></div>
-        <div class="kv"><span>${esc(o.customer)}</span><span>${esc(o.phone)}</span></div>
+        <div class="kv"><span>${esc(displayName(o.customer, o.phone))}</span><span>${esc(o.phone)}</span></div>
         <div class="kv"><span class="muted">${esc(itemsText(o.items))}</span></div>
         <div class="kv"><span>Paid ${money(o.amount_paid)} of ${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
         <div class="kv"><span>Delivery</span><span>${fmtDate(o.expected_delivery)}${isOverdue(o) ? " ⚠️" : ""}</span></div>
@@ -455,7 +462,7 @@ async function orderDetail(number) {
     const o = d.order;
     $("drawer-body").innerHTML = `
       <h3>${o.order_number} <span class="pill ${o.status}">${statusName(o.status)}</span></h3>
-      <p class="muted">${esc(o.customer_name || "")} · ${esc(o.customer_phone)}</p><hr class="hr">
+      <p class="muted">${esc(displayName(o.customer_name, o.customer_phone))} · ${esc(o.customer_phone)}</p><hr class="hr">
       <b>Items</b>
       ${(o.items || []).map((i) => `<div class="sumrow"><span>${i.qty} × ${esc(i.type || i.garment || i.service || "?")}</span><span>${i.amount != null ? money(i.amount) : ""}</span></div>`).join("")}
       <div class="sumrow"><span>Discount</span><span>${money(o.discount_amount || 0)}</span></div>
@@ -549,14 +556,25 @@ function calcBill() {
   $("nb-due").textContent = money(Math.max(0, total - adv));
   return { sub, disc, gst, total, adv };
 }
+/* SECURITY: the customer's NAME comes from their WhatsApp profile — it is
+   attacker-controlled text. It must never travel through an inline
+   onclick="...'${name}'" JS string (a single quote breaks out = XSS).
+   Rows are picked by INDEX into this array instead. */
+let AC_HITS = [];
 function custAc() {
   const q = $("nb-phone").value.trim().toLowerCase();
   const box = $("nb-ac");
   if (!q || !CUSTOMERS_CACHE) { box.innerHTML = ""; return; }
-  const hits = CUSTOMERS_CACHE.filter((c) => c.phone.includes(q) || (c.name || "").toLowerCase().includes(q)).slice(0, 6);
-  box.innerHTML = hits.map((c) => `<div onclick="pickCust('${c.phone}','${esc(c.name || "")}')">${esc(c.name || "New customer")} · ${c.phone}</div>`).join("");
+  AC_HITS = CUSTOMERS_CACHE.filter((c) => c.phone.includes(q) || (c.name || "").toLowerCase().includes(q)).slice(0, 6);
+  box.innerHTML = AC_HITS.map((c, i) => `<div onclick="pickCust(${i})">${esc(displayName(c.name, c.phone))} · ${c.phone}</div>`).join("");
 }
-function pickCust(phone, name) { $("nb-phone").value = phone; $("nb-name").value = name; $("nb-ac").innerHTML = ""; }
+function pickCust(i) {
+  const c = AC_HITS[i];
+  if (!c) return;
+  $("nb-phone").value = c.phone;
+  $("nb-name").value = c.name || "";
+  $("nb-ac").innerHTML = "";
+}
 
 async function saveBill(btn) {
   await busy(btn, async () => {
@@ -650,8 +668,8 @@ function billRowHtml(o, kind) {
   const due = o.total_amount ? Number(o.total_amount) - Number(o.amount_paid) : null;
   if (kind === "tr") return `<tr>
     <td><b>${o.order_number}</b><div class="muted">${fmtDate(o.created_at)}</div></td>
-    <td>${esc(o.customer_name || o.customer_phone)}<div class="muted">${esc(o.customer_phone)}</div></td>
-    <td style="max-width:180px"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
+    <td>${esc(displayName(o.customer_name, o.customer_phone))}<div class="muted">${esc(o.customer_phone)}</div></td>
+    <td style="max-width:180px" title="${esc(itemsText(o.items))}"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
     <td class="money">${o.total_amount ? money(o.total_amount) : "—"}${due > 0 ? `<div class="muted">due ${money(due)}</div>` : ""}</td>
     <td><div class="pillrow"><span class="pill ${o.status}">${statusName(o.status)}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div></td>
     <td><div class="act">
@@ -663,7 +681,7 @@ function billRowHtml(o, kind) {
     </div></td></tr>`;
   return `<div class="rowcard">
     <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${statusName(o.status)}</span></div>
-    <div class="kv"><span>${esc(o.customer_name || o.customer_phone)}</span><span>${fmtDate(o.created_at)}</span></div>
+    <div class="kv"><span>${esc(displayName(o.customer_name, o.customer_phone))}</span><span>${fmtDate(o.created_at)}</span></div>
     <div class="kv"><span>${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
     <div class="act"><button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
     <button class="btn sm ghost" onclick="printReceiptFromOrder('${o.order_number}')">Print</button>
@@ -913,7 +931,7 @@ function renderCustomers() {
   $("cust-list").innerHTML = `
     <table class="tbl"><thead><tr><th>Customer</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Last seen</th><th>Actions</th></tr></thead>
     <tbody>${rows.map((c) => `
-      <tr><td>${esc(c.name || "—")}${c.opted_out ? ' <span class="tag">opted out</span>' : ""}<div class="muted">${c.phone}</div></td>
+      <tr><td>${esc(displayName(c.name, c.phone))}${c.opted_out ? ' <span class="tag">opted out</span>' : ""}<div class="muted">${c.phone}</div></td>
       <td>${c.total_orders} <span class="muted">(${c.active_orders} active)</span></td>
       <td class="money">${money(c.business)}</td><td class="money">${money(c.paid)}</td>
       <td class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</td>
@@ -926,7 +944,7 @@ function renderCustomers() {
       </div></td></tr>`).join("")}
     </tbody></table>
     <div class="rowcards">${rows.map((c) => `
-      <div class="rowcard"><div class="r1"><b>${esc(c.name || c.phone)}</b><span class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</span></div>
+      <div class="rowcard"><div class="r1"><b>${esc(displayName(c.name, c.phone))}</b><span class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</span></div>
       <div class="kv"><span>${c.phone}</span><span>${c.total_orders} orders</span></div>
       <div class="kv"><span>Business ${money(c.business)}</span><span>Paid ${money(c.paid)}</span></div>
       <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}','${c.outstanding}')">Remind</button>` : ""}
@@ -971,7 +989,7 @@ function editCustomerModal(phone) {
 function deleteCustomerModal(phone) {
   const c = customerByPhone(phone);
   if (!c) return;
-  const label = c.name || c.phone;
+  const label = displayName(c.name, c.phone);
   const n = Number(c.total_orders || 0);
   openModal(`<h3>Delete ${esc(label)}?</h3>
     <p class="muted">${c.phone}</p>
@@ -1280,7 +1298,7 @@ function renderExpenses() {
     <table class="tbl"><thead><tr><th>Date</th><th>Category</th><th>Amount</th><th>Description</th><th></th></tr></thead>
     <tbody>${EXPENSES.map((e) => `
       <tr><td>${fmtDate(e.spent_on)}</td><td>${esc(e.category)}</td><td class="money">${money(e.amount)}</td>
-      <td class="muted">${esc(e.description || "")}</td>
+      <td class="muted" style="max-width:260px" title="${esc(e.description || "")}"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.description || "")}</div></td>
       <td><button class="btn sm danger" onclick="delExpense('${e.id}')">✕</button></td></tr>`).join("")}
     </tbody></table>
     <div class="rowcards">${EXPENSES.map((e) => `
@@ -1357,7 +1375,7 @@ async function loadReports() {
     <div class="split2" style="margin-top:14px">
       <div class="card"><b>Active orders by status</b><div class="split2" style="align-items:center;margin-top:8px">${sd}<div class="legend">${sl}</div></div></div>
       <div class="card"><b>Top customers by business</b>
-        ${top.map((c) => `<div class="sumrow"><span>${esc(c.name || c.phone)}</span><span class="money">${money(c.business)}</span></div>`).join("") || emptyBox(T.noData)}
+        ${top.map((c) => `<div class="sumrow"><span>${esc(displayName(c.name, c.phone))}</span><span class="money">${money(c.business)}</span></div>`).join("") || emptyBox(T.noData)}
       </div></div>
     <div class="btnrow" style="margin-top:12px;justify-content:flex-start">
       <button class="btn ghost" onclick="dlServer('/admin/api/export/orders.csv','orders.csv')">⬇ Orders CSV</button>
@@ -1612,11 +1630,13 @@ async function loadTraining() {
     renderFaqs(faqs); renderCorrections(corr); renderTeachme(teach); renderDocs(docs);
   } catch (e) { $("faq-list").innerHTML = errBox(e.message, "loadTraining"); }
 }
+let DOCS_CACHE = [];
 function renderDocs(docs) {
-  $("doc-list").innerHTML = docs.length ? docs.map((d) => `
+  DOCS_CACHE = docs;
+  $("doc-list").innerHTML = docs.length ? docs.map((d, i) => `
     <div class="sumrow"><span>📄 <b>${esc(d.document)}</b> <span class="tag">${d.chunks} parts</span>
       <span class="muted">${fmtWhen(d.uploaded_at)}</span></span>
-      <button class="btn sm danger" onclick="delDoc('${esc(d.document)}')">✕</button></div>`).join("")
+      <button class="btn sm danger" aria-label="Delete document" onclick="delDocAt(${i})">✕</button></div>`).join("")
     : `<p class="muted">No documents yet.</p>`;
 }
 async function uploadDoc(input) {
@@ -1631,6 +1651,10 @@ async function uploadDoc(input) {
     loadTraining();
   } catch (e) { toast(e.message, true); $("doc-status").textContent = ""; }
   input.value = "";
+}
+function delDocAt(i) {
+  const d = DOCS_CACHE[i];
+  if (d) delDoc(d.document);
 }
 function delDoc(name) {
   confirmDialog(`Remove "${name}" from the agent's knowledge?`, async () => {
@@ -2288,9 +2312,9 @@ function renderThreads() {
     return `<div class="thread-item ${t.phone === OPEN_PHONE ? "on" : ""}"
       onclick="openThread('${t.phone}')" ontouchstart="thTouchStart(event,'${t.phone}')" ontouchend="thTouchEnd(event,'${t.phone}')">
       <div style="display:flex;gap:10px;align-items:center">
-        ${avatar(t.name)}
+        ${avatar(displayName(t.name, t.phone))}
         <div style="flex:1;min-width:0">
-          <div class="nm"><span>${esc(t.name)}${chip}</span><span class="t">${fmtWhen(t.last_at)}</span></div>
+          <div class="nm"><span>${esc(displayName(t.name, t.phone))}${chip}</span><span class="t">${fmtWhen(t.last_at)}</span></div>
           <div class="pv">${preview}</div>
         </div>
       </div></div>`;
@@ -2331,7 +2355,7 @@ function markRead(phone) {
 }
 function threadMenu(phone) {
   const t = THREADS.find((x) => x.phone === phone) || {};
-  openModal(`<h3>${esc(t.name || phone)}</h3>
+  openModal(`<h3>${esc(displayName(t.name, phone))}</h3>
     <div class="frm">
       <button class="btn" onclick="closeModal();openThread('${phone}')">💬 Open chat</button>
       <button class="btn ghost" onclick="closeModal();markRead('${phone}')">✓ Mark read</button>
@@ -2397,8 +2421,8 @@ async function openThread(phone, silent = false, push = true) {
   if (!silent || headSig !== LAST_HEAD_SIG) {
     $("chat-head").innerHTML = `
     <button class="chat-back" onclick="closeThreadMobile()" aria-label="Back">←</button>
-    ${avatar(d.name)}
-    <div style="flex:1;min-width:0"><b>${esc(d.name)}</b>
+    ${avatar(displayName(d.name, d.phone))}
+    <div style="flex:1;min-width:0"><b>${esc(displayName(d.name, d.phone))}</b>
       <div class="muted">${d.phone} · ${d.kind === "staff" ? "Staff 🧑‍🔧" : d.kind === "admin" ? "You 👑" : "Customer"}</div></div>
     <span class="winchip ${d.window.open ? "open" : "closed"}">${d.window.open ? "window open" : "window closed"}</span>
     <button class="btn sm ghost" title="Yaad dilao" onclick="pingThread(this)">🔔 Ping</button>
@@ -2900,6 +2924,22 @@ window.addEventListener("DOMContentLoaded", () => {
     stTab(h.slice(9));
   } else {
     go(h, false);
+  }
+
+  // keyboard access: the nav / tab bar / sheet items are divs — give them
+  // focus + Enter/Space so the app is usable without a touchscreen or mouse
+  document.querySelectorAll(".nav div[data-s], .tabbar div, .sheet-grid div, .logout")
+    .forEach((el) => { el.setAttribute("tabindex", "0"); el.setAttribute("role", "button"); });
+  document.addEventListener("keydown", (e) => {
+    if ((e.key === "Enter" || e.key === " ") &&
+        e.target.matches?.(".nav div[data-s], .tabbar div, .sheet-grid div, .logout")) {
+      e.preventDefault(); e.target.click();
+    }
+  });
+
+  // PWA: app-shell cache -> instant repeat loads, shell survives offline blips
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/admin/sw.js", { scope: "/admin" }).catch(() => {});
   }
 
   // offline awareness

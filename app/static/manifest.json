@@ -1,0 +1,14 @@
+{
+  "name": "Kwik Klin — Laundry Pro",
+  "short_name": "Kwik Klin",
+  "description": "WhatsApp-first admin panel for the laundry: orders, bills, customers and the AI agent.",
+  "start_url": "/admin",
+  "scope": "/admin",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f6fb",
+  "theme_color": "#0d1526",
+  "icons": [
+    { "src": "/admin/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

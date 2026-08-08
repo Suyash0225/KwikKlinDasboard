@@ -28,3 +28,4 @@ app/media/
 
 # Database backups (nightly pg_dump output)
 backups/
+app/static/dist/

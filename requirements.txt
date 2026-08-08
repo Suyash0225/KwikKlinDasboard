@@ -34,3 +34,7 @@ pytest-asyncio==1.4.0
 python-multipart==0.0.20  # FastAPI file uploads (Inbox media)
 pypdf
 openpyxl  # .xlsx contact imports (Inbox bulk upload)
+
+# dev/build only: static asset minification (scripts/minify_static.py)
+rjsmin
+rcssmin
