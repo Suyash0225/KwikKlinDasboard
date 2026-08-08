@@ -200,12 +200,29 @@
       <div class="grid kpis" id="exp-kpis"></div>
       <div class="card" style="margin-bottom:14px">
         <b>Add expense</b>
-        <div class="filters" style="margin-top:8px">
-          <select id="exp-cat" aria-label="Expense category"></select>
-          <input id="exp-amt" type="number" inputmode="decimal" min="1" placeholder="Amount (₹)" aria-label="Expense amount in rupees">
-          <input id="exp-date" type="date" aria-label="Expense date">
-          <input id="exp-desc" placeholder="Description (optional)" aria-label="Expense description" style="flex:1">
-          <button class="btn" onclick="saveExpense(this)">Save expense</button>
+        <div class="expform">
+          <div class="ef-field">
+            <label for="exp-cat">Category</label>
+            <select id="exp-cat"></select>
+            <small class="fielderr" id="exp-cat-err"></small>
+          </div>
+          <div class="ef-field">
+            <label for="exp-amt">Amount</label>
+            <div class="rupee-input"><span class="rupee">₹</span>
+              <input id="exp-amt" type="number" inputmode="decimal" min="1" step="0.01" placeholder="0" aria-label="Expense amount in rupees"></div>
+            <small class="fielderr" id="exp-amt-err"></small>
+          </div>
+          <div class="ef-field">
+            <label for="exp-date">Date</label>
+            <input id="exp-date" type="date" aria-label="Expense date">
+          </div>
+          <div class="ef-field ef-desc">
+            <label for="exp-desc">Description <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
+            <input id="exp-desc" placeholder="e.g. detergent restock, van fuel" aria-label="Expense description">
+          </div>
+          <div class="ef-field ef-submit">
+            <button class="btn" onclick="saveExpense(this)">Save expense</button>
+          </div>
         </div>
       </div>
       <div class="split2">

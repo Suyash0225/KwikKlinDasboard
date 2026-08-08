@@ -1140,6 +1140,55 @@ select {
   #sec-dashboard .chip:hover { transform: none; background: var(--n50); }
 }
 
+
+/* ==========================================================================
+   EXPENSES PAGE
+   ========================================================================== */
+
+/* add-expense form: aligned grid, one row on desktop, stacks on phones.
+   Description gets the flexible column so text never cuts off. */
+.expform {
+  display: grid; gap: 12px; margin-top: 12px; align-items: end;
+  grid-template-columns: 1fr;
+}
+.ef-field { min-width: 0; display: flex; flex-direction: column; }
+.ef-field label { margin-bottom: 5px; }
+.ef-field input, .ef-field select { height: var(--tap); }
+.ef-submit .btn { width: 100%; height: var(--tap); }
+@media (min-width: 768px) {
+  .expform {
+    grid-template-columns: minmax(140px,1fr) minmax(120px,1fr) minmax(140px,1fr) minmax(200px,2fr) auto;
+  }
+  .ef-submit .btn { width: auto; }
+}
+
+/* ₹ prefix sits inside the amount field */
+.rupee-input { position: relative; }
+.rupee-input .rupee {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  color: var(--n500); font-weight: 600; pointer-events: none;
+}
+.rupee-input input { padding-left: 26px; }
+/* hide the number spinners — a cleaner money field */
+.rupee-input input::-webkit-outer-spin-button,
+.rupee-input input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.rupee-input input { -moz-appearance: textfield; }
+
+/* donut centre total + legend percentage */
+.donut { display: grid; place-items: center; }
+.donut-center { text-align: center; line-height: 1.15; z-index: 1; }
+.donut-center .dc-lbl { display: block; font-size: .625rem; color: var(--n500); text-transform: uppercase; letter-spacing: .5px; }
+.donut-center .dc-val { display: block; font-size: 1rem; font-weight: 800; color: var(--n900); font-variant-numeric: tabular-nums; }
+
+/* table extras: zebra striping, sortable headers, totals row */
+.tbl.zebra tbody tr:nth-child(even) td { background: var(--n50); }
+.tbl th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.tbl th.sortable.num { text-align: right; }
+.tbl tfoot .totalrow td {
+  border-top: 2px solid var(--n300); font-weight: 800; color: var(--n900);
+  background: var(--n0); position: sticky; bottom: 0;
+}
+
 /* ---------- print (thermal receipt) ---------- */
 #receipt { display: none; }
 @media print {

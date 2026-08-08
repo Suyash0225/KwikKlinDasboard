@@ -1340,66 +1340,137 @@ function newTaskModal() {
 /* ============================= expenses ============================= */
 const EXP_CATS = ["Detergent", "Electricity", "Rent", "Salary", "Transport", "Maintenance", "Other"];
 let EXPENSES = [];
+let expSort = { key: "spent_on", dir: -1 }, expQuery = "";
 async function loadExpenses() {
   $("exp-list").innerHTML = skeleton(4);
-  $("exp-cat").innerHTML = EXP_CATS.map((c) => `<option>${c}</option>`).join("");
+  $("exp-cat").innerHTML = '<option value="">Select category…</option>'
+    + EXP_CATS.map((c) => `<option>${c}</option>`).join("");
   $("exp-date").value = new Date().toISOString().slice(0, 10);
   try {
     [EXPENSES, SUMMARY] = await Promise.all([api("/admin/api/expenses"), api("/admin/api/reports/summary")]);
   } catch (e) { $("exp-list").innerHTML = errBox(e.message, "loadExpenses"); return; }
-  const t = SUMMARY.today || {}, m = SUMMARY.month || {};
+  const t = SUMMARY.today || {}, m = SUMMARY.month || {}, lm = SUMMARY.last_month || {};
+  const profit = Number(m.profit || 0);
+  // "vs last month" — omit when there is no baseline to compare against
+  const delta = (now, prev) => {
+    const p = Number(prev || 0);
+    if (!p) return "";
+    const pct = Math.round(((Number(now || 0) - p) / Math.abs(p)) * 100);
+    const cls = pct > 0 ? "down" : pct < 0 ? "up" : "";   // more spend = bad (red)
+    return `<span class="sub ${cls}">${pct > 0 ? "▲" : pct < 0 ? "▼" : ""} ${Math.abs(pct)}% vs last month</span>`;
+  };
+  const profitDelta = (() => {
+    const p = Number(lm.profit || 0);
+    if (!p) return "revenue − expenses";
+    const pct = Math.round(((profit - p) / Math.abs(p)) * 100);
+    return `<span class="${pct >= 0 ? "up" : "down"}">${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct)}% vs last month</span>`;
+  })();
   $("exp-kpis").innerHTML =
-    kpi("Expenses today", money(t.expenses || 0), "", "", "📅", "amber") +
-    kpi("Expenses this month", money(m.expenses || 0), "", "", "🗓️", "pink") +
-    kpi("Profit this month", money(m.profit || 0), "revenue − expenses", "go('reports')", "💰", "green");
+    kpi("Expenses today", money(t.expenses || 0), fmtDate(new Date().toISOString()), "", "📅", "amber") +
+    kpi("Expenses this month", money(m.expenses || 0), delta(m.expenses, lm.expenses), "", "🗓️", "pink") +
+    kpi("Profit this month", money(profit), profitDelta, "go('reports')", profit < 0 ? "📉" : "💰", profit < 0 ? "red" : "green");
+  // profit value takes the sign colour directly
+  const pv = $("exp-kpis").querySelectorAll(".kpi")[2]?.querySelector(".val");
+  if (pv) pv.style.color = profit < 0 ? "var(--danger)" : "var(--ok)";
   renderExpenses(); renderExpChart();
 }
+function expSortBy(key) {
+  if (expSort.key === key) expSort.dir *= -1;
+  else expSort = { key, dir: key === "spent_on" ? -1 : -1 };
+  renderExpenses();
+}
+function expFilter(v) { expQuery = (v || "").toLowerCase(); renderExpenses(); }
 function renderExpenses() {
-  if (!EXPENSES.length) { $("exp-list").innerHTML = emptyBox("No expenses recorded yet — add your first one above.", "💸"); return; }
+  if (!EXPENSES.length) {
+    $("exp-list").innerHTML = emptyBox("No expenses yet — add your first one above.", "💸");
+    return;
+  }
+  const q = expQuery;
+  const rows = EXPENSES
+    .filter((e) => !q || e.category.toLowerCase().includes(q) || (e.description || "").toLowerCase().includes(q))
+    .sort((a, b) => {
+      const k = expSort.key;
+      const av = k === "amount" ? Number(a.amount) : a.spent_on;
+      const bv = k === "amount" ? Number(b.amount) : b.spent_on;
+      return (av < bv ? -1 : av > bv ? 1 : 0) * expSort.dir;
+    });
+  const total = rows.reduce((s, e) => s + Number(e.amount || 0), 0);
+  const arrow = (k) => expSort.key === k ? (expSort.dir < 0 ? " ▼" : " ▲") : "";
+  if (!rows.length) {
+    $("exp-list").innerHTML = `
+      <div class="filters" style="padding:12px 12px 0"><input type="search" aria-label="Search expenses" value="${esc(expQuery)}" placeholder="Search category or description…" oninput="expFilter(this.value)"></div>
+      ${emptyBox("No expenses match your search.", "🔍")}`;
+    return;
+  }
   $("exp-list").innerHTML = `
-    <table class="tbl"><thead><tr><th>Date</th><th>Category</th><th>Amount</th><th>Description</th><th></th></tr></thead>
-    <tbody>${EXPENSES.map((e) => `
-      <tr><td>${fmtDate(e.spent_on)}</td><td>${esc(e.category)}</td><td class="money">${money(e.amount)}</td>
+    <div class="filters" style="padding:12px 12px 0"><input type="search" aria-label="Search expenses" value="${esc(expQuery)}" placeholder="Search category or description…" oninput="expFilter(this.value)"></div>
+    <table class="tbl zebra"><thead><tr>
+      <th class="sortable" onclick="expSortBy('spent_on')">Date${arrow("spent_on")}</th>
+      <th>Category</th>
+      <th class="sortable num" onclick="expSortBy('amount')">Amount${arrow("amount")}</th>
+      <th>Description</th><th></th></tr></thead>
+    <tbody>${rows.map((e) => `
+      <tr><td class="nowrap">${fmtDate(e.spent_on)}</td><td>${esc(e.category)}</td>
+      <td class="money">${money(e.amount)}</td>
       <td class="muted" style="max-width:260px" title="${esc(e.description || "")}"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.description || "")}</div></td>
-      <td><button class="btn sm danger" onclick="delExpense('${e.id}')">✕</button></td></tr>`).join("")}
-    </tbody></table>
-    <div class="rowcards">${EXPENSES.map((e) => `
+      <td><button class="btn sm ghost danger-ic" aria-label="Delete expense" title="Delete" onclick="delExpense('${e.id}')">🗑</button></td></tr>`).join("")}
+    </tbody>
+    <tfoot><tr class="totalrow"><td>Total</td><td class="muted">${rows.length} item${rows.length > 1 ? "s" : ""}</td>
+      <td class="money">${money(total)}</td><td></td><td></td></tr></tfoot></table>
+    <div class="rowcards">${rows.map((e) => `
       <div class="rowcard"><div class="r1"><b>${esc(e.category)}</b><span class="money">${money(e.amount)}</span></div>
       <div class="kv"><span>${fmtDate(e.spent_on)}</span><span>${esc(e.description || "")}</span></div>
-      <div class="act"><button class="btn sm danger" onclick="delExpense('${e.id}')">Delete</button></div></div>`).join("")}</div>`;
+      <div class="act"><button class="btn sm ghost danger-ic" onclick="delExpense('${e.id}')">🗑 Delete</button></div></div>`).join("")}
+      <div class="rowcard" style="background:var(--n50)"><div class="r1"><b>Total (${rows.length})</b><span class="money">${money(total)}</span></div></div>
+    </div>`;
 }
 async function saveExpense(btn) {
+  $("exp-cat-err").textContent = ""; $("exp-amt-err").textContent = "";
+  const cat = $("exp-cat").value;
+  const amt = parseFloat($("exp-amt").value);
+  if (!cat) { $("exp-cat-err").textContent = "Pick a category."; $("exp-cat").focus(); return; }
+  if (!(amt > 0)) { $("exp-amt-err").textContent = "Enter an amount greater than 0."; $("exp-amt").focus(); return; }
   await busy(btn, async () => {
-    const amt = parseFloat($("exp-amt").value);
-    if (!(amt > 0)) throw new Error("Amount must be greater than 0");
-    await api("/admin/api/expenses", { method: "POST", body: { category: $("exp-cat").value, amount: amt, spent_on: $("exp-date").value, description: $("exp-desc").value.trim() || null } });
-    $("exp-amt").value = ""; $("exp-desc").value = "";
-    toast("Expense saved"); loadExpenses();
+    await api("/admin/api/expenses", { method: "POST", body: { category: cat, amount: amt, spent_on: $("exp-date").value, description: $("exp-desc").value.trim() || null } });
+    $("exp-cat").value = ""; $("exp-amt").value = ""; $("exp-desc").value = "";
+    toast(`✓ ${money(amt)} expense saved`); loadExpenses();
   });
 }
 function delExpense(id) {
-  confirmDialog("Delete this expense? This cannot be undone.", async () => {
+  const e = EXPENSES.find((x) => x.id === id);
+  const label = e ? `${money(e.amount)} — ${e.category}` : "this expense";
+  confirmDialog(`Delete ${label}? This cannot be undone.`, async () => {
     try { await api(`/admin/api/expenses/${id}`, { method: "DELETE" }); toast(T.deleted); loadExpenses(); }
     catch (e) { toast(e.message, true); }
   });
 }
 const PALETTE = ["#f97316", "#2563eb", "#16a34a", "#d97706", "#7c3aed", "#0e7490", "#dc2626", "#78716c"];
-function donutHtml(pairs, elLegend) {
+/* money=true (Expenses/Reports): every legend value is a ₹ amount, and the
+   donut shows the total in its middle. money=false keeps the old count look. */
+function donutHtml(pairs, opts = {}) {
+  const asMoney = opts.money !== false;
   const total = pairs.reduce((a, [, v]) => a + v, 0) || 1;
   let acc = 0;
-  const stops = pairs.map(([k, v], i) => {
+  const stops = pairs.map(([, v], i) => {
     const from = (acc / total) * 360; acc += v;
     return `${PALETTE[i % PALETTE.length]} ${from}deg ${(acc / total) * 360}deg`;
   });
-  const legend = pairs.map(([k, v], i) => `<div><span class="sw" style="background:${PALETTE[i % PALETTE.length]}"></span>${esc(k)} — <b>${typeof v === "number" && v > 999 ? money(v) : v}</b></div>`).join("");
-  return [`<div class="donut" style="background:conic-gradient(${stops.join(",")})"></div>`, legend];
+  const fmt = (v) => asMoney ? money(v) : (typeof v === "number" && v > 999 ? money(v) : v);
+  const legend = pairs.map(([k, v], i) => {
+    const pct = Math.round((v / total) * 100);
+    return `<div><span class="sw" style="background:${PALETTE[i % PALETTE.length]}"></span>${esc(k)} — <b>${fmt(v)}</b>${asMoney ? ` <span class="muted">(${pct}%)</span>` : ""}</div>`;
+  }).join("");
+  const center = asMoney
+    ? `<div class="donut-center"><span class="dc-lbl">Total</span><span class="dc-val">${money(total)}</span></div>`
+    : "";
+  return [`<div class="donut" style="background:conic-gradient(${stops.join(",")})">${center}</div>`, legend];
 }
 function renderExpChart() {
   const byCat = {};
   EXPENSES.forEach((e) => { byCat[e.category] = (byCat[e.category] || 0) + Number(e.amount); });
   const pairs = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
-  if (!pairs.length) { $("exp-chart").innerHTML = ""; return; }
-  const [donut, legend] = donutHtml(pairs);
+  if (!pairs.length) { $("exp-chart").innerHTML = emptyBox("No spending to chart yet.", "📊"); return; }
+  const [donut, legend] = donutHtml(pairs, { money: true });
   $("exp-chart").innerHTML = `<div class="split2" style="align-items:center">${donut}<div class="legend">${legend}</div></div>`;
 }
 
@@ -1424,7 +1495,7 @@ async function loadReports() {
       <div style="font-size:11px" class="muted">R ${money(p.revenue)} · E ${money(p.expenses)} · P ${money(p.profit)}</div>
     </div>`).join("");
   const statusPairs = Object.entries(DASH.counts.by_status || {}).map(([k, v]) => [statusName(k) || k, v]);
-  const [sd, sl] = statusPairs.length ? donutHtml(statusPairs) : ["", ""];
+  const [sd, sl] = statusPairs.length ? donutHtml(statusPairs, { money: false }) : ["", ""];
   const top = (CUSTOMERS_CACHE || []).slice().sort((a, b) => Number(b.business) - Number(a.business)).slice(0, 8);
   $("rep-body").innerHTML = `
     <div class="card"><b>Revenue vs expenses vs profit</b>

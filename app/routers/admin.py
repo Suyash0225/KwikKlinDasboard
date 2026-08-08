@@ -375,20 +375,28 @@ async def reports_summary(db: AsyncSession = Depends(get_db)) -> dict:
     week0 = today0 - timedelta(days=7)
     month0 = today0.replace(day=1)
 
-    async def money_since(since: datetime) -> dict:
+    # last calendar month, as a closed [start, end) range — powers the
+    # "vs last month" indicators on the Expenses KPIs
+    last_month_end = month0
+    last_month_start = (month0 - timedelta(days=1)).replace(day=1)
+
+    async def money_between(since: datetime, until: datetime | None = None) -> dict:
+        ocond = [Order.created_at >= since]
+        econd = [Expense.spent_on >= since.date()]
+        if until is not None:
+            ocond.append(Order.created_at < until)
+            econd.append(Expense.spent_on < until.date())
         row = (
             await db.execute(
                 select(
                     func.coalesce(func.sum(Order.amount_paid), 0),
                     func.count(),
-                ).where(Order.created_at >= since)
+                ).where(*ocond)
             )
         ).one()
         exp = (
             await db.execute(
-                select(func.coalesce(func.sum(Expense.amount), 0)).where(
-                    Expense.spent_on >= since.date()
-                )
+                select(func.coalesce(func.sum(Expense.amount), 0)).where(*econd)
             )
         ).scalar_one()
         revenue, orders_count = row
@@ -398,6 +406,9 @@ async def reports_summary(db: AsyncSession = Depends(get_db)) -> dict:
             "profit": str(Decimal(revenue) - Decimal(exp)),
             "orders": orders_count,
         }
+
+    async def money_since(since: datetime) -> dict:
+        return await money_between(since)
 
     outstanding = (
         await db.execute(
@@ -413,6 +424,7 @@ async def reports_summary(db: AsyncSession = Depends(get_db)) -> dict:
         "today": await money_since(today0),
         "week": await money_since(week0),
         "month": await money_since(month0),
+        "last_month": await money_between(last_month_start, last_month_end),
         "outstanding_total": str(outstanding),
     }
 
