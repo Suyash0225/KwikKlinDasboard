@@ -4,15 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Kwik Klin — Laundry Pro</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%BA%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/admin/static/app.css?v=wa3">
+<!-- fonts load WITHOUT blocking first paint: text shows in the system font,
+     Poppins swaps in when it lands (display=swap). media-flip trick, no JS lib. -->
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet" media="print" onload="this.media='all';this.onload=null">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
+<!-- app.css is mobile-first and carries every breakpoint — one sheet, one cascade.
+     It stays render-blocking on purpose: it IS the critical CSS (too big to inline). -->
+<link rel="stylesheet" href="/admin/static/app.css?v=rs1">
+<!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
+<script src="/admin/static/app.js?v=rs1" defer></script>
 </head>
 <body>
 <div class="shell">
 
-  <!-- ======== sidebar ======== -->
+  <!-- ======== sidebar (off-canvas drawer under 1024px) ======== -->
+  <div class="side-ov" id="side-ov" onclick="closeSidebar()"></div>
   <aside class="sidebar" id="sidebar">
     <div class="logo">
       <div class="logo-badge">KK</div>
@@ -44,7 +54,7 @@
   <!-- ======== main ======== -->
   <main class="main">
     <div class="topbar">
-      <span class="burger" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</span>
+      <button class="burger" aria-label="Menu kholo" onclick="toggleSidebar()">☰</button>
       <h2 id="mob-title">Dashboard</h2>
     </div>
 
@@ -52,18 +62,20 @@
     <section id="sec-dashboard">
       <div class="pagehead"><div><h2>Dashboard</h2><p>Today at a glance</p></div>
         <div class="actions"><button class="btn" onclick="go('newbill')">➕ New bill</button></div></div>
-      <div class="grid kpis" id="kpis"></div>
+      <!-- static skeletons paint on slow 4G before app.js + the API answer;
+           loadDashboard() replaces them with real numbers -->
+      <div class="grid kpis" id="kpis"><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div></div>
       <div class="card" id="wa-stats" style="margin-bottom:14px"><span class="muted">📱 WhatsApp stats load ho rahe…</span></div>
       <div class="chips" id="dash-chips"></div>
       <div class="filters">
-        <input placeholder="Search name, phone or order…" oninput="dashFilter.q=this.value;dashFilter.page=1;renderOrders()">
+        <input type="search" placeholder="Search name, phone or order…" oninput="dashFilter.q=this.value;dashFilter.page=1;renderOrdersDeb()">
         <select onchange="dashFilter.pay=this.value;dashFilter.page=1;renderOrders()">
           <option value="">All payments</option><option value="PAID">Paid</option>
           <option value="PARTIAL">Partial</option><option value="UNPAID">Unpaid</option>
         </select>
         <button class="btn ghost sm" onclick="loadDashboard()">↻ Refresh</button>
       </div>
-      <div class="card" style="padding:0;overflow:hidden"><div id="dash-orders"></div></div>
+      <div class="card listcard"><div id="dash-orders" style="padding:12px"><div class="skel skelrow"></div><div class="skel skelrow"></div><div class="skel skelrow"></div><div class="skel skelrow"></div></div></div>
       <div class="pager" id="dash-pager"></div>
     </section>
 
@@ -82,19 +94,20 @@
             <button class="th-ico" onclick="newChatModal()" title="New chat">✚</button>
             <button class="th-ico" onclick="bulkImportModal()" title="Bulk import numbers">⋮</button>
           </div>
-          <div class="th-search"><input id="th-search" placeholder="Search" oninput="renderThreads()"></div>
-          <div id="th-list" style="flex:1;overflow-y:auto"></div>
+          <div class="th-search"><input id="th-search" type="search" placeholder="Naam ya number se dhoondhein" oninput="threadSearch(this.value)"></div>
+          <div id="th-list" style="flex:1;overflow-y:auto" onscroll="onThreadScroll(this)"><div style="padding:12px"><div class="skel skelrow"></div><div class="skel skelrow"></div><div class="skel skelrow"></div></div></div>
         </div>
         <div class="chatpane" style="position:relative">
           <div class="chathead" id="chat-head"><span class="muted">Pick a conversation on the left…</span></div>
           <div class="chatlog" id="chat-log"></div>
           <div class="newmsg-pill" id="newmsg-pill" onclick="scrollChatBottom()">⬇ Naye messages</div>
+          <div class="replybar" id="reply-bar"></div>
           <div class="composer" style="position:relative">
             <div class="emojis" id="emoji-pal"></div>
             <button class="btn ghost sm" onclick="tplSendModal()" title="Template bhejo (window band ho tab bhi)">📑</button>
             <button class="btn ghost sm" onclick="toggleEmojis()">😊</button>
             <label class="btn ghost sm" style="cursor:pointer">📎<input type="file" accept="image/*" style="display:none" onchange="sendMedia(this)"></label>
-            <input type="text" id="chat-input" placeholder="Type a message" onkeydown="if(event.key==='Enter')sendChat()">
+            <input type="text" id="chat-input" enterkeyhint="send" placeholder="Type a message" onkeydown="if(event.key==='Enter')sendChat()">
             <button class="btn" onclick="sendChat()" title="Send" aria-label="Send">➤</button>
           </div>
         </div>
@@ -110,7 +123,7 @@
           <div class="split2" style="margin-top:8px">
             <div class="autocomplete">
               <label>Mobile number *</label>
-              <input id="nb-phone" placeholder="98765 43210" oninput="custAc()" autocomplete="off">
+              <input id="nb-phone" type="tel" inputmode="numeric" placeholder="98765 43210" oninput="custAc()" autocomplete="off">
               <div class="acp" id="nb-ac"></div>
             </div>
             <div><label>Name</label><input id="nb-name" placeholder="Customer name"></div>
@@ -129,13 +142,13 @@
           <div class="sumrow" style="margin-top:8px"><span>Subtotal</span><span class="money" id="nb-sub">₹0</span></div>
           <div class="sumrow"><span>Discount preset</span><span style="max-width:150px"><select id="nb-preset" onchange="applyPreset()"><option value="">No discount</option></select></span></div>
           <div class="sumrow"><span>Discount (₹)</span><span style="max-width:110px"><input id="nb-disc" type="number" min="0" oninput="calcBill()"></span></div>
-          <div class="sumrow"><span><label style="display:inline"><input type="checkbox" id="nb-gst" onchange="calcBill()" style="width:auto"> GST 18%</label></span><span class="money" id="nb-gstamt">₹0</span></div>
+          <div class="sumrow"><span><label style="display:inline"><input type="checkbox" id="nb-gst" onchange="calcBill()"> GST 18%</label></span><span class="money" id="nb-gstamt">₹0</span></div>
           <div class="sumrow"><span>Coupon code</span><span style="max-width:130px"><input id="nb-coupon" placeholder="e.g. OFF10"></span></div>
           <div class="sumrow total"><span>Total</span><span id="nb-total">₹0</span></div>
           <div class="sumrow"><span>Advance (₹)</span><span style="max-width:110px"><input id="nb-adv" type="number" min="0" oninput="calcBill()"></span></div>
           <div class="sumrow"><span>Advance mode</span><span style="max-width:110px"><select id="nb-advmode"><option value="CASH">Cash</option><option value="UPI">UPI</option></select></span></div>
           <div class="sumrow"><span>Due</span><span class="money" id="nb-due">₹0</span></div>
-          <button class="btn" style="width:100%;margin-top:10px" onclick="saveBill(this)">💾 Save bill</button>
+          <div class="savebar"><button class="btn" onclick="saveBill(this)">💾 Save bill</button></div>
           <p class="muted" style="margin-top:8px">Saving notifies the customer on WhatsApp and sends the work order to staff.</p>
         </div>
       </div>
@@ -146,7 +159,7 @@
       <div class="pagehead"><div><h2>Bill history</h2><p>Every order, filterable</p></div>
         <div class="actions"><button class="btn ghost" onclick="billsCsv()">⬇ CSV</button></div></div>
       <div class="filters">
-        <input placeholder="Search…" oninput="billFilter.q=this.value;billFilter.page=1;renderBills()">
+        <input type="search" placeholder="Search…" oninput="billFilter.q=this.value;billFilter.page=1;renderBillsDeb()">
         <select onchange="billFilter.status=this.value;billFilter.page=1;renderBills()">
           <option value="">All statuses</option>
           <option value="RECEIVED">New</option><option value="IN_WASH">Washing</option>
@@ -161,7 +174,7 @@
         <input type="date" onchange="billFilter.from=this.value;renderBills()" title="From date">
         <input type="date" onchange="billFilter.to=this.value;renderBills()" title="To date">
       </div>
-      <div class="card" style="padding:0;overflow:hidden"><div id="bills-list"></div></div>
+      <div class="card listcard"><div id="bills-list"></div></div>
       <div class="pager" id="bills-pager"></div>
     </section>
 
@@ -169,8 +182,8 @@
     <section id="sec-customers" style="display:none">
       <div class="pagehead"><div><h2>Customers</h2><p>Ledger — sorted by highest outstanding first</p></div>
         <div class="actions"><button class="btn ghost" onclick="bulkImportModal()">📥 Bulk import numbers</button></div></div>
-      <div class="filters"><input id="cust-search" placeholder="Search name or number…" oninput="renderCustomers()"></div>
-      <div class="card" style="padding:0;overflow:hidden"><div id="cust-list"></div></div>
+      <div class="filters"><input id="cust-search" type="search" placeholder="Search name or number…" oninput="custSearchDeb()"></div>
+      <div class="card listcard"><div id="cust-list"></div></div>
     </section>
 
     <!-- Expenses -->
@@ -181,7 +194,7 @@
         <b>Add expense</b>
         <div class="filters" style="margin-top:8px">
           <select id="exp-cat"></select>
-          <input id="exp-amt" type="number" min="1" placeholder="Amount (₹)">
+          <input id="exp-amt" type="number" inputmode="decimal" min="1" placeholder="Amount (₹)">
           <input id="exp-date" type="date">
           <input id="exp-desc" placeholder="Description (optional)" style="flex:1">
           <button class="btn" onclick="saveExpense(this)">Save expense</button>
@@ -189,7 +202,7 @@
       </div>
       <div class="split2">
         <div class="card"><b>Category breakdown</b><div id="exp-chart" style="margin-top:10px"></div></div>
-        <div class="card" style="padding:0;overflow:hidden"><div id="exp-list"></div></div>
+        <div class="card listcard"><div id="exp-list"></div></div>
       </div>
     </section>
 
@@ -284,7 +297,7 @@
       <div class="card" style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
           <b>🤖 Agent master switch</b>
-          <label style="display:flex;align-items:center;gap:8px;margin:0"><input type="checkbox" id="agent-toggle" style="width:auto"> Agent replies to customers</label>
+          <label style="display:flex;align-items:center;gap:8px;margin:0"><input type="checkbox" id="agent-toggle"> Agent replies to customers</label>
         </div>
         <div class="split2" style="margin-top:10px">
           <div><label>Extra instructions — customer replies</label>
@@ -389,7 +402,7 @@
           <div class="split2" style="margin-top:10px">
             <div><label>Business name</label><input id="bp-name" disabled title="Set via .env SHOP_NAME"></div>
             <div><label>GST identification number (GSTIN)</label><input id="bp-gstin" placeholder="09AAAAA0000A1Z5"></div>
-            <div><label>Contact phone number</label><input id="bp-phone" placeholder="9696856069"></div>
+            <div><label>Contact phone number</label><input id="bp-phone" type="tel" inputmode="numeric" placeholder="9696856069"></div>
             <div><label>Default delivery boy</label><select id="set-delivery"></select></div>
           </div>
           <div style="margin-top:10px"><label>Shop timings (the bot tells customers this)</label>
@@ -405,7 +418,7 @@
           <div class="filters" style="margin-top:10px">
             <div><label>Standard GST (%)</label><input id="bp-gstpct" type="number" min="0" max="28" style="width:90px"></div>
             <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:13px;margin-top:14px">
-              <input type="checkbox" id="bp-gstdef" style="width:auto"> Enable GST by default on new bills</label>
+              <input type="checkbox" id="bp-gstdef"> Enable GST by default on new bills</label>
           </div>
           <button class="btn" style="margin-top:12px" onclick="saveProfile(this)">Save profile configurations</button>
         </div>
@@ -531,7 +544,7 @@
           </div>
           <div class="setfield">
             <label for="sf-phone">Phone</label>
-            <input id="sf-phone" inputmode="numeric" placeholder="10 digits" onkeydown="if(event.key==='Enter')addStaff(document.getElementById('sf-add'))">
+            <input id="sf-phone" type="tel" inputmode="numeric" placeholder="10 digits" onkeydown="if(event.key==='Enter')addStaff(document.getElementById('sf-add'))">
             <small class="fielderr" id="sf-phone-err"></small>
           </div>
           <div class="setfield">
@@ -608,6 +621,5 @@
 <div id="toasts"></div>
 <pre id="receipt"></pre>
 
-<script src="/admin/static/app.js?v=wa3"></script>
 </body>
 </html>

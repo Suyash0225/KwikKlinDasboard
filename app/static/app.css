@@ -1,5 +1,14 @@
 /* Kwik Klin — Laundry Pro design system.
-   Single source of truth: change a variable here, the whole app follows. */
+   Single source of truth: change a variable here, the whole app follows.
+
+   MOBILE-FIRST: base styles are the phone layout (360-479px). Wider screens
+   layer on top via min-width queries only:
+     >= 480px   small refinements (filter rows, settings grid)
+     >= 768px   tablet: tables return, split panes, centred modals
+     >= 1024px  desktop: fixed sidebar, tab bar gone
+     >= 1280px  wide desktop: extra breathing room
+   The ONE deliberate max-width block is the full-screen chat overlay
+   (body.chat-open) — it must never leak past 767px, see the comment there. */
 
 :root {
   /* brand — matched to the owner's legacy "Smart Laundry Billing" app */
@@ -20,50 +29,72 @@
   --n300: #cbd2de; --n400: #98a2b3; --n500: #667085; --n600: #475467;
   --n700: #344054; --n800: #1d2939; --n900: #101828;
   --sidebar-bg: #0d1526; --sidebar-bg2: #111c33;
-  --radius: 20px; --radius-sm: 12px;
+  --line: #e7eaf1;          /* one border colour everywhere */
+  --line-soft: #f0f2f7;
+  --radius: 20px; --radius-sm: 12px; --radius-lg: 18px;
   --shadow: 0 2px 4px rgba(16,24,40,.04), 0 10px 30px rgba(16,24,40,.06);
   --shadow-pop: 0 10px 26px rgba(246,90,43,.32);
   --shadow-green: 0 10px 26px rgba(18,183,106,.3);
   --sidebar-w: 244px;
+  /* spacing scale — use these, not magic numbers */
+  --s1: 4px; --s2: 8px; --s3: 14px; --s4: 20px; --s5: 26px;
+  --pad: 20px;              /* the single spacing step cards use */
+  --tap: 44px;              /* minimum touch target */
+  --tabbar-h: 64px;         /* bottom tab bar clearance on phones */
   --font: "Poppins", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; overflow-x: hidden; }
+/* min-height, height NAHI: height:100% body ko viewport par taala laga deta
+   hai, jisse scroll BODY ke andar hota hai, page ka nahi. Nateeja: phone ka
+   address bar chhupta nahi, window.scrollTo bekaar ho jaata hai, aur
+   document.scrollHeight hamesha 800 batata hai chahe content 1973px ka ho. */
+html, body { min-height: 100%; overflow-x: hidden; }
 body {
   font-family: var(--font); background: var(--n50); color: var(--n800);
   font-size: 14px; line-height: 1.45;
   touch-action: manipulation; -webkit-tap-highlight-color: transparent;
 }
 button { font-family: inherit; }
+/* 16px base = iOS focus par zoom NAHI karta. Desktop (fine pointer) end mein
+   wapas 13.5px ho jaata hai — file ke aakhri block mein. */
 input, select, textarea {
-  font-family: inherit; font-size: 13.5px; color: var(--n800);
-  border: 1.5px solid var(--n200); border-radius: var(--radius-sm);
-  padding: 10px 13px; background: var(--n50); width: 100%;
+  font-family: inherit; font-size: 16px; color: var(--n800);
+  border: 1.5px solid var(--line); border-radius: var(--radius-sm);
+  padding: 10px 13px; background: var(--n0); width: 100%;
   transition: border-color .15s, box-shadow .15s, background .15s;
 }
+input:hover, select:hover, textarea:hover { border-color: var(--n300); }
 input:focus, select:focus, textarea:focus {
   outline: none; border-color: var(--brand); background: var(--n0);
   box-shadow: 0 0 0 3px rgba(246,90,43,.12);
 }
-label {
-  display: block; font-size: 10.5px; font-weight: 700; color: var(--n500);
-  margin-bottom: 5px; text-transform: uppercase; letter-spacing: .9px;
+input[type=checkbox] {
+  width: 22px; height: 22px; min-height: 22px; padding: 0;
+  accent-color: var(--brand); outline-offset: 8px;
 }
+label input[type=checkbox] { margin-right: 6px; }
+label { display: block; font-size: 11.5px; font-weight: 600; color: var(--n600); margin-bottom: 5px; }
 a { color: var(--brand-600); text-decoration: none; }
 
 /* ---------- layout ---------- */
 .shell { display: flex; min-height: 100dvh; }
+
+/* Sidebar: base = off-canvas drawer (phone/tablet). Desktop pins it. */
 .sidebar {
   width: var(--sidebar-w);
   background: linear-gradient(180deg, var(--sidebar-bg), var(--sidebar-bg2));
   color: #cdd5e1;
   position: fixed; inset: 0 auto 0 0; z-index: 40; display: flex;
   flex-direction: column; transition: transform .2s ease;
+  transform: translateX(-105%);
+  padding-top: env(safe-area-inset-top);
 }
-.sidebar .logo {
-  display: flex; align-items: center; gap: 11px; padding: 22px 18px 18px;
-}
+.sidebar.open { transform: none; }
+/* scrim behind the open drawer — tap anywhere outside to close */
+.side-ov { position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 39; display: none; }
+.side-ov.open { display: block; }
+.sidebar .logo { display: flex; align-items: center; gap: 11px; padding: 22px 18px 18px; }
 .logo-badge {
   width: 42px; height: 42px; border-radius: 50%; background: var(--g-orange);
   color: #fff; font-weight: 800; display: grid; place-items: center; font-size: 15px;
@@ -74,54 +105,85 @@ a { color: var(--brand-600); text-decoration: none; }
 .nav { flex: 1; overflow-y: auto; padding: 8px 14px 16px; }
 .nav div {
   display: flex; align-items: center; gap: 11px; padding: 12px 14px;
+  min-height: 46px;
   border-radius: 14px; cursor: pointer; font-size: 13.5px; color: #aeb8c9;
   margin-bottom: 4px; transition: background .12s, color .12s, transform .12s;
   font-weight: 600;
 }
-.nav div:hover { background: rgba(255,255,255,.06); color: #fff; transform: translateX(2px); }
 .nav div.on {
   background: var(--g-orange); color: #fff; box-shadow: var(--shadow-pop);
   font-weight: 700;
 }
-.nav .navsec { font-size: 9.5px; letter-spacing: 2px; color: #58657c; padding: 14px 14px 4px; cursor: default; font-weight: 700; }
-.nav .navsec:hover { background: none; color: #58657c; transform: none; }
+.nav .navsec { font-size: 9.5px; letter-spacing: 2px; color: #58657c; padding: 14px 14px 4px; cursor: default; font-weight: 700; min-height: 0; }
 .sysline { padding: 12px 18px; font-size: 11px; color: #7c8aa0; border-top: 1px solid rgba(255,255,255,.07); }
 .sysline .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; box-shadow: 0 0 8px var(--ok); }
 .logout {
   display: flex; align-items: center; gap: 10px; padding: 12px 18px; cursor: pointer;
+  min-height: var(--tap);
   color: #aeb8c9; font-size: 13px; font-weight: 600; border-top: 1px solid rgba(255,255,255,.07);
 }
-.logout:hover { color: #fff; background: rgba(255,255,255,.05); }
 
-.main { flex: 1; margin-left: var(--sidebar-w); padding: 22px 26px 90px; max-width: 1400px; }
-.topbar { display: none; }
+/* Main column: base = full width under a sticky top bar, with clearance for
+   the bottom tab bar. Safe-area insets keep content off notches. */
+.main {
+  flex: 1; min-width: 0; max-width: 1400px;
+  margin-left: 0;
+  padding: var(--s3)
+           max(var(--s3), env(safe-area-inset-right))
+           calc(var(--tabbar-h) + 32px + env(safe-area-inset-bottom))
+           max(var(--s3), env(safe-area-inset-left));
+}
+/* sticky mobile header — burger + current page title */
+.topbar {
+  display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 30;
+  background: rgba(247,248,252,.92); backdrop-filter: blur(6px);
+  padding: calc(10px + env(safe-area-inset-top)) 2px 10px; margin-bottom: 8px;
+}
+.topbar .burger {
+  font-size: 22px; cursor: pointer; border: none; background: none; color: var(--n800);
+  min-width: var(--tap); min-height: var(--tap);
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 12px;
+}
+.topbar h2 { font-size: 17px; }
 
 /* ---------- page header ---------- */
-.pagehead { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
-.pagehead h2 { font-size: 24px; font-weight: 800; color: var(--n900); letter-spacing: -.3px; }
-.pagehead p { color: var(--n500); font-size: 13px; margin-top: 2px; }
+.pagehead { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+/* Phone par topbar pehle hi section ka naam dikhata hai — wahi heading
+   neeche dobara chhaapna ~130px kha jaata tha. Sirf action buttons raho. */
+.pagehead h2, .pagehead p { display: none; }
+.pagehead .actions { margin-left: auto; }
 .pagehead .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Phone par Inbox mein headings/buttons ~580px kha rahe the — tabbar aur
+   chat-head wahi kaam karte hain, isliye chhoti screen par pagehead gayab. */
+#sec-inbox .pagehead { display: none; }
 
 /* ---------- cards & KPIs ---------- */
 .card {
-  background: var(--n0); border: 1px solid var(--n100); border-radius: var(--radius);
-  box-shadow: var(--shadow); padding: 18px;
+  background: var(--n0); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  box-shadow: 0 1px 2px rgba(16,24,40,.04); padding: var(--pad);
 }
-/* card section headers read like the legacy app: small caps, letterspaced */
+/* list cards (orders/bills/customers/expenses): flush content; a genuinely
+   wide table scrolls INSIDE the card on desktop instead of dragging the page.
+   NOTE: overflow-x scroll containers still clip to the border-radius. */
+.card.listcard { padding: 0; overflow-x: auto; }
+.card:has(.tbl) { overflow-x: auto; }
+.card:has(.tbl) { padding-bottom: 6px; }
+.card.listcard:has(.tbl) { padding-bottom: 0; }
 .card > b {
-  display: block; font-size: 12px; letter-spacing: 1.1px; text-transform: uppercase;
-  color: var(--n700); font-weight: 700;
+  display: block; font-size: 13px; letter-spacing: .2px;
+  color: var(--n800); font-weight: 700; margin-bottom: 2px;
 }
-.grid { display: grid; gap: 14px; }
-.kpis { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); margin-bottom: 18px; }
+.grid { display: grid; gap: var(--s3); }
+/* phone: two KPI tiles per row; money numbers may wrap, never clip */
+.kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 18px; }
 .kpis > * { min-width: 0; }
-.kpi { cursor: pointer; transition: transform .14s, box-shadow .14s; position: relative; padding: 18px; }
-.kpi:hover { transform: translateY(-3px); box-shadow: 0 14px 34px rgba(16,24,40,.1); }
-.kpi .lbl {
-  font-size: 10.5px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase;
-  color: var(--n400); padding-right: 44px;
+.kpi { cursor: pointer; transition: transform .14s, box-shadow .14s; position: relative; border-radius: var(--radius-lg); padding: var(--s4); }
+.kpi .lbl { font-size: 11px; letter-spacing: .3px; color: var(--n500); font-weight: 600; padding-right: 44px; }
+.kpi .val {
+  font-size: 22px; font-weight: 800; color: var(--n900);
+  font-variant-numeric: tabular-nums; margin-top: 8px; letter-spacing: -.5px;
+  overflow-wrap: anywhere;
 }
-.kpi .val { font-size: 27px; font-weight: 800; color: var(--n900); font-variant-numeric: tabular-nums; margin-top: 6px; }
 .kpi .sub { font-size: 11.5px; color: var(--n500); margin-top: 2px; }
 .kpi .sub.up { color: var(--ok); } .kpi .sub.down { color: var(--danger); }
 /* pastel icon chip, top-right — legacy-app signature */
@@ -139,28 +201,29 @@ a { color: var(--brand-600); text-decoration: none; }
 .chip {
   border: 1px solid var(--n200); background: var(--n0); border-radius: 999px;
   padding: 6px 14px; font-size: 12.5px; cursor: pointer; color: var(--n600);
-  font-weight: 700; transition: all .12s;
+  font-weight: 600; transition: all .12s;
+  min-height: 36px; display: inline-flex; align-items: center;
 }
-.chip:hover { border-color: var(--brand); color: var(--brand-600); transform: translateY(-1px); }
-.chip.on { background: var(--g-orange); border-color: transparent; color: #fff; box-shadow: 0 4px 12px rgba(249,115,22,.3); }
+.chip.on { background: var(--g-orange); border-color: transparent; color: #fff; }
 .chip b { font-variant-numeric: tabular-nums; }
 
-/* ---------- buttons ---------- */
+/* ---------- buttons ----------
+   Base = finger-sized (44px). The desktop fine-pointer block at the end of
+   this file restores the tighter mouse sizes, so 1280px+ looks unchanged. */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  border: none; border-radius: 999px; padding: 10px 20px;
+  border: none; border-radius: 999px; padding: 10px 18px;
+  min-height: var(--tap); min-width: var(--tap);
   font-size: 13.5px; font-weight: 700; cursor: pointer; transition: all .14s;
   background: var(--g-green); color: #fff; white-space: nowrap;
-  box-shadow: var(--shadow-green); font-family: var(--font);
+  box-shadow: 0 1px 2px rgba(16,24,40,.06); font-family: var(--font);
 }
-.btn:hover { filter: brightness(1.05); transform: translateY(-1px); }
 .btn:disabled { opacity: .55; cursor: not-allowed; }
 .btn.ghost { background: var(--n0); color: var(--n600); border: 1.5px solid var(--n200); box-shadow: none; }
-.btn.ghost:hover { border-color: var(--brand); color: var(--brand-600); background: var(--brand-50); box-shadow: none; }
-.btn.danger { background: linear-gradient(135deg, #fb7185, #e11d48); box-shadow: 0 6px 16px rgba(244,63,94,.28); }
-.btn.ok { background: var(--g-green); box-shadow: var(--shadow-green); }
+.btn.danger { background: linear-gradient(135deg, #fb7185, #e11d48); box-shadow: none; }
+.btn.ok { background: var(--g-green); }
 .btn.orange { background: var(--g-orange); box-shadow: var(--shadow-pop); }
-.btn.sm { padding: 6px 13px; font-size: 12px; }
+.btn.sm { padding: 8px 14px; font-size: 12px; }
 .btn .spin { width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -187,21 +250,55 @@ a { color: var(--brand-600); text-decoration: none; }
 .pill.urgent { background: var(--danger); color: #fff; }
 .pill.neutral { background: var(--n100); color: var(--n600); }
 
-/* ---------- tables (desktop) + cards (mobile) ---------- */
-.tbl { width: 100%; border-collapse: collapse; }
+/* ---------- data lists: cards on phones, tables from 768px ----------
+   Base hides .tbl and shows the stacked .rowcards that every list renders
+   alongside its table. NEVER horizontal-scroll a data table on a phone.
+   .tbl.keep opts out (rate matrix — a spreadsheet-like editor that lives in
+   its own overflow-x wrapper and cannot sanely be carded). */
+.tbl { display: none; }
+.tbl.keep { display: table; }
+.rowcards { display: flex; flex-direction: column; gap: 10px; }
+.rowcard { background: var(--n0); border: 1px solid var(--n200); border-radius: 12px; padding: 13px; box-shadow: var(--shadow); }
+.card.listcard .rowcards { padding: 12px; }
+.rowcard.overdue { border-left: 3px solid var(--danger); }
+.rowcard .r1 { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+.rowcard .r1 b { font-size: 14px; }
+.rowcard .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 2px 0; color: var(--n600); }
+.rowcard .kv > * { min-width: 0; overflow-wrap: anywhere; }
+.rowcard .act { margin-top: 9px; flex-wrap: wrap; }
+
+.tbl { width: 100%; border-collapse: separate; border-spacing: 0; }
 .tbl th {
-  text-align: left; font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase;
-  color: var(--n500); padding: 10px 12px; border-bottom: 1px solid var(--n200);
-  background: var(--n50); position: sticky; top: 0;
+  text-align: left; font-size: 11px; letter-spacing: .3px;
+  color: var(--n500); font-weight: 700; padding: 12px 16px;
+  border-bottom: 1px solid var(--line); background: var(--n0);
+  position: sticky; top: 0; z-index: 1; white-space: normal;
 }
-.tbl td { padding: 11px 12px; border-bottom: 1px solid var(--n100); vertical-align: middle; font-variant-numeric: tabular-nums; }
-.tbl tr:hover td { background: var(--n50); }
+.tbl td {
+  padding: 15px 16px; border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle; font-size: 13.5px; font-variant-numeric: tabular-nums;
+}
+.tbl tbody tr:last-child td { border-bottom: none; }
+.tbl tbody tr { transition: background .1s; }
 .tbl tr.overdue { border-left: 3px solid var(--danger); }
 .tbl tr.overdue td:first-child { position: relative; }
-.rowcards { display: none; }
+.tbl th:last-child, .tbl td:last-child { text-align: right; }
+.tbl .money, .tbl td.money { text-align: right; font-variant-numeric: tabular-nums; }
+/* Identifiers, phones and money must never wrap — a broken invoice number
+   ("KK-2026 / 0805 / -01") is unreadable and unscannable. Names may wrap. */
+.tbl td b, .tbl td .money, .tbl .nowrap { white-space: nowrap; }
+.tbl td .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tbl td:first-child { width: 1%; white-space: nowrap; }
+.tbl td .act { justify-content: flex-end; flex-wrap: nowrap; gap: 6px; }
+.tbl td .act .btn { padding: 7px 12px; }
 .money { font-variant-numeric: tabular-nums; font-weight: 600; }
 .muted { color: var(--n500); font-size: 12px; }
-.act { display: flex; gap: 5px; flex-wrap: nowrap; }
+.act { display: flex; gap: 8px; flex-wrap: wrap; }
+/* status + payment pills side by side, not stacked */
+.pillrow { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* icon-only row actions: quiet by default, colour on intent */
+.act .btn.sm.ghost { min-width: var(--tap); padding: 7px 10px; }
+.act .btn.danger-ic { color: var(--danger); border-color: var(--line); }
 
 /* ---------- states ---------- */
 .skel { border-radius: var(--radius-sm); background: linear-gradient(90deg, var(--n100) 25%, var(--n200) 50%, var(--n100) 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
@@ -211,28 +308,54 @@ a { color: var(--brand-600); text-decoration: none; }
 .empty .ico { font-size: 34px; margin-bottom: 8px; }
 .errbox { text-align: center; padding: 34px 20px; color: var(--danger); }
 
-/* ---------- modal / drawer ---------- */
+/* ---------- modal: bottom sheet on phones, dialog from 768px ----------
+   Screenshot se: bill wala modal screen ke neeche kat raha tha. Phone par
+   modal = sheet: neeche se poori chaudai, andar scroll, Save/Cancel HAMESHA
+   neeche chipka hua. */
 .overlay {
   position: fixed; inset: 0; background: rgba(28,25,23,.45); z-index: 60;
-  display: none; align-items: center; justify-content: center; padding: 16px;
+  display: none; align-items: flex-end; justify-content: center; padding: 0;
 }
 .overlay.open { display: flex; }
 .modal {
-  background: var(--n0); border-radius: var(--radius); max-width: 520px; width: 100%;
-  max-height: 88dvh; overflow-y: auto; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.25);
+  background: var(--n0); width: 100%; max-width: 100%;
+  max-height: 92dvh;
+  border-radius: 20px 20px 0 0;
+  padding: 18px 16px calc(16px + env(safe-area-inset-bottom));
+  box-shadow: 0 20px 60px rgba(0,0,0,.25);
+  animation: sheetUp .18s ease-out;
+  /* SIRF ek scroll container: modal khud. Do scroller ladte hain. */
+  overflow-y: auto; overscroll-behavior: contain;
 }
-.modal h3 { font-size: 16px; margin-bottom: 12px; }
-.modal .frm { display: grid; gap: 10px; }
-.modal .btnrow { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+@keyframes sheetUp { from { transform: translateY(24px); } to { transform: none; } }
+/* upar khinchne wali chhoti patti — user ko dikhe ki ye sheet hai */
+.modal::before {
+  content: ""; flex: none; display: block; width: 42px; height: 4px; border-radius: 3px;
+  background: var(--n200); margin: -6px auto 12px;
+}
+/* andar ka koi hissa apna alag scroll na banaye */
+.modal .frm, .modal .billedit { overflow: visible; max-height: none; }
+.modal h3 { font-size: 17px; margin-bottom: 12px; letter-spacing: -.2px; }
+.modal .frm { display: grid; gap: 14px; }
+/* Save/Cancel neeche chipke rahenge — dhoondhna na pade */
+.modal .btnrow {
+  position: sticky; bottom: 0; z-index: 2;
+  margin: 14px -16px calc(-16px - env(safe-area-inset-bottom));
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  background: var(--n0); border-top: 1px solid var(--n100);
+  display: flex; gap: 10px;
+}
+.modal .btnrow .btn { flex: 1; min-height: 48px; }
 .drawer {
   position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 94vw);
   background: var(--n0); z-index: 70; box-shadow: -8px 0 30px rgba(0,0,0,.18);
-  transform: translateX(105%); transition: transform .2s ease; overflow-y: auto; padding: 20px;
+  transform: translateX(105%); transition: transform .2s ease; overflow-y: auto;
+  padding: 20px; padding-top: calc(20px + env(safe-area-inset-top));
 }
 .drawer.open { transform: none; }
 
 /* ---------- toast ---------- */
-#toasts { position: fixed; bottom: 76px; left: 50%; transform: translateX(-50%); z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+#toasts { position: fixed; bottom: calc(76px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .toast {
   background: var(--n900); color: #fff; border-radius: 10px; padding: 10px 18px;
   font-size: 13px; box-shadow: var(--shadow); animation: pop .18s ease;
@@ -241,75 +364,184 @@ a { color: var(--brand-600); text-decoration: none; }
 .toast.err { background: var(--danger); }
 @keyframes pop { from { opacity: 0; transform: translateY(8px); } }
 
-/* ---------- inbox: WhatsApp Web look (owner's reference) ---------- */
-.inboxwrap { display: flex; gap: 0; height: calc(100dvh - 150px); min-height: 420px; border: 1px solid #E9EDEF; border-radius: var(--radius); overflow: hidden; background: #fff; }
-.threads { width: 300px; border-right: 1px solid #E9EDEF; overflow-y: auto; flex-shrink: 0; background: #fff; display: flex; flex-direction: column; }
-.th-head { background: #F0F2F5; padding: 10px 12px; display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 2; }
+/* ---------- inbox: WhatsApp look ----------
+   Base = phone: the thread LIST owns the pane; tapping a thread opens the
+   chat as a full screen (body.chat-open) with a back button. From 768px the
+   two live side by side and the back button disappears. */
+.inboxwrap {
+  display: flex; gap: 0; height: calc(100dvh - 118px);
+  border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: #fff;
+  min-width: 0; max-width: 100%;
+}
+.threads {
+  width: 100%; border-right: none; overflow-y: auto; flex-shrink: 0;
+  background: #fff; display: flex; flex-direction: column; min-width: 0; max-width: 100%;
+}
+.th-head { background: #f7f8fa; padding: 6px 10px; display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 2; border-bottom: 1px solid var(--line); }
 .th-head .kkav { width: 34px; height: 34px; border-radius: 50%; background: var(--g-orange); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
 .th-head .spacer { flex: 1; }
 .th-ico {
   border: none; background: none; color: #54656F; font-size: 18px; cursor: pointer;
-  border-radius: 50%; width: 44px; height: 44px; display: inline-flex;
+  border-radius: 50%; width: var(--tap); height: var(--tap); display: inline-flex;
   align-items: center; justify-content: center; flex-shrink: 0;
 }
-.th-ico:hover { background: rgba(0,0,0,.06); }
 .th-search { padding: 8px 10px; border-bottom: 1px solid #E9EDEF; background: #fff; }
-.th-search input { background: #F0F2F5; border: none; border-radius: 8px; padding: 7px 12px; font-size: 13px; }
+.th-search input { background: #F0F2F5; border: none; border-radius: 8px; padding: 7px 12px; min-height: 44px; }
 .th-search input:focus { background: #fff; box-shadow: 0 0 0 1.5px #00A884; }
-.thread-item { padding: 10px 12px; cursor: pointer; display: block; border-bottom: 1px solid #F0F2F5; }
-.thread-item:hover { background: #F5F6F6; }
-.thread-item.on { background: #F0F2F5; border-left: 4px solid #00A884; padding-left: 8px; }
+.thread-item { padding: 12px 14px; min-height: 60px; cursor: pointer; display: block; border-bottom: 1px solid #F0F2F5; overflow: hidden; min-width: 0; max-width: 100%; }
+.thread-item.on { background: #F0F2F5; border-left: 4px solid #00A884; padding-left: 10px; }
 .thread-item .nm { display: flex; justify-content: space-between; font-weight: 500; font-size: 14px; color: #111B21; gap: 6px; }
 .thread-item .nm .t { color: #667781; font-size: 11px; font-weight: 400; flex-shrink: 0; }
 .thread-item.on .nm .t { color: #00A884; }
-.thread-item .pv { color: #667781; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
-.staff-chip { background: #D5E7EC; color: #33555E; font-size: 10px; border-radius: 6px; padding: 1px 6px; margin-left: 6px; font-weight: 700; }
-.chatpane { flex: 1; display: flex; flex-direction: column; min-width: 0; background: #EFE7DE; }
-.chathead { padding: 9px 14px; background: #F0F2F5; border-bottom: 1px solid #E1E4E6; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.chatlog { flex: 1; overflow-y: auto; padding: 14px 28px; background: #EFE7DE; display: flex; flex-direction: column; gap: 6px; }
+.thread-item .pv { display: block; color: #667781; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.staff-chip { background: #D5E7EC; color: #33555E; font-size: 11.5px; border-radius: 6px; padding: 1px 6px; margin-left: 6px; font-weight: 700; }
+/* chat pane hidden on phones until a thread is opened */
+.chatpane { display: none; flex: 1; flex-direction: column; min-width: 0; background: #EFE7DE; }
+
+/* Chat ka header — phone par grid, warna "window open" chip naam par chadh
+   jaata tha aur "· You 👑" teen line mein tootta tha. (>=768 flex row.) */
+.chathead {
+  background: #F0F2F5; border-bottom: 1px solid #E1E4E6;
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  grid-template-areas: "back av who ping" "chips chips chips chips";
+  align-items: center; gap: 4px 8px; padding: 8px 10px;
+}
+.chathead .chat-back { grid-area: back; }
+.chathead .avatar { grid-area: av; }
+.chathead > div:not(.avatar) { grid-area: who; min-width: 0; }
+.chathead > div:not(.avatar) b { display: block; font-size: 15px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chathead .muted { font-size: 11.5px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.chathead .winchip { grid-area: chips; justify-self: start; }
+.chathead .btn.sm { grid-area: ping; padding: 8px 12px; font-size: 12.5px; }
+/* Agent toggle chips ke saath neeche wali line mein */
+.chathead #agent-pause-btn { grid-area: chips; justify-self: end; }
+.chat-back {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--tap); height: var(--tap); border: none; background: none; font-size: 21px;
+  cursor: pointer; color: var(--n700); flex-shrink: 0;
+}
+
+.chatlog { flex: 1; overflow-y: auto; padding: 14px 16px; background: #EFE7DE; display: flex; flex-direction: column; gap: 6px; }
 .daychip { align-self: center; background: #D5E7EC; color: #33555E; font-size: 11px; padding: 4px 12px; border-radius: 8px; margin: 6px 0 4px; }
-.bubble { max-width: 65%; padding: 7px 10px 5px; border-radius: 8px; font-size: 13.5px; line-height: 1.45; color: #111B21; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; box-shadow: 0 1px 1px rgba(0,0,0,.06); }
+.bubble {
+  position: relative; max-width: 85%; padding: 7px 34px 5px 10px; border-radius: 8px;
+  font-size: 13.5px; line-height: 1.45; color: #111B21; white-space: pre-wrap;
+  overflow-wrap: anywhere; word-break: break-word; box-shadow: 0 1px 1px rgba(16,24,40,.07);
+}
 .bubble.in { background: #FFFFFF; align-self: flex-start; border-bottom-left-radius: 2px; }
 .bubble.out { background: #D9FDD3; align-self: flex-end; border-bottom-right-radius: 2px; }
 .bubble .bt { display: block; font-size: 10.5px; color: #667781; margin-top: 2px; text-align: right; }
-.bubble.out .bt::after { content: " ✓✓"; color: #53BDEB; }
-.bubble img { max-width: 100%; aspect-ratio: 4/3; object-fit: cover; background: var(--n100); border-radius: 6px; display: block; margin-bottom: 4px; }
-.composer { display: flex; gap: 10px; padding: 8px 14px; background: #F0F2F5; align-items: center; }
-.composer input[type=text] { flex: 1; background: #fff; border: none; border-radius: 8px; padding: 9px 12px; font-size: 13.5px; }
+/* ticks come from Meta's real delivery status (see ticks() in app.js) */
+.bubble .tick { color: #8696A0; letter-spacing: -1px; }
+.bubble .tick.read { color: #53BDEB; }
+.bubble .tick.fail { color: #D14343; }
+
+/* quoted reply, inside the bubble like WhatsApp */
+.bubble .quoted {
+  border-left: 3px solid #06CF9C; background: rgba(0,0,0,.045);
+  border-radius: 5px; padding: 4px 8px; margin-bottom: 4px;
+  font-size: 12px; color: #4A5A62; white-space: normal;
+}
+.bubble .quoted span { display: block; font-weight: 700; color: #06846A; font-size: 11.5px; }
+
+/* per-message reply arrow. VISIBLE by default (touch has no hover) — the
+   hover-reveal version lives in the @media (hover:hover) block below. */
+.bubble .breply {
+  position: absolute; top: 0; right: 0; opacity: .55; transition: opacity .12s;
+  background: transparent; border: none; cursor: pointer; font-size: 14px;
+  color: #667781; line-height: 1;
+  min-width: 40px; min-height: 40px; display: grid; place-items: center;
+}
+
+/* thread list: paging footer + contacts with no history yet */
+.th-more, .th-end {
+  text-align: center; padding: 13px; min-height: var(--tap);
+  font-size: 12.5px; color: #667781;
+}
+.th-more { cursor: pointer; font-weight: 700; color: #027A6B; }
+.pv-none { font-style: italic; opacity: .75; }
+
+/* contact import: file drop + a result the owner can act on */
+.tabs2 { display: flex; gap: 6px; margin: 4px 0 12px; }
+.tab2 {
+  flex: 1; padding: 10px; min-height: var(--tap); border-radius: 9px; border: 1px solid var(--n200);
+  background: #fff; cursor: pointer; font-weight: 600; font-size: 13px; color: #55606A;
+}
+.tab2.on { background: var(--brand-50, #E9F7F3); border-color: #06CF9C; color: #056B57; }
+.dropzone {
+  display: block; border: 2px dashed var(--n200); border-radius: 12px;
+  padding: 26px 14px; text-align: center; cursor: pointer; background: #FAFBFC;
+  transition: border-color .15s, background .15s;
+}
+.dropzone.over { border-color: #06CF9C; background: #F2FBF8; }
+.dropzone .dz-in b { display: block; margin-bottom: 4px; }
+.imp-res { margin: 12px 0 4px; border-top: 1px solid var(--n200); padding-top: 10px; font-size: 13px; }
+.imp-res .imp-row { margin-bottom: 4px; }
+.imp-res .bad { color: #B42318; }
+.imp-res .bad ul { margin: 5px 0 0 16px; font-size: 12px; }
+
+/* the strip above the composer while you are answering one message */
+.replybar { display: none; align-items: center; gap: 8px; padding: 8px 14px 0; background: #F0F2F5; }
+.replybar.show { display: flex; }
+.replybar .rq {
+  flex: 1; min-width: 0; border-left: 3px solid #06CF9C; background: #fff;
+  border-radius: 6px; padding: 5px 9px; font-size: 12.5px; color: #4A5A62;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.replybar .rq span { display: block; font-weight: 700; color: #06846A; font-size: 11.5px; }
+.replybar .rx {
+  background: none; border: none; cursor: pointer; font-size: 17px; color: #667781;
+  min-width: var(--tap); min-height: var(--tap); display: grid; place-items: center;
+}
+.bubble img { max-width: 100%; aspect-ratio: 4/3; object-fit: cover; background: var(--n100); border-radius: 10px; display: block; margin-bottom: 4px; }
+.composer {
+  display: flex; gap: 4px; padding: 8px; background: #f7f8fa; align-items: center;
+  border-top: 1px solid var(--line);
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+}
+.composer input[type=text] { flex: 1; min-width: 0; background: #fff; border: none; border-radius: 8px; padding: 9px 10px; min-height: 44px; }
 .composer input[type=text]:focus { box-shadow: none; }
 .composer .btn.ghost.sm {
   border: none; background: none; color: #54656F; font-size: 19px; padding: 0;
-  box-shadow: none; width: 44px; height: 44px; min-height: 44px; flex-shrink: 0;
+  box-shadow: none; width: var(--tap); height: var(--tap); min-height: var(--tap); flex-shrink: 0;
 }
-.composer .btn.ghost.sm:hover { background: rgba(0,0,0,.06); color: #54656F; }
 .composer .btn:not(.ghost) {
   background: #00A884; box-shadow: none; border-radius: 50%;
-  width: 44px; height: 44px; min-width: 44px; padding: 0; font-size: 16px; flex-shrink: 0;
+  width: var(--tap); height: var(--tap); min-width: var(--tap); padding: 0; font-size: 16px; flex-shrink: 0;
 }
-.winchip { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 3px 10px; }
+.winchip { font-size: 11.5px; font-weight: 700; border-radius: 999px; padding: 3px 10px; }
 .winchip.open { background: #D9FDD3; color: #0e7a4f; }
 .winchip.closed { background: var(--danger-50); color: var(--danger); }
 .avatar { width: 38px; height: 38px; border-radius: 50%; background: #6B7C85; color: #fff; display: grid; place-items: center; font-weight: 600; font-size: 15px; flex-shrink: 0; }
 
-/* emoji palette */
-.emojis { position: absolute; bottom: 54px; left: 8px; background: var(--n0); border: 1px solid var(--n200); border-radius: 12px; padding: 8px; display: none; grid-template-columns: repeat(8, 1fr); gap: 2px; box-shadow: var(--shadow); z-index: 20; }
+/* emoji palette — every emoji is a real tap target */
+.emojis { position: absolute; bottom: 54px; left: 8px; background: var(--n0); border: 1px solid var(--n200); border-radius: 12px; padding: 8px; display: none; grid-template-columns: repeat(6, 1fr); gap: 2px; box-shadow: var(--shadow); z-index: 20; }
 .emojis.open { display: grid; }
-.emojis span { font-size: 19px; padding: 4px; cursor: pointer; border-radius: 6px; }
-.emojis span:hover { background: var(--n100); }
+.emojis span {
+  font-size: 21px; cursor: pointer; border-radius: 6px;
+  width: var(--tap); height: var(--tap); display: grid; place-items: center;
+}
 
 /* ---------- new bill ---------- */
-.billgrid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; align-items: start; }
-.lineitem { display: grid; grid-template-columns: 1.2fr 1.2fr 64px 80px 84px 30px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.billgrid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+/* phone: ek item = do line; desktop: one 6-column row (>=768) */
+.lineitem { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; margin-bottom: 8px; }
+.lineitem .del { grid-column: 2; justify-self: end; }
 .autocomplete { position: relative; }
 .acp { position: absolute; top: 100%; left: 0; right: 0; background: var(--n0); border: 1px solid var(--n200); border-radius: 0 0 10px 10px; box-shadow: var(--shadow); z-index: 30; max-height: 220px; overflow-y: auto; }
-.acp div { padding: 8px 12px; cursor: pointer; font-size: 13px; }
-.acp div:hover { background: var(--brand-50); }
+.acp div { padding: 12px; min-height: var(--tap); display: flex; align-items: center; cursor: pointer; font-size: 13px; }
 .sumrow {
   display: flex; justify-content: space-between; gap: 10px; padding: 5px 0;
-  font-size: 13.5px; flex-wrap: wrap;
+  font-size: 13.5px; flex-wrap: wrap; align-items: center;
 }
 .sumrow > * { min-width: 0; overflow-wrap: anywhere; }
 .sumrow.total { font-size: 17px; font-weight: 800; border-top: 1px solid var(--n200); padding-top: 9px; margin-top: 5px; }
+/* Save bill: sticky above the tab bar on phones — thumb-zone, no hunting */
+.savebar { position: sticky; bottom: calc(var(--tabbar-h) + 12px + env(safe-area-inset-bottom)); z-index: 5; margin-top: 10px; }
+.savebar .btn { width: 100%; min-height: 48px; box-shadow: 0 8px 22px rgba(18,183,106,.35); }
 
 /* ---------- charts (pure CSS) ---------- */
 .donut { width: 130px; height: 130px; border-radius: 50%; margin: 0 auto; position: relative; }
@@ -317,7 +549,7 @@ a { color: var(--brand-600); text-decoration: none; }
 .legend { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; }
 .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; }
 .bars { display: flex; gap: 14px; align-items: flex-end; height: 140px; padding-top: 8px; }
-.bargrp { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.bargrp { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; }
 .bar { width: 100%; max-width: 46px; border-radius: 6px 6px 0 0; min-height: 3px; }
 .bar.rev { background: var(--brand); }
 .bar.exp { background: var(--n300); }
@@ -327,22 +559,17 @@ a { color: var(--brand-600); text-decoration: none; }
 /* minmax(0,1fr), not 1fr: a plain 1fr column refuses to shrink below its
    min-content, so one long label/input pushes the grid past the screen —
    and body has overflow-x:hidden, so that content is CUT OFF, not
-   scrollable. Same reason .sumrow/.act children get min-width:0 below. */
-.split2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+   scrollable. Phone: one column; two from 768px. */
+.split2 { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .split2 > * { min-width: 0; }
+/* filters: fluid full-width controls on phones, natural row on wide */
 .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
-.filters input, .filters select { width: auto; min-width: 130px; }
-.pager { display: flex; gap: 6px; justify-content: center; margin-top: 14px; align-items: center; }
+.filters input, .filters select { flex: 1 1 150px; width: auto; min-width: 0; min-height: 44px; }
+.filters .btn { flex: 0 0 auto; }
+.pager { display: flex; gap: 6px; justify-content: center; margin-top: 14px; align-items: center; flex-wrap: wrap; }
 .seg-card { cursor: pointer; }
-.seg-card:hover { border-color: var(--brand); }
-.tag { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 6px; background: var(--n100); color: var(--n600); }
+.tag { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 6px; background: var(--n100); color: var(--n600); }
 .hr { border: none; border-top: 1px solid var(--n200); margin: 14px 0; }
-
-/* Touch devices of ANY width (tablets, touch laptops) get finger-sized
-   controls; mouse-only screens keep the app's tighter 32px buttons. */
-@media (pointer: coarse) {
-  .btn, .btn.sm { min-height: 44px; min-width: 44px; }
-}
 
 /* keyboard users must always see where they are */
 .btn:focus-visible, .peek:focus-visible, a:focus-visible, [tabindex]:focus-visible {
@@ -350,25 +577,19 @@ a { color: var(--brand-600); text-decoration: none; }
 }
 
 /* ---------- settings: field grid + staff rows ---------- */
-/* This tab reads as sentences, not shouted labels — long helper text under
-   ALL-CAPS letterspaced labels is genuinely hard to scan. */
+/* This tab reads as sentences, not shouted labels. */
 #st-ops .card > b, #st-ops .setfield label, #st-ops b.subhead {
   text-transform: none; letter-spacing: 0;
 }
 #st-ops .card > b { font-size: 14.5px; }
 #st-ops .setfield label { font-size: 12px; color: var(--n600); }
-/* Fields reflow to one column instead of shrinking/overflowing. Every
-   control is the same height and fills its cell, so selects can't end up
-   different widths just because their text is longer. */
-.setgrid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 14px; margin-top: 12px; align-items: start;
-}
+/* phone: one column; >=480 fields reflow with auto-fit. Every control is the
+   same height and fills its cell. */
+.setgrid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 12px; align-items: start; }
 .setfield { min-width: 0; }
 .setfield label { margin-bottom: 6px; }
-.setfield input, .setfield select { width: 100%; height: 44px; }
-/* every control here is a finger target, not just a mouse target */
-#st-ops .btn, .modal .btnrow .btn { min-height: 44px; }
+.setfield input, .setfield select { width: 100%; height: var(--tap); }
+#st-ops .btn, .modal .btnrow .btn { min-height: var(--tap); }
 .setfield small {
   display: block; margin-top: 5px; font-size: 11.5px; line-height: 1.45;
   color: var(--n500);
@@ -376,7 +597,7 @@ a { color: var(--brand-600); text-decoration: none; }
 .setfield small.fielderr { color: var(--danger); font-weight: 600; }
 .setfield small.fielderr:empty { display: none; }
 .setfield.addbtn { display: flex; align-items: flex-end; }
-.setfield.addbtn .btn { height: 44px; }
+.setfield.addbtn .btn { height: var(--tap); width: 100%; }
 b.subhead { display: block; font-size: 13.5px; }
 /* save + secondary action stack instead of squeezing on a narrow phone */
 #st-ops .act { flex-wrap: wrap; gap: 8px; }
@@ -386,12 +607,11 @@ b.subhead { display: block; font-size: 13.5px; }
 .inputwrap input { padding-right: 68px; }
 /* attached suffix button — full field height so it is a real tap target */
 .peek {
-  position: absolute; right: 0; top: 0; height: 44px; min-width: 58px;
+  position: absolute; right: 0; top: 0; height: var(--tap); min-width: 58px;
   border: 1.5px solid var(--n200); border-left: none; background: var(--n100);
   color: var(--n600); cursor: pointer; font-size: 11.5px; font-weight: 700;
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: 0 12px;
 }
-.peek:hover { background: var(--n200); }
 .connstate { font-size: 12.5px; color: var(--n500); margin-top: 10px; }
 .connstate .dot {
   display: inline-block; width: 8px; height: 8px; border-radius: 50%;
@@ -402,7 +622,7 @@ b.subhead { display: block; font-size: 13.5px; }
 /* staff list — cards at every width, so nothing ever scrolls sideways */
 .stafflist { display: grid; gap: 10px; }
 .staffrow {
-  display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center;
+  display: grid; grid-template-columns: 1fr; gap: 10px; align-items: center;
   background: var(--n0); border: 1px solid var(--n200);
   border-radius: 12px; padding: 12px 14px;
 }
@@ -416,15 +636,15 @@ b.subhead { display: block; font-size: 13.5px; }
   white-space: nowrap; font-size: 12.5px; color: var(--n600);
   font-variant-numeric: tabular-nums;
 }
-.staffrow .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-.staffrow .acts .btn { min-height: 44px; }
+.staffrow .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: stretch; }
+.staffrow .acts .btn { min-height: var(--tap); flex: 1; }
 .badge {
-  font-size: 10.5px; font-weight: 700; letter-spacing: .4px; padding: 3px 9px;
+  font-size: 11.5px; font-weight: 700; letter-spacing: .4px; padding: 3px 9px;
   border-radius: 7px; background: var(--n100); color: var(--n600); white-space: nowrap;
 }
 .badge.role { background: var(--info-50); color: var(--info); }
 .statuspill {
-  font-size: 10.5px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
   white-space: nowrap;
 }
 .statuspill.on { background: var(--ok-50); color: var(--ok); }
@@ -434,23 +654,17 @@ b.subhead { display: block; font-size: 13.5px; }
   padding: 22px 14px; border: 1.5px dashed var(--n200); border-radius: 12px;
 }
 
-@media (max-width: 640px) {
-  .setgrid { grid-template-columns: 1fr; }
-  .staffrow { grid-template-columns: 1fr; }
-  .staffrow .acts { justify-content: stretch; }
-  .staffrow .acts .btn { flex: 1; }
-  .setfield.addbtn .btn { width: 100%; }
-}
 .notice { background: var(--warn-50); border: 1px solid #fde68a; color: #92400e; border-radius: var(--radius-sm); padding: 10px 14px; font-size: 12.5px; margin-bottom: 12px; }
 
-/* bottom tab bar (mobile) */
+/* bottom tab bar — thumb-zone nav on phones/tablets, gone on desktop */
 .tabbar {
-  display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+  display: grid; position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
   background: var(--sidebar-bg); border-top: 1px solid rgba(255,255,255,.08);
-  grid-template-columns: repeat(5, 1fr); padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+  grid-template-columns: repeat(5, 1fr);
+  padding: 6px calc(4px + env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left));
   box-shadow: 0 -6px 24px rgba(16,24,40,.25);
 }
-.tabbar div { text-align: center; font-size: 10px; color: #8b97ab; cursor: pointer; padding: 5px 0 3px; font-weight: 700; border-radius: 13px; margin: 0 3px; transition: all .12s; }
+.tabbar div { text-align: center; font-size: 10px; color: #8b97ab; cursor: pointer; padding: 5px 0 3px; min-height: 48px; font-weight: 700; border-radius: 13px; margin: 0 3px; transition: all .12s; }
 .tabbar div .ti { display: block; font-size: 19px; margin-bottom: 1px; }
 .tabbar div.on { color: #fff; background: var(--g-orange); box-shadow: var(--shadow-pop); }
 
@@ -479,7 +693,7 @@ b.subhead { display: block; font-size: 13.5px; }
 .tab-badge.show { display: grid; }
 .newmsg-pill {
   position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%);
-  background: var(--n900); color: #fff; border-radius: 999px; padding: 8px 16px;
+  background: var(--n900); color: #fff; border-radius: 999px; padding: 10px 16px;
   font-size: 12.5px; font-weight: 700; cursor: pointer; display: none; z-index: 5;
   box-shadow: var(--shadow);
 }
@@ -487,191 +701,13 @@ b.subhead { display: block; font-size: 13.5px; }
 #offline-bar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 100; display: none;
   background: var(--n900); color: #fff; text-align: center; font-size: 12.5px;
-  padding: 8px calc(8px + env(safe-area-inset-top)) 8px;
+  padding: calc(8px + env(safe-area-inset-top)) 12px 8px;
 }
 #offline-bar.show { display: block; }
-.chat-back { display: none; }
 
-/* touch ergonomics: real fingers, no hover */
-@media (pointer: coarse) {
-  .btn { min-height: 44px; }
-  .btn.sm { min-height: 44px; padding: 8px 14px; }
-  .act { gap: 8px; }
-  .thread-item { padding: 14px; min-height: 60px; }
-  .nav div { min-height: 46px; }
-  input, select, textarea { font-size: 16px; }  /* stops iOS focus zoom */
-}
-
-/* ---------- responsive ---------- */
-@media (max-width: 860px) {
-  .sidebar { transform: translateX(-105%); width: 260px; }
-  .sidebar.open { transform: none; }
-  .main { margin-left: 0; padding: 14px 14px 100px; }
-  .topbar {
-    display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 30;
-    background: rgba(247,248,252,.92); backdrop-filter: blur(6px); padding: 10px 2px; margin-bottom: 8px;
-  }
-  .topbar .burger { font-size: 22px; cursor: pointer; padding: 4px 8px; }
-  .topbar h2 { font-size: 17px; }
-  .tbl { display: none; }
-  .rowcards { display: flex; flex-direction: column; gap: 10px; }
-  .rowcard { background: var(--n0); border: 1px solid var(--n200); border-radius: 12px; padding: 13px; box-shadow: var(--shadow); }
-  .rowcard.overdue { border-left: 3px solid var(--danger); }
-  .rowcard .r1 { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .rowcard .r1 b { font-size: 14px; }
-  .rowcard .kv { display: flex; justify-content: space-between; font-size: 12.5px; padding: 2px 0; color: var(--n600); }
-  .rowcard .act { margin-top: 9px; flex-wrap: wrap; }
-  .billgrid { grid-template-columns: 1fr; }
-  .split2 { grid-template-columns: minmax(0, 1fr); }
-  /* action rows wrap instead of pushing buttons off the screen edge */
-  .act { flex-wrap: wrap; }
-  /* touch targets: 32px is a mouse size, not a finger size */
-  .btn, .btn.sm { min-height: 44px; min-width: 44px; }
-  /* 768-860: 2-pane inbox with a narrower list */
-  .threads { width: 240px; }
-  .lineitem { grid-template-columns: 1fr 1fr; }
-  .lineitem .del { grid-column: 2; justify-self: end; }
-  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
-/* ---------- PHONE (<768): single pane, bottom tabs, full-screen chat ---------- */
-@media (max-width: 767px) {
-  .tabbar { display: grid; }
-  .main, section, .inboxwrap, .threads, .thread-item { min-width: 0; max-width: 100%; }
-  .inboxwrap { height: calc(100dvh - 205px); }
-  .threads { width: 100%; border-right: none; }
-  .thread-item { overflow: hidden; }
-  .thread-item .pv { display: block; }
-  .chatpane { display: none; }
-  body.chat-open .chatpane {
-    display: flex !important; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    z-index: 70; background: var(--n0);
-    height: 100dvh; padding-top: env(safe-area-inset-top);
-  }
-  body.chat-open .tabbar, body.chat-open .topbar { display: none; }
-  body.chat-open .composer { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
-  .chat-back {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 44px; height: 44px; border: none; background: none; font-size: 21px;
-    cursor: pointer; color: var(--n700); flex-shrink: 0;
-  }
-  .bubble { max-width: 85%; }
-}
-
-/* ---------- print (thermal receipt) ---------- */
-@media print {
-  body * { visibility: hidden; }
-  #receipt, #receipt * { visibility: visible; }
-  #receipt { position: absolute; left: 0; top: 0; width: 80mm; font-size: 11px; font-family: monospace; padding: 4mm; }
-  .sidebar, .tabbar, .topbar { display: none !important; }
-}
-#receipt { display: none; }
-@media print { #receipt { display: block; } }
-
-/* ==========================================================================
-   MODERN REFRESH — sample, scoped to the Dashboard only.
-   Same palette, same fonts. Delete this whole block to revert.
-   What changes: quieter labels (sentence case, not shouted caps), a calmer
-   card surface (hairline border instead of a heavy drop shadow), a real
-   type hierarchy on the KPIs, and a table that reads like data instead of
-   a wall of buttons.
-   ========================================================================== */
-
-/* --- KPI cards --- */
-#sec-dashboard .kpis {
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px; margin-bottom: 20px;
-}
-/* six KPIs auto-fitted into four columns leaves a ragged 4 + 2; an explicit
-   3 x 2 block reads as deliberate */
-@media (min-width: 900px) {
-  #sec-dashboard .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-#sec-dashboard .kpi {
-  padding: 18px 18px 16px;
-  border: 1px solid var(--n200);
-  border-radius: 16px;
-  box-shadow: 0 1px 2px rgba(16,24,40,.04);
-  transition: border-color .15s, box-shadow .15s, transform .15s;
-}
-#sec-dashboard .kpi:hover {
-  transform: none;
-  border-color: var(--n300);
-  box-shadow: 0 4px 14px rgba(16,24,40,.07);
-}
-#sec-dashboard .kpi .lbl {
-  font-size: 12.5px; font-weight: 600; letter-spacing: 0;
-  text-transform: none; color: var(--n500); padding-right: 30px;
-}
-#sec-dashboard .kpi .val {
-  font-size: 30px; font-weight: 700; letter-spacing: -.6px;
-  margin-top: 8px; line-height: 1.15;
-}
-#sec-dashboard .kpi .sub { font-size: 12px; color: var(--n400); margin-top: 4px; }
-/* the emoji chip read as clip-art and each one rendered a different size;
-   a small tinted dot carries the same colour cue without the noise */
-#sec-dashboard .kico {
-  top: 18px; right: 18px; width: 10px; height: 10px; font-size: 0;
-  overflow: hidden; border-radius: 50%; opacity: .9;
-}
-#sec-dashboard .kico.orange { background: var(--brand); }
-#sec-dashboard .kico.green  { background: var(--ok); }
-#sec-dashboard .kico.blue   { background: var(--info); }
-#sec-dashboard .kico.amber  { background: var(--warn); }
-#sec-dashboard .kico.teal   { background: var(--teal); }
-#sec-dashboard .kico.red    { background: var(--danger); }
-
-/* --- cards + section headers --- */
-#sec-dashboard .card {
-  border: 1px solid var(--n200);
-  box-shadow: 0 1px 2px rgba(16,24,40,.04);
-  border-radius: 16px;
-}
-#sec-dashboard .card > b {
-  text-transform: none; letter-spacing: 0; font-size: 14.5px; color: var(--n800);
-}
-
-/* --- WhatsApp strip: one quiet line of stats --- */
-#sec-dashboard #wa-stats { font-size: 13px; color: var(--n600); padding: 14px 18px; }
-#sec-dashboard #wa-stats b { color: var(--n800); font-weight: 700; }
-
-/* --- filter chips --- */
-#sec-dashboard .chip {
-  border-radius: 10px; padding: 7px 13px; font-weight: 600; font-size: 12.5px;
-}
-#sec-dashboard .chip:hover { transform: none; background: var(--n50); }
-#sec-dashboard .chip.on {
-  background: var(--brand-50); color: var(--brand-600);
-  border-color: var(--brand); box-shadow: none;
-}
-
-/* --- orders table --- */
-#sec-dashboard .tbl th {
-  text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 600;
-  color: var(--n500); padding-bottom: 10px;
-}
-#sec-dashboard .tbl td { padding: 14px 12px; vertical-align: middle; }
-#sec-dashboard .tbl tbody tr { transition: background .12s; }
-#sec-dashboard .tbl tbody tr:hover { background: var(--n50); }
-/* an order number is an identifier — breaking it across two lines makes it
-   unreadable and unsearchable at a glance */
-#sec-dashboard .tbl td:first-child b,
-#sec-dashboard .tbl td:first-child {
-  white-space: nowrap; font-variant-numeric: tabular-nums;
-}
-/* five solid buttons per row shouted louder than the data; quiet them down
-   until hover so the eye lands on orders first */
-#sec-dashboard .tbl .act .btn {
-  background: var(--n0); color: var(--n600); border: 1px solid var(--n200);
-  box-shadow: none; font-weight: 600; border-radius: 9px;
-}
-#sec-dashboard .tbl .act .btn:hover {
-  border-color: var(--brand); color: var(--brand-600);
-  background: var(--brand-50); transform: none;
-}
-
-/* template + button bubbles in the Inbox: show the message, not the log line */
-.tplmsg { white-space: pre-wrap; }
+/* template + button bubbles in the Inbox: show the message, not the log line. */
+.tplmsg { white-space: normal; }
+.tplmsg .tpltxt { white-space: pre-wrap; display: block; }
 .tplmsg .tplname {
   font-size: 10.5px; font-weight: 700; color: #667781; margin-top: 6px;
   opacity: .8;
@@ -688,177 +724,55 @@ b.subhead { display: block; font-size: 13.5px; }
 /* inbound files and pins: openable, not a dead [document] tag */
 .filechip {
   display: inline-flex; align-items: center; gap: 7px; background: rgba(0,0,0,.05);
-  border-radius: 9px; padding: 9px 12px; color: inherit; font-weight: 600;
+  border-radius: 9px; padding: 11px 12px; min-height: var(--tap); color: inherit; font-weight: 600;
   font-size: 13px; max-width: 250px; word-break: break-word;
 }
-.filechip:hover { background: rgba(0,0,0,.09); }
-
-/* ==========================================================================
-   MODERN PASS — 2026 dashboard practice, applied on top of the base sheet.
-   Grounded in what the research agrees on: breathing room over density,
-   horizontal rules only (a full grid is visual noise), text left / numbers
-   right, dark-grey type on light-grey lines, generous card radii.
-   ========================================================================== */
-
-:root {
-  --line: #e7eaf1;          /* one border colour everywhere */
-  --line-soft: #f0f2f7;
-  --pad: 20px;              /* the single spacing step cards use */
-  --radius-lg: 18px;
-}
-
-/* ---------- cards: quieter shadow, real breathing room ---------- */
-.card {
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--line);
-  box-shadow: 0 1px 2px rgba(16,24,40,.04);
-  padding: var(--pad);
-}
-.card:has(.tbl) { padding-bottom: 6px; }
-.card > b {
-  font-size: 13px; letter-spacing: .2px; text-transform: none;
-  color: var(--n800); font-weight: 700; margin-bottom: 2px;
-}
-
-/* KPI: number is the hero, label calms down, hover lifts less */
-.kpi { border-radius: var(--radius-lg); padding: 20px; }
-.kpi:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(16,24,40,.08); }
-.kpi .lbl { font-size: 11px; letter-spacing: .3px; text-transform: none; color: var(--n500); font-weight: 600; }
-.kpi .val { font-size: 30px; letter-spacing: -.5px; margin-top: 8px; }
-
-/* ---------- tables: horizontal rules only, numbers right ---------- */
-.tbl { border-collapse: separate; border-spacing: 0; }
-.tbl th {
-  font-size: 11px; letter-spacing: .3px; text-transform: none;
-  color: var(--n500); font-weight: 700; background: transparent;
-  padding: 12px 16px; border-bottom: 1px solid var(--line);
-  position: sticky; top: 0; z-index: 1; background: var(--n0);
-}
-.tbl td {
-  padding: 15px 16px;                 /* research: >=16px sides, roomy rows */
-  border-bottom: 1px solid var(--line-soft);
-  vertical-align: middle; font-size: 13.5px;
-}
-.tbl tbody tr:last-child td { border-bottom: none; }
-.tbl tbody tr { transition: background .1s; }
-.tbl tbody tr:hover { background: #fafbfd; }
-.tbl th:last-child, .tbl td:last-child { text-align: right; }
-.tbl .money, .tbl td.money { text-align: right; font-variant-numeric: tabular-nums; }
-
-/* ---------- form controls: one height, one language ---------- */
-input, select, textarea { border-color: var(--line); background: var(--n0); }
-input:hover, select:hover, textarea:hover { border-color: var(--n300); }
-select {
-  appearance: none; -webkit-appearance: none;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%23667085' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-  background-repeat: no-repeat; background-position: right 13px center;
-  padding-right: 36px; cursor: pointer;
-}
-.filters input, .filters select { height: 42px; }
-
-/* ---------- buttons: flatter, less candy ---------- */
-.btn { box-shadow: none; padding: 10px 18px; }
-.btn:hover { transform: none; filter: brightness(.97); }
-.btn.ok, .btn:not(.ghost):not(.danger):not(.orange) { box-shadow: 0 1px 2px rgba(16,24,40,.06); }
-.btn.danger { box-shadow: none; }
-.chip { font-weight: 600; }
-.chip.on { box-shadow: none; }
 
 /* ---------- the bill editor: reads like a bill, not a form ---------- */
-/* garment names carry their service ("Shirt — ₹80" under Dry Clean), so the
-   bill modal gets more room than a plain confirm dialog needs */
-.modal:has(.billedit) { max-width: 640px; }
 .billedit {
   border: 1px solid var(--line); border-radius: 14px; padding: 14px;
   margin-top: 12px; background: var(--n50);
 }
+/* phone: one garment = one small card. Named areas, not nth-child guessing —
+   the positional rules fought each other and squashed the name field. */
+.bl.head { display: none; }
 .bl {
-  display: grid; grid-template-columns: 1fr 74px 84px 88px 40px;
-  gap: 8px; align-items: center; margin-bottom: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  grid-template-areas: "item item del" "qty rate amt";
+  gap: 8px; align-items: center; background: var(--n0); border: 1px solid var(--line);
+  border-radius: 12px; padding: 10px; margin-bottom: 10px;
 }
-.bl.head {
-  font-size: 10.5px; font-weight: 700; letter-spacing: .4px;
-  color: var(--n500); text-transform: uppercase; margin-bottom: 6px;
-}
-.bl.head span:nth-child(4) { text-align: right; }
-.bl input, .bl select { height: 40px; min-width: 0; }
-.bl .money { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+/* by class, not position — the kapda cell is a select or a wrapper div,
+   so nth-of-type would silently hand its area to the qty box */
+.bl > .kapda { grid-area: item; width: 100%; height: var(--tap); font-size: 14px; text-overflow: ellipsis; }
+.bl > .k-qty { grid-area: qty; height: var(--tap); font-size: 14px; }
+.bl > .k-rate { grid-area: rate; height: var(--tap); font-size: 14px; }
+.bl > .money { grid-area: amt; align-self: center; text-align: right; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bl > .btn { grid-area: del; }
+.bl .del, .bl > button { min-width: 40px; min-height: 40px; }
+.bl select option { font-size: 15px; }
+.bl input, .bl select { min-width: 0; }
 /* the kapda cell is either a rate-card select or a free-text box + a way back */
-.bl .kapdanew { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.bl .kapdanew { grid-area: item; display: flex; gap: 6px; align-items: center; min-width: 0; }
 .bl .kapdanew input { flex: 1; }
 .bl .kapdanew .btn { padding: 0 12px; height: 40px; }
-.billtot {
-  border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px;
-}
-@media (max-width: 640px) {
-  /* one garment = one small card. Named areas, not nth-child guessing —
-     the positional rules fought each other and squashed the name field. */
-  .bl.head { display: none; }
-  .bl {
-    grid-template-columns: 1fr 1fr auto;
-    grid-template-areas: "item item del" "qty rate amt";
-    gap: 8px; background: var(--n0); border: 1px solid var(--line);
-    border-radius: 12px; padding: 10px; margin-bottom: 10px;
-  }
-  /* by class, not position — the kapda cell is a select or a wrapper div,
-     so nth-of-type would silently hand its area to the qty box */
-  .bl > .kapda { grid-area: item; }
-  .bl > .k-qty { grid-area: qty; }
-  .bl > .k-rate { grid-area: rate; }
-  .bl > .money { grid-area: amt; align-self: center; text-align: right; }
-  .bl > .btn { grid-area: del; }
-}
+.billtot { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
 
-/* ---------- inbox: one aligned height, calmer chrome ---------- */
-.inboxwrap { border-color: var(--line); border-radius: var(--radius-lg); }
-.th-head, .composer { background: #f7f8fa; }
-.th-head { border-bottom: 1px solid var(--line); }
-.composer { border-top: 1px solid var(--line); }
-.thread-item { padding: 11px 14px; }
-.bubble { box-shadow: 0 1px 1px rgba(16,24,40,.07); }
-
-/* ---------- table column discipline ----------
-   Identifiers, phones and money must never wrap — a broken invoice number
-   ("KK-2026 / 0805 / -01") is unreadable and unscannable. Names may wrap. */
-.tbl td b, .tbl td .money, .tbl .nowrap { white-space: nowrap; }
-.tbl td .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tbl th { white-space: nowrap; }
-.tbl td:first-child { width: 1%; white-space: nowrap; }
-/* keep the row's actions on one line and out of the content's way */
-.tbl td .act { justify-content: flex-end; flex-wrap: nowrap; gap: 6px; }
-.tbl td .act .btn { padding: 7px 12px; }
-/* status + payment pills side by side, not stacked */
-.pillrow { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-/* icon-only row actions: quiet by default, colour on intent */
-.act .btn.sm.ghost { min-width: 36px; padding: 7px 10px; }
-.act .btn.danger-ic { color: var(--danger); border-color: var(--line); }
-.act .btn.danger-ic:hover { background: var(--danger-50); border-color: var(--danger); color: var(--danger); }
-
-/* ---------- typography: stop shouting ----------
-   Letterspaced ALL-CAPS labels were the old app's signature; at this size
-   they are harder to read than plain sentence case, and every modern
-   dashboard reference drops them. Applied app-wide, not per page. */
-label, .bl.head, .tbl th, .kpi .lbl {
-  text-transform: none; letter-spacing: 0;
-}
-label { font-size: 11.5px; color: var(--n600); font-weight: 600; }
+/* ---------- typography: stop shouting ---------- */
+.bl.head, .tbl th, .kpi .lbl { text-transform: none; letter-spacing: 0; }
 .bl.head { font-size: 11.5px; color: var(--n500); }
-.modal h3 { font-size: 17px; letter-spacing: -.2px; }
-.modal .frm { gap: 14px; }
 
-/* ---------- activity: one event, one block ----------
-   Scanning the log means reading down a column of "what happened" — the
-   icon column keeps that column straight, the chips carry the details
-   that used to be a JSON blob. */
+/* ---------- activity: one event, one block ---------- */
 .actday {
   font-size: 11.5px; font-weight: 700; color: var(--n500);
   margin: 18px 2px 8px; letter-spacing: .2px;
 }
 .actday:first-child { margin-top: 0; }
 .actrow {
-  display: flex; gap: 12px; align-items: flex-start;
+  display: flex; gap: 10px; align-items: flex-start;
   background: var(--n0); border: 1px solid var(--line); border-radius: 14px;
-  padding: 12px 14px; margin-bottom: 8px;
+  padding: 11px 12px; margin-bottom: 8px;
 }
 .actrow.bad { border-color: #fecdca; background: #fffbfa; }
 .actico {
@@ -885,31 +799,290 @@ label { font-size: 11.5px; color: var(--n600); font-weight: 600; }
 }
 .actchip i { font-style: normal; color: var(--n500); margin-right: 5px; }
 .actchip.urgent { background: #fef3f2; border-color: #fecdca; color: #b42318; font-weight: 600; }
-@media (max-width: 640px) {
-  .actrow { padding: 11px 12px; gap: 10px; }
-}
 
-/* ---------- media inside chat bubbles ----------
-   A raw <audio> control is ~54px tall and 300px wide — next to a two-line
-   text bubble it looked like a different app. Size it to the conversation. */
-.bubble audio { height: 38px; width: 232px; display: block; }
-.bubble video { display: block; border-radius: 10px; }
-.bubble img { border-radius: 10px; display: block; }
+/* ---------- media inside chat bubbles ---------- */
+.bubble audio { height: 38px; width: min(232px, 100%); display: block; }
+.bubble video { display: block; border-radius: 10px; max-width: 100%; }
 .bubble.in audio::-webkit-media-controls-panel { background: #f3f5f7; }
 .bubble.out audio::-webkit-media-controls-panel { background: #d9fdd3; }
 /* a voice note's transcript sits under the player, like a caption */
 .bubble audio + * { margin-top: 6px; display: block; }
 
-/* ---------- wide tables scroll inside their card ----------
-   Forcing every header onto one line made the table wider than its card,
-   which pushed the page past the viewport (and got clipped, so content
-   simply vanished). Headers may wrap; a genuinely wide table scrolls
-   inside its own card instead of dragging the layout with it. */
-.tbl th { white-space: normal; }
-/* the table is usually inside a render div, so match any descendant */
-.card:has(.tbl) { overflow-x: auto; }
-/* A flex item's default min-width:auto refuses to shrink below its content,
-   so one wide table dragged the whole page past the viewport (where
-   overflow-x:hidden then clipped it). min-width:0 lets the page fit and
-   hands the scrolling to the card above. */
-.main { min-width: 0; }
+/* ---------- select: one arrow language everywhere ---------- */
+select {
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%23667085' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat; background-position: right 13px center;
+  padding-right: 36px; cursor: pointer;
+}
+
+/* ==========================================================================
+   FULL-SCREEN CHAT (body.chat-open) — the ONE max-width block, on purpose.
+   JS only adds the class under 768px; this fence guarantees a stale class
+   can never hijack the desktop split pane after a rotate/resize.
+   ========================================================================== */
+@media (max-width: 767.98px) {
+  body.chat-open .chatpane {
+    display: flex !important; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 70; background: var(--n0);
+    height: 100dvh; padding-top: env(safe-area-inset-top);
+  }
+  body.chat-open .tabbar, body.chat-open .topbar { display: none; }
+}
+
+/* ==========================================================================
+   >= 480px — small-phone landscape / large phones
+   ========================================================================== */
+@media (min-width: 480px) {
+  .setgrid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .setfield.addbtn .btn { width: auto; }
+  .staffrow { grid-template-columns: 1fr auto; }
+  .staffrow .acts { justify-content: flex-end; }
+  .staffrow .acts .btn { flex: 0 0 auto; }
+  .filters input[type=date] { flex: 0 1 160px; }
+  .emojis { grid-template-columns: repeat(8, 1fr); }
+}
+
+/* ==========================================================================
+   >= 768px — tablet: tables return, split panes, centred modals
+   ========================================================================== */
+@media (min-width: 768px) {
+  .main { padding: var(--s3) var(--s4) calc(var(--tabbar-h) + 32px + env(safe-area-inset-bottom)); }
+
+  /* page heading wapas — bade screen par topbar nahi hota */
+  .pagehead { margin-bottom: 18px; }
+  .pagehead h2 { display: block; font-size: 24px; font-weight: 800; color: var(--n900); letter-spacing: -.3px; }
+  .pagehead p { display: block; color: var(--n500); font-size: 13px; margin-top: 2px; }
+  .pagehead .actions { margin-left: 0; }
+
+  /* data tables replace the stacked cards */
+  .tbl { display: table; }
+  .rowcards { display: none; }
+  .card.listcard .rowcards { display: none; }
+
+  .kpis { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .kpi .val { font-size: 27px; overflow-wrap: normal; }
+  .split2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .filters input, .filters select { flex: 0 1 auto; min-width: 130px; height: 42px; min-height: 42px; }
+
+  /* new bill: entry + totals side by side, one 6-column row per garment */
+  .billgrid { grid-template-columns: 1fr 320px; }
+  .lineitem { grid-template-columns: 1.2fr 1.2fr 64px 80px 84px 30px; }
+  .lineitem .del { grid-column: auto; justify-self: auto; }
+  .savebar { position: static; }
+  .savebar .btn { box-shadow: var(--shadow-green); }
+
+  /* bill editor rows: back to a sheet-like grid */
+  .bl.head {
+    display: grid; background: none; border: none; padding: 0 0 6px; margin-bottom: 6px;
+    font-weight: 700; letter-spacing: .4px;
+  }
+  .bl.head span:nth-child(4) { text-align: right; }
+  .bl, .bl.head {
+    grid-template-columns: 1fr 74px 84px 88px 40px;
+    grid-template-areas: none;
+  }
+  .bl { background: none; border: none; border-radius: 0; padding: 0; margin-bottom: 8px; }
+  .bl > .kapda, .bl > .k-qty, .bl > .k-rate, .bl > .money, .bl > .btn, .bl .kapdanew { grid-area: auto; }
+  .bl input, .bl select { height: 40px; }
+  .bl > .kapda { height: 40px; font-size: 16px; }
+  .bl > .money { font-size: 13.5px; font-weight: 600; }
+  .modal:has(.billedit) { max-width: 640px; }
+
+  /* modal: centred dialog, not a sheet */
+  .overlay { align-items: center; padding: 16px; }
+  .modal {
+    max-width: 520px; width: 100%; max-height: 88dvh;
+    border-radius: var(--radius); padding: 20px; animation: none;
+  }
+  .modal::before { display: none; }
+  .modal .btnrow {
+    position: static; margin: 14px 0 0; padding: 0; border-top: none;
+    justify-content: flex-end;
+  }
+  .modal .btnrow .btn { flex: 0 0 auto; }
+
+  /* inbox: side-by-side split pane, back button gone.
+     Height leaves room for topbar + pagehead + the tab bar (still visible
+     until 1024px, where the sidebar takes over). */
+  #sec-inbox .pagehead { display: flex; }
+  .inboxwrap { height: calc(100dvh - 210px - env(safe-area-inset-bottom)); min-height: 420px; border-radius: var(--radius-lg); }
+  .threads { width: 240px; border-right: 1px solid #E9EDEF; }
+  .chatpane { display: flex; }
+  .chat-back { display: none; }
+  .th-head { padding: 10px 12px; }
+  .chathead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 14px; }
+  .chathead > div:not(.avatar) { flex: 1; }
+  .chatlog { padding: 14px 28px; }
+  .bubble { max-width: 65%; }
+
+}
+
+/* ==========================================================================
+   >= 1024px — desktop: fixed sidebar, tab bar and top bar gone
+   ========================================================================== */
+@media (min-width: 1024px) {
+  .sidebar { transform: none; }
+  .side-ov, .side-ov.open { display: none; }
+  .topbar { display: none; }
+  .tabbar { display: none; }
+  .main { margin-left: var(--sidebar-w); padding: 22px 26px 90px; }
+  .threads { width: 300px; }
+  .staffrow .acts .btn { min-height: var(--tap); }
+  .inboxwrap { height: calc(100dvh - 150px); }
+
+  /* WhatsApp Web behaviour on a laptop: the Inbox owns the whole viewport.
+     Only the message list and the thread list scroll — never the page.
+     Desktop only: below 1024px the bottom tab bar needs its space back. */
+  body.inbox-mode .main {
+    height: 100dvh; padding-bottom: 18px; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  body.inbox-mode #sec-inbox {
+    flex: 1; min-height: 0; display: flex; flex-direction: column;
+  }
+  body.inbox-mode #sec-inbox .pagehead { flex: none; margin-bottom: 12px; }
+  body.inbox-mode #sec-inbox .inboxwrap { flex: 1; min-height: 0; height: auto; }
+}
+
+/* ==========================================================================
+   >= 1280px — wide desktop: extra breathing room
+   ========================================================================== */
+@media (min-width: 1280px) {
+  .main { padding: 24px 32px 90px; }
+  .threads { width: 320px; }
+}
+
+/* ==========================================================================
+   Capability queries — orthogonal to width
+   ========================================================================== */
+
+/* touch ergonomics on ANY width (tablets, touch laptops) */
+@media (pointer: coarse) {
+  .btn, .btn.sm { min-height: var(--tap); min-width: var(--tap); }
+  .act { gap: 8px; }
+  .thread-item { padding: 14px; min-height: 60px; }
+  .nav div { min-height: 46px; }
+  input, select, textarea { font-size: 16px; }  /* stops iOS focus zoom */
+  .composer input[type=text], .th-search input { font-size: 16px; }
+}
+
+/* hover-reveal ONLY where hover exists — touch users always see the arrow */
+@media (hover: hover) and (pointer: fine) {
+  .nav div:hover { background: rgba(255,255,255,.06); color: #fff; transform: translateX(2px); }
+  .nav .navsec:hover { background: none; color: #58657c; transform: none; }
+  .logout:hover { color: #fff; background: rgba(255,255,255,.05); }
+  .kpi:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(16,24,40,.08); }
+  .chip:hover { border-color: var(--brand); color: var(--brand-600); }
+  .btn:hover { filter: brightness(.97); }
+  .btn.ghost:hover { border-color: var(--brand); color: var(--brand-600); background: var(--brand-50); box-shadow: none; }
+  .act .btn.danger-ic:hover { background: var(--danger-50); border-color: var(--danger); color: var(--danger); }
+  .tbl tbody tr:hover { background: #fafbfd; }
+  .th-ico:hover { background: rgba(0,0,0,.06); }
+  .thread-item:hover { background: #F5F6F6; }
+  .th-more:hover { background: rgba(0,0,0,.03); }
+  .dropzone:hover { border-color: #06CF9C; background: #F2FBF8; }
+  .acp div:hover { background: var(--brand-50); }
+  .emojis span:hover { background: var(--n100); }
+  .composer .btn.ghost.sm:hover { background: rgba(0,0,0,.06); color: #54656F; }
+  .peek:hover { background: var(--n200); }
+  .seg-card:hover { border-color: var(--brand); }
+  .filechip:hover { background: rgba(0,0,0,.09); }
+  .bubble .breply { opacity: 0; }
+  .bubble:hover .breply { opacity: .75; }
+  .bubble .breply:hover { opacity: 1; }
+}
+
+/* ==========================================================================
+   DESKTOP MOUSE DENSITY — restores the exact pre-refactor desktop controls
+   so 1280px+ with a mouse looks unchanged. Touch screens (coarse) never
+   match, so tablets keep their 44px targets. Last in file: wins ties.
+   ========================================================================== */
+@media (min-width: 1024px) and (pointer: fine) {
+  input, select, textarea { font-size: 13.5px; }
+  label { font-size: 11.5px; }
+  .btn { min-height: 0; min-width: 0; padding: 10px 18px; }
+  .btn.sm { padding: 6px 13px; font-size: 12px; }
+  .act .btn.sm.ghost { min-width: 36px; padding: 7px 10px; }
+  .act { gap: 5px; flex-wrap: nowrap; }
+  .rowcard .act, #st-ops .act, .staffrow .acts { flex-wrap: wrap; }
+  .tbl td .act .btn { padding: 7px 12px; }
+  .chip { min-height: 0; }
+  .th-search input { font-size: 13px; min-height: 0; }
+  .composer input[type=text] { font-size: 13.5px; min-height: 40px; }
+  .composer { gap: 10px; padding: 8px 14px; }
+  .composer .btn.ghost.sm { width: 44px; height: 44px; }
+  .emojis span { width: auto; height: auto; font-size: 19px; padding: 4px; }
+  .filters input, .filters select { min-height: 0; }
+  .setfield input, .setfield select, .peek, .setfield.addbtn .btn { height: 44px; }
+  .replybar .rx { min-width: 0; min-height: 0; font-size: 15px; padding: 6px; }
+  .acp div { min-height: 0; padding: 8px 12px; }
+  .th-search input { padding: 7px 12px; }
+  .btn:hover { transform: none; }
+}
+
+/* ---------- dashboard modern refresh (scoped) ---------- */
+#sec-dashboard .kpis { gap: 12px; margin-bottom: 20px; }
+#sec-dashboard .kpi {
+  padding: 18px 18px 16px;
+  border: 1px solid var(--n200);
+  border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(16,24,40,.04);
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+#sec-dashboard .kpi .lbl {
+  font-size: 12.5px; font-weight: 600; letter-spacing: 0;
+  text-transform: none; color: var(--n500); padding-right: 30px;
+}
+#sec-dashboard .kpi .val { font-weight: 700; letter-spacing: -.6px; margin-top: 8px; line-height: 1.15; }
+#sec-dashboard .kpi .sub { font-size: 12px; color: var(--n400); margin-top: 4px; }
+/* the emoji chip read as clip-art; a small tinted dot carries the colour cue */
+#sec-dashboard .kico {
+  top: 18px; right: 18px; width: 10px; height: 10px; font-size: 0;
+  overflow: hidden; border-radius: 50%; opacity: .9;
+}
+#sec-dashboard .kico.orange { background: var(--brand); }
+#sec-dashboard .kico.green  { background: var(--ok); }
+#sec-dashboard .kico.blue   { background: var(--info); }
+#sec-dashboard .kico.amber  { background: var(--warn); }
+#sec-dashboard .kico.teal   { background: var(--teal); }
+#sec-dashboard .kico.red    { background: var(--danger); }
+/* six KPIs auto-fitted leave a ragged 4 + 2; an explicit 3 x 2 block reads
+   as deliberate (desktop only) */
+@media (min-width: 1024px) {
+  #sec-dashboard .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #sec-dashboard .kpi:hover { transform: none; border-color: var(--n300); box-shadow: 0 4px 14px rgba(16,24,40,.07); }
+}
+#sec-dashboard .card { border: 1px solid var(--n200); box-shadow: 0 1px 2px rgba(16,24,40,.04); border-radius: 16px; }
+#sec-dashboard .card > b { text-transform: none; letter-spacing: 0; font-size: 14.5px; color: var(--n800); }
+#sec-dashboard #wa-stats { font-size: 13px; color: var(--n600); padding: 14px 18px; }
+#sec-dashboard #wa-stats b { color: var(--n800); font-weight: 700; }
+#sec-dashboard .chip { border-radius: 10px; padding: 7px 13px; font-weight: 600; font-size: 12.5px; }
+#sec-dashboard .chip.on { background: var(--brand-50); color: var(--brand-600); border-color: var(--brand); box-shadow: none; }
+#sec-dashboard .tbl th { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 600; color: var(--n500); }
+#sec-dashboard .tbl td { vertical-align: middle; }
+/* an order number is an identifier — breaking it across two lines makes it
+   unreadable and unsearchable at a glance */
+#sec-dashboard .tbl td:first-child b,
+#sec-dashboard .tbl td:first-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* five solid buttons per row shouted louder than the data */
+#sec-dashboard .tbl .act .btn {
+  background: var(--n0); color: var(--n600); border: 1px solid var(--n200);
+  box-shadow: none; font-weight: 600; border-radius: 9px;
+}
+@media (hover: hover) and (pointer: fine) {
+  #sec-dashboard .tbl .act .btn:hover {
+    border-color: var(--brand); color: var(--brand-600);
+    background: var(--brand-50); transform: none;
+  }
+  #sec-dashboard .chip:hover { transform: none; background: var(--n50); }
+}
+
+/* ---------- print (thermal receipt) ---------- */
+#receipt { display: none; }
+@media print {
+  body * { visibility: hidden; }
+  #receipt, #receipt * { visibility: visible; }
+  #receipt { display: block; position: absolute; left: 0; top: 0; width: 80mm; font-size: 11px; font-family: monospace; padding: 4mm; }
+  .sidebar, .tabbar, .topbar { display: none !important; }
+}

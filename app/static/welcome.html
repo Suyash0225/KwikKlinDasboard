@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kwik Klin — Aapka account taiyar ho raha hai</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%BA%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- fonts async — pehla paint system font mein, Poppins aate hi swap -->
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet" media="print" onload="this.media='all';this.onload=null">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
+<style>
+  :root { --brand:#FF5A1F; --ink:#111B21; --mut:#667781; --line:#E6E9EC; --ok:#00A884; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:Poppins,system-ui,sans-serif; color:var(--ink); background:#F7F8FC; line-height:1.6; }
+  .wrap { max-width:620px; margin:0 auto;
+          padding:0 max(20px, env(safe-area-inset-right)) 0 max(20px, env(safe-area-inset-left)); }
+  header { background:#fff; border-bottom:1px solid var(--line); }
+  .nav { display:flex; align-items:center; gap:10px; padding:14px 0; }
+  .badge { width:38px; height:38px; border-radius:11px; background:var(--brand); color:#fff;
+           display:grid; place-items:center; font-weight:800; font-size:14px; }
+  .nav b { font-weight:800; }
+  .spacer { flex:1; }
+  /* 44px tap target — text button ke chaaron or padding */
+  .lo { background:none; border:none; color:var(--mut); font:inherit; font-size:13px; cursor:pointer;
+        min-height:44px; min-width:44px; padding:10px 12px; margin:-10px -12px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:30px; margin:34px 0; }
+  .tick { width:52px; height:52px; border-radius:50%; background:#E7F8F1; color:var(--ok);
+          display:grid; place-items:center; font-size:26px; margin-bottom:14px; }
+  h1 { font-size:24px; font-weight:800; letter-spacing:-.3px; }
+  .sub { color:var(--mut); margin-top:6px; font-size:14.5px; }
+  .meta { display:flex; gap:10px; flex-wrap:wrap; margin:18px 0 4px; }
+  .chip { background:#F3F5F7; border-radius:999px; padding:6px 13px; font-size:12.5px; font-weight:600; }
+  .chip.plan { background:#FFF1EB; color:#C2410C; }
+  .chip.trial { background:#E7F8F1; color:#046C4E; }
+  h2 { font-size:15px; margin:26px 0 10px; }
+  ol { margin-left:18px; }
+  li { font-size:14px; padding:6px 0; }
+  li b { font-weight:600; }
+  .done { color:var(--ok); }
+  .foot { color:var(--mut); font-size:13px; margin-top:22px; padding-top:18px; border-top:1px solid var(--line); }
+  .foot a { color:var(--brand); font-weight:600; text-decoration:none; }
+</style>
+</head>
+<body>
+
+<header><div class="wrap nav">
+  <div class="badge">KK</div><b>Kwik Klin</b>
+  <div class="spacer"></div>
+  <button class="lo" onclick="logout()">Logout</button>
+</div></header>
+
+<div class="wrap">
+  <div class="card">
+    <div class="tick">✓</div>
+    <h1 id="hi">Account ban gaya!</h1>
+    <p class="sub" id="sub">Aapka account taiyar hai. Ab hum aapki dukaan set up kar rahe hain.</p>
+
+    <div class="meta" id="meta"></div>
+
+    <h2>Aage kya hoga</h2>
+    <ol>
+      <li class="done"><b>✓ Account ban gaya</b> — aap login kar sakte hain</li>
+      <li><b>WhatsApp connect</b> — aapka business number jodenge (~20 minute)</li>
+      <li><b>Rate card</b> — aapke daam bharenge (Excel ho to bhej dijiye)</li>
+      <li><b>Staff jodenge</b> — kaun dhulai karta hai, kaun delivery</li>
+      <li><b>Pehla bill</b> — hum saath mein banayenge, phir aap chalu</li>
+    </ol>
+
+    <div class="foot">
+      Setup ke liye hum aapko <b id="ph">aapke number</b> par WhatsApp karenge.
+      Koi sawaal ho to wahin pooch lijiyega.
+    </div>
+  </div>
+</div>
+
+<script>
+async function api(p, body, method) {
+  const r = await fetch(p, {
+    method: method || (body ? "POST" : "GET"),
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+    credentials: "same-origin",
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "error");
+  return r.json();
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function logout() {
+  try { await api("/api/logout", {}); } catch (e) {}
+  location.href = "/";
+}
+
+(async function () {
+  try {
+    const d = await api("/api/me");
+    const t = d.tenant || {};
+    document.getElementById("hi").textContent =
+      `Swagat hai, ${d.user.name || ""}!`;
+    document.getElementById("sub").textContent =
+      `${t.shop_name || "Aapki dukaan"} ka account taiyar hai. Setup hum kar rahe hain.`;
+    const chips = [`<span class="chip plan">${esc(t.plan_name || "")} plan</span>`];
+    if (t.status === "trial" && t.trial_ends_at) {
+      const days = Math.max(0, Math.ceil((new Date(t.trial_ends_at) - new Date()) / 86400000));
+      chips.push(`<span class="chip trial">${days} din free trial baaki</span>`);
+    } else if (t.status === "active") {
+      chips.push(`<span class="chip trial">Subscription chalu</span>`);
+    } else if (t.status) {
+      chips.push(`<span class="chip">${esc(t.status)}</span>`);
+    }
+    document.getElementById("meta").innerHTML = chips.join("");
+    if (d.user.email) document.getElementById("ph").textContent = "aapke WhatsApp number";
+  } catch (e) {
+    location.href = "/#login";   // session nahi hai
+  }
+})();
+</script>
+</body>
+</html>

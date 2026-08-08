@@ -135,14 +135,34 @@ function dlCsvClient(filename, header, rows) {
   a.download = filename; a.click();
 }
 
-function kkLogout() {
+async function kkLogout() {
+  // dono cheezein hatao: purani admin key AUR asli session
   localStorage.removeItem("kk_admin_key");
   KEY = "";
-  toast("Logged out");
-  showLogin();
+  try {
+    await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+  } catch (e) { /* offline — cookie waise bhi expire ho jayegi */ }
+  location.href = "/#login";
 }
 
 /* login */
+/* Session pehle, key baad mein. Dono na hon to login page par bhej do. */
+async function ensureSignedIn() {
+  try {
+    const me = await (await fetch("/api/me", { credentials: "same-origin" })).json();
+    if (me && me.user) {
+      SIGNED_IN_AS = me;
+      const btn = document.querySelector(".logout");
+      if (btn) btn.textContent = "⏋ Log out " + (me.user.name || me.user.role);
+      return true;                       // session kaafi hai, key ki zaroorat nahi
+    }
+  } catch (e) { /* session nahi — neeche dekho */ }
+  if (KEY) return true;                  // purani admin key se chal jayega
+  location.href = "/#login";             // dono nahi: login page
+  return false;
+}
+let SIGNED_IN_AS = null;
+
 function showLogin() {
   openModal(`<h3>Sign in</h3><p class="muted">Enter your admin key to continue.</p>
     <div class="frm" style="margin-top:10px"><input id="login-key" type="password" placeholder="Admin key" autofocus></div>
@@ -156,6 +176,16 @@ function showLogin() {
     } catch (e) { toast("That key is not correct", true); }
   };
 }
+
+/* Debounce — search/filter typing must not re-render (or hit the API) per
+   keystroke; 300ms after the last key is when the work happens. */
+function debounce(fn, ms = 300) {
+  let t;
+  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+const renderOrdersDeb = debounce(() => renderOrders(), 300);
+const renderBillsDeb = debounce(() => renderBills(), 300);
+const custSearchDeb = debounce(() => { CUST_SHOWN = 30; renderCustomers(); }, 300);
 
 /* ============================= router ============================= */
 const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "tasks", "agents", "usage", "training", "activity", "settings"];
@@ -183,10 +213,13 @@ function go(sec, push = true) {
   // leaving a full-screen mobile chat closes it
   if (sec !== "inbox") closeThreadMobile(false);
   SECTIONS.forEach((s) => { const el = $("sec-" + s); if (el) el.style.display = s === sec ? "" : "none"; });
+  // the Inbox is a full-height app pane, not a page that scrolls: it must
+  // reach the bottom of the screen instead of leaving dead space under it
+  document.body.classList.toggle("inbox-mode", sec === "inbox");
   document.querySelectorAll(".nav div[data-s]").forEach((el) => el.classList.toggle("on", el.dataset.s === sec));
   document.querySelectorAll(".tabbar div[data-s]").forEach((el) => el.classList.toggle("on", el.dataset.s === sec));
   $("mob-title").textContent = TITLES[sec][0];
-  $("sidebar").classList.remove("open");
+  closeSidebar();
   if (push && location.hash !== "#" + sec) {
     NAVIGATING = true;
     location.hash = sec;  // creates a history entry -> Android back works
@@ -201,6 +234,10 @@ function go(sec, push = true) {
 // Browser/Android back button: '#inbox/<phone>' = open thread, '#sec' = section
 window.addEventListener("hashchange", () => {
   if (NAVIGATING) return;
+  // Back/forward chalne par koi bhi khula overlay band — pehle modal ya
+  // More-sheet naye section ke UPAR latka reh jaata tha aur lagta tha
+  // "navigation atak gayi"
+  closeModal(); closeSheet(); closeSidebar(); closeDrawer();
   const h = (location.hash || "#dashboard").slice(1);
   if (h.startsWith("inbox/")) {
     if (CURRENT !== "inbox") go("inbox", false);
@@ -215,6 +252,16 @@ window.addEventListener("hashchange", () => {
   closeThreadMobile(false);
   go(h, false);
 });
+
+/* Sidebar drawer (phone/tablet) — scrim taps and navigation both close it */
+function toggleSidebar() {
+  const open = $("sidebar").classList.toggle("open");
+  $("side-ov")?.classList.toggle("open", open);
+}
+function closeSidebar() {
+  $("sidebar").classList.remove("open");
+  $("side-ov")?.classList.remove("open");
+}
 
 /* More sheet */
 function openSheet() { $("sheet-ov").classList.add("open"); $("more-sheet").classList.add("open"); }
@@ -311,11 +358,11 @@ function renderOrders() {
         <td><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span><div class="muted">${money(o.amount_paid)} / ${o.total_amount ? money(o.total_amount) : "—"}</div></td>
         <td>${fmtDate(o.expected_delivery)}</td>
         <td><div class="act">
-          <button class="btn sm ghost" title="Status badlo" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>
-          <button class="btn sm ghost" title="Payment lo" onclick="paymentModal('${o.order_number}')">₹</button>
-          <button class="btn sm ghost" title="Delivery date" onclick="dateModal('${o.order_number}')">📅</button>
-          <button class="btn sm ghost" title="Details" onclick="orderDetail('${o.order_number}')">👁</button>
-          <button class="btn sm ghost" title="Chat kholo" onclick="jumpChat('${o.phone}')">💬</button>
+          <button class="btn sm ghost" title="Status badlo" aria-label="Status badlo" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>
+          <button class="btn sm ghost" title="Payment lo" aria-label="Payment lo" onclick="paymentModal('${o.order_number}')">₹</button>
+          <button class="btn sm ghost" title="Delivery date" aria-label="Delivery date" onclick="dateModal('${o.order_number}')">📅</button>
+          <button class="btn sm ghost" title="Details" aria-label="Details" onclick="orderDetail('${o.order_number}')">👁</button>
+          <button class="btn sm ghost" title="Chat kholo" aria-label="Chat kholo" onclick="jumpChat('${o.phone}')">💬</button>
         </div></td>
       </tr>`).join("")}
     </tbody></table>
@@ -608,11 +655,11 @@ function billRowHtml(o, kind) {
     <td class="money">${o.total_amount ? money(o.total_amount) : "—"}${due > 0 ? `<div class="muted">due ${money(due)}</div>` : ""}</td>
     <td><div class="pillrow"><span class="pill ${o.status}">${statusName(o.status)}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div></td>
     <td><div class="act">
-      <button class="btn sm ghost" title="Details" onclick="orderDetail('${o.order_number}')">👁</button>
-      <button class="btn sm ghost" title="Print" onclick="printReceiptFromOrder('${o.order_number}')">🖨</button>
-      <button class="btn sm ghost" title="Payment lo" onclick="paymentModal('${o.order_number}')">₹</button>
-      <button class="btn sm ghost" title="Bill edit karo" onclick="editBillModal('${o.order_number}')">✏️</button>
-      <button class="btn sm ghost danger-ic" title="Delete" onclick="deleteBillModal('${o.order_number}')">🗑</button>
+      <button class="btn sm ghost" title="Details" aria-label="Details" onclick="orderDetail('${o.order_number}')">👁</button>
+      <button class="btn sm ghost" title="Print" aria-label="Print" onclick="printReceiptFromOrder('${o.order_number}')">🖨</button>
+      <button class="btn sm ghost" title="Payment lo" aria-label="Payment lo" onclick="paymentModal('${o.order_number}')">₹</button>
+      <button class="btn sm ghost" title="Bill edit karo" aria-label="Bill edit karo" onclick="editBillModal('${o.order_number}')">✏️</button>
+      <button class="btn sm ghost danger-ic" title="Delete" aria-label="Delete" onclick="deleteBillModal('${o.order_number}')">🗑</button>
     </div></td></tr>`;
   return `<div class="rowcard">
     <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${statusName(o.status)}</span></div>
@@ -822,18 +869,47 @@ function billsCsv() {
 }
 
 /* ============================= customers ============================= */
+/* The cache stays at the server's default 300 (same as before) because the
+   "Total outstanding" KPI and the reports top-list sum over it. The LIST
+   renders a window of 30 and grows via "Aur dikhao" — past the cache it
+   pages the API with limit/offset, so every customer stays reachable. */
+let CUST_SHOWN = 30, CUST_MAYBE_MORE = false;
+const CUST_CHUNK = 100;
 async function loadCustomers(quiet = false) {
   if (!quiet) $("cust-list").innerHTML = skeleton(6);
+  CUST_SHOWN = 30;
   try { CUSTOMERS_CACHE = await api("/admin/api/customers"); } catch (e) { if (!quiet) $("cust-list").innerHTML = errBox(e.message, "loadCustomers"); return; }
+  CUST_MAYBE_MORE = CUSTOMERS_CACHE.length >= 300;
   if (!quiet || CURRENT === "customers") renderCustomers();
+}
+function visibleCustomers() {
+  const q = (($("cust-search") && $("cust-search").value) || "").toLowerCase();
+  return (CUSTOMERS_CACHE || [])
+    .filter((c) => !q || (c.name || "").toLowerCase().includes(q) || c.phone.includes(q))
+    .sort((a, b) => Number(b.outstanding) - Number(a.outstanding));
+}
+async function custMore(btn) {
+  const all = visibleCustomers();
+  if (CUST_SHOWN < all.length) { CUST_SHOWN += 50; renderCustomers(); return; }
+  if (!CUST_MAYBE_MORE) return;
+  btn.disabled = true;
+  try {
+    const r = await api(`/admin/api/customers?limit=${CUST_CHUNK}&offset=${CUSTOMERS_CACHE.length}`);
+    CUSTOMERS_CACHE = CUSTOMERS_CACHE.concat(r);
+    CUST_MAYBE_MORE = r.length >= CUST_CHUNK;
+  } catch (e) { toast(e.message, true); btn.disabled = false; return; }
+  CUST_SHOWN += 50;
+  renderCustomers();
 }
 function renderCustomers() {
   if (!$("cust-list")) return;
-  const q = ($("cust-search").value || "").toLowerCase();
-  const rows = (CUSTOMERS_CACHE || [])
-    .filter((c) => !q || (c.name || "").toLowerCase().includes(q) || c.phone.includes(q))
-    .sort((a, b) => Number(b.outstanding) - Number(a.outstanding));
-  if (!rows.length) { $("cust-list").innerHTML = emptyBox("No customers yet — they appear after their first bill or message.", "👥"); return; }
+  const all = visibleCustomers();
+  if (!all.length) { $("cust-list").innerHTML = emptyBox("No customers yet — they appear after their first bill or message.", "👥"); return; }
+  const rows = all.slice(0, CUST_SHOWN);
+  const more = all.length > rows.length || CUST_MAYBE_MORE;
+  const moreBtn = more
+    ? `<div style="padding:12px;text-align:center"><button class="btn ghost sm" onclick="custMore(this)">⬇ Aur dikhao (${rows.length}${CUST_MAYBE_MORE ? "+" : " / " + all.length})</button></div>`
+    : "";
   $("cust-list").innerHTML = `
     <table class="tbl"><thead><tr><th>Customer</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Last seen</th><th>Actions</th></tr></thead>
     <tbody>${rows.map((c) => `
@@ -856,7 +932,7 @@ function renderCustomers() {
       <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}','${c.outstanding}')">Remind</button>` : ""}
       <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">Chat</button>
       <button class="btn sm ghost" onclick="editCustomerModal('${c.phone}')">Edit</button>
-      <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button></div></div>`).join("")}</div>`;
+      <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button></div></div>`).join("")}</div>${moreBtn}`;
 }
 
 /* ---- customer edit / delete ---- */
@@ -871,7 +947,7 @@ function editCustomerModal(phone) {
       <div class="setfield"><label for="ec-name">Name</label>
         <input id="ec-name" value="${esc(c.name || "")}"></div>
       <div class="setfield"><label for="ec-phone">Phone</label>
-        <input id="ec-phone" inputmode="numeric" value="${esc(digits)}">
+        <input id="ec-phone" type="tel" inputmode="numeric" value="${esc(digits)}">
         <small>Number badalne par unki puri chat aur bills isi naye number se judenge.</small>
         <small class="fielderr" id="ec-phone-err"></small></div>
       <div class="setfield"><label for="ec-addr">Address</label>
@@ -917,6 +993,29 @@ async function sendReminder(phone, amt) {
     toast(T.reminderSent);
   } catch (e) { toast(e.message, true); }
 }
+
+/* Media ka URL. Login session ho to cookie hi kaafi hai; sirf purane
+   admin-key wale rasta ke liye ?key= lagta hai. Khali key jodne se server
+   401 deta tha aur Inbox mein toota hua dabba dikhta tha. */
+const mediaUrl = (path) => KEY ? `${path}?key=${encodeURIComponent(KEY)}` : path;
+
+/* ---- chat text + ticks, WhatsApp style ---- */
+/* Trailing newlines in a stored/approved body rendered as a big empty hole
+   under the message (white-space: pre-wrap). Trim, and never allow more
+   than one blank line in a row. */
+const tidy = (s) => String(s || "").replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+const oneLine = (s) => tidy(s).replace(/\s+/g, " ");
+
+/* ✓ sent · ✓✓ delivered · blue ✓✓ read · ⚠ failed — Meta's status, not a
+   decoration. The old UI painted a blue ✓✓ on everything, so a message
+   sitting undelivered looked read. */
+function ticks(status) {
+  if (status === "read") return ` <span class="tick read">✓✓</span>`;
+  if (status === "delivered") return ` <span class="tick">✓✓</span>`;
+  if (status === "failed") return ` <span class="tick fail">⚠</span>`;
+  return ` <span class="tick">✓</span>`;   // sent, or an older row
+}
+let BY_WAMID = {};
 
 /* Thread list previews: a file must read like WhatsApp's own list —
    "🎤 Voice note", not "[audio:/admin/media/in-f7ed7c2...]". */
@@ -983,8 +1082,10 @@ async function loadUsage() {
   const max = Math.max(1, ...s.map((d) => d.calls));
   $("usage-chart").innerHTML = s.length
     ? `<div style="display:flex;align-items:flex-end;gap:3px;height:130px">` +
+      // tap = toast with the numbers; title alone is invisible on touch
       s.map((d) => `<div title="${d.date}: ${d.calls} calls, ${kTok(d.tokens)} tokens"
-        style="flex:1;min-width:0;background:var(--g-blue);border-radius:3px 3px 0 0;
+        onclick="toast('${d.date}: ${d.calls} calls, ${kTok(d.tokens)} tokens')"
+        style="flex:1;min-width:0;background:var(--g-blue);border-radius:3px 3px 0 0;cursor:pointer;
         height:${Math.max(3, (d.calls / max) * 100)}%"></div>`).join("") + `</div>
       <div class="muted" style="display:flex;justify-content:space-between;margin-top:6px">
         <span>${s[0].date.slice(5)}</span><span>aaj</span></div>`
@@ -1001,14 +1102,21 @@ async function loadUsage() {
       </div>`).join("")
     : `<p class="muted">Is mahine abhi kuch nahi.</p>`;
 
+  // table on wide screens + stacked cards on phones — .tbl is hidden <768px
+  const byModel = u.month.by_model || [];
   $("usage-models").innerHTML = `
     <p class="muted">Provider: <b>${esc(u.provider)}</b> · ${esc(u.models.smart)} / ${esc(u.models.cheap)}</p>
     <table class="tbl"><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Kharch</th></tr></thead>
-    <tbody>${(u.month.by_model || []).map((m) => `<tr>
+    <tbody>${byModel.map((m) => `<tr>
       <td><b>${esc(m.model)}</b></td><td>${m.calls}</td>
       <td>${kTok(m.input_tokens)}</td><td>${kTok(m.output_tokens)}</td>
       <td class="money">${m.priced ? usd(m.cost_usd) : '<span class="muted">free</span>'}</td>
     </tr>`).join("") || `<tr><td colspan="5" class="muted">Is mahine koi call nahi.</td></tr>`}</tbody></table>
+    <div class="rowcards">${byModel.map((m) => `
+      <div class="rowcard"><div class="r1"><b>${esc(m.model)}</b>
+        <span class="money">${m.priced ? usd(m.cost_usd) : "free"}</span></div>
+      <div class="kv"><span>${m.calls} calls</span><span>in ${kTok(m.input_tokens)} · out ${kTok(m.output_tokens)}</span></div>
+      </div>`).join("") || `<p class="muted">Is mahine koi call nahi.</p>`}</div>
     <p class="muted" style="margin-top:10px">Rate card aur limit Settings mein badal sakte ho — puraana hisaab bhi naye rate se dobara jud jayega.</p>`;
 }
 
@@ -1661,12 +1769,22 @@ function actChips(args) {
   return out.length ? `<div class="actchips">${out.join("")}</div>` : "";
 }
 
-async function loadActivity() {
-  $("act-list").innerHTML = skeleton(6);
+/* First screen = 60 events (was the server default 100 in one shot);
+   "Aur dikhao" grows the window via the API's ?limit= up to its 500 cap. */
+let ACT_LIMIT = 60;
+const ACT_MAX = 500;
+function actMore(btn) { btn.disabled = true; ACT_LIMIT = Math.min(ACT_LIMIT + 100, ACT_MAX); loadActivity(false); }
+async function loadActivity(reset = true) {
+  if (reset) { ACT_LIMIT = 60; $("act-list").innerHTML = skeleton(6); }
   try {
     const role = $("act-role").value;
-    const rows = await api("/admin/api/activity" + (role ? `?role=${role}` : ""));
+    const p = new URLSearchParams({ limit: ACT_LIMIT });
+    if (role) p.set("role", role);
+    const rows = await api("/admin/api/activity?" + p);
     if (!rows.length) { $("act-list").innerHTML = emptyBox("No agent activity yet.", "🤖"); return; }
+    const moreBtn = rows.length >= ACT_LIMIT && ACT_LIMIT < ACT_MAX
+      ? `<div style="padding:12px;text-align:center"><button class="btn ghost sm" onclick="actMore(this)">⬇ Aur dikhao (${rows.length} dikh rahe)</button></div>`
+      : "";
     let lastDay = "";
     $("act-list").innerHTML = rows.map((r) => {
       const [icon, label] = actMeta(r.action);
@@ -1693,7 +1811,7 @@ async function loadActivity() {
             ${actChips(a)}
           </div>
         </div>`;
-    }).join("");
+    }).join("") + moreBtn;
   } catch (e) { $("act-list").innerHTML = errBox(e.message, "loadActivity"); }
 }
 
@@ -1803,7 +1921,7 @@ function renderRateMatrix() {
       placeholder="—" onchange="rmCell('${esc(g)}','${esc(s)}',this.value,'${r ? r.id : ""}')"></td>`;
   };
   $("rate-matrix").innerHTML = `
-    <table class="tbl" style="min-width:${180 + services.length * 110}px"><thead><tr>
+    <table class="tbl keep" style="min-width:${180 + services.length * 110}px"><thead><tr>
       <th>Laundry garment name</th>${services.map((s) => `<th>${esc(s)} (₹)</th>`).join("")}
     </tr></thead><tbody>
       ${garments.map((g) => `<tr><td><b style="font-size:13px;text-transform:none;letter-spacing:0">${esc(g)}</b></td>${services.map((s) => cell(g, s)).join("")}</tr>`).join("")}
@@ -2089,14 +2207,61 @@ async function mfReset(btn) {
 
 /* ============================= inbox ============================= */
 let THREADS = [], OPEN_PHONE = null, OPEN_THREAD = null, inboxTimer = null;
+let LAST_HEAD_SIG = "", LAST_CHAT_PHONE = null, LAST_CHAT_HTML = "";
 const EMOJIS = ["😀","😄","😊","🙏","👍","👌","✅","❤️","🎉","😅","😂","🤝","🧺","👔","🧼","⏰","📅","💰","🛵","⚠️","❓","🌟"];
+/* The list is PAGED: 50 at a time as you scroll. A shop with 500+ imported
+   contacts must open as fast as one with five. Search runs on the server so
+   it reaches every contact, including ones who never messaged. */
+const TH_PAGE = 50;
+let TH_QUERY = "", TH_MORE = false, TH_TOTAL = 0, TH_LOADING = false;
+
+async function fetchThreads(offset = 0) {
+  const p = new URLSearchParams({ limit: TH_PAGE, offset, q: TH_QUERY });
+  return api(`/admin/api/inbox/threads?${p}`);
+}
 async function loadThreads() {
-  try { THREADS = await api("/admin/api/inbox/threads"); } catch (e) { $("th-list").innerHTML = errBox(e.message, "loadThreads"); return; }
+  try {
+    // the 12s auto-refresh must not yank a scrolled list back to page one
+    const keep = Math.max(TH_PAGE, THREADS.length || 0);
+    const r = await api(`/admin/api/inbox/threads?${new URLSearchParams(
+      { limit: Math.min(keep, 500), offset: 0, q: TH_QUERY })}`);
+    THREADS = r.threads; TH_MORE = r.has_more; TH_TOTAL = r.total;
+  } catch (e) { $("th-list").innerHTML = errBox(e.message, "loadThreads"); return; }
   loadTplPreview();  // fire-and-forget: makes template bubbles readable
   renderThreads(); updateUnreadBadge();
   if (OPEN_PHONE) openThread(OPEN_PHONE, true, false);
   clearTimeout(inboxTimer);
-  if (CURRENT === "inbox") inboxTimer = setTimeout(loadThreads, 12000);
+  if (CURRENT === "inbox" && !document.hidden) inboxTimer = setTimeout(loadThreads, 12000);
+}
+/* Screen band / doosra app khula = polling band. Wapas aate hi taaza list.
+   Phone ki battery aur data dono bachte hain, aur wapas aane par 12s ka
+   intezaar nahi karna padta. */
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { clearTimeout(inboxTimer); return; }
+  if (CURRENT === "inbox") loadThreads();
+});
+async function loadMoreThreads() {
+  if (!TH_MORE || TH_LOADING) return;
+  TH_LOADING = true;
+  try {
+    const r = await fetchThreads(THREADS.length);
+    THREADS = THREADS.concat(r.threads);
+    TH_MORE = r.has_more; TH_TOTAL = r.total;
+    renderThreads();
+  } catch (e) { toast(e.message, true); }
+  finally { TH_LOADING = false; }
+}
+/* server-side search, debounced — typing must not fire a query per keystroke */
+let _thSearchTimer = null;
+function threadSearch(value) {
+  clearTimeout(_thSearchTimer);
+  _thSearchTimer = setTimeout(() => {
+    TH_QUERY = (value || "").trim();
+    loadThreads();
+  }, 300);
+}
+function onThreadScroll(el) {
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 220) loadMoreThreads();
 }
 const avatar = (n) => `<div class="avatar">${esc((n || "?").trim()[0] || "?").toUpperCase()}</div>`;
 const seenKey = (p) => "kk_seen_" + p;
@@ -2107,21 +2272,42 @@ function updateUnreadBadge() {
   const b = $("unread-badge");
   if (b) { b.textContent = n; b.classList.toggle("show", n > 0); }
 }
+/* Phone ka asli jank yahi tha: har 12s poori list ka innerHTML replace —
+   scroll upar kood jaata tha aur ungli ke neeche ka DOM gayab ho jaata tha.
+   Ab: kuch badla hi nahi to DOM ko chhoo bhi nahi; badla to scroll wapas
+   wahi rakho jahan tha. */
+let LAST_TH_HTML = "";
 function renderThreads() {
-  const q = ($("th-search").value || "").toLowerCase();
-  const rows = THREADS.filter((t) => !q || t.name.toLowerCase().includes(q) || t.phone.includes(q));
-  $("th-list").innerHTML = rows.map((t) => {
+  const rows = THREADS;
+  const items = rows.map((t) => {
     const chip = t.kind === "staff" ? '<span class="staff-chip">staff</span>' : t.kind === "admin" ? '<span class="staff-chip">👑 you</span>' : "";
+    const preview = t.no_messages
+      ? `<span class="pv-none">Abhi koi message nahi — tap karke shuru karein</span>`
+      : `${isUnread(t) ? '<b style="color:#00A884">● </b>' : ""}${
+          t.last_direction === "OUTBOUND" ? "✓✓ " : ""}${esc(previewText(t.last_text))}`;
     return `<div class="thread-item ${t.phone === OPEN_PHONE ? "on" : ""}"
       onclick="openThread('${t.phone}')" ontouchstart="thTouchStart(event,'${t.phone}')" ontouchend="thTouchEnd(event,'${t.phone}')">
       <div style="display:flex;gap:10px;align-items:center">
         ${avatar(t.name)}
         <div style="flex:1;min-width:0">
           <div class="nm"><span>${esc(t.name)}${chip}</span><span class="t">${fmtWhen(t.last_at)}</span></div>
-          <div class="pv">${isUnread(t) ? '<b style="color:#00A884">● </b>' : ""}${t.last_direction === "OUTBOUND" ? "✓✓ " : ""}${esc(previewText(t.last_text))}</div>
+          <div class="pv">${preview}</div>
         </div>
       </div></div>`;
-  }).join("") || `<div class="thread-item">${T.noData}</div>`;
+  }).join("");
+  const footer = TH_MORE
+    ? `<div class="th-more" onclick="loadMoreThreads()">⬇ Aur dikhao (${rows.length}/${TH_TOTAL})</div>`
+    : rows.length
+      ? `<div class="th-end">${rows.length} ${TH_QUERY ? "mile" : "chat"}</div>`
+      : "";
+  const html = (items || `<div class="thread-item">${
+    TH_QUERY ? "Kuch nahi mila" : T.noData}</div>`) + footer;
+  if (html === LAST_TH_HTML) return;          // data wahi ka wahi — repaint kyun?
+  const el = $("th-list");
+  const keep = el.scrollTop;
+  el.innerHTML = html;
+  el.scrollTop = keep;                        // scroll jahan tha wahin rahe
+  LAST_TH_HTML = html;
 }
 
 /* swipe (left = mark read, right = agent toggle) + long-press menu fallback */
@@ -2157,6 +2343,13 @@ function closeThreadMobile(push = true) {
   document.body.classList.remove("chat-open");
   const pane = document.querySelector(".chatpane");
   if (pane) pane.removeAttribute("style");
+  // Phone par chat band = sach mein band. OPEN_PHONE saaf kiye bina 12s ka
+  // refresh (loadThreads -> openThread) wahi chat dobara khol deta tha —
+  // back button ka koi matlab hi nahi rehta tha.
+  if (window.innerWidth <= 767 && OPEN_PHONE) {
+    OPEN_PHONE = null;
+    if (THREADS.length) renderThreads();   // list ki green highlight bhi hatao
+  }
   if (push && location.hash.startsWith("#inbox/")) {
     NAVIGATING = true; location.hash = "inbox"; setTimeout(() => (NAVIGATING = false), 0);
   }
@@ -2171,7 +2364,9 @@ async function openThread(phone, silent = false, push = true) {
   OPEN_PHONE = phone;
   localStorage.setItem(seenKey(phone), new Date().toISOString());
   updateUnreadBadge();
-  if (window.innerWidth <= 767) {
+  // !silent zaroori hai: 12s wala background refresh bhi yahan se guzarta
+  // hai — wo sirf content taaza kare, band ki hui chat WAPAS na khole
+  if (window.innerWidth <= 767 && !silent) {
     document.body.classList.add("chat-open");
     // belt + braces: inline styles guarantee the full-screen push even if
     // a stylesheet hiccups on some browser
@@ -2196,16 +2391,26 @@ async function openThread(phone, silent = false, push = true) {
   try { OPEN_THREAD = await api(`/admin/api/inbox/thread?phone=${encodeURIComponent(phone)}`); }
   catch (e) { log.innerHTML = errBox(e.message, "loadThreads"); return; }
   const d = OPEN_THREAD;
-  $("chat-head").innerHTML = `
+  // header sirf tab bane jab uska CONTENT badla — warna har 12s Ping/Agent
+  // button ungli ke neeche se recreate ho jaate the
+  const headSig = `${d.phone}|${d.name}|${d.kind}|${d.window.open}`;
+  if (!silent || headSig !== LAST_HEAD_SIG) {
+    $("chat-head").innerHTML = `
     <button class="chat-back" onclick="closeThreadMobile()" aria-label="Back">←</button>
     ${avatar(d.name)}
     <div style="flex:1;min-width:0"><b>${esc(d.name)}</b>
       <div class="muted">${d.phone} · ${d.kind === "staff" ? "Staff 🧑‍🔧" : d.kind === "admin" ? "You 👑" : "Customer"}</div></div>
     <span class="winchip ${d.window.open ? "open" : "closed"}">${d.window.open ? "window open" : "window closed"}</span>
+    <button class="btn sm ghost" title="Yaad dilao" onclick="pingThread(this)">🔔 Ping</button>
     ${d.kind === "customer" ? `<button class="btn sm ghost" id="agent-pause-btn" onclick="toggleAgentPause()">🤖 Agent: …</button>` : ""}`;
-  refreshPauseBtn();
+    refreshPauseBtn();
+    LAST_HEAD_SIG = headSig;
+  }
   const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   let lastDay = "";
+  // quoted replies point at a wamid — keep a lookup so we can show the words
+  BY_WAMID = {};
+  (d.messages || []).forEach((m) => { if (m.wamid) BY_WAMID[m.wamid] = m; });
   const html = (d.messages || []).map((m) => {
     let chip = "";
     const day = new Date(m.at).toDateString();
@@ -2221,10 +2426,10 @@ async function openThread(phone, silent = false, push = true) {
     const med = raw.match(/^\[(audio|voice|video|document)\:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
     const loc = raw.match(/^\[location:([-\d.]+),([-\d.]+)\]\s*(.*)$/s);
     if (img) {
-      body = `<img src="${img[1]}?key=${encodeURIComponent(KEY)}" loading="lazy" width="280" height="210">${esc(img[2] || "")}`;
+      body = `<img src="${mediaUrl(img[1])}" loading="lazy" width="280" height="210">${esc(img[2] || "")}`;
     } else if (med) {
       // play/open it right here, like WhatsApp — not a dead "[document]" tag
-      const url = `${med[2]}?key=${encodeURIComponent(KEY)}`;
+      const url = mediaUrl(med[2]);
       const label = esc(med[3] || "");
       if (med[1] === "audio" || med[1] === "voice") {
         body = `<audio controls preload="none" src="${url}" style="max-width:250px"></audio>${label}`;
@@ -2238,22 +2443,56 @@ async function openThread(phone, silent = false, push = true) {
         href="https://www.google.com/maps/search/?api=1&query=${loc[1]},${loc[2]}">📍 ${esc(loc[3] || "Location")}</a>`;
     } else if (tpl) {
       // a template log line is unreadable as "[template:kk_thankyou_rating]" —
-      // show the actual text the customer received, with its buttons
+      // show the actual text that went out: the approved body with this
+      // message's own {{1}}, {{2}} filled in (they are stored beside the
+      // marker, ' | ' separated). No body known -> show the params alone.
       const t = TPL_PREVIEW[tpl[1]];
-      body = `<div class="tplmsg">${t ? esc(t.body) : esc(tpl[2] || tpl[1])}
-        <div class="tplname">📑 ${esc(tpl[1])}</div>
-        ${(t && t.buttons || []).map((b) => `<div class="tplbtn">${esc(b)}</div>`).join("")}</div>`;
+      const params = (tpl[2] || "").split(" | ").filter((p) => p !== "");
+      let shown = tpl[2] || "";
+      if (t && t.body) {
+        shown = params.length
+          ? t.body.replace(/\{\{(\d+)\}\}/g, (m0, n) => params[n - 1] ?? m0)
+          : t.body;
+      }
+      // NOTE: keep this markup on ONE line. The bubble is white-space:
+      // pre-wrap, so a newline + indentation in the source rendered as a
+      // real blank line — that was the empty hole under every template.
+      const btns = (t && t.buttons || []).filter(Boolean)
+        .map((b) => `<div class="tplbtn">${esc(b)}</div>`).join("");
+      body = `<div class="tplmsg"><span class="tpltxt">${esc(tidy(shown) || tpl[1])}</span><div class="tplname">📑 ${esc(tpl[1])}</div>${btns}</div>`;
     } else if (btn) {
       body = `<span class="tapped">👆 ${esc(btn[1])}</span>`;
+    } else {
+      // WhatsApp trims the fat: no leading/trailing blank lines, and never
+      // more than one empty line inside. Untrimmed template bodies were
+      // leaving a hand-sized hole under every message.
+      body = esc(tidy(m.text || ""));
     }
-    return `${chip}<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${body}
-      <span class="bt">${fmtClock(m.at)}${m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") : ""}</span></div>`;
+    const quoted = m.reply_to && BY_WAMID[m.reply_to];
+    // one line, on purpose — see the note in the template branch above
+    const quote = quoted
+      ? `<div class="quoted"><span>${quoted.direction === "INBOUND" ? esc(d.name) : "Aap"}</span>${esc(oneLine(quoted.text)).slice(0, 90)}</div>`
+      : "";
+    const meta = `<span class="bt">${fmtClock(m.at)}${
+      m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") + ticks(m.status) : ""
+    }</span>`;
+    const reply = m.wamid
+      ? `<button class="breply" title="Reply" aria-label="Reply" onclick="replyTo('${m.wamid}')">↩</button>`
+      : "";
+    return `${chip}<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${quote}${body}${meta}${reply}</div>`;
   }).join("") || emptyBox("Chat appears here", "💬");
-  log.innerHTML = html;
-  sessionStorage.setItem("kk_thread_" + phone, html);
+  // wahi 12s wali baat: message log tabhi repaint ho jab sach mein naya
+  // message/status aaya ho — warna bubbles + images har tick par flicker
+  // karte the aur phone ka scroll atak jaata tha
+  const same = silent && phone === LAST_CHAT_PHONE && html === LAST_CHAT_HTML;
   const newCount = (d.messages || []).length;
-  if (nearBottom || !silent) scrollChatBottom();
-  else if (newCount > prevCount) $("newmsg-pill").classList.add("show");
+  if (!same) {
+    log.innerHTML = html;
+    sessionStorage.setItem("kk_thread_" + phone, html);
+    LAST_CHAT_PHONE = phone; LAST_CHAT_HTML = html;
+    if (nearBottom || !silent) scrollChatBottom();
+    else if (newCount > prevCount) $("newmsg-pill").classList.add("show");
+  } else if (!silent) scrollChatBottom();
 }
 async function refreshPauseBtn() {
   const btn = $("agent-pause-btn");
@@ -2288,18 +2527,51 @@ async function flushOutbox() {
     if (OPEN_PHONE) openThread(OPEN_PHONE, true, false);
   }
 }
+/* ---- reply to one message (WhatsApp's swipe-to-reply) ---- */
+let REPLY_TO = null;
+function replyTo(wamid) {
+  const m = BY_WAMID[wamid];
+  if (!m) return;
+  REPLY_TO = wamid;
+  const bar = $("reply-bar");
+  bar.innerHTML = `<div class="rq"><span>${m.direction === "INBOUND" ? esc(OPEN_THREAD?.name || "Unhone") : "Aap"}</span>
+      ${esc(oneLine(m.text)).slice(0, 110)}</div>
+    <button class="rx" onclick="cancelReply()" aria-label="Cancel reply">✕</button>`;
+  bar.classList.add("show");
+  $("chat-input").focus();
+}
+function cancelReply() {
+  REPLY_TO = null;
+  const bar = $("reply-bar");
+  bar.classList.remove("show");
+  bar.innerHTML = "";
+}
+
+async function pingThread(btn) {
+  if (!OPEN_PHONE) return;
+  await busy(btn, async () => {
+    const r = await api("/admin/api/inbox/ping", { method: "POST", body: { phone: OPEN_PHONE } });
+    toast("🔔 Ping bhej diya: " + oneLine(r.text).slice(0, 60));
+    openThread(OPEN_PHONE, true, false);
+  });
+}
+
 async function sendChat() {
   const input = $("chat-input");
   const text = input.value.trim();
   if (!text || !OPEN_PHONE) return;
+  const replyTo = REPLY_TO;
   input.value = "";
+  cancelReply();
   if (!navigator.onLine) {
-    saveOutbox([...outbox(), { phone: OPEN_PHONE, text }]);
+    saveOutbox([...outbox(), { phone: OPEN_PHONE, text, reply_to: replyTo }]);
     toast("Offline — message queue mein hai, net aate hi jayega");
     return;
   }
   try {
-    await api("/admin/api/inbox/send", { method: "POST", body: { phone: OPEN_PHONE, text } });
+    await api("/admin/api/inbox/send", {
+      method: "POST", body: { phone: OPEN_PHONE, text, reply_to: replyTo },
+    });
     openThread(OPEN_PHONE, true, false);
   } catch (e) { toast(e.message, true); input.value = text; }
 }
@@ -2307,7 +2579,7 @@ async function sendChat() {
 function newChatModal() {
   openModal(`<h3>➕ New chat</h3>
     <div class="frm">
-      <div><label>Mobile number</label><input id="nc-phone" placeholder="98765 43210" autofocus></div>
+      <div><label>Mobile number</label><input id="nc-phone" type="tel" inputmode="numeric" placeholder="98765 43210" autofocus></div>
       <div><label>Name (optional)</label><input id="nc-name" placeholder="Customer name"></div>
     </div>
     <p class="muted">Naya number ho to pehla message sirf <b>approved template</b> se ja sakta hai (WhatsApp ka niyam) — chat khulne par 📑 button use karo.</p>
@@ -2385,19 +2657,79 @@ function tplSendPrev() {
 
 /* bulk customer numbers */
 function bulkImportModal() {
-  openModal(`<h3>📥 Bulk import numbers</h3>
-    <div class="frm">
-      <textarea id="bi-text" rows="8" placeholder="Ek line mein ek number:\n9876543210\nSharma ji, 9812345678\nSeema Mam, 98111 22333"></textarea>
+  openModal(`<h3>📥 Contacts import</h3>
+    <div class="tabs2">
+      <button class="tab2 on" id="bi-tab-file" onclick="biTab('file')">📄 Excel / CSV</button>
+      <button class="tab2" id="bi-tab-text" onclick="biTab('text')">⌨️ Type / paste</button>
     </div>
-    <p class="muted">Format: sirf number, ya 'naam, number'. Jo pehle se hain wo skip honge. Yaad rahe — marketing message sirf opted-in logon ko jayega.</p>
+    <div id="bi-pane-file">
+      <label class="dropzone" id="bi-drop">
+        <input type="file" id="bi-file" accept=".csv,.tsv,.xlsx,.xlsm,text/csv" style="display:none">
+        <div class="dz-in"><b>📄 File chunein ya yahan drop karein</b>
+          <span class="muted">.xlsx ya .csv — 5MB tak</span></div>
+      </label>
+      <div id="bi-file-name" class="muted" style="margin-top:8px"></div>
+      <p class="muted" style="margin-top:10px">Column ka naam <b>phone / mobile / number</b>, <b>name</b>, <b>address</b>
+        ho to apne aap pehchan lunga. Heading na ho to bhi chalega — jo cell number jaisa dikhega wahi number maanunga.
+        Jo pehle se hain unka data <b>overwrite nahi</b> hoga, sirf khali jagah bharunga.</p>
+    </div>
+    <div id="bi-pane-text" style="display:none">
+      <div class="frm">
+        <textarea id="bi-text" rows="8" placeholder="Ek line mein ek number:\n9876543210\nSharma ji, 9812345678\nSeema Mam, 98111 22333"></textarea>
+      </div>
+      <p class="muted">Format: sirf number, ya 'naam, number'.</p>
+    </div>
+    <div id="bi-result"></div>
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
     <button class="btn" id="bi-go">Import</button></div>`);
-  $("bi-go").onclick = (e) => busy(e.target, async () => {
-    const r = await api("/admin/api/customers/bulk", { method: "POST", body: { text: $("bi-text").value } });
-    closeModal();
-    toast(`${r.added} naye jude, ${r.skipped_existing} pehle se the` + (r.invalid.length ? `, ${r.invalid.length} galat` : ""));
-    loadCustomers();
+
+  const drop = $("bi-drop"), fileIn = $("bi-file");
+  const showName = () => {
+    $("bi-file-name").textContent = fileIn.files?.[0] ? "✅ " + fileIn.files[0].name : "";
+  };
+  fileIn.onchange = showName;
+  ["dragenter", "dragover"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => {
+    if (e.dataTransfer.files?.[0]) { fileIn.files = e.dataTransfer.files; showName(); }
   });
+
+  $("bi-go").onclick = (e) => busy(e.target, async () => {
+    let r;
+    if (BI_MODE === "file") {
+      const f = fileIn.files?.[0];
+      if (!f) { toast("Pehle file chunein", true); return; }
+      const fd = new FormData();
+      fd.append("file", f);
+      r = await api("/admin/api/customers/import-file", { method: "POST", body: fd });
+    } else {
+      r = await api("/admin/api/customers/bulk", { method: "POST", body: { text: $("bi-text").value } });
+    }
+    // A row that did not import is the owner's problem to fix — show it,
+    // don't bury it in a toast that disappears.
+    const badTotal = r.invalid_total ?? (r.invalid || []).length;
+    $("bi-result").innerHTML = `<div class="imp-res">
+      <div class="imp-row"><b>${r.added}</b> naye contact jude</div>
+      ${r.updated ? `<div class="imp-row"><b>${r.updated}</b> ka adhura data bhara</div>` : ""}
+      <div class="imp-row muted">${r.skipped_existing} pehle se the</div>
+      ${badTotal ? `<div class="imp-row bad"><b>${badTotal}</b> line samajh nahi aayi:
+        <ul>${(r.invalid || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+        ${badTotal > (r.invalid || []).length ? `<span class="muted">…aur ${badTotal - r.invalid.length}</span>` : ""}</div>` : ""}
+    </div>`;
+    toast(`${r.added} naye contact jude`);
+    if (CURRENT === "customers") loadCustomers();
+    if (CURRENT === "inbox") loadThreads();
+  });
+}
+let BI_MODE = "file";
+function biTab(mode) {
+  BI_MODE = mode;
+  $("bi-pane-file").style.display = mode === "file" ? "" : "none";
+  $("bi-pane-text").style.display = mode === "text" ? "" : "none";
+  $("bi-tab-file").classList.toggle("on", mode === "file");
+  $("bi-tab-text").classList.toggle("on", mode === "text");
 }
 
 function toggleEmojis() { $("emoji-pal").classList.toggle("open"); }
@@ -2415,28 +2747,154 @@ async function sendMedia(input) {
   input.value = "";
 }
 
+
+/* ================= mobile UI probe ==================
+   Screen main dekh nahi sakta, isliye phone khud naap kar bhejta hai:
+   kya viewport se bahar nikla hua hai, kaunsa tap-target chhota hai, kya
+   JS error aaya. `?probe=1` lagao, ek baar scroll karo, bas. */
+function _uiOffenders() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const out = [];
+  // Neeche chipki hui cheezein (tabbar) content ko dhak leti hain — unki
+  // ooncha-i nikaal lo taaki "kya chhup gaya" bataya ja sake.
+  let coverBottom = 0;
+  for (const f of document.querySelectorAll("*")) {
+    const st = getComputedStyle(f);
+    if (st.position !== "fixed" || st.display === "none") continue;
+    const r = f.getBoundingClientRect();
+    if (r.bottom >= vh - 2 && r.height > 0 && r.height < vh / 2) {
+      coverBottom = Math.max(coverBottom, r.height);
+    }
+  }
+
+  for (const e of document.querySelectorAll("body *")) {
+    const st = getComputedStyle(e);
+    if (st.display === "none" || st.visibility === "hidden" || st.opacity === "0") continue;
+    const r = e.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;
+
+    // Poori tarah baayein parked cheez = chhupa hua drawer (sidebar), bug
+    // nahi. Pehle isi ne saari report bhar di thi.
+    if (r.right <= 0 || r.left >= vw) continue;
+    if (st.position === "fixed") continue;
+
+    // 1. dayein se bahar = side scroll / kata hua content
+    if (r.right > vw + 1) {
+      out.push({ why: "right", el: _elName(e), left: Math.round(r.left),
+                 right: Math.round(r.right), w: Math.round(r.width),
+                 text: (e.textContent || "").trim().slice(0, 40) });
+      continue;
+    }
+    // 2. text apne dabbe mein nahi sama raha (kat raha hai)
+    // "…" se katna design hai, bug nahi — usse chhodo
+    if (e.scrollWidth > e.clientWidth + 2 && e.clientWidth > 0 && st.overflowX !== "auto"
+        && st.overflowX !== "scroll" && st.textOverflow !== "ellipsis"
+        && (e.textContent || "").trim()) {
+      out.push({ why: "clipped", el: _elName(e), w: Math.round(r.width),
+                 need: e.scrollWidth, has: e.clientWidth,
+                 text: (e.textContent || "").trim().slice(0, 40) });
+      continue;
+    }
+    // 3. neeche ki fixed patti ke peeche chhup gaya
+    if (coverBottom && r.top < vh && r.bottom > vh - coverBottom && r.height < 200
+        && (e.textContent || "").trim() && e.children.length === 0) {
+      out.push({ why: "under_tabbar", el: _elName(e), bottom: Math.round(r.bottom),
+                 covered_from: Math.round(vh - coverBottom),
+                 text: (e.textContent || "").trim().slice(0, 40) });
+      continue;
+    }
+    // 4. padhne layak nahi
+    const fs = parseFloat(st.fontSize);
+    if (fs && fs < 11 && (e.textContent || "").trim() && e.children.length === 0) {
+      out.push({ why: "tiny_text", el: _elName(e), font: fs,
+                 text: (e.textContent || "").trim().slice(0, 40) });
+    }
+  }
+  return out.slice(0, 30);
+}
+
+function _elName(e) {
+  const cls = String(e.className || "").trim().split(/\s+/).filter(Boolean).slice(0, 2).join(".");
+  return e.tagName.toLowerCase() + (e.id ? "#" + e.id : "") + (cls ? "." + cls : "");
+}
+
+let _uiErrors = [];
+function startUiProbe() {
+  window.addEventListener("error", (e) =>
+    _uiErrors.push(`${e.message} @ ${String(e.filename || "").split("/").pop()}:${e.lineno}`));
+  window.addEventListener("unhandledrejection", (e) =>
+    _uiErrors.push("promise: " + String(e.reason).slice(0, 120)));
+
+  const banner = document.createElement("div");
+  banner.style.cssText =
+    "position:fixed;left:8px;right:8px;bottom:8px;z-index:9999;background:#111B21;color:#fff;" +
+    "padding:10px 12px;border-radius:10px;font:600 13px/1.4 system-ui;text-align:center";
+  banner.textContent = "🔎 UI probe chal raha hai…";
+  document.body.appendChild(banner);
+
+  const send = async (label) => {
+    const body = {
+      label, section: CURRENT, url: location.href,
+      ua: navigator.userAgent,
+      viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 },
+      page: { scrollW: document.documentElement.scrollWidth, scrollH: document.documentElement.scrollHeight },
+      side_scroll: document.documentElement.scrollWidth > window.innerWidth + 1,
+      overflow: _uiOffenders(),
+      tiny_taps: _uiTinyTaps(),
+      errors: _uiErrors.slice(0, 10),
+    };
+    try {
+      await fetch("/admin/api/ui-report", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body), credentials: "same-origin",
+      });
+      const by = {};
+      body.overflow.forEach((o) => (by[o.why] = (by[o.why] || 0) + 1));
+      const bits = Object.entries(by).map(([k, v]) => `${v} ${k}`);
+      banner.textContent =
+        `✅ ${label}: ` + (bits.join(", ") || "layout theek") +
+        `, ${body.tiny_taps.length} chhote button, ${body.errors.length} error`;
+    } catch (e) {
+      banner.textContent = "⚠️ Report nahi ja payi: " + e.message;
+    }
+  };
+
+  setTimeout(() => send("load"), 1500);
+  // har section badalne par dobara — "sara UI" ka matlab har screen
+  let last = CURRENT;
+  setInterval(() => {
+    if (CURRENT !== last) { last = CURRENT; setTimeout(() => send(CURRENT), 800); }
+  }, 1000);
+  banner.onclick = () => send("manual");
+}
+
 /* ============================= init ============================= */
 window.addEventListener("DOMContentLoaded", () => {
-  // dev probe: ?probe=1 writes overflow offenders into the <title>
+  // ?probe=1 -> phone khud batata hai ki kya toota hai.
+  // Purana version findings <title> mein likhta tha — mobile par title
+  // dikhta hi nahi. Ab report server par chali jaati hai.
   if (qs.get("probe")) {  // qs captured before replaceState strips the query
-    const report = () => {
-      const wide = [...document.querySelectorAll("body *")]
-        .filter((e) => e.getBoundingClientRect().right > window.innerWidth + 1
-          && getComputedStyle(e).position !== "fixed")
-        .slice(0, 6)
-        .map((e) => `${e.tagName}.${String(e.className).slice(0, 24)}=${Math.round(e.getBoundingClientRect().right)}`);
-      document.title = `PROBE vw=${window.innerWidth} sw=${document.documentElement.scrollWidth} :: ${wide.join(" ; ") || "none"}`;
-    };
-    report();
-    setTimeout(report, 1200);
-    setTimeout(report, 3000);
+    startUiProbe();
   }
   $("emoji-pal").innerHTML = EMOJIS.map((e) => `<span onclick="addEmoji('${e}')">${e}</span>`).join("");
-  if (!KEY) { showLogin(); }
+  // Ab do raste hain: asli login (session cookie) ya purani admin key.
+  // Session hai to key maangna bilkul galat hai — isliye pehle poochho.
+  ensureSignedIn();
   const h = (location.hash || "#dashboard").slice(1);
   if (h.startsWith("inbox/")) {
     go("inbox", false);
-    setTimeout(() => openThread(decodeURIComponent(h.slice(6)), false, false), 300);
+    // Phone par chat kholte hi URL mein "#inbox/<number>" chipak jaata hai.
+    // Us hash ke saath agli baar page khulne par seedha CHAT khul jaata tha —
+    // user ne "Inbox" socha tha, list dikhni chahiye thi. Aur us waqt
+    // history mein list ka koi kadam hota hi nahi, isliye phone ka BACK
+    // button poori site se bahar phenk deta tha.
+    if (window.matchMedia("(max-width: 767px)").matches) {
+      history.replaceState(null, "", "#inbox");
+    } else {
+      // Bade screen par dono pane ek saath dikhte hain — wahan deep link
+      // se chat kholna sahi hai, list gayab nahi hoti.
+      setTimeout(() => openThread(decodeURIComponent(h.slice(6)), false, false), 300);
+    }
   } else if (h.startsWith("settings/")) {
     go("settings", false);
     stTab(h.slice(9));
