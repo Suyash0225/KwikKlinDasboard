@@ -91,10 +91,13 @@ async def test_inbound_text_stores_and_acks(client, sent) -> None:
         assert conv.message_text == "mera order kahan hai"
         assert conv.customer_id == cust.id and conv.staff_id is None
 
-    # exactly one ack, to the customer, with the registered string
+    # exactly one ack, to the customer, with the registered string —
+    # plus the owner's bold AI signature at the bottom
+    from app.routers.webhook import AI_SIGNATURE
+
     assert len(sent) == 1
     assert sent[0]["to"] == TEST_CUSTOMER_PHONE
-    assert sent[0]["text"] == get_message("ack_received")
+    assert sent[0]["text"] == get_message("ack_received") + "\n\n" + AI_SIGNATURE
 
 
 async def test_duplicate_delivery_stored_and_acked_once(client, sent) -> None:
