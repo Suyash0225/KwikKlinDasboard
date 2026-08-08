@@ -1795,12 +1795,38 @@ function delDoc(name) {
     catch (e) { toast(e.message, true); }
   });
 }
+/* The FAQ store can hold 1000+ rows (mostly duplicates). Rendering them all
+   into #sec-training left thousands of DOM nodes alive app-wide — every
+   layout/paint (composer, template modal) crawled. Fix: de-duplicate, then
+   render a page at a time. */
+let FAQ_ALL = [], FAQ_SHOWN = 0;
+const FAQ_PAGE = 30;
 function renderFaqs(faqs) {
-  $("faq-list").innerHTML = faqs.length ? faqs.map((f) => `
+  const seen = new Set();
+  FAQ_ALL = (faqs || []).filter((f) => {
+    const k = `${(f.question || "").trim().toLowerCase()}|${(f.answer || "").trim().toLowerCase()}|${f.audience}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  FAQ_SHOWN = FAQ_PAGE;
+  paintFaqs();
+}
+function faqMore() { FAQ_SHOWN += 50; paintFaqs(); }
+function paintFaqs() {
+  if (!FAQ_ALL.length) {
+    $("faq-list").innerHTML = `<p class="muted">No FAQ entries yet — add shop timings, prices policy, delivery areas…</p>`;
+    return;
+  }
+  const rows = FAQ_ALL.slice(0, FAQ_SHOWN);
+  const dupNote = "";
+  $("faq-list").innerHTML = rows.map((f) => `
     <div class="sumrow" style="align-items:flex-start;gap:8px">
       <span style="flex:1"><b>Q:</b> ${esc(f.question)}<br><b>A:</b> ${esc(f.answer)} <span class="tag">${f.audience}</span></span>
-      <button class="btn sm danger" onclick="delFaq('${f.id}')">✕</button></div>`).join("")
-    : `<p class="muted">No FAQ entries yet — add shop timings, prices policy, delivery areas…</p>`;
+      <button class="btn sm ghost danger-ic" aria-label="Delete FAQ" title="Delete" onclick="delFaq('${f.id}')">🗑</button></div>`).join("")
+    + (FAQ_ALL.length > rows.length
+        ? `<div style="text-align:center;padding:10px"><button class="btn ghost sm" onclick="faqMore()">Show more (${rows.length}/${FAQ_ALL.length})</button></div>`
+        : `<div class="muted" style="text-align:center;padding:8px;font-size:11.5px">${FAQ_ALL.length} unique ${FAQ_ALL.length === 1 ? "entry" : "entries"}</div>`);
 }
 async function addFaq(btn) {
   await busy(btn, async () => {
@@ -2517,6 +2543,101 @@ function scrollChatBottom() {
   $("newmsg-pill").classList.remove("show");
 }
 
+/* One chat bubble — shared by the full render and the optimistic append on
+   send, so a sent message can appear instantly without rebuilding the whole
+   log (the old openThread() innerHTML rebuild was the freeze on send). */
+function oneBubble(m, threadName) {
+  let body = esc(m.text || "");
+  const raw = m.text || "";
+  const img = raw.match(/^\[image:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
+  const tpl = raw.match(/^\[template:([\w]+)\]\s*(.*)$/s);
+  const btn = raw.match(/^\[button:([^\]]+)\]\s*(.*)$/s);
+  const med = raw.match(/^\[(audio|voice|video|document)\:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
+  const loc = raw.match(/^\[location:([-\d.]+),([-\d.]+)\]\s*(.*)$/s);
+  if (img) {
+    body = `<img src="${mediaUrl(img[1])}" loading="lazy" width="280" height="210">${esc(img[2] || "")}`;
+  } else if (med) {
+    const url = mediaUrl(med[2]);
+    const label = esc(med[3] || "");
+    if (med[1] === "audio" || med[1] === "voice") {
+      body = `<audio controls preload="none" src="${url}" style="max-width:250px"></audio>${label}`;
+    } else if (med[1] === "video") {
+      body = `<video controls preload="metadata" src="${url}" width="260" style="border-radius:8px"></video>${label}`;
+    } else {
+      body = `<a class="filechip" href="${url}" target="_blank" rel="noopener">📄 ${label || "Open file"}</a>`;
+    }
+  } else if (loc) {
+    body = `<a class="filechip" target="_blank" rel="noopener"
+      href="https://www.google.com/maps/search/?api=1&query=${loc[1]},${loc[2]}">📍 ${esc(loc[3] || "Location")}</a>`;
+  } else if (tpl) {
+    const t = TPL_PREVIEW[tpl[1]];
+    const params = (tpl[2] || "").split(" | ").filter((p) => p !== "");
+    let shown = tpl[2] || "";
+    if (t && t.body) {
+      shown = params.length
+        ? t.body.replace(/\{\{(\d+)\}\}/g, (m0, n) => params[n - 1] ?? m0)
+        : t.body;
+    }
+    // NOTE: keep this markup on ONE line — the bubble is pre-wrap, a newline
+    // in the source rendered as a real blank line under every template.
+    const btns = (t && t.buttons || []).filter(Boolean)
+      .map((b) => `<div class="tplbtn">${esc(b)}</div>`).join("");
+    body = `<div class="tplmsg"><span class="tpltxt">${esc(tidy(shown) || tpl[1])}</span><div class="tplname">📑 ${esc(tpl[1])}</div>${btns}</div>`;
+  } else if (btn) {
+    body = `<span class="tapped">👆 ${esc(btn[1])}</span>`;
+  } else {
+    body = esc(tidy(m.text || ""));
+  }
+  const quoted = m.reply_to && BY_WAMID[m.reply_to];
+  const quote = quoted
+    ? `<div class="quoted"><span>${quoted.direction === "INBOUND" ? esc(threadName) : "You"}</span>${esc(oneLine(quoted.text)).slice(0, 90)}</div>`
+    : "";
+  const meta = `<span class="bt">${fmtClock(m.at)}${
+    m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") + ticks(m.status) : ""
+  }</span>`;
+  const reply = m.wamid
+    ? `<button class="breply" title="Reply" aria-label="Reply" onclick="replyTo('${m.wamid}')">↩</button>`
+    : "";
+  return `<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${quote}${body}${meta}${reply}</div>`;
+}
+
+/* Optimistic append: drop ONE outbound bubble into the open log and scroll,
+   instead of re-fetching + rebuilding the whole thread. The 12s poll later
+   replaces the log with server truth (real wamid, delivery ticks), which
+   reconciles this bubble — no duplicate, because that is a full replace.
+   `bodyHtml` overrides the parsed body (used for a local image preview). */
+function appendBubble(m, bodyHtml) {
+  const log = $("chat-log");
+  if (!log || OPEN_PHONE == null) return;
+  if (log.querySelector(".empty")) log.innerHTML = "";   // was the empty state
+  let html;
+  if (bodyHtml != null) {
+    const meta = `<span class="bt">${fmtClock(m.at)} · you <span class="tick">✓</span></span>`;
+    html = `<div class="bubble out">${bodyHtml}${meta}</div>`;
+  } else {
+    html = oneBubble(m, OPEN_THREAD && OPEN_THREAD.name);
+    if (m.wamid) BY_WAMID[m.wamid] = m;
+  }
+  log.insertAdjacentHTML("beforeend", html);
+  // keep the poll's dedup cache honest so it does not instantly rebuild;
+  // skip the blob-url image case (its cache would be stale on reload)
+  if (bodyHtml == null) {
+    LAST_CHAT_PHONE = OPEN_PHONE; LAST_CHAT_HTML = log.innerHTML;
+    sessionStorage.setItem("kk_thread_" + OPEN_PHONE, log.innerHTML);
+  } else {
+    LAST_CHAT_HTML = "";   // force the next poll to paint the real image
+  }
+  scrollChatBottom();
+}
+const nowIso = () => new Date().toISOString();
+
+/* Close every composer popover (emoji panel) — call after each send, and on
+   a tap anywhere outside the panel (wired in init). */
+function closePickers() {
+  const pal = $("emoji-pal");
+  if (pal) pal.classList.remove("open");
+}
+
 async function openThread(phone, silent = false, push = true) {
   OPEN_PHONE = phone;
   localStorage.setItem(seenKey(phone), new Date().toISOString());
@@ -2575,68 +2696,7 @@ async function openThread(phone, silent = false, push = true) {
       lastDay = day;
       chip = `<div class="daychip">${dayName(m.at) || fmtDate(m.at)}</div>`;
     }
-    let body = esc(m.text || "");
-    const raw = m.text || "";
-    const img = raw.match(/^\[image:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
-    const tpl = raw.match(/^\[template:([\w]+)\]\s*(.*)$/s);
-    const btn = raw.match(/^\[button:([^\]]+)\]\s*(.*)$/s);
-    const med = raw.match(/^\[(audio|voice|video|document)\:(\/admin\/media\/[\w.\-]+)\]\s*(.*)$/s);
-    const loc = raw.match(/^\[location:([-\d.]+),([-\d.]+)\]\s*(.*)$/s);
-    if (img) {
-      body = `<img src="${mediaUrl(img[1])}" loading="lazy" width="280" height="210">${esc(img[2] || "")}`;
-    } else if (med) {
-      // play/open it right here, like WhatsApp — not a dead "[document]" tag
-      const url = mediaUrl(med[2]);
-      const label = esc(med[3] || "");
-      if (med[1] === "audio" || med[1] === "voice") {
-        body = `<audio controls preload="none" src="${url}" style="max-width:250px"></audio>${label}`;
-      } else if (med[1] === "video") {
-        body = `<video controls preload="metadata" src="${url}" width="260" style="border-radius:8px"></video>${label}`;
-      } else {
-        body = `<a class="filechip" href="${url}" target="_blank" rel="noopener">📄 ${label || "Open file"}</a>`;
-      }
-    } else if (loc) {
-      body = `<a class="filechip" target="_blank" rel="noopener"
-        href="https://www.google.com/maps/search/?api=1&query=${loc[1]},${loc[2]}">📍 ${esc(loc[3] || "Location")}</a>`;
-    } else if (tpl) {
-      // a template log line is unreadable as "[template:kk_thankyou_rating]" —
-      // show the actual text that went out: the approved body with this
-      // message's own {{1}}, {{2}} filled in (they are stored beside the
-      // marker, ' | ' separated). No body known -> show the params alone.
-      const t = TPL_PREVIEW[tpl[1]];
-      const params = (tpl[2] || "").split(" | ").filter((p) => p !== "");
-      let shown = tpl[2] || "";
-      if (t && t.body) {
-        shown = params.length
-          ? t.body.replace(/\{\{(\d+)\}\}/g, (m0, n) => params[n - 1] ?? m0)
-          : t.body;
-      }
-      // NOTE: keep this markup on ONE line. The bubble is white-space:
-      // pre-wrap, so a newline + indentation in the source rendered as a
-      // real blank line — that was the empty hole under every template.
-      const btns = (t && t.buttons || []).filter(Boolean)
-        .map((b) => `<div class="tplbtn">${esc(b)}</div>`).join("");
-      body = `<div class="tplmsg"><span class="tpltxt">${esc(tidy(shown) || tpl[1])}</span><div class="tplname">📑 ${esc(tpl[1])}</div>${btns}</div>`;
-    } else if (btn) {
-      body = `<span class="tapped">👆 ${esc(btn[1])}</span>`;
-    } else {
-      // WhatsApp trims the fat: no leading/trailing blank lines, and never
-      // more than one empty line inside. Untrimmed template bodies were
-      // leaving a hand-sized hole under every message.
-      body = esc(tidy(m.text || ""));
-    }
-    const quoted = m.reply_to && BY_WAMID[m.reply_to];
-    // one line, on purpose — see the note in the template branch above
-    const quote = quoted
-      ? `<div class="quoted"><span>${quoted.direction === "INBOUND" ? esc(d.name) : "You"}</span>${esc(oneLine(quoted.text)).slice(0, 90)}</div>`
-      : "";
-    const meta = `<span class="bt">${fmtClock(m.at)}${
-      m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") + ticks(m.status) : ""
-    }</span>`;
-    const reply = m.wamid
-      ? `<button class="breply" title="Reply" aria-label="Reply" onclick="replyTo('${m.wamid}')">↩</button>`
-      : "";
-    return `${chip}<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${quote}${body}${meta}${reply}</div>`;
+    return chip + oneBubble(m, d.name);
   }).join("") || emptyBox("Chat appears here", "💬");
   // wahi 12s wali baat: message log tabhi repaint ho jab sach mein naya
   // message/status aaya ho — warna bubbles + images har tick par flicker
@@ -2718,8 +2778,9 @@ async function sendChat() {
   const text = input.value.trim();
   if (!text || !OPEN_PHONE) return;
   const replyTo = REPLY_TO;
-  input.value = "";
+  input.value = "";              // clear input
   cancelReply();
+  closePickers();                // emoji panel closes on send
   if (!navigator.onLine) {
     saveOutbox([...outbox(), { phone: OPEN_PHONE, text, reply_to: replyTo }]);
     toast("Offline — message is queued, it will send once you're back online");
@@ -2729,7 +2790,8 @@ async function sendChat() {
     await api("/admin/api/inbox/send", {
       method: "POST", body: { phone: OPEN_PHONE, text, reply_to: replyTo },
     });
-    openThread(OPEN_PHONE, true, false);
+    // show it instantly — no full-thread rebuild; the 12s poll reconciles
+    appendBubble({ direction: "OUTBOUND", text, at: nowIso(), sent_by: "you", status: "sent", reply_to: replyTo });
   } catch (e) { toast(e.message, true); input.value = text; }
 }
 /* new chat with any number */
@@ -2790,7 +2852,10 @@ async function tplSendModal() {
     if (params.some((p) => !p)) throw new Error("Fill in all the variables");
     await api("/admin/api/inbox/send-template", { method: "POST",
       body: { phone: OPEN_PHONE, template_name: t.name, params } });
-    closeModal(); toast(T.sent); openThread(OPEN_PHONE, true, false);
+    closeModal(); closePickers(); toast(T.sent);
+    // show the sent template bubble immediately (oneBubble renders the marker)
+    appendBubble({ direction: "OUTBOUND", at: nowIso(), sent_by: "you", status: "sent",
+      text: `[template:${t.name}] ${params.join(" | ")}` });
   });
 }
 function tplSendPick() {
@@ -2893,15 +2958,25 @@ function toggleEmojis() { $("emoji-pal").classList.toggle("open"); }
 function addEmoji(e) { $("chat-input").value += e; $("chat-input").focus(); }
 async function sendMedia(input) {
   if (!input.files || !input.files[0] || !OPEN_PHONE) return;
+  const file = input.files[0];
+  closePickers();                // emoji panel closes on send
   const fd = new FormData();
   fd.append("phone", OPEN_PHONE);
-  fd.append("file", input.files[0]);
+  fd.append("file", file);
   fd.append("caption", "");
+  // local preview URL so the image shows the moment it uploads
+  const preview = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
   try {
     await api("/admin/api/inbox/send-media", { method: "POST", body: fd });
-    toast(T.sent); openThread(OPEN_PHONE, true);
+    toast(T.sent);
+    if (preview) {
+      appendBubble({ direction: "OUTBOUND", at: nowIso() },
+        `<img src="${preview}" width="280" height="210" style="object-fit:cover;border-radius:10px;display:block">`);
+    } else {
+      openThread(OPEN_PHONE, true, false);   // non-image: let the poll paint it
+    }
   } catch (e) { toast(e.message, true); }
-  input.value = "";
+  input.value = "";              // reset the file input so re-picking the same file fires change
 }
 
 
@@ -3068,6 +3143,15 @@ window.addEventListener("DOMContentLoaded", () => {
         e.target.matches?.(".nav div[data-s], .tabbar div, .sheet-grid div, .logout")) {
       e.preventDefault(); e.target.click();
     }
+  });
+
+  // tap anywhere outside the emoji panel (and not on its toggle) closes it
+  document.addEventListener("click", (e) => {
+    const pal = $("emoji-pal");
+    if (!pal || !pal.classList.contains("open")) return;
+    if (e.target.closest("#emoji-pal")) return;                       // picking an emoji
+    if (e.target.closest("[onclick*='toggleEmojis']")) return;        // the toggle itself
+    pal.classList.remove("open");
   });
 
   // PWA: app-shell cache -> instant repeat loads, shell survives offline blips
