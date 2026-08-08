@@ -52,17 +52,9 @@ log = structlog.get_logger()
 # Matches order numbers like KK-20260801-01 anywhere in a message.
 ORDER_NUMBER_RE = re.compile(r"\bKK-\d{8}-\d{2,}\b", re.IGNORECASE)
 
-# Owner's ask: customer ko AI ka har jawab neeche bold sign ke saath jaye,
-# taaki saaf rahe ki machine bol rahi hai. (*...* = WhatsApp bold.)
-# Sirf conversational replies par — STOP/START confirmations, staff commands
-# aur owner alerts par nahi.
-AI_SIGNATURE = "*Thank you – Kwik Klin AI*"
-
-
-def _sign_ai(text: str) -> str:
-    if not text or AI_SIGNATURE in text:
-        return text
-    return f"{text}\n\n{AI_SIGNATURE}"
+# AI signature ab whatsapp.send_message ke andar centrally lagta hai
+# (app/services/whatsapp.py: sign_ai) — har automated customer message
+# par, sirf yahan ke conversational replies par nahi.
 
 # Opt-out phrases: English STOP + the Hinglish ways our customers say it.
 STOP_RE = re.compile(
@@ -110,7 +102,7 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
                 f"{link}"
             )
     try:
-        await send_message(db, to_phone=phone, text=_sign_ai(reply_text))
+        await send_message(db, to_phone=phone, text=reply_text)
     except SendError:
         log.exception("rating_reply_failed", phone=phone)
     if kind == "bad":
@@ -672,7 +664,7 @@ async def _handle_inbound_message(
             log.exception("reply_build_failed", phone=phone)
             reply = get_message("error_fallback")
         try:
-            await send_message(db, to_phone=phone, text=_sign_ai(reply))
+            await send_message(db, to_phone=phone, text=reply)
         except SendError:
             log.exception("reply_send_failed", phone=phone)
         # first-contact numbers with no orders -> lead pipeline (never raises)

@@ -233,9 +233,7 @@ async def test_foreign_order_number_not_leaked(client, sent) -> None:
         r = await _post_text(client, f"{other.order_number} kahan hai", "wamid.TESTN-4")
         assert r.status_code == 200
         assert len(sent) == 1
-        from app.routers.webhook import _sign_ai
-
-        assert sent[0]["text"] == _sign_ai(get_message("order_not_found"))
+        assert sent[0]["text"] == get_message("order_not_found")
     finally:
         from tests.conftest import purge_phones
 
@@ -246,6 +244,4 @@ async def test_no_orders_falls_back_to_ack(client, sent) -> None:
     r = await _post_text(client, "hello ji", "wamid.TESTN-5")
     assert r.status_code == 200
     assert len(sent) == 1
-    from app.routers.webhook import _sign_ai
-
-    assert sent[0]["text"] == _sign_ai(get_message("ack_received"))
+    assert sent[0]["text"] == get_message("ack_received")

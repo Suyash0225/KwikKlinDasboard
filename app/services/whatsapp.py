@@ -92,6 +92,24 @@ class WindowClosedError(SendError):
     """Free-form send attempted outside the 24h window. Use a template."""
 
 
+# Owner ka niyam: customer ko jaane wala HAR automated free-form message
+# neeche bold sign + ek halki italic line ke saath jaye — customer ko pata
+# rahe ki AI bol raha hai, aur AI se galti bhi ho sakti hai. Note italic
+# hai taaki message mein chamke nahi.
+# - sirf customers ko (staff/owner ke internal messages par nahi)
+# - manual Inbox replies (sent_by="manager") insaan ke hain — unpar nahi
+# - pre-approved templates ka body Meta fix karta hai, wahan runtime par
+#   kuch nahi juda sakta — uske liye Template Studio ka footer hai
+AI_SIGNATURE = "*Thank you – Kwik Klin AI*"
+AI_NOTE = "_AI hai — chhoti-moti galti mumkin hai_"
+
+
+def sign_ai(text: str) -> str:
+    if not text or AI_SIGNATURE in text:
+        return text
+    return f"{text}\n\n{AI_SIGNATURE}\n{AI_NOTE}"
+
+
 def _template_log(name: str, params: list[str] | None) -> str:
     """What we store for a template send, so the Inbox stays readable.
 
@@ -163,6 +181,8 @@ async def send_message(
 
     if text:
         text = _wa_format(text)
+        if customer is not None and sent_by != "manager":
+            text = sign_ai(text)
 
     # --- DotPe provider: delegate the actual send, keep everything else ---
     if settings.WHATSAPP_PROVIDER == "dotpe":

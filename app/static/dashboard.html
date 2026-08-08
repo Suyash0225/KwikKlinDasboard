@@ -263,7 +263,9 @@
               <textarea id="tpl-body" rows="4" placeholder="Namaste {{1}}! Aapke liye khaas offer…" oninput="tplPreview()"></textarea></div>
             <div><label>Sample values (comma separated — Meta review ke liye)</label>
               <input id="tpl-samples" placeholder="Sharma ji, 10%" oninput="tplPreview()"></div>
-            <div><label>Footer (optional)</label><input id="tpl-footer" maxlength="60" placeholder="Kwik Klin, Varanasi" oninput="tplPreview()"></div>
+            <!-- pre-approved template ka body Meta fix karta hai — AI wala sign
+                 yahan footer se jaata hai (WhatsApp mein chhota grey dikhta hai) -->
+            <div><label>Footer (optional)</label><input id="tpl-footer" maxlength="60" value="Thank you – Kwik Klin AI" oninput="tplPreview()"></div>
             <div><label>Buttons (max 3)</label><div id="tpl-btns"></div>
               <button class="btn ghost sm" onclick="tplAddBtn()">+ Add button</button></div>
             <button class="btn" onclick="tplSubmit(this)">Submit to Meta for approval</button>

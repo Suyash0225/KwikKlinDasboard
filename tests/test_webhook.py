@@ -91,13 +91,12 @@ async def test_inbound_text_stores_and_acks(client, sent) -> None:
         assert conv.message_text == "mera order kahan hai"
         assert conv.customer_id == cust.id and conv.staff_id is None
 
-    # exactly one ack, to the customer, with the registered string —
-    # plus the owner's bold AI signature at the bottom
-    from app.routers.webhook import AI_SIGNATURE
-
+    # exactly one ack, to the customer, with the registered string
+    # (AI signature is appended deeper, inside whatsapp.send_message —
+    # this fixture replaces send_message, so raw text is expected here)
     assert len(sent) == 1
     assert sent[0]["to"] == TEST_CUSTOMER_PHONE
-    assert sent[0]["text"] == get_message("ack_received") + "\n\n" + AI_SIGNATURE
+    assert sent[0]["text"] == get_message("ack_received")
 
 
 async def test_duplicate_delivery_stored_and_acked_once(client, sent) -> None:
