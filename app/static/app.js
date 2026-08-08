@@ -360,16 +360,14 @@ function renderOrders() {
       <tr class="${isOverdue(o) ? "overdue" : ""}">
         <td><b>${o.order_number}</b><div class="muted">${fmtDate(o.created_at)}</div></td>
         <td>${esc(displayName(o.customer, o.phone))}<div class="muted">${esc(o.phone)}</div></td>
-        <td style="max-width:190px" title="${esc(itemsText(o.items))}"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
+        <td style="max-width:140px" title="${esc(itemsText(o.items))}"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
         <td><span class="pill ${o.status}">${statusName(o.status)}</span>${isOverdue(o) ? ' <span class="pill UNPAID">Overdue</span>' : ""}</td>
         <td><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span><div class="muted">${money(o.amount_paid)} / ${o.total_amount ? money(o.total_amount) : "—"}</div></td>
         <td>${fmtDate(o.expected_delivery)}</td>
         <td><div class="act">
-          <button class="btn sm ghost" title="Status badlo" aria-label="Status badlo" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>
-          <button class="btn sm ghost" title="Payment lo" aria-label="Payment lo" onclick="paymentModal('${o.order_number}')">₹</button>
-          <button class="btn sm ghost" title="Delivery date" aria-label="Delivery date" onclick="dateModal('${o.order_number}')">📅</button>
-          <button class="btn sm ghost" title="Details" aria-label="Details" onclick="orderDetail('${o.order_number}')">👁</button>
-          <button class="btn sm ghost" title="Open chat" aria-label="Open chat" onclick="jumpChat('${o.phone}')">💬</button>
+          <button class="btn sm ghost" title="Update status" aria-label="Update status" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>
+          <button class="btn sm ghost" title="Collect payment" aria-label="Collect payment" onclick="paymentModal('${o.order_number}')">₹</button>
+          <button class="btn sm ghost" title="More actions" aria-label="More actions" onclick="orderMenu('${o.order_number}')">⋯</button>
         </div></td>
       </tr>`).join("")}
     </tbody></table>
@@ -393,6 +391,29 @@ function renderOrders() {
        <span class="muted">Page ${dashFilter.page} of ${pages}</span>
        <button class="btn sm ghost" ${dashFilter.page >= pages ? "disabled" : ""} onclick="dashFilter.page++;renderOrders()">Next ›</button>`
     : "";
+}
+
+/* "⋯" overflow menus — 5 icons per row made the Actions column wider than
+   the card at common laptop widths, pushing it behind a horizontal scroll
+   nobody discovers. Two primary actions stay inline; the rest live here. */
+function orderMenu(num) {
+  const o = ((DASH && DASH.active_orders) || []).find((x) => x.order_number === num);
+  openModal(`<h3>${num}</h3>
+    <div class="frm">
+      <button class="btn ghost" onclick="closeModal();dateModal('${num}')">📅 Delivery date</button>
+      <button class="btn ghost" onclick="closeModal();orderDetail('${num}')">👁 Details</button>
+      ${o ? `<button class="btn ghost" onclick="closeModal();jumpChat('${o.phone}')">💬 Open chat</button>` : ""}
+    </div>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
+}
+function billMenu(num) {
+  openModal(`<h3>${num}</h3>
+    <div class="frm">
+      <button class="btn ghost" onclick="closeModal();printReceiptFromOrder('${num}')">🖨 Print receipt</button>
+      <button class="btn ghost" onclick="closeModal();editBillModal('${num}')">✏️ Edit bill</button>
+      <button class="btn ghost danger-ic" onclick="closeModal();deleteBillModal('${num}')">🗑 Delete bill</button>
+    </div>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
 }
 
 function statusModal(number, current) {
@@ -669,15 +690,13 @@ function billRowHtml(o, kind) {
   if (kind === "tr") return `<tr>
     <td><b>${o.order_number}</b><div class="muted">${fmtDate(o.created_at)}</div></td>
     <td>${esc(displayName(o.customer_name, o.customer_phone))}<div class="muted">${esc(o.customer_phone)}</div></td>
-    <td style="max-width:180px" title="${esc(itemsText(o.items))}"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
+    <td style="max-width:150px" title="${esc(itemsText(o.items))}"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
     <td class="money">${o.total_amount ? money(o.total_amount) : "—"}${due > 0 ? `<div class="muted">due ${money(due)}</div>` : ""}</td>
     <td><div class="pillrow"><span class="pill ${o.status}">${statusName(o.status)}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div></td>
     <td><div class="act">
       <button class="btn sm ghost" title="Details" aria-label="Details" onclick="orderDetail('${o.order_number}')">👁</button>
-      <button class="btn sm ghost" title="Print" aria-label="Print" onclick="printReceiptFromOrder('${o.order_number}')">🖨</button>
-      <button class="btn sm ghost" title="Payment lo" aria-label="Payment lo" onclick="paymentModal('${o.order_number}')">₹</button>
-      <button class="btn sm ghost" title="Edit bill" aria-label="Edit bill" onclick="editBillModal('${o.order_number}')">✏️</button>
-      <button class="btn sm ghost danger-ic" title="Delete" aria-label="Delete" onclick="deleteBillModal('${o.order_number}')">🗑</button>
+      <button class="btn sm ghost" title="Collect payment" aria-label="Collect payment" onclick="paymentModal('${o.order_number}')">₹</button>
+      <button class="btn sm ghost" title="More actions" aria-label="More actions" onclick="billMenu('${o.order_number}')">⋯</button>
     </div></td></tr>`;
   return `<div class="rowcard">
     <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${statusName(o.status)}</span></div>
