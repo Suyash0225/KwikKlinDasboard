@@ -13,10 +13,10 @@ from sqlalchemy import Boolean, DateTime, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 
 
-class LlmUsage(Base):
+class LlmUsage(Base, TenantScoped):
     __tablename__ = "llm_usage"
 
     id: Mapped[uuid.UUID] = mapped_column(

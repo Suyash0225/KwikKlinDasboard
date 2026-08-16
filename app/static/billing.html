@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan & Recharge — Kwik Klin</title>
+<meta name="description" content="Your plan, what you have used this month, and top-up packs.">
+<style>
+  :root {
+    --bg:#f6f7fb; --card:#fff; --ink:#101828; --mut:#667085; --line:#e6e9f0;
+    --brand:#f65a2b; --brand-50:#fff1ec; --ok:#12b76a; --warn:#f59e0b; --bad:#f43f5e;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:15px/1.6 "Segoe UI",system-ui,sans-serif; padding:20px; }
+  .wrap { max-width:960px; margin:0 auto; }
+  header { display:flex; align-items:center; gap:12px; margin-bottom:18px; flex-wrap:wrap; }
+  .logo { width:40px; height:40px; border-radius:11px; background:var(--brand); color:#fff;
+          display:grid; place-items:center; font-weight:800; }
+  h1 { font-size:21px; } h2 { font-size:15px; margin:26px 0 10px; color:var(--mut);
+       text-transform:uppercase; letter-spacing:.6px; }
+  h3 { font-size:16px; }
+  .muted { color:var(--mut); font-size:13.5px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px;
+          box-shadow:0 1px 2px rgba(16,24,40,.04); }
+  .grid { display:grid; gap:12px; }
+  .g3 { grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); }
+  .meter { margin:12px 0; }
+  .meter .row { display:flex; justify-content:space-between; font-size:14px; }
+  .bar { height:8px; background:#eef1f6; border-radius:5px; margin-top:5px; overflow:hidden; }
+  .bar > i { display:block; height:8px; background:var(--ok); border-radius:5px; }
+  .bar.warn > i { background:var(--warn); } .bar.bad > i { background:var(--bad); }
+  .pill { display:inline-block; padding:3px 11px; border-radius:99px; font-size:12.5px; font-weight:700; }
+  .pill-ok { background:#ecfdf3; color:#027a48; } .pill-warn { background:#fffaeb; color:#b54708; }
+  .pill-bad { background:#fff1f3; color:#c01048; }
+  button, .btn { background:var(--brand); color:#fff; border:none; border-radius:9px;
+                 padding:10px 16px; font:inherit; font-weight:700; cursor:pointer; text-decoration:none;
+                 display:inline-block; }
+  button.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); font-weight:600; }
+  button:focus-visible, a:focus-visible { outline:3px solid #ffd166; outline-offset:2px; }
+  .pack { display:flex; flex-direction:column; gap:8px; }
+  .pack .price { font-size:24px; font-weight:800; }
+  .pack .per { color:var(--mut); font-size:13px; }
+  .note { background:var(--brand-50); border:1px solid #ffd9c9; border-radius:12px; padding:14px; }
+  table { width:100%; border-collapse:collapse; margin-top:8px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); font-size:13.5px; }
+  th { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
+  .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+           background:#101828; color:#fff; padding:11px 18px; border-radius:10px; display:none; }
+  @media (max-width:600px) { body { padding:12px; } .card { padding:14px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">KK</div>
+    <div style="flex:1">
+      <h1>Plan &amp; Recharge</h1>
+      <p class="muted" id="shop">loading…</p>
+    </div>
+    <a class="btn" href="/admin">← Dashboard</a>
+  </header>
+
+  <div class="card" id="plan-card"><p class="muted">Loading your plan…</p></div>
+
+  <h2>This month</h2>
+  <div class="card" id="usage-card"></div>
+
+  <h2>Top-up packs</h2>
+  <p class="muted" style="margin-bottom:10px">
+    Aapke customer ke message ka jawab hamesha <b>free</b> hai — usse koi balance nahi katta.
+    Balance sirf <b>business messages</b> (order update, reminder, offer) aur <b>AI replies</b> par lagta hai.
+  </p>
+  <div class="grid g3" id="packs"></div>
+
+  <div class="note" style="margin-top:16px" id="pay-note"></div>
+
+  <h2>Your requests</h2>
+  <div class="card" id="requests"></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN");
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const when = (iso) => iso ? new Date(iso).toLocaleDateString("en-IN",
+  { day: "2-digit", month: "short", year: "numeric" }) : "—";
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg; t.style.display = "block";
+  setTimeout(() => (t.style.display = "none"), 3500);
+}
+
+async function api(path, body, method) {
+  const r = await fetch(path, {
+    method: method || (body ? "POST" : "GET"),
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+    credentials: "same-origin",
+  });
+  if (r.status === 401) { location.href = "/#login"; throw new Error("login"); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "Something went wrong");
+  return r.json();
+}
+
+const meter = (label, used, limit, credits, unit) => {
+  const total = limit == null ? null : limit + (credits || 0);
+  const pct = total ? Math.min(100, Math.round(used * 100 / total)) : 0;
+  const cls = pct >= 90 ? "bad" : pct >= 70 ? "warn" : "";
+  return `<div class="meter">
+    <div class="row"><b>${esc(label)}</b>
+      <span>${used}${total == null ? " (unlimited)" : " / " + total}${unit ? " " + unit : ""}</span></div>
+    ${total == null ? "" : `<div class="bar ${cls}"><i style="width:${pct}%"></i></div>`}
+    ${credits ? `<div class="muted">includes ${credits} from your recharge</div>` : ""}
+  </div>`;
+};
+
+(async function load() {
+  let d;
+  try { d = await api("/api/billing/summary"); }
+  catch (e) { $("plan-card").innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
+
+  $("shop").textContent = d.shop;
+  const s = d.subscription || {};
+  const statusPill = s.locked ? '<span class="pill pill-bad">Account locked</span>'
+    : s.read_only ? '<span class="pill pill-bad">Read-only — renew to continue</span>'
+    : s.status === "trial" ? `<span class="pill pill-warn">Trial — ${s.days_left ?? "?"} days left</span>`
+    : '<span class="pill pill-ok">Active</span>';
+  $("plan-card").innerHTML = `
+    <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center">
+      <div>
+        <h3>${esc(d.plan.name)} plan · ${inr(d.plan.price_inr)}/month</h3>
+        <p class="muted">${s.trial_ends_at ? "Trial ends " + when(s.trial_ends_at) :
+          s.current_period_end ? "Paid till " + when(s.current_period_end) : ""}</p>
+      </div>
+      <div>${statusPill}</div>
+    </div>
+    <ul class="muted" style="margin:10px 0 0 18px">${d.plan.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>`;
+
+  const u = d.usage;
+  $("usage-card").innerHTML =
+    meter("Business messages", u.messages.used, u.messages.limit, u.messages.credits, "") +
+    meter("AI replies", u.ai.used, u.ai.limit, u.ai.credits, "") +
+    meter("Orders", u.orders.used, u.orders.limit, 0, "") +
+    `<p class="muted" style="margin-top:8px">Replies to your customers inside their 24-hour window are free and are not counted here.</p>`;
+
+  $("packs").innerHTML = d.packs.map((p) => `
+    <div class="card pack">
+      <div><b>${esc(p.title)}</b></div>
+      <div class="price">${inr(p.price_inr)}</div>
+      <div class="per">${(p.price_inr / p.units).toFixed(p.kind === "ai" ? 3 : 2)} per ${p.kind === "ai" ? "reply" : "message"}</div>
+      <p class="muted" style="flex:1">${esc(p.detail)}</p>
+      <button data-pack="${esc(p.id)}">Request this pack</button>
+    </div>`).join("");
+
+  const upi = d.upi || {};
+  $("pay-note").innerHTML = upi.id
+    ? `<b>How payment works</b><br>Pay <b>${esc(upi.id)}</b> (${esc(upi.name || "")}) on any UPI app —
+       GPay, PhonePe, Paytm. Then tap “Request this pack” and put the UPI reference in the note.
+       We add the balance to your account, usually within a few hours.`
+    : `<b>How payment works</b><br>Tap “Request this pack” — we will WhatsApp you the payment details
+       and add the balance to your account once it is received.`;
+
+  $("packs").addEventListener("click", async (e) => {
+    const b = e.target.closest("button[data-pack]");
+    if (!b) return;
+    const note = prompt("UPI reference / any note (optional):") || "";
+    b.disabled = true;
+    try {
+      const r = await api("/api/billing/recharge-request", { pack: b.dataset.pack, note });
+      toast(`Request sent — ${inr(r.amount_inr)}. We will add it after payment.`);
+      loadRequests();
+    } catch (err) { toast(err.message); }
+    b.disabled = false;
+  });
+
+  loadRequests();
+})();
+
+async function loadRequests() {
+  try {
+    const rows = await api("/api/billing/requests");
+    $("requests").innerHTML = rows.length ? `<table>
+      <thead><tr><th>Date</th><th>Pack</th><th>Amount</th><th>Status</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td>${when(r.at)}</td><td>${esc(r.pack)} (${r.units})</td>
+        <td>${inr(r.amount_inr)}</td><td>${esc(r.status)}</td></tr>`).join("")}</tbody></table>`
+      : `<p class="muted">No requests yet.</p>`;
+  } catch (e) { $("requests").innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+}
+</script>
+</body>
+</html>

@@ -102,12 +102,12 @@ const fmtWhen = (iso) => {
   if (named === "Yesterday") return "Yesterday";
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 };
-function toast(msg, err = false) {
+function toast(msg, err = false, ms = 0) {
   const t = document.createElement("div");
   t.className = "toast" + (err ? " err" : "");
   t.textContent = msg;
   $("toasts").appendChild(t);
-  setTimeout(() => t.remove(), err ? 5000 : 2600);
+  setTimeout(() => t.remove(), ms || (err ? 5000 : 2600));
 }
 const skeleton = (n = 4) => Array.from({ length: n }, () => '<div class="skel skelrow"></div>').join("");
 const emptyBox = (msg, ico = "🧺") => `<div class="empty"><div class="ico">${ico}</div>${esc(msg)}</div>`;
@@ -142,6 +142,102 @@ function dlCsvClient(filename, header, rows) {
   a.download = filename; a.click();
 }
 
+/* ---------------------------------------------------------- live updates
+ *
+ * Ajit ne phone se bill banaya aur owner ke khule hue dashboard par wo
+ * dikha hi nahi — kyunki page ne dobara poocha hi nahi tha. Ab server
+ * bata deta hai, aur page sirf WAHI hissa taaza karta hai jo abhi screen
+ * par hai.
+ *
+ * Teen jaan-boojh kar liye gaye faisle:
+ *
+ * 1. **Server sirf ISHARA bhejta hai** ("order badla"), poora data nahi.
+ *    Page apne hisaab se maangta hai — isliye kisi ka data galat
+ *    connection par ja hi nahi sakta.
+ * 2. **Refresh debounced hai.** Ek saath dus ishare aayen (bulk kaam) to
+ *    ek hi refresh chalta hai, dus nahi.
+ * 3. **SSE na chale to bhi kaam chalta rahe.** Purana browser, koi proxy
+ *    jo stream kaat de — tab har 45 second par chup-chaap refresh. Dheema
+ *    sahi, par owner ko kabhi purana data nahi dikhega.
+ */
+let LIVE = null, LIVE_TIMER = null, LIVE_FALLBACK = null, LIVE_SEEN = 0;
+
+/* Stream par AAKHRI baar kab kuch aaya — event ho ya dhadkan (ping).
+   Server har 20 second par dhadkan bhejta hai, isliye 60 second ki chuppi
+   ka matlab hai stream sach mein mar chuki hai. */
+const LIVE_SILENCE_MS = 60000;
+function liveIsProven() { return LIVE_SEEN > 0 && Date.now() - LIVE_SEEN < LIVE_SILENCE_MS; }
+function liveSeen() { LIVE_SEEN = Date.now(); }
+
+function refreshCurrentSection() {
+  // Sirf khuli hui screen — background mein baaki sab maangna bekaar hai
+  if (CURRENT === "dashboard") loadDashboard();
+  else if (CURRENT === "tasks") loadTasks();
+  else if (CURRENT === "bills") loadBills();
+  else if (CURRENT === "inbox") loadThreads();
+}
+
+function liveRefreshSoon() {
+  clearTimeout(LIVE_TIMER);
+  LIVE_TIMER = setTimeout(refreshCurrentSection, 400);
+}
+
+/* Poochhna HAMESHA chalu rehta hai — bas jab tak stream khud ko sabit kar
+   rahi hai tab tak chup baitha rehta hai.
+ *
+ * Pehle ye ulta tha aur wahi ek line owner ke "phone se bana bill dashboard
+ * par aata hi nahi" wali shikayat ki jad thi: fallback tabhi chalu hota tha
+ * jab `onerror` TEEN baar aa jaye. Par EventSource ka niyam ye hai ki
+ * 401/403 jaise jawab par browser connection band karke DOBARA JUDTA HI
+ * NAHI — yani `onerror` sirf EK baar aata hai. Ginti kabhi teen tak
+ * pahunchti hi nahi thi, isliye na stream chalti thi na polling: khula hua
+ * dashboard hamesha ke liye purana ho jaata tha. Aur ye rozmarra ki baat
+ * thi — tunnel ka URL badalte hi session cookie chali jaati hai aur page
+ * purani admin key par chalta rehta hai, jise EventSource bhej hi nahi
+ * sakta. */
+function startPollingFallback() {
+  if (LIVE_FALLBACK) return;
+  LIVE_FALLBACK = setInterval(() => {
+    if (document.hidden) return;      // chhupi tab ke liye data maangna bekaar
+    if (liveIsProven()) return;       // stream zinda hai — usi se aa jayega
+    refreshCurrentSection();
+  }, 30000);
+}
+
+function startLiveUpdates() {
+  startPollingFallback();             // pehle jaal, phir chhalaang
+  if (!("EventSource" in window) || LIVE) return;
+  try {
+    LIVE = new EventSource("/admin/api/events", { withCredentials: true });
+  } catch (e) {
+    return;
+  }
+  // `onopen` sirf itna kehta hai ki header aa gaye. Asli saboot ye hai ki
+  // stream par kuch GUZRA — "ready", dhadkan, ya koi khabar. Beech ka koi
+  // proxy stream ko buffer kar de to headers aa jaate hain par kuch aata
+  // nahi; us haalat mein bhi polling chalti rehni chahiye.
+  LIVE.addEventListener("ready", liveSeen);
+  LIVE.addEventListener("ping", liveSeen);
+  LIVE.onmessage = () => { liveSeen(); liveRefreshSoon(); };
+  LIVE.onerror = (e) => {
+    // CLOSED = browser ne haar maan li (401/403 par wo dobara judta hi
+    // nahi). Us waqt intezaar karne ka koi matlab nahi — polling hi ab
+    // ekmatra rasta hai. Baaki haalat mein browser khud dobara judta hai.
+    // Source event se lete hain, `LIVE` se nahi: neeche wo null ho jaata hai.
+    const src = e && e.target;
+    if (src && src.readyState === EventSource.CLOSED) {
+      LIVE_SEEN = 0;
+      LIVE = null;
+      refreshCurrentSection();        // jitna peeche reh gaye, abhi pura karo
+    }
+  };
+  // Tab wapas dikhi — jitni der chhupi thi utni der ka farak ek baar mein
+  // poora kar lo (mobile browser chhupe tab ka stream rok dete hain).
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) liveRefreshSoon();
+  });
+}
+
 async function kkLogout() {
   // dono cheezein hatao: purani admin key AUR asli session
   localStorage.removeItem("kk_admin_key");
@@ -153,22 +249,166 @@ async function kkLogout() {
 }
 
 /* login */
-/* Session pehle, key baad mein. Dono na hon to login page par bhej do. */
+/* Session pehle, key baad mein. Dono na hon to login page par bhej do.
+ *
+ * Ek farak jo bahut maayne rakhta hai: "server ne kaha tum logged in nahi
+ * ho" aur "server tak baat hi nahi pahunchi" — ye do alag baatein hain.
+ * Pehle dono ka ek hi ilaaj tha, seedha /#login. Isliye phone par har
+ * refresh par, jab pehli request signal ki wajah se gir jaati thi, login
+ * page ek pal ko jhalak kar chala jaata tha — jabki session bilkul theek
+ * tha. Ab network ki hichki par ek baar aur poochha jaata hai, aur phir
+ * bhi baat na bane to aadmi jahan hai wahin rehta hai. */
 async function ensureSignedIn() {
-  try {
-    const me = await (await fetch("/api/me", { credentials: "same-origin" })).json();
-    if (me && me.user) {
-      SIGNED_IN_AS = me;
-      const btn = document.querySelector(".logout");
-      if (btn) btn.textContent = "⏋ Log out " + (me.user.name || me.user.role);
-      return true;                       // session kaafi hai, key ki zaroorat nahi
+  let me = null, serverAnswered = false;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch("/api/me", { credentials: "same-origin" });
+      serverAnswered = true;
+      me = await res.json().catch(() => null);
+      break;
+    } catch (e) {
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 800));
     }
-  } catch (e) { /* session nahi — neeche dekho */ }
+  }
+  if (me && me.user) {
+    SIGNED_IN_AS = me;
+    const btn = document.querySelector(".logout");
+    if (btn) btn.textContent = "⏋ Log out " + (me.user.name || me.user.role);
+    renderBillingBanner(me.subscription);
+    renewCard(me.subscription);
+    applyFeatureLocks(me.features || []);
+    return true;                       // session kaafi hai, key ki zaroorat nahi
+  }
   if (KEY) return true;                  // purani admin key se chal jayega
-  location.href = "/#login";             // dono nahi: login page
+  if (!serverAnswered) {
+    // Signal gaya hai, session nahi. Login par bhejna yahan galat jawab hai.
+    toast("No signal — trying again…", true, 4000);
+    setTimeout(() => ensureSignedIn().then((ok) => { if (ok) startLiveUpdates(); }), 5000);
+    return false;
+  }
+  location.href = "/#login";             // server ne saaf kaha: session nahi
   return false;
 }
 let SIGNED_IN_AS = null;
+
+/* Feature gating — /api/me ke `features` array se. Jo tab plan mein nahi
+   hai wo 🔒 ke saath dikhta hai; click par Upgrade prompt. Naya gated tab
+   banao to bas FEATURE_TABS mein entry daalo (backend plans.py ke saath). */
+const FEATURE_TABS = {
+  campaigns: "campaigns",
+  reports: "reports",
+  training: "service_agent",
+  agents: "service_agent",
+  usage: "reports",
+};
+const FEATURE_LABELS = {
+  campaigns: "Campaigns", reports: "Reports",
+  service_agent: "AI Service Agent", marketing_agent: "Marketing Agent",
+};
+let LOCKED_TABS = {};   // tab -> missing feature
+
+function applyFeatureLocks(features) {
+  const have = new Set(features);
+  LOCKED_TABS = {};
+  for (const [tab, feat] of Object.entries(FEATURE_TABS)) {
+    const els = document.querySelectorAll(`[data-s="${tab}"]`);
+    if (have.has(feat)) {
+      els.forEach((el) => { el.classList.remove("locked"); });
+      continue;
+    }
+    LOCKED_TABS[tab] = feat;
+    els.forEach((el) => {
+      el.classList.add("locked");
+      if (!el.querySelector(".lock-ico")) {
+        const ico = document.createElement("span");
+        ico.className = "lock-ico";
+        ico.textContent = " 🔒";
+        el.appendChild(ico);
+      }
+    });
+  }
+}
+
+function showUpgrade(feature) {
+  const label = FEATURE_LABELS[feature] || feature;
+  openModal(`<h3>🔒 ${esc(label)}</h3>
+    <p>Ye feature aapke plan mein nahi hai. Upgrade karne par turant khul jayega —
+    aapka data waise hi safe rahta hai.</p>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <a class="btn" href="/join#pricing" target="_blank">Plans dekhein</a>
+      <button class="btn ghost" onclick="closeModal()">Baad mein</button>
+    </div>`);
+}
+
+
+/* 7 din pehle ka renew card — banner se alag, kyunki ise dabana padta hai:
+   "Pay now" billing page kholta hai, "Remind me later" 24 ghante chup.
+   Ek hi din mein baar-baar chipakne se log ise andekha karne lagte hain. */
+function renewCard(sub) {
+  if (!sub) return;
+  const days = sub.status === "trial" ? sub.days_left : null;
+  const grace = sub.read_only ? (sub.grace_days_left ?? 0) : null;
+  const due = (days != null && days <= 7) || sub.read_only || sub.locked;
+  if (!due) return;
+  try {
+    if (Number(localStorage.getItem("kk_renew_snooze") || 0) > Date.now()) return;
+  } catch (e) {}
+  const title = sub.locked ? "Account locked"
+    : sub.read_only ? "Your plan has ended"
+    : days === 0 ? "Your trial ends today"
+    : `Your trial ends in ${days} day${days === 1 ? "" : "s"}`;
+  const line = sub.locked
+    ? "Your data is safe. Renew to switch everything back on."
+    : sub.read_only
+      ? `You can still see everything; adding new bills is paused.${grace ? ` ${grace} days before the account locks.` : ""}`
+      : "Renew now and nothing stops — orders, WhatsApp and the AI agent keep running.";
+  const wrap = document.createElement("div");
+  wrap.className = "renew-card";
+  wrap.innerHTML = `
+    <div class="rc-body">
+      <div class="rc-ico">${sub.locked || sub.read_only ? "🔒" : "⏳"}</div>
+      <div class="rc-text"><b>${esc(title)}</b><div class="muted">${esc(line)}</div></div>
+    </div>
+    <div class="rc-actions">
+      <a class="btn" href="/billing">Pay / Recharge</a>
+      <button class="btn ghost" id="rc-later">Remind me later</button>
+    </div>`;
+  document.body.appendChild(wrap);
+  wrap.querySelector("#rc-later").onclick = () => {
+    try { localStorage.setItem("kk_renew_snooze", String(Date.now() + 24 * 3600 * 1000)); } catch (e) {}
+    wrap.remove();
+  };
+}
+
+/* Trial/subscription banner — har page/tab par sabse upar (SPA hai, to ek
+   hi banner sab jagah dikhta hai). /api/me ka `subscription` object yahi
+   padhta hai; active par kuch nahi dikhta. */
+function renderBillingBanner(sub) {
+  const old = document.getElementById("billing-banner");
+  if (old) old.remove();
+  if (!sub || sub.status === "active") return;
+  let cls = "warn", text = "";
+  if (sub.status === "trial") {
+    const d = sub.days_left == null ? "?" : sub.days_left;
+    text = "🕒 Trial: " + d + " day" + (d === 1 ? "" : "s") + " left";
+    if (sub.days_left != null && sub.days_left <= 2) cls = "danger";
+  } else if (sub.locked) {
+    cls = "danger";
+    text = "🔒 Account locked hai — subscription renew karein. Aapka poora data safe hai.";
+  } else if (sub.read_only) {
+    cls = "danger";
+    const g = sub.grace_days_left == null ? "" :
+      " (" + sub.grace_days_left + " din mein account lock ho jayega)";
+    text = "⚠️ Trial/subscription khatam — account READ-ONLY hai" + g + ". Data poora safe hai.";
+  } else {
+    return;
+  }
+  const div = document.createElement("div");
+  div.id = "billing-banner";
+  div.className = "billing-banner " + cls;
+  div.textContent = text;
+  document.body.prepend(div);
+}
 
 function showLogin() {
   openModal(`<h3>Sign in</h3><p class="muted">Enter your admin key to continue.</p>
@@ -191,7 +431,8 @@ function debounce(fn, ms = 300) {
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
 const renderOrdersDeb = debounce(() => renderOrders(), 300);
-const renderBillsDeb = debounce(() => renderBills(), 300);
+// Search box: har akshar par server nahi jaate — 300ms chup rahe to ek call
+const renderBillsDeb = debounce(() => reloadBills(), 300);
 const custSearchDeb = debounce(() => { CUST_SHOWN = 30; renderCustomers(); }, 300);
 
 /* ============================= router ============================= */
@@ -215,6 +456,7 @@ const TITLES = {
 let CURRENT = "dashboard", NAVIGATING = false;
 function go(sec, push = true) {
   if (!SECTIONS.includes(sec)) sec = "dashboard";
+  if (LOCKED_TABS[sec]) { showUpgrade(LOCKED_TABS[sec]); return; }
   CURRENT = sec;
   closeSheet();
   // leaving a full-screen mobile chat closes it
@@ -609,21 +851,70 @@ function calcBill() {
    onclick="...'${name}'" JS string (a single quote breaks out = XSS).
    Rows are picked by INDEX into this array instead. */
 let AC_HITS = [];
-function custAc() {
-  const err = $("nb-phone-err"); if (err) err.textContent = "";
-  const q = $("nb-phone").value.trim().toLowerCase();
-  const box = $("nb-ac");
-  if (!q || !CUSTOMERS_CACHE) { box.innerHTML = ""; return; }
-  AC_HITS = CUSTOMERS_CACHE.filter((c) => c.phone.includes(q) || (c.name || "").toLowerCase().includes(q)).slice(0, 6);
-  box.innerHTML = AC_HITS.map((c, i) => `<div onclick="pickCust(${i})">${esc(displayName(c.name, c.phone))} · ${c.phone}</div>`).join("");
+let AC_TIMER = null;      // debounce: har akshar par server nahi jaate
+let AC_SEQ = 0;           // dher saare jawab aayen to sirf AAKHRI wala lagta hai
+
+/* Naam ya number likhte hi purane customer ka sujhaav.
+ *
+ * Pehle ye chunaav BROWSER karta tha, `CUSTOMERS_CACHE` par — yani sirf un
+ * teen sau customers par jo page ne utaare the. Jiska naam us list mein
+ * nahi tha wo mila hi nahi karta tha, aur staff naya customer bana deta
+ * tha; wahi ek grahak do baar dukaan mein baith jaata tha.
+ *
+ * Ab chunaav DB karta hai (indexed), aur network par sirf aath row aati
+ * hain. Do cheezein zaroori thin:
+ *   - **Debounce**: har keystroke par request nahi. 200ms chup rahe to ek
+ *     request. "Anmol" par ek call, paanch nahi.
+ *   - **Sequence**: dheema jawab tez jawab ke baad aa kar purane sujhaav
+ *     na dikha de. Har request ka number hota hai; purana aaye to phenk
+ *     diya jaata hai.
+ *
+ * SECURITY: customer ka naam unke WhatsApp profile se aata hai — yani
+ * unka likha hua text. Wo kabhi inline onclick="...'${name}'" ke andar
+ * nahi jaata (ek quote = XSS). Row INDEX se chuni jaati hai. */
+function custAc(fieldId) {
+  const isName = fieldId === "nb-name";
+  const box = $(isName ? "nb-ac-name" : "nb-ac");
+  const other = $(isName ? "nb-ac" : "nb-ac-name");
+  if (other) other.innerHTML = "";
+  if (!isName) { const err = $("nb-phone-err"); if (err) err.textContent = ""; }
+  const q = $(fieldId).value.trim();
+  clearTimeout(AC_TIMER);
+  if (q.length < 2) { box.innerHTML = ""; return; }
+  const mine = ++AC_SEQ;
+  AC_TIMER = setTimeout(async () => {
+    let hits = [];
+    try {
+      hits = await api(`/admin/api/customers/search?q=${encodeURIComponent(q)}`);
+    } catch (e) {
+      box.innerHTML = "";       // sujhaav ek suvidha hai — fail ho to chup
+      return;
+    }
+    if (mine !== AC_SEQ) return;            // beech mein aur likh diya gaya
+    AC_HITS = hits;
+    box.innerHTML = hits.length
+      ? hits.map((c, i) =>
+          `<div onclick="pickCust(${i})">${esc(displayName(c.name, c.phone))} · ${esc(c.phone)}</div>`).join("")
+      : `<div class="muted" style="cursor:default">No match — this will be a new customer</div>`;
+  }, 200);
 }
+
 function pickCust(i) {
   const c = AC_HITS[i];
   if (!c) return;
   $("nb-phone").value = c.phone;
   $("nb-name").value = c.name || "";
   $("nb-ac").innerHTML = "";
+  const nameBox = $("nb-ac-name");
+  if (nameBox) nameBox.innerHTML = "";
 }
+
+/* Bahar tap karte hi sujhaav band — warna wo doosre field ke upar chipka
+   reh jaata hai. */
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".autocomplete")) return;
+  ["nb-ac", "nb-ac-name"].forEach((id) => { const b = $(id); if (b) b.innerHTML = ""; });
+});
 
 async function saveBill(btn) {
   await busy(btn, async () => {
@@ -699,34 +990,65 @@ async function waBill(o) {
 
 /* ============================= bills ============================= */
 let BILLS = [], billFilter = { q: "", status: "", pay: "", from: "", to: "", page: 1 };
+/* Bills ki list ab SERVER se ek page aati hai.
+ *
+ * Pehle ye sabse naye 200 bill utaar kar browser mein chhaanti thi. Us
+ * soch mein do khaamiyan hain jo dukaan badhte hi dikhti hain: 201-wa
+ * bill kisi bhi tarah nahi milta — na search se, na page badalne se — aur
+ * har baar poora 200 ka bojh phone par utarta hai.
+ *
+ * Ab jo dikhana hai wahi maanga jaata hai (25), aur `total` alag se aata
+ * hai taaki "Page 3 of 47" sach bole. Search/filter DB tak jaate hain,
+ * isliye pichhle saal ka bill bhi utni hi aasani se milta hai. */
+let BILLS_TOTAL = 0, BILLS_SEQ = 0;
+
 async function loadBills() {
+  const f = billFilter;
   $("bills-list").innerHTML = skeleton(6);
-  try { BILLS = await api("/orders?limit=200"); } catch (e) { $("bills-list").innerHTML = errBox(e.message, "loadBills"); return; }
+  const p = new URLSearchParams({
+    limit: PAGE, offset: (f.page - 1) * PAGE,
+  });
+  if (f.q) p.set("q", f.q);
+  if (f.status) p.set("status", f.status);
+  if (f.pay) p.set("payment", f.pay);
+  if (f.from) p.set("date_from", f.from);
+  if (f.to) p.set("date_to", f.to);
+  const mine = ++BILLS_SEQ;
+  let out;
+  try {
+    out = await api("/admin/api/bills?" + p.toString());
+  } catch (e) {
+    $("bills-list").innerHTML = errBox(e.message, "loadBills");
+    return;
+  }
+  // Jaldi-jaldi type karne par purana jawab baad mein aakar nayi list na
+  // mita de — sirf aakhri request ka natija lagta hai.
+  if (mine !== BILLS_SEQ) return;
+  BILLS = out.items;
+  BILLS_TOTAL = out.total;
   renderBills();
 }
+
+/* Filter badla -> pehle page par wapas aur server se dobara maango.
+   (Pehle ye sirf browser mein chhaanta tha, isliye alag function tha.) */
+function reloadBills() { billFilter.page = 1; loadBills(); }
+
 function renderBills() {
   const f = billFilter;
-  const rows = BILLS.filter((o) => {
-    if (f.status && o.status !== f.status) return false;
-    if (f.pay && o.payment_status !== f.pay) return false;
-    if (f.from && o.created_at.slice(0, 10) < f.from) return false;
-    if (f.to && o.created_at.slice(0, 10) > f.to) return false;
-    const q = f.q.toLowerCase();
-    if (q && !(o.order_number.toLowerCase().includes(q) || (o.customer_name || "").toLowerCase().includes(q) || o.customer_phone.includes(q))) return false;
-    return true;
-  });
-  const pages = Math.max(1, Math.ceil(rows.length / PAGE));
-  f.page = Math.min(f.page, pages);
-  const page = rows.slice((f.page - 1) * PAGE, f.page * PAGE);
-  if (!page.length) { $("bills-list").innerHTML = emptyBox("No bills match these filters.", "🧾"); $("bills-pager").innerHTML = ""; return; }
+  const pages = Math.max(1, Math.ceil(BILLS_TOTAL / PAGE));
+  if (!BILLS.length) {
+    $("bills-list").innerHTML = emptyBox("No bills match these filters.", "🧾");
+    $("bills-pager").innerHTML = "";
+    return;
+  }
   $("bills-list").innerHTML = `
     <table class="tbl"><thead><tr><th>Invoice</th><th>Customer</th><th>Items</th><th>Total / due</th><th>Status</th><th>Actions</th></tr></thead>
-    <tbody>${page.map((o) => billRowHtml(o, "tr")).join("")}</tbody></table>
-    <div class="rowcards">${page.map((o) => billRowHtml(o, "card")).join("")}</div>`;
+    <tbody>${BILLS.map((o) => billRowHtml(o, "tr")).join("")}</tbody></table>
+    <div class="rowcards">${BILLS.map((o) => billRowHtml(o, "card")).join("")}</div>`;
   $("bills-pager").innerHTML = pages > 1
-    ? `<button class="btn sm ghost" ${f.page <= 1 ? "disabled" : ""} onclick="billFilter.page--;renderBills()">‹ Prev</button>
-       <span class="muted">Page ${f.page} of ${pages}</span>
-       <button class="btn sm ghost" ${f.page >= pages ? "disabled" : ""} onclick="billFilter.page++;renderBills()">Next ›</button>` : "";
+    ? `<button class="btn sm ghost" ${f.page <= 1 ? "disabled" : ""} onclick="billFilter.page--;loadBills()">‹ Prev</button>
+       <span class="muted">Page ${f.page} of ${pages} · ${BILLS_TOTAL} bills</span>
+       <button class="btn sm ghost" ${f.page >= pages ? "disabled" : ""} onclick="billFilter.page++;loadBills()">Next ›</button>` : "";
 }
 function billRowHtml(o, kind) {
   const due = o.total_amount ? Number(o.total_amount) - Number(o.amount_paid) : null;
@@ -1240,9 +1562,13 @@ function renderTaskChips() {
     DONE: TASKS.filter((t) => t.status === "DONE").length,
     ALL: TASKS.length,
   };
+  // Ginti label se chipki hui thi ("Pending1") — ab apne pill mein, saaf
+  // padhne layak. Ye asli buttons hain, isliye keyboard/tab se bhi chalte
+  // hain aur screen-reader ko pata hota hai kaunsa chuna hua hai.
   $("task-chips").innerHTML = [["OPEN", "Pending"], ["DONE", "Done"], ["ALL", "All"]]
-    .map(([v, label]) => `<span class="chip ${taskFilter === v ? "on" : ""}"
-      onclick="taskFilter='${v}';renderTaskChips();renderTasks()">${label} <b>${counts[v]}</b></span>`)
+    .map(([v, label]) => `<button type="button" class="chip ${taskFilter === v ? "on" : ""}"
+      aria-pressed="${taskFilter === v}"
+      onclick="taskFilter='${v}';renderTaskChips();renderTasks()">${label}<span class="cnt">${counts[v]}</span></button>`)
     .join("");
 }
 
@@ -1253,46 +1579,105 @@ function renderTasks() {
       taskFilter === "OPEN" ? "No pending tasks 🎉" : "Nothing here.", "✅");
     return;
   }
-  $("task-list").innerHTML = `<div class="stafflist">` + rows.map((t) => {
+  // Har kaam apna card — poora card khulta hai (click ya Enter), aur
+  // buttons alag rehte hain taaki "Done" dabane par detail na khul jaye.
+  $("task-list").innerHTML = `<div class="taskgrid">` + rows.map((t) => {
     const open = t.status === "OPEN";
     const late = open && (t.escalated || t.age_hours >= 6);
     return `
-    <div class="staffrow ${open ? "" : "off"}" style="${late ? "border-left:3px solid var(--danger)" : ""}">
-      <div class="who">
-        <div class="nm">${t.urgent ? "🔴 " : ""}${esc(t.title)}</div>
-        <div class="meta">
-          <span class="badge">${t.code}</span>
-          <span class="badge role">${t.staff ? esc(t.staff) : "unassigned"}</span>
-          ${t.order_number ? `<span class="badge">${t.order_number}</span>` : ""}
-          <span class="statuspill ${open ? "off" : "on"}">${
-            t.status === "OPEN" ? `${t.age_hours}h pending` : t.status === "DONE" ? "Done" : "Cancelled"}</span>
-          ${t.ping_count ? `<span class="badge">reminded ${t.ping_count}x</span>` : ""}
-          ${t.escalated ? `<span class="statuspill off" style="color:var(--danger)">escalated to you</span>` : ""}
-        </div>
-        ${t.reply ? `<div class="muted" style="margin-top:6px">💬 ${esc(t.staff || "they")}: ${esc(t.reply)}</div>` : ""}
+    <article class="taskcard ${open ? "" : "off"} ${late ? "late" : ""}"
+      tabindex="0" role="button" aria-label="${esc(t.code)} details"
+      onclick="taskDetail('${t.code}')"
+      onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();taskDetail('${t.code}')}">
+      <div class="tc-top">
+        <span class="badge">${t.code}</span>
+        <span class="statuspill ${open ? "off" : "on"}">${
+          t.status === "OPEN" ? `${t.age_hours}h pending` : t.status === "DONE" ? "Done" : "Cancelled"}</span>
       </div>
-      <div class="acts">
-        ${open ? `
-          <button class="btn sm ghost" onclick="pingTask('${t.code}')">Ask</button>
-          <button class="btn sm" onclick="doneTask('${t.code}')">Done</button>
-          <button class="btn sm ghost" onclick="cancelTask('${t.code}')">Cancel</button>` : ""}
+      <div class="tc-title">${t.urgent ? "🔴 " : ""}${esc(t.title)}</div>
+      <div class="tc-meta">
+        <span class="badge role">${t.staff ? esc(t.staff) : "unassigned"}</span>
+        ${t.order_number ? `<span class="badge">${esc(t.order_number)}</span>` : ""}
+        ${t.ping_count ? `<span class="badge">reminded ${t.ping_count}×</span>` : ""}
+        ${t.escalated ? `<span class="badge warn">escalated to you</span>` : ""}
       </div>
-    </div>`;
+      ${t.reply ? `<div class="tc-reply">💬 ${esc(t.staff || "they")}: ${esc(t.reply)}</div>` : ""}
+      ${open ? `
+      <div class="tc-acts" onclick="event.stopPropagation()">
+        <button class="btn sm ghost" onclick="pingTask('${t.code}', this)">Ask</button>
+        <button class="btn sm" onclick="doneTask('${t.code}', this)">Done</button>
+        <button class="btn sm ghost" onclick="cancelTask('${t.code}', this)">Cancel</button>
+      </div>` : ""}
+    </article>`;
   }).join("") + `</div>`;
 }
 
-async function pingTask(code) {
-  try { const r = await api(`/admin/api/tasks/${code}/ping`, { method: "POST" }); toast(r.detail); loadTasks(); }
-  catch (e) { toast(e.message, true); }
+/* Card par click -> poori kahani ek jagah: kise diya, kab, kitni baar
+   yaad dilaya, usne kya kaha. Pehle ye sab kahin dikhta hi nahi tha. */
+function taskDetail(code) {
+  const t = TASKS.find((x) => x.code === code);
+  if (!t) return;
+  const open = t.status === "OPEN";
+  const when = (s) => (s ? new Date(s).toLocaleString("en-IN", {
+    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+  }) : "—");
+  const row = (k, v) => `<div class="dt-row"><span>${k}</span><b>${v}</b></div>`;
+  openModal(`
+    <h3>${t.urgent ? "🔴 " : ""}${esc(t.title)}</h3>
+    <div class="tc-meta" style="margin:-4px 0 12px">
+      <span class="badge">${t.code}</span>
+      <span class="statuspill ${open ? "off" : "on"}">${
+        t.status === "OPEN" ? `${t.age_hours}h pending` : t.status === "DONE" ? "Done" : "Cancelled"}</span>
+      ${t.escalated ? `<span class="badge warn">escalated to you</span>` : ""}
+    </div>
+    <div class="dtl">
+      ${row("Given to", t.staff ? esc(t.staff) : "unassigned")}
+      ${t.order_number ? row("Order", esc(t.order_number)) : ""}
+      ${row("Created", `${when(t.created_at)}${t.created_by ? ` · ${esc(t.created_by)}` : ""}`)}
+      ${row("Last reminder", when(t.last_ping_at))}
+      ${row("Times asked", t.ping_count || 0)}
+      ${t.eta_text ? row("They said", esc(t.eta_text)) : ""}
+      ${t.completed_at ? row("Closed", when(t.completed_at)) : ""}
+    </div>
+    ${t.reply ? `<div class="tc-reply" style="margin-top:12px">💬 ${esc(t.staff || "they")}: ${esc(t.reply)}</div>` : ""}
+    <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal()">Close</button>
+      ${open ? `
+        <button class="btn ghost" onclick="pingTask('${t.code}', this, true)">Ask again</button>
+        <button class="btn ghost" onclick="cancelTask('${t.code}', this, true)">Cancel task</button>
+        <button class="btn" onclick="doneTask('${t.code}', this, true)">Mark done</button>` : ""}
+    </div>`);
 }
-async function doneTask(code) {
-  try { await api(`/admin/api/tasks/${code}/done`, { method: "POST" }); toast(`${code} closed`); loadTasks(); }
-  catch (e) { toast(e.message, true); }
+
+/* Task ke teen kaam: pooch lo, band karo, radd karo.
+ *
+ * Teenon ek hi raste se jate hain taaki teenon ek jaise BOLEN. Pehle button
+ * dabate hi kuch nahi dikhta tha — network dheema ho to aadmi ko lagta tha
+ * click laga hi nahi, aur wo dobara dabata tha. Ab: turant spinner, phir
+ * toast, phir list taaza. Sheet se dabaya ho to sheet kaam POORA hone par
+ * band hoti hai (pehle wo pehle band ho jati thi, isliye galti dikhti hi
+ * nahi thi — jawab kahin kho jata tha). */
+async function taskAction(code, path, btn, shut, okMsg) {
+  const run = async () => {
+    const r = await api(`/admin/api/tasks/${code}/${path}`, { method: "POST" });
+    if (shut) closeModal();
+    toast((r && r.detail) || okMsg);
+    loadTasks();
+  };
+  if (!btn) { try { await run(); } catch (e) { toast(e.message, true); } return; }
+  await busy(btn, run);           // busy() khud galti par toast kar deta hai
 }
-function cancelTask(code) {
+
+async function pingTask(code, btn, shut) {
+  return taskAction(code, "ping", btn, shut, "Reminder sent");
+}
+async function doneTask(code, btn, shut) {
+  return taskAction(code, "done", btn, shut, `${code} closed`);
+}
+function cancelTask(code, btn, shut) {
   confirmDialog(`Cancel ${code}? The staff member will get no more reminders.`, async () => {
-    try { await api(`/admin/api/tasks/${code}/cancel`, { method: "POST" }); toast(`${code} cancelled`); loadTasks(); }
-    catch (e) { toast(e.message, true); }
+    // confirm apni modal khud band karta hai; detail sheet bhi tabhi jaye
+    await taskAction(code, "cancel", null, shut, `${code} cancelled`);
   });
 }
 async function pingAllTasks(btn) {
@@ -2163,7 +2548,11 @@ async function addRate(btn) {
     toast("Rate added"); $("rt-item").value = ""; $("rt-rate").value = ""; loadSettings();
   });
 }
-const ROLE_LABEL = { WASHER: "Washer", DELIVERY: "Delivery" };
+const ROLE_LABEL = {
+  WASHER: "Washer", DELIVERY: "Delivery",
+  // Senior aadmi ko sirf "Washer" likhna uske kaam ko chhota dikhata hai
+  SUPERVISOR: "Washerman / Manager", MANAGER: "Manager", ADMIN: "Owner",
+};
 
 /** +918707093136 -> +91 87070 93136 (never wraps mid-number, see .ph) */
 function fmtPhone(p) {
@@ -2186,10 +2575,13 @@ function renderStaff() {
           <span class="badge role">${ROLE_LABEL[s.role] || esc(s.role)}</span>
           <span class="statuspill ${s.is_active ? "on" : "off"}">${s.is_active ? "Active" : "Inactive"}</span>
           ${s.is_default ? `<span class="badge">Default</span>` : ""}
+          ${s.also_customer ? `<span class="badge warn" title="Yeh number customer list mein bhi hai. Is number se aane wale message STAFF ke maane jayenge — customer wala AI jawab nahi milega.">Customer bhi</span>` : ""}
           ${s.active_orders ? `<span class="badge">${s.active_orders} active order${s.active_orders > 1 ? "s" : ""}</span>` : ""}
         </div>
       </div>
       <div class="acts">
+        <button class="btn sm ghost" onclick="panelAccess('${s.id}')">${
+          s.has_login ? "🔑 New password" : "🔑 Panel login"}</button>
         <button class="btn sm ghost" onclick="editStaffModal('${s.id}')">Edit</button>
         ${s.is_active
           ? `<button class="btn sm ghost" onclick="deactivateStaff('${s.id}')">Deactivate</button>`
@@ -2200,6 +2592,120 @@ function renderStaff() {
 }
 
 function staffById(id) { return STAFF.find((s) => s.id === id); }
+
+/* Staff ko /staff panel ka login dena.
+ *
+ * Password sirf EK BAAR dikhta hai — DB mein uska hash hi jata hai, isliye
+ * baad mein "wo password kya tha" kahin se nikala nahi ja sakta. Bhool jaye
+ * to yahi button dobara dabaiye, naya ban jayega (purane phone ke session
+ * apne aap kat jate hain). */
+function panelAccess(id) {
+  const s = staffById(id);
+  if (!s) return;
+  // Owner ka apna row: koi role dropdown nahi. Wo koi "role" nahi hai, wo
+  // maalik hai — aur is dropdown mein ADMIN hai hi nahi, isliye dikhane par
+  // owner khud ko chup-chaap MANAGER bana baithta tha.
+  const roleSel = s.role === "ADMIN" ? `
+    <p class="muted" style="font-size:13px;margin:0 0 10px">
+      This is the owner's own login. Their access stays as it is.</p>` : `
+    <label>What will they do</label>
+    <select id="pa-role">
+      <option value="WASHER"${s.role === "WASHER" ? " selected" : ""}>Washerman — washing/pressing</option>
+      <option value="DELIVERY"${s.role === "DELIVERY" ? " selected" : ""}>Delivery — pickup and delivery</option>
+      <option value="SUPERVISOR"${s.role === "SUPERVISOR" ? " selected" : ""}>Washerman / Manager — works, and oversees everyone</option>
+      <option value="MANAGER"${s.role === "MANAGER" ? " selected" : ""}>Manager — oversees only, does not work orders</option>
+    </select>`;
+  openModal(`
+    <h3>Give ${esc(s.name)} a panel login</h3>
+    <p class="muted" style="font-size:13px;margin:0 0 10px">
+      They sign in at <b>${location.origin}/staff</b> with their own number and this
+      password. It is shown once, and you can send it to them on WhatsApp.</p>
+    ${roleSel}
+    <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      ${s.has_login ? `<button class="btn danger" id="pa-revoke">Remove access</button>` : ""}
+      <button class="btn" id="pa-go">${s.has_login ? "New password" : "Create login"}</button>
+    </div>`);
+  $("pa-go").onclick = (e) => busy(e.target, async () => {
+    try {
+      const sel = $("pa-role");
+      const r = await api(`/admin/api/staff/${id}/access`, {
+        method: "POST", body: sel ? { role: sel.value } : {},
+      });
+      // Local list ko TURANT sach bana do. Sirf loadSettings() par chhodne
+      // se, agar refetch dhima ho, dobara khulne par wahi purana "Login
+      // banayein" dikh jata tha — jaise login bana hi na ho.
+      s.has_login = true;
+      s.role = r.role;
+      showPanelPassword(s, r);
+      loadSettings();
+    } catch (err) { toast(err.message, true, 9000); }
+  });
+  if (s.has_login) {
+    $("pa-revoke").onclick = () => confirmDialog(
+      `Remove ${s.name}'s panel access? All their logins stop immediately.`,
+      async () => {
+        try {
+          const r = await api(`/admin/api/staff/${id}/access/revoke`, { method: "POST" });
+          closeModal(); toast(`Access removed (${r.sessions_killed} login${r.sessions_killed === 1 ? "" : "s"} closed)`); loadSettings();
+        } catch (err) { toast(err.message, true); }
+      });
+  }
+}
+
+/* Password ek hi baar dikhta hai, isliye yahin se bhej bhi dijiye.
+ *
+ * "Send on WhatsApp" server se jata hai — owner ka message app kholna,
+ * password type karna, galat number chun lena, sab hat gaya. Password
+ * server ko wapas jata hai kyunki DB mein sirf hash hai; server use hash
+ * se milata hai, isliye ye endpoint "staff ko kuch bhi bhej do" nahi ban
+ * sakta. Hamare apne message log mein password nahi likha jata.
+ * Copy button rehta hai — kabhi WhatsApp na jaye to haath ka rasta. */
+function showPanelPassword(s, r) {
+  const name = s.name;
+  const url = `${location.origin}/staff`;
+  const msg = `${name}, your work panel: ${url}\nNumber: ${s.phone || "your WhatsApp number"}\nPassword: ${r.temp_password}\n(Log in and change the password the first time)`;
+  openModal(`
+    <h3>✅ ${esc(name)}'s login is ready</h3>
+    <div class="dtl">
+      <div class="dt-row"><span>Panel</span><b>${esc(url)}</b></div>
+      <div class="dt-row"><span>Role</span><b>${esc(r.role)}</b></div>
+      <div class="dt-row"><span>Password</span><b style="font-size:1.1rem">${esc(r.temp_password)}</b></div>
+    </div>
+    <p class="muted" style="font-size:12.5px;margin:10px 0 0">
+      This password is shown only once — send it now. They will set their own
+      on first login.</p>
+    <div class="btnrow">
+      <button class="btn ghost" id="pw-copy">📋 Copy</button>
+      <button class="btn" id="pw-share">📤 Send on WhatsApp</button>
+    </div>
+    <div class="btnrow" style="margin-top:6px">
+      <button class="btn ghost" onclick="closeModal()">Done</button>
+    </div>`);
+  $("pw-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(msg); toast("Copied — paste it in WhatsApp"); }
+    catch (e) { toast("Could not copy — write the password down", true); }
+  };
+  // busy() apna purana label wapas laga deta hai, isliye yahan haath se —
+  // bhej dene ke baad button ko jawab hi bane rehna chahiye.
+  $("pw-share").onclick = async (e) => {
+    const btn = e.currentTarget;
+    const old = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span>';
+    try {
+      const out = await api(`/admin/api/staff/${s.id}/access/share`, {
+        method: "POST", body: { password: r.temp_password },
+      });
+      btn.innerHTML = `✅ Sent to ${esc(fmtPhone(out.to))}`;
+      toast(`Login sent to ${s.name} on WhatsApp`);
+    } catch (err) {
+      btn.disabled = false;
+      btn.innerHTML = old;
+      toast(err.message, true, 9000);
+    }
+  };
+}
 
 async function updStaff(id, body) {
   try { await api(`/admin/api/staff/${id}`, { method: "PUT", body }); toast(T.saved); loadSettings(); }
@@ -2236,8 +2742,13 @@ function editStaffModal(id) {
     if (name.length < 2) { $("es-name-err").textContent = "Name must be at least 2 characters."; bad = true; }
     if (phone.length !== 10) { $("es-phone-err").textContent = "Phone must be exactly 10 digits."; bad = true; }
     if (bad) return;
-    await api(`/admin/api/staff/${id}`, { method: "PUT", body: { name, phone, role: $("es-role").value } });
-    closeModal(); toast("Staff updated"); loadSettings();
+    const res = await api(`/admin/api/staff/${id}`, { method: "PUT", body: { name, phone, role: $("es-role").value } });
+    closeModal();
+    // save ke turant baad batao ki agent ab kya karega — aur agar wo number
+    // customer ka bhi hai to chetavni, jo chhupani nahi chahiye
+    toast((res && res.ready) || "Staff updated", false, 7000);
+    if (res && res.warning) toast(res.warning, true, 12000);
+    loadSettings();
   });
 }
 
@@ -2307,8 +2818,9 @@ async function addStaff(btn) {
       bad = true;
     }
     if (bad) return;
-    await api("/admin/api/staff", { method: "POST", body: { name, phone, role: $("sf-role").value } });
-    toast(`${name} added`);
+    const res = await api("/admin/api/staff", { method: "POST", body: { name, phone, role: $("sf-role").value } });
+    toast((res && res.ready) || `${name} added`, false, 7000);
+    if (res && res.warning) toast(res.warning, true, 12000);
     $("sf-name").value = ""; $("sf-phone").value = "";
     loadSettings();
   });
@@ -2447,7 +2959,23 @@ function onThreadScroll(el) {
   if (el.scrollHeight - el.scrollTop - el.clientHeight < 220) loadMoreThreads();
 }
 const avatar = (n) => `<div class="avatar">${esc((n || "?").trim()[0] || "?").toUpperCase()}</div>`;
-const seenKey = (p) => "kk_seen_" + p;
+/* Read-marker keys. Pehle "kk_seen_+919876543210" — yani customer ke
+   NUMBER localStorage mein plain pade rehte the (device chori/shared PC =
+   PII leak). Ab sirf ek non-reversible short hash. Purane plaintext keys
+   pehli load par saaf ho jaate hain. */
+const hashPhone = (p) => {
+  let h = 5381;
+  for (let i = 0; i < p.length; i++) h = ((h * 33) ^ p.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+};
+const seenKey = (p) => "kk_seen_" + hashPhone(String(p || ""));
+(function purgeLegacySeenKeys() {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith("kk_seen_") && /[+0-9]{6,}/.test(k)) localStorage.removeItem(k);
+    }
+  } catch (e) {}
+})();
 const isUnread = (t) =>
   t.last_direction === "INBOUND" && t.last_at > (localStorage.getItem(seenKey(t.phone)) || "");
 function updateUnreadBadge() {
@@ -2560,7 +3088,15 @@ function oneBubble(m, threadName) {
     const url = mediaUrl(med[2]);
     const label = esc(med[3] || "");
     if (med[1] === "audio" || med[1] === "voice") {
-      body = `<audio controls preload="none" src="${url}" style="max-width:250px"></audio>${label}`;
+      // WhatsApp ki voice note Ogg/Opus hoti hai — Safari aur iPhone use
+      // baja hi nahi sakte, wahan player khali dabba dikhta tha. Isliye
+      // saath mein hamesha ek link, jo har jagah kaam karta hai. Aur jab
+      // awaaz ke shabd nikle hi na ho, wo bhi saaf likh dete hain — warna
+      // owner ko lagta hai ki message khali aaya.
+      body = `<audio controls preload="none" src="${url}" style="max-width:250px"></audio>`
+        + `<a class="filechip" href="${url}" target="_blank" rel="noopener">🎧 Voice note kholein</a>`
+        + (label ? `<div class="vtext">${label}</div>`
+                 : `<div class="vtext muted">(awaaz ke shabd nahi mile)</div>`);
     } else if (med[1] === "video") {
       body = `<video controls preload="metadata" src="${url}" width="260" style="border-radius:8px"></video>${label}`;
     } else {
@@ -2586,7 +3122,17 @@ function oneBubble(m, threadName) {
   } else if (btn) {
     body = `<span class="tapped">👆 ${esc(btn[1])}</span>`;
   } else {
-    body = esc(tidy(m.text || ""));
+    // Bheje gaye message ka log "…text [buttons: A, B, C]" hota hai. Wo
+    // kachra text ki tarah dikh raha tha — button WhatsApp par dabta hai,
+    // yahan sirf ye dikhna chahiye ki kaunse option bheje the.
+    const withBtns = (m.text || "").match(/^([\s\S]*?)\s*\[(buttons|list): ([^\]]+)\]\s*$/);
+    if (withBtns) {
+      const chips = withBtns[3].split(",").map((b) => b.trim()).filter(Boolean)
+        .map((b) => `<div class="tplbtn">${esc(b)}</div>`).join("");
+      body = `${esc(tidy(withBtns[1]))}<div class="sentbtns">${chips}</div>`;
+    } else {
+      body = esc(tidy(m.text || ""));
+    }
   }
   const quoted = m.reply_to && BY_WAMID[m.reply_to];
   const quote = quoted
@@ -3111,7 +3657,10 @@ window.addEventListener("DOMContentLoaded", () => {
   $("emoji-pal").innerHTML = EMOJIS.map((e) => `<span onclick="addEmoji('${e}')">${e}</span>`).join("");
   // Ab do raste hain: asli login (session cookie) ya purani admin key.
   // Session hai to key maangna bilkul galat hai — isliye pehle poochho.
-  ensureSignedIn();
+  // Live updates SIRF sign-in ke baad. Bina iske EventSource 401 par
+  // baar-baar dobara judne ki koshish karta rehta — har teen second ek
+  // request, login page par baithe rehne bhar ke liye.
+  ensureSignedIn().then((ok) => { if (ok) startLiveUpdates(); });
   const h = (location.hash || "#dashboard").slice(1);
   if (h.startsWith("inbox/")) {
     go("inbox", false);

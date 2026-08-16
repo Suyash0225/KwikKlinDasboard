@@ -16,10 +16,11 @@ Owner (Suyash) ke apne endpoints `/api/admin/tenants*` par hain — usse wo
 
 import json
 import re
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -33,9 +34,11 @@ from app.models import (
     TENANT_ACTIVE,
     TENANT_TRIAL,
     LoginSession,
+    RechargeRequest,
     Tenant,
     User,
 )
+from app.models.tenant import GRACE_DAYS, TENANT_LOCKED, TENANT_PAST_DUE, WRITABLE_STATUSES
 from app.services import auth, billing, google_auth, plans
 from app.utils.phone import normalize_phone
 
@@ -196,20 +199,25 @@ async def checkout(
     p: auth.Principal = Depends(auth.require_owner),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Razorpay order — checkout isi par khulta hai."""
+    """RECURRING Razorpay subscription banao — checkout isi par khulta hai.
+
+    Har cycle Razorpay khud charge karta hai; activation hamesha webhook
+    se hoti hai (subscription.activated / subscription.charged)."""
     if p.tenant is None:
         raise HTTPException(status_code=400, detail="Tenant not found")
     try:
-        out = await billing.create_order(p.tenant, body.plan, annual=body.annual)
+        out = await billing.create_subscription(db, p.tenant, body.plan, annual=body.annual)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return out
 
 
 class ConfirmIn(BaseModel):
-    razorpay_order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
+    # order-mode (legacy) YA subscription-mode — jo aaya ho
+    razorpay_order_id: str = ""
+    razorpay_subscription_id: str = ""
 
 
 @router.post("/api/checkout/confirm")
@@ -224,9 +232,14 @@ async def checkout_confirm(
     ka asli faisla webhook karta hai** — browser jhooth bol sakta hai,
     Razorpay ka signed webhook nahi.
     """
-    ok = billing.verify_checkout_signature(
-        body.razorpay_order_id, body.razorpay_payment_id, body.razorpay_signature
-    )
+    if body.razorpay_subscription_id:
+        ok = billing.verify_subscription_checkout_signature(
+            body.razorpay_payment_id, body.razorpay_subscription_id, body.razorpay_signature
+        )
+    else:
+        ok = billing.verify_checkout_signature(
+            body.razorpay_order_id, body.razorpay_payment_id, body.razorpay_signature
+        )
     if not ok:
         log.warning("rzp_bad_checkout_signature", tenant=p.tenant.slug if p.tenant else "?")
         raise HTTPException(status_code=400, detail="Payment could not be verified")
@@ -276,6 +289,15 @@ def _set_cookie(response: Response, token: str) -> None:
     )
 
 
+
+
+def _dashboard_url(tenant: Tenant | None, is_home: bool) -> str:
+    """Login/invite ke baad kahan bhejein — self-serve gate ke baad HAR
+    chalu tenant apne dashboard par; sirf band accounts welcome (renew CTA)."""
+    if tenant is not None and tenant.status in ("locked", "suspended", "cancelled"):
+        return "/welcome"
+    return "/admin"
+
 @router.post("/api/login")
 async def login(
     body: LoginIn, request: Request, response: Response, db: AsyncSession = Depends(get_db)
@@ -286,16 +308,32 @@ async def login(
             status_code=429, detail="Too many wrong attempts — try again in 10 minutes"
         )
     email = (body.email or "").strip().lower()
-    user = (
+    # Email sirf PER-TENANT unique hai — ek hi email do shops ka ho sakta
+    # hai. Password hi batata hai kaun sa account: har candidate ke against
+    # verify karo, jo match kare wahi user. (Pehle .first() tha — kaun sa
+    # account milega ye row-order ki lottery thi.)
+    candidates = (
         await db.execute(select(User).where(User.email == email))
-    ).scalars().first()
+    ).scalars().all()
+    user = next(
+        (
+            u
+            for u in candidates
+            if u.is_active and auth.verify_password(body.password, u.password_hash)
+        ),
+        None,
+    )
     # Galat email aur galat password ka jawab EK jaisa — warna attacker ko
     # pata chal jaata hai ki kaun sa email registered hai.
-    if user is None or not user.is_active or not auth.verify_password(
-        body.password, user.password_hash
-    ):
+    if user is None:
         auth.note_failure(ip)
         log.warning("login_failed", email=email[:60], ip=ip)
+        from app.services import audit
+
+        await audit.record(
+            actor_role="user", actor=email[:60], action="login_failed",
+            args={"ip": ip}, ok=False,
+        )
         raise HTTPException(status_code=401, detail="Email or password is incorrect")
 
     auth.clear_failures(ip)
@@ -305,22 +343,37 @@ async def login(
     _set_cookie(response, token)
     tenant = await db.get(Tenant, user.tenant_id) if user.tenant_id else None
     is_home = await auth.is_home_user(db, user)
+    from app.services import audit
+
+    await audit.record(
+        actor_role="user", actor=user.email, action="login",
+        args={"ip": ip, "role": user.role,
+              "tenant": tenant.slug if tenant else None},
+    )
     return {
         "user": {"name": user.name, "email": user.email, "role": user.role},
         "must_change_password": user.must_change_password,
         "tenant": _tenant_out(tenant) if tenant else None,
         "is_home": is_home,
         # Client ka browser khud faisla na kare — server batata hai kahan jaana hai
-        "next_url": "/admin" if is_home else "/welcome",
+        "next_url": _dashboard_url(tenant, is_home),
     }
 
 
 @router.post("/api/logout")
 async def logout(
-    response: Response, kk_session: str = "", db: AsyncSession = Depends(get_db)
+    response: Response,
+    # Cookie(...) zaroori hai — bare `str = ""` ko FastAPI query param
+    # samajhta tha, to browser ka logout server par session revoke hi
+    # nahi karta tha (cookie delete hoti thi, token 30 din zinda rehta).
+    kk_session: str = Cookie(default=""),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     if kk_session:
         await auth.end_session(db, kk_session)
+        from app.services import audit
+
+        await audit.record(actor_role="user", actor=None, action="logout")
     response.delete_cookie(auth.SESSION_COOKIE, path="/")
     return {"ok": True}
 
@@ -352,8 +405,10 @@ async def me(
     p: auth.Principal = Depends(auth.current_user), db: AsyncSession = Depends(get_db)
 ) -> dict:
     from app.models import Order
+    from app.services import quota
 
-    used = None
+    used = ai_used = wa_used = staff_used = None
+    plan = plans.get(p.tenant.plan) if p.tenant else None
     if p.tenant is not None:
         month_start = datetime.now(timezone.utc).replace(
             day=1, hour=0, minute=0, second=0, microsecond=0
@@ -363,6 +418,13 @@ async def me(
                 select(func.count()).select_from(Order).where(Order.created_at >= month_start)
             )
         ).scalar_one()
+        ai_used = await quota.ai_calls_this_month(db, p.user.tenant_id)
+        wa_used = await quota.wa_messages_this_month(db, p.user.tenant_id)
+        staff_used = (
+            await db.execute(
+                select(func.count()).select_from(User).where(User.tenant_id == p.user.tenant_id)
+            )
+        ).scalar_one()
     return {
         "user": {"name": p.user.name, "email": p.user.email, "role": p.user.role},
         "tenant": _tenant_out(p.tenant) if p.tenant else None,
@@ -370,8 +432,218 @@ async def me(
         # Kya ye user ISI deployment ki dukaan ka hai? Sirf tabhi use /admin
         # dashboard dikhaya jaata hai — warna wo kisi aur ka data hoga.
         "is_home": await auth.is_home_user(db, p.user),
-        "usage": {"orders_this_month": used},
+        "usage": {
+            "orders_this_month": used,
+            "ai_calls_this_month": ai_used,
+            "wa_messages_this_month": wa_used,
+            "staff": staff_used,
+        },
+        # Feature-gating: frontend inhi flags se tabs lock karta hai.
+        "features": sorted(plan.features) if plan else [],
+        "plan_limits": {
+            "staff": plan.staff_limit,
+            "ai_usage": plan.ai_usage_limit,
+            "whatsapp_messages": plan.whatsapp_message_limit,
+        } if plan else None,
+        # Banner/gating ke liye — dashboard yahi padhta hai.
+        "subscription": _subscription_out(p.tenant),
     }
+
+
+def _subscription_out(t: Tenant | None) -> dict | None:
+    """Trial/subscription ki haalat, banner-ready numbers ke saath."""
+    if t is None:
+        return None
+    now = datetime.now(timezone.utc)
+    days_left = None
+    if t.status == TENANT_TRIAL and t.trial_ends_at is not None:
+        days_left = max(0, -(-int((t.trial_ends_at - now).total_seconds()) // 86400))
+    grace_days_left = None
+    if t.status == TENANT_PAST_DUE:
+        ref = billing._grace_reference(t)
+        if ref is not None:
+            grace_days_left = max(0, GRACE_DAYS - (now - ref).days)
+    return {
+        "status": t.status,
+        "trial_ends_at": t.trial_ends_at.isoformat() if t.trial_ends_at else None,
+        "days_left": days_left,
+        "read_only": t.status not in WRITABLE_STATUSES,
+        "grace_days_left": grace_days_left,
+        "locked": t.status == TENANT_LOCKED,
+    }
+
+
+@router.get("/api/session/adopt/{token}", include_in_schema=False)
+async def adopt_session(token: str, db: AsyncSession = Depends(get_db)):
+    """Impersonation link: valid session token -> cookie set -> dashboard.
+
+    Token khud hi auth hai (30-min TTL, danger-key se bana, audit-logged).
+    Galat/expired -> login page."""
+    user = await auth.user_for_token(db, token)
+    if user is None:
+        return RedirectResponse(url="/#login", status_code=303)
+    resp = RedirectResponse(url="/admin", status_code=303)
+    _set_cookie(resp, token)
+    log.info("session_adopted", user=user.email)
+    return resp
+
+
+# --------------------------------------------------------------------------
+# Invite accept — set-password page (plaintext password kabhi nahi banta)
+# --------------------------------------------------------------------------
+
+_INVITE_FILE = Path(__file__).resolve().parent.parent / "static" / "invite.html"
+
+
+@router.get("/invite/{token}", include_in_schema=False)
+async def invite_page(token: str):
+    """Set-password page ka shell. Token URL mein hai; page JS usse
+    /api/invite/accept par bhejta hai. Yahan koi data nahi nikalta."""
+    from fastapi.responses import Response as _Resp
+
+    return _Resp(
+        content=_INVITE_FILE.read_text(encoding="utf-8"),
+        media_type="text/html",
+        headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"},
+    )
+
+
+class InviteAcceptIn(BaseModel):
+    token: str = Field(min_length=10)
+    password: str = Field(min_length=8, max_length=128)
+
+
+@router.post("/api/invite/accept")
+async def invite_accept(
+    body: InviteAcceptIn, request: Request, response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Token + naya password -> account active + seedha login."""
+    from app.services import invites
+
+    try:
+        user = await invites.accept_invite(db, token=body.token, password=body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    ip = request.client.host if request.client else ""
+    token = await auth.start_session(
+        db, user, ip=ip, user_agent=request.headers.get("user-agent", "")
+    )
+    _set_cookie(response, token)
+    is_home = await auth.is_home_user(db, user)
+    return {
+        "ok": True,
+        "user": {"name": user.name, "email": user.email, "role": user.role},
+        "next_url": _dashboard_url(await db.get(Tenant, user.tenant_id), is_home),
+    }
+
+
+# --------------------------------------------------------------------------
+# WhatsApp connect — har tenant apna number (official Meta Cloud API)
+# --------------------------------------------------------------------------
+
+
+class WaConnectIn(BaseModel):
+    phone_number_id: str = Field(min_length=5, max_length=30)
+    token: str = Field(min_length=20)
+    waba_id: str = ""
+
+
+@router.post("/api/whatsapp/connect")
+async def whatsapp_connect(
+    body: WaConnectIn,
+    p: auth.Principal = Depends(auth.require_owner),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Tenant apna WhatsApp number jodta hai (Meta Cloud API creds).
+
+    Creds Graph API par LIVE validate hote hain — galat token/number yahin
+    pakda jaata hai, webhook par nahi. Token store hota hai, wapas kabhi
+    nahi bheja jaata (masked). Ek number = ek tenant (unique)."""
+    from app.services import whatsapp
+
+    pnid = body.phone_number_id.strip()
+    if not await whatsapp.validate_credentials(pnid, body.token.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Meta ne creds reject kiye — phone_number_id/token check karein "
+                   "(test mode: Meta App Dashboard > WhatsApp > API Setup).",
+        )
+    dupe = (
+        await db.execute(
+            select(Tenant).where(
+                Tenant.wa_phone_number_id == pnid, Tenant.id != p.user.tenant_id
+            )
+        )
+    ).scalar_one_or_none()
+    if dupe is not None:
+        raise HTTPException(
+            status_code=409, detail="Ye WhatsApp number kisi aur account se juda hai."
+        )
+    t = await db.get(Tenant, p.user.tenant_id)
+    t.wa_phone_number_id = pnid
+    t.wa_waba_id = body.waba_id.strip() or None
+    t.wa_token = body.token.strip()
+    await db.commit()
+    log.info("whatsapp_connected", tenant=t.slug, phone_number_id=pnid)
+    from app.services import audit
+
+    await audit.record(
+        actor_role="user", actor=p.user.email, action="whatsapp_connect",
+        args={"tenant": t.slug, "phone_number_id": pnid},
+    )
+    return {"connected": True, "phone_number_id": pnid, "waba_id": t.wa_waba_id}
+
+
+@router.get("/api/whatsapp/status")
+async def whatsapp_status(
+    p: auth.Principal = Depends(auth.current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Kya WhatsApp juda hai? Token KABHI wapas nahi jaata — sirf mask."""
+    t = await db.get(Tenant, p.user.tenant_id)
+    if t is None or not t.wa_phone_number_id:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "phone_number_id": t.wa_phone_number_id,
+        "waba_id": t.wa_waba_id,
+        "token": "••••••••" + (t.wa_token[-4:] if t.wa_token else ""),
+    }
+
+
+@router.get("/api/billing/invoices")
+async def list_invoices(
+    p: auth.Principal = Depends(auth.current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Is tenant ki saari receipts, nayi pehle. Sirf apne tenant ki —
+    query explicitly tenant-scoped hai."""
+    from app.models import Invoice
+
+    rows = (
+        await db.execute(
+            select(Invoice)
+            .where(Invoice.tenant_id == p.user.tenant_id)
+            .order_by(Invoice.created_at.desc())
+            .limit(100)
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": str(i.id),
+            "payment_id": i.rzp_payment_id,
+            "plan": plans.get(i.plan).name,
+            "cycle": i.cycle,
+            "amount_inr": round(i.amount_paise / 100, 2),
+            "currency": i.currency,
+            "status": i.status,
+            "period_start": i.period_start.isoformat() if i.period_start else None,
+            "period_end": i.period_end.isoformat() if i.period_end else None,
+            "date": i.created_at.isoformat(),
+        }
+        for i in rows
+    ]
 
 
 class PasswordIn(BaseModel):
@@ -481,7 +753,7 @@ async def google_callback(
             user_agent=request.headers.get("user-agent", ""),
         )
         is_home = await auth.is_home_user(db, user)
-        resp = RedirectResponse(url="/admin" if is_home else "/welcome", status_code=303)
+        resp = RedirectResponse(url=_dashboard_url(await db.get(Tenant, user.tenant_id), is_home), status_code=303)
         _set_cookie(resp, token)
         resp.delete_cookie(google_auth.STATE_COOKIE, path="/")
         log.info("google_login_ok", email=user.email, is_home=is_home)
@@ -564,7 +836,7 @@ async def signup_google(
     is_home = await auth.is_home_user(db, user)
     return {
         "tenant": {"slug": tenant.slug, "shop_name": tenant.shop_name, "plan": tenant.plan},
-        "next_url": "/admin" if is_home else "/welcome",
+        "next_url": _dashboard_url(tenant, is_home),
     }
 
 
@@ -608,16 +880,17 @@ async def create_user(
     if body.role not in ROLES:
         raise HTTPException(status_code=400, detail=f"Role must be one of: {', '.join(ROLES)}")
     plan = plans.get(p.tenant.plan if p.tenant else "starter")
+    _max_staff = plans.effective_limits(p.tenant)["max_staff"]
     count = (
         await db.execute(
             select(func.count()).select_from(User).where(User.tenant_id == p.user.tenant_id)
         )
     ).scalar_one()
-    if plan.max_staff is not None and count >= plan.max_staff:
+    if _max_staff is not None and count >= _max_staff:
         nxt = plans.next_plan_after(plan.code)
         raise HTTPException(
             status_code=402,
-            detail=f"The {plan.name} plan allows up to {plan.max_staff} team members."
+            detail=f"The {plan.name} plan allows up to {_max_staff} team members."
                    + (f" {plans.get(nxt).name} par jaayein." if nxt else ""),
         )
     email = body.email.strip().lower()
@@ -629,19 +902,140 @@ async def create_user(
     if dupe is not None:
         raise HTTPException(status_code=409, detail="This email is already registered")
 
-    temp = auth.temp_password()
-    db.add(
-        User(
-            tenant_id=p.user.tenant_id,
-            name=body.name.strip(),
-            email=email,
+    # Invite link — password na hum banate hain, na store, na bhejte.
+    # Naya user link par khud password set karta hai (services/invites.py).
+    from app.services import invites
+
+    try:
+        _u, invite_path = await invites.create_invite(
+            db, tenant_id=p.user.tenant_id, email=email, name=body.name,
+            role=body.role, invited_by=p.user.email,
             phone=(body.phone or "").strip() or None,
-            password_hash=auth.hash_password(temp),
-            role=body.role,
-            must_change_password=True,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    log.info("user_invited", email=email, role=body.role)
+    from app.services import audit
+
+    await audit.record(
+        actor_role="user", actor=p.user.email, action="user_invited",
+        args={"email": email, "role": body.role},
     )
+    return {"email": email, "role": body.role, "invite_path": invite_path}
+
+
+# --------------------------------------------------------------------------
+# Client ka billing page: plan, usage, price card, recharge request
+# --------------------------------------------------------------------------
+
+
+@router.get("/api/billing/summary")
+async def billing_summary(
+    p: auth.Principal = Depends(auth.current_user), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Client ke billing page ka sara data ek call mein.
+
+    Yahan sirf USI tenant ka apna hisaab jaata hai — koi vendor-level
+    cost/margin kabhi nahi (public_packs() cost hata deta hai).
+    """
+    from app.models import Order
+    from app.services import app_settings, quota
+
+    t = p.tenant
+    if t is None:
+        raise HTTPException(status_code=400, detail="Tenant not found")
+    plan = plans.get(t.plan)
+    limits = plans.effective_limits(t)
+    month_start = datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    orders_used = (
+        await db.execute(
+            select(func.count()).select_from(Order).where(Order.created_at >= month_start)
+        )
+    ).scalar_one()
+    ai_used = await quota.ai_calls_this_month(db, t.id)
+    wa_used = await quota.wa_messages_this_month(db, t.id)
+    pending = (
+        await db.execute(
+            select(func.count()).select_from(RechargeRequest).where(
+                RechargeRequest.tenant_id == t.id, RechargeRequest.status == "pending"
+            )
+        )
+    ).scalar_one()
+    return {
+        "shop": t.shop_name,
+        "plan": {"code": plan.code, "name": plan.name, "price_inr": plan.price_inr,
+                 "cycle": t.billing_cycle, "points": plan.sales_points},
+        "subscription": _subscription_out(t),
+        "usage": {
+            "orders": {"used": orders_used, "limit": limits["max_orders_month"]},
+            "messages": {"used": wa_used, "limit": limits["whatsapp_message_limit"],
+                         "credits": t.wa_credits},
+            "ai": {"used": ai_used, "limit": limits["ai_usage_limit"],
+                   "credits": t.ai_credits},
+        },
+        "packs": plans.public_packs(),
+        "upi": {
+            "id": await app_settings.get(db, "vendor_upi_id"),
+            "name": await app_settings.get(db, "vendor_upi_name"),
+        },
+        "pending_requests": pending,
+        "plans": plans.public_catalog(),
+    }
+
+
+class RechargeRequestIn(BaseModel):
+    pack: str
+    note: str = Field(default="", max_length=200)
+
+
+@router.post("/api/billing/recharge-request", status_code=201)
+async def request_recharge(
+    body: RechargeRequestIn,
+    p: auth.Principal = Depends(auth.require_owner),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Client: "ye pack chahiye". Paisa UPI se aata hai, credits vendor ke
+    approve karte hi chadhte hain (control panel se)."""
+    pack = plans.pack(body.pack)
+    if pack is None:
+        raise HTTPException(status_code=400, detail="Unknown pack")
+    req = RechargeRequest(
+        tenant_id=p.user.tenant_id, pack=pack["id"], kind=pack["kind"],
+        units=pack["units"], amount_inr=pack["price_inr"],
+        note=body.note.strip() or None, requested_by=p.user.email,
+    )
+    db.add(req)
     await db.commit()
-    log.info("user_created", email=email, role=body.role)
-    # temp password SIRF yahan dikhta hai — kahin store nahi hota
-    return {"email": email, "temp_password": temp, "role": body.role}
+    from app.services import audit
+
+    await audit.record(
+        actor_role="user", actor=p.user.email, action="recharge_requested",
+        tenant_id=p.user.tenant_id,
+        args={"pack": pack["id"], "units": pack["units"], "amount_inr": pack["price_inr"],
+              "note": body.note.strip() or None},
+    )
+    log.info("recharge_requested", tenant=p.tenant.slug if p.tenant else None,
+             pack=pack["id"])
+    return {"ok": True, "pack": pack["id"], "amount_inr": pack["price_inr"],
+            "status": "pending"}
+
+
+@router.get("/api/billing/requests")
+async def my_recharge_requests(
+    p: auth.Principal = Depends(auth.current_user), db: AsyncSession = Depends(get_db)
+) -> list[dict]:
+    rows = (
+        await db.execute(
+            select(RechargeRequest)
+            .where(RechargeRequest.tenant_id == p.user.tenant_id)
+            .order_by(RechargeRequest.created_at.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+    return [
+        {"at": r.created_at.isoformat(), "pack": r.pack, "units": r.units,
+         "amount_inr": r.amount_inr, "status": r.status, "note": r.note}
+        for r in rows
+    ]

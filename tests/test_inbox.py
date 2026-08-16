@@ -366,7 +366,10 @@ async def test_media_opens_for_a_logged_in_owner(client) -> None:
         await app_settings.set_value(s, "home_tenant_slug", "kwik-klin")
         user = (
             await s.execute(
-                select(User).where(User.tenant_id == home.id, User.role == ROLE_OWNER)
+                select(User).where(
+                    User.tenant_id == home.id, User.role == ROLE_OWNER,
+                    User.is_active.is_(True),   # revoked user ka session banta hi nahi
+                )
             )
         ).scalars().first()
         if user is None:
@@ -448,3 +451,31 @@ async def test_manager_send_blocked_outside_window(client, monkeypatch) -> None:
     )
     assert r.status_code == 409
     assert "window is closed" in r.json()["detail"]
+
+
+async def test_suite_does_not_close_a_real_staff_window() -> None:
+    """Regression: cleanup fixture asli staff ki 24h window NULL kar deti
+    thi — owner ko Inbox mein 'window closed' dikhta tha jabki usne raat ko
+    hi message kiya ho. Ab kisi bhi staff ki asli value bahaal rehti hai.
+    """
+    from sqlalchemy import text as _sql
+
+    async with async_session_factory() as db:
+        rows = (
+            await db.execute(
+                _sql(
+                    "SELECT s.name, s.last_message_at, i.last_inbound FROM staff s"
+                    " JOIN (SELECT staff_id, max(created_at) AS last_inbound"
+                    "       FROM conversations WHERE staff_id IS NOT NULL"
+                    "         AND direction = 'INBOUND' GROUP BY staff_id) i"
+                    "   ON i.staff_id = s.id"
+                )
+            )
+        ).all()
+    if not rows:
+        pytest.skip("kisi staff ka koi inbound message hi nahi")
+    for name, last_message_at, last_inbound in rows:
+        assert last_message_at is not None, f"{name}: window bina wajah band"
+        assert last_message_at >= last_inbound - timedelta(seconds=1), (
+            f"{name} ka last_message_at aakhri inbound se peeche hai"
+        )

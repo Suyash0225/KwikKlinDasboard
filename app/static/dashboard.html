@@ -126,11 +126,15 @@
           <div class="split2" style="margin-top:8px">
             <div class="autocomplete">
               <label>Mobile number *</label>
-              <input id="nb-phone" type="tel" inputmode="numeric" placeholder="98765 43210" oninput="custAc()" autocomplete="off">
+              <input id="nb-phone" type="tel" inputmode="numeric" placeholder="98765 43210" oninput="custAc('nb-phone')" autocomplete="off">
               <div class="acp" id="nb-ac"></div>
               <small class="fielderr" id="nb-phone-err"></small>
             </div>
-            <div><label>Name</label><input id="nb-name" placeholder="Customer name"></div>
+            <div class="autocomplete">
+              <label>Name</label>
+              <input id="nb-name" placeholder="Start typing a name…" oninput="custAc('nb-name')" autocomplete="off">
+              <div class="acp" id="nb-ac-name"></div>
+            </div>
           </div>
           <hr class="hr"><b>🧺 Items</b>
           <div class="lineshead" aria-hidden="true"><span>Service</span><span>Item</span><span>Qty / kg</span><span>Rate ₹</span><span>Amount</span><span></span></div>
@@ -168,19 +172,19 @@
         <div class="actions"><button class="btn ghost" onclick="billsCsv()">⬇ CSV</button></div></div>
       <div class="filters">
         <input type="search" aria-label="Search bills" placeholder="Search…" oninput="billFilter.q=this.value;billFilter.page=1;renderBillsDeb()">
-        <select aria-label="Status filter" onchange="billFilter.status=this.value;billFilter.page=1;renderBills()">
+        <select aria-label="Status filter" onchange="billFilter.status=this.value;reloadBills()">
           <option value="">All statuses</option>
           <option value="RECEIVED">New</option><option value="IN_WASH">Washing</option>
           <option value="IN_IRON">Ironing</option><option value="READY">Ready</option>
           <option value="OUT_FOR_DELIVERY">Out for delivery</option>
           <option value="DELIVERED">Delivered</option><option value="CANCELLED">Cancelled</option>
         </select>
-        <select aria-label="Payment filter" onchange="billFilter.pay=this.value;billFilter.page=1;renderBills()">
+        <select aria-label="Payment filter" onchange="billFilter.pay=this.value;reloadBills()">
           <option value="">All payments</option><option value="PAID">Paid</option>
           <option value="PARTIAL">Partial</option><option value="UNPAID">Unpaid</option>
         </select>
-        <input type="date" onchange="billFilter.from=this.value;renderBills()" title="From date" aria-label="From date">
-        <input type="date" onchange="billFilter.to=this.value;renderBills()" title="To date" aria-label="To date">
+        <input type="date" onchange="billFilter.from=this.value;reloadBills()" title="From date" aria-label="From date">
+        <input type="date" onchange="billFilter.to=this.value;reloadBills()" title="To date" aria-label="To date">
       </div>
       <div class="card listcard"><div id="bills-list"></div></div>
       <div class="pager" id="bills-pager"></div>
@@ -576,8 +580,8 @@
           </div>
           <div class="setfield">
             <label for="sf-role">Role</label>
-            <select id="sf-role"><option value="WASHER">Washer (washing &amp; ironing)</option><option value="DELIVERY">Delivery</option><option value="ADMIN">Admin (owner — full access)</option></select>
-            <small>Washers get wash and iron jobs, delivery gets pickups and drops.</small>
+            <select id="sf-role"><option value="WASHER">Washerman — dhulai aur press</option><option value="DELIVERY">Delivery — pickup aur delivery</option><option value="SUPERVISOR">Washerman / Manager — khud kaam bhi, sabka dekhein bhi</option><option value="MANAGER">Manager — sirf dekh-rekh</option><option value="ADMIN">Admin (owner — full access)</option></select>
+            <small>Washerman ko dhulai/press ka kaam, delivery ko pickup aur drop. "Washerman / Manager" wo hai jo khud bhi kaam karta hai aur baaki ka bhi dekhta hai.</small>
           </div>
           <div class="setfield addbtn">
             <button class="btn" id="sf-add" onclick="addStaff(this)">Add staff</button>

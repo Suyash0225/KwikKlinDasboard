@@ -208,6 +208,50 @@ a { color: var(--brand-600); text-decoration: none; }
 }
 .chip.on { background: var(--g-orange); border-color: transparent; color: #fff; }
 .chip b { font-variant-numeric: tabular-nums; }
+.chip:focus-visible { outline: 2px solid var(--g-orange); outline-offset: 2px; }
+/* Ginti apne pill mein — "Pending1" ek shabd jaisa chipak raha tha */
+.chip .cnt {
+  margin-left: 7px; padding: 1px 7px; border-radius: 999px;
+  background: var(--n100); color: var(--n600);
+  font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.chip.on .cnt { background: rgba(255,255,255,.28); color: #fff; }
+
+/* ---------- task cards ----------
+   Ek kaam = ek card. Poora card khulta hai (click/Enter) aur detail modal
+   mein poori kahani hoti hai; buttons stopPropagation karte hain taaki
+   "Done" dabane par detail na khul jaye. */
+.taskgrid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+.taskcard {
+  background: var(--n0); border: 1px solid var(--n200); border-radius: var(--radius);
+  padding: 14px 16px; cursor: pointer; transition: box-shadow .14s, transform .14s;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.taskcard:hover { box-shadow: 0 4px 14px rgba(16,24,40,.10); transform: translateY(-1px); }
+.taskcard:focus-visible { outline: 2px solid var(--g-orange); outline-offset: 2px; }
+.taskcard.off { opacity: .68; }
+.taskcard.late { border-left: 3px solid var(--danger); }
+.taskcard .tc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.taskcard .tc-title { font-weight: 700; font-size: .9375rem; line-height: 1.35; }
+.taskcard .tc-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.taskcard .tc-reply {
+  background: var(--n50); border-radius: var(--radius-sm); padding: 8px 10px;
+  font-size: 12.5px; color: var(--n600);
+}
+.taskcard .tc-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.taskcard .tc-acts .btn { flex: 1 1 auto; min-width: auto; }
+/* detail modal ki saaf do-column list */
+.dtl { display: flex; flex-direction: column; gap: 2px; }
+.dt-row {
+  display: flex; justify-content: space-between; gap: 16px;
+  padding: 8px 0; border-bottom: 1px solid var(--n100); font-size: 13px;
+}
+.dt-row:last-child { border-bottom: none; }
+.dt-row span { color: var(--n600); }
+.dt-row b { text-align: right; }
 
 /* ---------- buttons ----------
    Base = finger-sized (44px). The desktop fine-pointer block at the end of
@@ -357,9 +401,24 @@ a { color: var(--brand-600); text-decoration: none; }
   margin: 14px -16px calc(-16px - env(safe-area-inset-bottom));
   padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
   background: var(--n0); border-top: 1px solid var(--n100);
-  display: flex; gap: 10px;
+  display: flex; gap: 10px; flex-wrap: wrap;
 }
-.modal .btnrow .btn { flex: 1; min-height: 48px; }
+/* Phone par ye row TOOTNI chahiye, sikudni nahi.
+ *
+ * Pehle `flex: 1` tha — yani flex-basis 0 — aur .btn ka min-width sirf 44px.
+ * Char button (Close / Ask again / Cancel task / Mark done) 360px ke phone
+ * par 44px tak sikud jate the, aur unka `white-space: nowrap` text pill ke
+ * bahar nikal aata tha. `flex-basis: auto` + `min-width: auto` matlab koi
+ * button apne text se chhota ho hi nahi sakta; jagah kam padi to wo agli
+ * line par chala jata hai. Text kabhi nahi katta. */
+.modal .btnrow .btn {
+  flex: 1 1 auto; min-width: auto; min-height: 48px;
+}
+/* 4 lambe label wale row 320-380px par bhi na phate: thoda kam padding */
+@media (max-width: 400px) {
+  .modal .btnrow { gap: 8px; }
+  .modal .btnrow .btn { padding-inline: 13px; font-size: .8125rem; }
+}
 .drawer {
   position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 94vw);
   background: var(--n0); z-index: 96; box-shadow: -8px 0 30px rgba(0,0,0,.18);
@@ -685,12 +744,15 @@ b.subhead { display: block; font-size: 13.5px; }
   font-variant-numeric: tabular-nums;
 }
 .staffrow .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: stretch; }
-.staffrow .acts .btn { min-height: var(--tap); flex: 1; }
+/* wahi baat: "🔑 New password" jaisa label sikud kar bahar nahi nikalna chahiye */
+.staffrow .acts .btn { min-height: var(--tap); flex: 1 1 auto; min-width: auto; }
 .badge {
   font-size: 11.5px; font-weight: 700; letter-spacing: .4px; padding: 3px 9px;
   border-radius: 7px; background: var(--n100); color: var(--n600); white-space: nowrap;
 }
 .badge.role { background: var(--info-50); color: var(--info); }
+/* number staff aur customer dono hai — rokta kuch nahi, bas dikhta rahe */
+.badge.warn { background: var(--warn-50); color: #92600a; }
 .statuspill {
   font-size: 11.5px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
   white-space: nowrap;
@@ -764,12 +826,23 @@ b.subhead { display: block; font-size: 13.5px; }
   margin-top: 5px; text-align: center; color: #0a7cff; font-size: 13px;
   font-weight: 600; padding: 6px; border-top: 1px solid rgba(0,0,0,.09);
 }
+/* Jo options staff ko WhatsApp par bheje the — yahan sirf dikhne ke liye,
+   dabte wahin hain. Pehle ye "[buttons: ...]" bankar text mein aa jaate the. */
+.sentbtns { margin-top: 6px; border-top: 1px solid rgba(0,0,0,.09); }
+.sentbtns .tplbtn {
+  margin-top: 5px; text-align: center; color: #0a7cff; font-size: 13px;
+  font-weight: 600; padding: 6px; border-top: 1px solid rgba(0,0,0,.06);
+}
+.sentbtns .tplbtn:first-child { border-top: none; }
 .tapped {
   display: inline-block; background: rgba(0,0,0,.05); border-radius: 8px;
   padding: 3px 9px; font-weight: 600;
 }
 
 /* inbound files and pins: openable, not a dead [document] tag */
+/* voice note ke shabd — player ke neeche, padhne layak */
+.vtext { margin-top: 4px; font-size: 13px; line-height: 1.4; }
+.vtext.muted { font-style: italic; opacity: .7; font-size: 12px; }
 .filechip {
   display: inline-flex; align-items: center; gap: 7px; background: rgba(0,0,0,.05);
   border-radius: 9px; padding: 11px 12px; min-height: var(--tap); color: inherit; font-weight: 600;
@@ -1234,3 +1307,31 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
     scroll-behavior: auto !important;
   }
 }
+
+/* --- Trial/subscription banner (renderBillingBanner in app.js) ---------- */
+/* Har tab/page par sabse upar. SPA hai isliye ek hi element kaafi hai. */
+.billing-banner {
+  position: sticky; top: 0; z-index: 300;
+  padding: 9px 14px; text-align: center;
+  font-size: 13.5px; font-weight: 600; letter-spacing: .1px;
+}
+.billing-banner.warn   { background: var(--warn-50);   color: #92600a; box-shadow: inset 0 -1px 0 var(--warn); }
+.billing-banner.danger { background: var(--danger-50); color: #b31c3d; box-shadow: inset 0 -1px 0 var(--danger); }
+
+/* --- Feature locks (applyFeatureLocks in app.js) ------------------------ */
+.sidebar [data-s].locked, .tabbar [data-s].locked { opacity: .55; }
+.sidebar [data-s].locked:hover { opacity: .75; }
+
+/* --- Renew / recharge card (renewCard in app.js) ------------------------ */
+.renew-card {
+  position: fixed; right: 16px; bottom: 16px; z-index: 400; max-width: 380px;
+  background: var(--n0); border: 1px solid var(--n200); border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(16,24,40,.18); padding: 16px;
+}
+.renew-card .rc-body { display: flex; gap: 12px; }
+.renew-card .rc-ico { font-size: 24px; }
+.renew-card .rc-text b { display: block; margin-bottom: 2px; }
+.renew-card .rc-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.renew-card .btn { padding: 9px 14px; border-radius: 9px; font-weight: 700; text-decoration: none; }
+.renew-card .btn.ghost { background: var(--n0); color: var(--n800); border: 1px solid var(--n200); }
+@media (max-width: 600px) { .renew-card { left: 12px; right: 12px; max-width: none; } }

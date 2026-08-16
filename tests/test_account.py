@@ -15,11 +15,12 @@ from app.database import async_session_factory
 from app.models import (
     ROLE_OWNER,
     TENANT_ACTIVE,
-    TENANT_READ_ONLY,
+    TENANT_LOCKED,
     TENANT_TRIAL,
     Tenant,
     User,
 )
+from app.models.tenant import TENANT_PAST_DUE
 from app.services import auth, billing, plans
 
 AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
@@ -49,6 +50,20 @@ async def _clean():
             await s.execute(
                 sqltext(
                     "DELETE FROM billing_events WHERE tenant_id IN (SELECT id FROM tenants "
+                    f"WHERE owner_phone IN ('{PHONE}','{PHONE2}'))"
+                )
+            )
+            # invites bhi — warna tenants delete FK par gir jaata hai
+            await s.execute(
+                sqltext(
+                    "DELETE FROM invites WHERE tenant_id IN (SELECT id FROM tenants "
+                    f"WHERE owner_phone IN ('{PHONE}','{PHONE2}'))"
+                )
+            )
+            # receipts bhi — warna tenants delete FK par gir jaata hai
+            await s.execute(
+                sqltext(
+                    "DELETE FROM invoices WHERE tenant_id IN (SELECT id FROM tenants "
                     f"WHERE owner_phone IN ('{PHONE}','{PHONE2}'))"
                 )
             )
@@ -189,23 +204,25 @@ async def test_staff_limit_is_enforced_with_an_upgrade_hint(client) -> None:
             json={"name": f"Kaam Wala {i}", "email": f"k{i}@example.com", "role": "MANAGER"},
         )
         assert r.status_code == 201, r.text
-        assert r.json()["temp_password"], "naye user ko password milna chahiye"
+        assert r.json()["invite_path"].startswith("/invite/"), \
+            "naye user ko set-password INVITE LINK milna chahiye (password kabhi nahi)"
     r = await client.post(
         "/api/users", json={"name": "Chautha", "email": "c@example.com", "role": "STAFF"}
     )
     assert r.status_code == 402, "limit par 402 aana chahiye, 500 nahi"
-    assert "Pro" in r.json()["detail"]
+    assert "Premium" in r.json()["detail"]  # plan display names: Basic/Premium/Business
 
 
 async def test_read_only_tenant_can_look_but_not_touch(client) -> None:
-    """Paisa ruka: data dikhta hai, badalta nahi. Delete kabhi nahi."""
+    """Paisa ruka (past_due = read-only grace): data dikhta hai, badalta
+    nahi. Delete kabhi nahi."""
     await _signup(client)
     await _login(client)
     async with async_session_factory() as s:
         t = (
             await s.execute(select(Tenant).where(Tenant.owner_phone == PHONE))
         ).scalar_one()
-        t.status = TENANT_READ_ONLY
+        t.status = TENANT_PAST_DUE
         await s.commit()
 
     me = await client.get("/api/me")
@@ -276,22 +293,34 @@ async def test_paid_webhook_activates_the_shop_and_replay_is_safe(client) -> Non
     assert t.current_period_end > datetime.now(timezone.utc)
 
 
-async def test_dunning_moves_a_stale_past_due_to_read_only(client) -> None:
+async def test_sweep_locks_past_due_only_after_grace(client) -> None:
+    """past_due + 10 din = abhi grace mein (kuch nahi hota);
+    past_due + 31 din = locked. Data dono case mein safe."""
     await _signup(client)
     async with async_session_factory() as s:
         t = (
             await s.execute(select(Tenant).where(Tenant.owner_phone == PHONE))
         ).scalar_one()
-        t.status = "past_due"
+        t.status = TENANT_PAST_DUE
+        t.trial_ends_at = None
         t.current_period_end = datetime.now(timezone.utc) - timedelta(days=10)
         await s.commit()
     async with async_session_factory() as db:
-        assert await billing.run_dunning(db) >= 1
+        await billing.run_subscription_sweep(db)
     async with async_session_factory() as s:
         t = (
             await s.execute(select(Tenant).where(Tenant.owner_phone == PHONE))
         ).scalar_one()
-    assert t.status == TENANT_READ_ONLY
+        assert t.status == TENANT_PAST_DUE, "10 din = grace ke andar, lock nahi"
+        t.current_period_end = datetime.now(timezone.utc) - timedelta(days=31)
+        await s.commit()
+    async with async_session_factory() as db:
+        await billing.run_subscription_sweep(db)
+    async with async_session_factory() as s:
+        t = (
+            await s.execute(select(Tenant).where(Tenant.owner_phone == PHONE))
+        ).scalar_one()
+    assert t.status == TENANT_LOCKED
 
 
 # --- control panel (Suyash) -------------------------------------------------
@@ -312,20 +341,36 @@ async def test_control_panel_lists_clients_with_mrr(client) -> None:
     assert "mrr_inr" in d["summary"] and "onboarding_pending" in d["summary"]
 
 
-async def test_owner_can_create_a_client_and_hand_over_a_password(client) -> None:
+async def test_owner_can_create_a_client_via_invite_link(client) -> None:
+    """Control se client banao -> SET-PASSWORD link milta hai (plaintext
+    password kabhi nahi banta) -> owner khud password set karke login."""
     r = await client.post(
         "/control/api/tenants", headers=AUTH,
         json={"shop_name": "Phone Par Bika", "owner_name": "Seth ji", "phone": PHONE2,
               "email": "seth@example.com", "plan": "pro", "city": "Varanasi"},
     )
     assert r.status_code == 201, r.text
-    temp = r.json()["temp_password"]
-    assert temp
+    d = r.json()
+    assert "temp_password" not in d, "plaintext password kabhi response mein nahi!"
+    invite_path = d["invite_path"]
+    assert invite_path.startswith("/invite/")
 
-    # aur wo password sach mein chalta hai
-    login = await _login(client, email="seth@example.com", password=temp)
+    # invite page khulta hai
+    assert (await client.get(invite_path)).status_code == 200
+
+    # owner apna password khud set karta hai — aur seedha logged-in
+    token = invite_path.rsplit("/", 1)[1]
+    r = await client.post("/api/invite/accept",
+                          json={"token": token, "password": "seth-ka-naya-pw1"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    client.cookies.delete("kk_session")
+
+    # wahi password login mein chalta hai; dobara accept nahi hota
+    login = await _login(client, email="seth@example.com", password="seth-ka-naya-pw1")
     assert login.status_code == 200
-    assert login.json()["must_change_password"] is True
+    r = await client.post("/api/invite/accept",
+                          json={"token": token, "password": "dusra-pw-99999"})
+    assert r.status_code == 400
 
 
 async def test_duplicate_signup_names_the_shop_that_has_the_number(client) -> None:
@@ -375,8 +420,19 @@ async def test_test_signups_can_be_deleted_but_home_never(client) -> None:
         await client.delete(f"/control/api/tenants/{slug}", headers=AUTH)
     ).status_code == 400
 
+    # Naya model: pehla DELETE = SOFT (recycle bin — data salamat), phir
+    # purge hi asli hard delete hai (recovery window ka matlab yahi hai).
     r = await client.delete(
         f"/control/api/tenants/{slug}?confirm={slug}", headers=AUTH
+    )
+    assert r.status_code == 200 and r.json()["soft"] is True
+    async with async_session_factory() as s:
+        t2 = (
+            await s.execute(select(Tenant).where(Tenant.owner_phone == PHONE))
+        ).scalar_one()
+        assert t2.deleted_at is not None, "soft-delete ne data uda diya?!"
+    r = await client.delete(
+        f"/control/api/tenants/{slug}?confirm={slug}&purge=true", headers=AUTH
     )
     assert r.status_code == 200 and r.json()["users_removed"] >= 1
     async with async_session_factory() as s:
@@ -411,4 +467,5 @@ async def test_owner_can_change_plan_and_extend(client) -> None:
     assert r.status_code == 200
     d = r.json()
     assert d["plan"] == "growth" and d["status"] == TENANT_ACTIVE
-    assert d["onboarding_done"] is True and d["mrr_inr"] == 3999
+    assert d["onboarding_done"] is True
+    assert d["mrr_inr"] == plans.get("growth").price_inr  # config se, hardcode nahi

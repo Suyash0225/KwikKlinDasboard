@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Set your password — KwikKlin</title>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#0f1420; color:#e6ebf5; font:15px/1.5 "Segoe UI",system-ui,sans-serif; padding:16px; }
+  .card { background:#1a2233; border:1px solid #2a3550; border-radius:14px;
+          padding:28px; width:100%; max-width:400px; }
+  h1 { font-size:19px; margin-bottom:4px; }
+  p  { color:#8b98b8; font-size:13.5px; margin-bottom:18px; }
+  label { display:block; font-size:12.5px; color:#8b98b8; margin:12px 0 4px; }
+  input { width:100%; background:#212b42; color:#e6ebf5; border:1px solid #2a3550;
+          border-radius:8px; padding:10px 12px; font:inherit; }
+  input:focus { outline:none; border-color:#5aa7ff; }
+  button { width:100%; margin-top:18px; padding:11px; border:none; border-radius:8px;
+           background:#5aa7ff; color:#0f1420; font-weight:700; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:wait; }
+  .err { color:#f2647e; font-size:13px; margin-top:10px; min-height:18px; }
+
+/* password field: show/hide eye (login, signup, set-password) */
+.pw-wrap { position: relative; display: block; }
+.pw-wrap input { width: 100%; padding-right: 44px; }
+.pw-wrap .eye {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; font-size: 16px;
+  line-height: 1; padding: 4px 6px; border-radius: 6px;
+}
+.pw-wrap .eye:focus-visible { outline: 3px solid #ffd166; outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🔐 Apna password set karein</h1>
+  <p>KwikKlin account taiyar hai — bas ek password chahiye (kam se kam 8 characters). Ye sirf aap jaante hain; humein kabhi nahi dikhta.</p>
+  <label>Naya password</label>
+  <input id="pw" type="password" autocomplete="new-password" autofocus>
+  <label>Dobara likhein</label>
+  <input id="pw2" type="password" autocomplete="new-password">
+  <button id="go">Set password &amp; login</button>
+  <div class="err" id="err"></div>
+</div>
+<script>
+const token = location.pathname.split("/").pop();
+document.getElementById("go").onclick = async () => {
+  const pw = document.getElementById("pw").value;
+  const pw2 = document.getElementById("pw2").value;
+  const err = document.getElementById("err");
+  err.textContent = "";
+  if (pw.length < 8) { err.textContent = "Password kam se kam 8 characters ka ho"; return; }
+  if (pw !== pw2)    { err.textContent = "Dono passwords same nahi hain"; return; }
+  const btn = document.getElementById("go");
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/invite/accept", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ token, password: pw }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || "kuch galat hua");
+    location.href = d.next_url || "/welcome";
+  } catch (e) {
+    err.textContent = e.message;
+    btn.disabled = false;
+  }
+};
+
+/* Har password field par show/hide eye — user apna typed password dekh
+   sake (galat password ki sabse aam wajah yahi hoti hai). */
+(function attachEyes() {
+  var SHOW = "👁", HIDE = "🙈";
+  document.querySelectorAll('input[type="password"]').forEach(function (inp) {
+    if (inp.closest(".pw-wrap")) return;
+    var wrap = document.createElement("div");
+    wrap.className = "pw-wrap";
+    inp.parentNode.insertBefore(wrap, inp);
+    wrap.appendChild(inp);
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "eye";
+    b.textContent = SHOW;
+    b.setAttribute("aria-label", "Show password");
+    b.addEventListener("click", function () {
+      var show = inp.type === "password";
+      inp.type = show ? "text" : "password";
+      b.textContent = show ? HIDE : SHOW;
+      b.setAttribute("aria-label", show ? "Hide password" : "Show password");
+      inp.focus();
+    });
+    wrap.appendChild(b);
+  });
+})();
+</script>
+</body>
+</html>

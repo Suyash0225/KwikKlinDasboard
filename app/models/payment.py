@@ -13,11 +13,11 @@ from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 from app.models.enums import PaymentMethod
 
 
-class Payment(Base):
+class Payment(Base, TenantScoped):
     __tablename__ = "payments"
 
     id: Mapped[uuid.UUID] = mapped_column(

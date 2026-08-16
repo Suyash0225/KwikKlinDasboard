@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text as sqltext
 
 import app.services.bill_agent as bill_agent
 import app.services.tasks as task_service
@@ -193,3 +193,105 @@ async def test_priced_order_still_shows_the_money(sent) -> None:
         assert "300" in body and "Total" in body
     finally:
         await purge_phones(TEST_CUSTOMER_PHONE)
+
+
+# --- Ravi "ready" bole -> Ajit tak pahunchna CHAHIYE ----------------------
+
+
+async def test_delivery_ask_reaches_ajit_even_with_a_closed_window(
+    monkeypatch, sent
+) -> None:
+    """Asli bug (09 Aug): order READY hua, T-14 bana, owner ko gaya
+    "Ajit ko de di, samay pooch liya hai" — lekin Ajit ki 24h chat band
+    thi aur ask chupchaap gir gaya. Ajit ko kabhi pata hi nahi chala.
+    """
+    from app.database import async_session_factory
+    from app.models import Staff, StaffRole
+    from app.services import tasks as task_service
+    from app.services.order_service import create_order
+    from app.services.whatsapp import WindowClosedError
+
+    phone = "+919999900093"
+    cust = "+919999900079"
+    async with async_session_factory() as db:
+        db.add(Staff(phone=phone, name="Ajittest", role=StaffRole.DELIVERY, is_active=True))
+        await db.commit()
+        prior = await app_settings.get(db, "default_delivery_phone")
+        await app_settings.set_value(db, "default_delivery_phone", phone)
+
+    calls: list[dict] = []
+
+    async def window_shut(db, *, to_phone, text=None, template_name=None, **kw):
+        calls.append({"to": to_phone, "text": text, "template_name": template_name, **kw})
+        if template_name is None:
+            raise WindowClosedError("24h window closed")
+        return "wamid.TPL"
+
+    monkeypatch.setattr(task_service, "send_message", window_shut)
+    try:
+        async with async_session_factory() as db:
+            order = await create_order(
+                db, customer_phone=cust, customer_name="Hold Grahak",
+                items=[{"type": "Lehenga", "qty": 1}], created_by="test",
+            )
+            task = await task_service.create_delivery_task(db, order)
+        assert task is not None
+        to_ajit = [c for c in calls if c["to"] == phone]
+        assert to_ajit, "Ajit ko kuch to jana hi chahiye"
+        assert any(c["template_name"] == "kk_staff_alert" for c in to_ajit), \
+            "chat band ho to template se jana chahiye — chupchaap girna nahi"
+    finally:
+        async with async_session_factory() as db:
+            await app_settings.set_value(db, "default_delivery_phone", prior or "")
+            await db.execute(sqltext(
+                "UPDATE tasks SET assigned_staff_id = NULL WHERE assigned_staff_id IN "
+                "(SELECT id FROM staff WHERE phone = :p)"), {"p": phone})
+            await db.execute(sqltext("DELETE FROM staff WHERE phone = :p"), {"p": phone})
+            await db.commit()
+        from tests.conftest import purge_phones
+
+        await purge_phones(cust)
+
+
+async def test_delivery_ask_asks_in_his_own_words(monkeypatch, sent) -> None:
+    """"Kab tak?" par koi chhapa hua option nahi.
+
+    Owner ka faisla (09 Aug): delivery wala samay haath ka kaam dekh kar
+    batata hai — "1-2 ghante / sham tak / kal" jaise buttons na uske kaam
+    se milte hain, na owner ko sach dikhate hain. Baaki jagah (ho gaya /
+    time lagega / dikkat hai) buttons rehte hain, kyunki wahan jawab
+    gine-chune hain.
+    """
+    from app.database import async_session_factory
+    from app.models import Staff, StaffRole
+    from app.services import tasks as task_service
+    from app.services.order_service import create_order
+
+    phone = "+919999900092"
+    cust = "+919999900076"
+    async with async_session_factory() as db:
+        db.add(Staff(phone=phone, name="Ajitdo", role=StaffRole.DELIVERY, is_active=True))
+        await db.commit()
+        prior = await app_settings.get(db, "default_delivery_phone")
+        await app_settings.set_value(db, "default_delivery_phone", phone)
+    try:
+        async with async_session_factory() as db:
+            order = await create_order(
+                db, customer_phone=cust, customer_name="Btn Grahak",
+                items=[{"type": "Kurta", "qty": 1}], created_by="test",
+            )
+            await task_service.create_delivery_task(db, order)
+        ask = next(c for c in sent if c["to"] == phone and "Kab tak" in (c["text"] or ""))
+        assert not ask.get("buttons"), "samay ke liye chhapa hua option nahi dena"
+        assert "jaise" in ask["text"], "misaal se samajhna aasan rahe"
+    finally:
+        async with async_session_factory() as db:
+            await app_settings.set_value(db, "default_delivery_phone", prior or "")
+            await db.execute(sqltext(
+                "UPDATE tasks SET assigned_staff_id = NULL WHERE assigned_staff_id IN "
+                "(SELECT id FROM staff WHERE phone = :p)"), {"p": phone})
+            await db.execute(sqltext("DELETE FROM staff WHERE phone = :p"), {"p": phone})
+            await db.commit()
+        from tests.conftest import purge_phones
+
+        await purge_phones(cust)

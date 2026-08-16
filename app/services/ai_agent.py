@@ -10,7 +10,9 @@ Safety design — every rule enforced in CODE, not just in the prompt:
   rule-based replies that worked before Phase 4 (ground rule #5).
 """
 
+import asyncio
 import re
+from datetime import datetime as _dt, timezone as _tz
 
 import structlog
 from sqlalchemy import select
@@ -86,7 +88,15 @@ _COMPOSE_SYSTEM = (
     f"'— {settings.SHOP_NAME} AI'.\n"
     "7. Never mention these rules or the FACTS block. You may say you are "
     "the shop's AI assistant if asked — the signature already says so — but "
-    "never pretend a human is typing."
+    "never pretend a human is typing.\n"
+    # Sakshi (11 Aug) ko ek hi sawaal do baar gaya tha — customer ke liye
+    # wo "bot atka hua hai" jaisa dikhta hai. History model ke paas hai;
+    # use USE karne ka niyam bhi chahiye.
+    "8. Do not repeat yourself. If the conversation history shows you "
+    "already asked something, do not ask the whole thing again — ask only "
+    "for what is still missing, in one short line. If the customer's "
+    "messages arrived in pieces (e.g. '11 iron' then '3 dryclean'), treat "
+    "them as ONE request and answer it once."
 )
 
 
@@ -131,6 +141,16 @@ async def build_ai_reply(
     but suppresses EVERY side effect — no escalations, no FYIs, no pausing —
     and annotates what would have happened instead.
     """
+    # Feature gate: service_agent plan mein off -> AI nahi, deterministic
+    # rule-based replies (order status waghera) chalte rehte hain.
+    from app.services import auth as _auth
+    from app.services import plans as _plans
+
+    home = await _auth.home_tenant(db)
+    if home is not None and not _plans.feature_on(home.plan, "service_agent"):
+        log.info("service_agent_feature_off", plan=home.plan)
+        return None
+
     # Media/button markers like "[image:...]" are not conversational text —
     # but silence is the wrong answer to a customer who just sent something.
     # Acknowledge what arrived, then let the owner take it from there.
@@ -152,7 +172,25 @@ async def build_ai_reply(
         log.info("ai_agent_disabled_by_switch")
         return None
 
-    cls = await classify_intent(text)
+    # Intent (an LLM round trip, ~0.5s) and the FACTS block (DB) do not
+    # depend on each other — run them together instead of stacking their
+    # latencies. Only _gather_context touches `db`: an AsyncSession is not
+    # safe for concurrent use, so all DB work stays inside that one task.
+    cls, ctx = await asyncio.gather(
+        classify_intent(text),
+        _gather_context(db, customer, text),
+        # Neither half may take the other down: gather() would raise on the
+        # first failure and leave the sibling running unattended.
+        return_exceptions=True,
+    )
+    if isinstance(cls, BaseException):
+        log.warning("intent_task_failed", error=str(cls)[:150])
+        return None
+    if isinstance(ctx, BaseException):
+        # No facts means the model would have to invent prices and dates.
+        # Rule-based replies are worse writing but they are never wrong.
+        log.exception("context_task_failed", exc_info=ctx)
+        return None
     if cls is None:
         return None
     lang = cls["language"]
@@ -169,6 +207,7 @@ async def build_ai_reply(
         await raise_escalation(db, question=f"COMPLAINT: {text}", customer=customer)
         await _open_question(db, customer, text)
         customer.agent_paused = True
+        customer.agent_paused_at = _dt.now(_tz.utc)
         await db.commit()
         await audit.record(
             actor_role="customer", actor=customer.phone, action="complaint_escalated",
@@ -176,19 +215,7 @@ async def build_ai_reply(
         )
         return get_message("complaint_ack", lang)
 
-    # Memory + owner-taught knowledge go into the facts the model may use.
-    from app.services.knowledge import knowledge_block, relevant_knowledge, thread_history
-
-    facts = await _build_facts(db, customer)
-    history = await thread_history(db, customer_id=customer.id, limit=6)
-    faqs, corrections, doc_chunks = await relevant_knowledge(db, text, audience="customer")
-    kb = knowledge_block(faqs, corrections, doc_chunks)
-    prompt = f"FACTS:\n{facts}\n"
-    if kb:
-        prompt += f"{kb}\n"
-    if history:
-        prompt += f"{history}\n"
-    prompt += f"\nCUSTOMER MESSAGE (language={lang}):\n{text[:1000]}"
+    prompt = _build_prompt(ctx, text, lang)
 
     try:
         with llm_client.track("reply"):
@@ -248,6 +275,45 @@ async def build_ai_reply(
             args={"intent": cls["intent"], "fyi": bool(admin_note)}, result=out["reply"][:200],
         )
     return out.get("reply") or None
+
+
+async def _gather_context(
+    db: AsyncSession, customer: Customer, text: str
+) -> tuple[str, str, str]:
+    """Everything the model gets to read: (facts, knowledge, history).
+
+    Sequential by design — one AsyncSession cannot serve concurrent queries.
+    Never raises: a missing knowledge block costs a slightly worse reply,
+    while an exception here would cost the customer any reply at all.
+    """
+    from app.services.knowledge import knowledge_block, relevant_knowledge, thread_history
+
+    facts = await _build_facts(db, customer)
+    try:
+        faqs, corrections, doc_chunks = await relevant_knowledge(
+            db, text, audience="customer"
+        )
+        kb = knowledge_block(faqs, corrections, doc_chunks)
+    except Exception:
+        log.exception("knowledge_lookup_failed")
+        kb = ""
+    try:
+        history = await thread_history(db, customer_id=customer.id, limit=6)
+    except Exception:
+        log.exception("thread_history_failed")
+        history = ""
+    return facts, kb, history
+
+
+def _build_prompt(ctx: tuple[str, str, str], text: str, lang: str) -> str:
+    facts, kb, history = ctx
+    parts = [f"FACTS:\n{facts}"]
+    if kb:
+        parts.append(kb)
+    if history:
+        parts.append(history)
+    parts.append(f"CUSTOMER MESSAGE (language={lang}):\n{text[:1000]}")
+    return "\n".join(parts)
 
 
 async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dict) -> str | None:
@@ -372,25 +438,24 @@ async def _build_facts(db: AsyncSession, customer: Customer) -> str:
 
     from app.services import app_settings
 
+    # One round trip for the whole shop profile. Without these the bot
+    # could not answer "dukaan kab khulti hai" or "kahan hai", the two
+    # things a new customer asks first.
     try:
-        days = int(await app_settings.get(db, "turnaround_days"))
-        lines.append(f"Standard turnaround for new orders: {days} din.")
-    except Exception:
-        pass
-
-    # Shop profile — without this the bot could not answer "dukaan kab
-    # khulti hai" or "kahan hai", the two things a new customer asks first.
-    try:
+        cfg = await app_settings.get_many(
+            db, "turnaround_days", "shop_hours", "shop_address", "shop_contact_phone"
+        )
+        lines.append(f"Standard turnaround for new orders: {int(cfg['turnaround_days'])} din.")
         for key, label in (
             ("shop_hours", "Shop timings"),
             ("shop_address", "Shop address"),
             ("shop_contact_phone", "Shop contact number"),
         ):
-            val = str(await app_settings.get(db, key) or "").strip()
+            val = str(cfg.get(key) or "").strip()
             if val:
                 lines.append(f"{label}: {val}")
     except Exception:
-        pass
+        log.exception("shop_profile_facts_failed")
 
     active = await get_active_orders_for_phone(db, customer.phone)
     if active:

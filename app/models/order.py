@@ -17,12 +17,12 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy import Date as SADate
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 from app.models.enums import OrderStatus, PaymentMethod, PaymentStatus
 
 
@@ -37,15 +37,20 @@ def derive_payment_status(
     return PaymentStatus.PAID
 
 
-class Order(Base):
+class Order(Base, TenantScoped):
     __tablename__ = "orders"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "order_number", name="uq_orders_tenant_order_number"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    # Human-facing, e.g. "LDY-20260801-0042". Generation logic comes in
-    # Phase 3 (order_service). Unique constraint protects us regardless.
-    order_number: Mapped[str] = mapped_column(String(30), unique=True, index=True)
+    # Human-facing, e.g. "KK-20260801-01". PER-TENANT unique (self-serve
+    # gate): numbering ctx-scoped hai, to do shops ka "-01" clash na kare.
+    order_number: Mapped[str] = mapped_column(String(30), index=True)
 
     customer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("customers.id"), index=True

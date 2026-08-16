@@ -241,6 +241,97 @@ async def check_stop_throttle() -> None:
                 pass
 
 
+async def check_marketing_eligible_bulk(
+    db: AsyncSession, customer_ids: list
+) -> dict:
+    """Same gate as check_marketing_eligible, for a whole segment at once.
+
+    The per-customer version costs ~6 queries; queueing a 500-person
+    campaign was 3000 round trips before the first message went out. This
+    is a fixed 5, whatever the reach. Reasons match the single-customer
+    version exactly — one is not allowed to be laxer than the other.
+    """
+    from datetime import datetime as _dt
+
+    from app.models import AuditLog, Escalation
+    from app.services import app_settings
+
+    ids = list(customer_ids)
+    verdict: dict = {}
+    if not ids:
+        return verdict
+
+    now = _dt.now(timezone.utc)
+    month_ago = now - timedelta(days=30)
+
+    cap = int(await app_settings.get(db, "marketing_freq_cap_per_month"))
+    min_gap = timedelta(days=max(1, 30 // max(cap, 1)))
+
+    customers = {
+        c.id: c
+        for c in (
+            await db.execute(select(Customer).where(Customer.id.in_(ids)))
+        ).scalars().all()
+    }
+    complained = set(
+        (
+            await db.execute(
+                select(Escalation.customer_id)
+                .where(
+                    Escalation.customer_id.in_(ids),
+                    Escalation.question.like("COMPLAINT:%"),
+                    Escalation.created_at >= month_ago,
+                )
+                .group_by(Escalation.customer_id)
+            )
+        ).scalars().all()
+    )
+    busy = set(
+        (
+            await db.execute(
+                select(Order.customer_id)
+                .where(Order.customer_id.in_(ids), Order.status.in_(ACTIVE_STATUSES))
+                .group_by(Order.customer_id)
+            )
+        ).scalars().all()
+    )
+    phones = {c.phone: cid for cid, c in customers.items() if c.phone}
+    bad_rated = set()
+    if phones:
+        rated = (
+            await db.execute(
+                select(AuditLog.actor)
+                .where(
+                    AuditLog.action == "rating",
+                    AuditLog.at >= month_ago,
+                    AuditLog.actor.in_(tuple(phones)),
+                    AuditLog.result.like("%agent paused%"),
+                )
+                .group_by(AuditLog.actor)
+            )
+        ).scalars().all()
+        bad_rated = {phones[p] for p in rated if p in phones}
+
+    # Order matters: it is the reason the owner sees on the skipped row.
+    for cid in ids:
+        cust = customers.get(cid)
+        if cust is None or not cust.is_active:
+            verdict[cid] = (False, "inactive")
+        elif cust.opted_out or cust.marketing_opt_out:
+            verdict[cid] = (False, "opted_out")
+        elif cust.last_marketing_at and now - cust.last_marketing_at < min_gap:
+            verdict[cid] = (False, "freq_cap")
+        elif cid in complained:
+            verdict[cid] = (False, "recent_complaint")
+        elif cid in busy:
+            verdict[cid] = (False, "active_order")
+        elif cid in bad_rated:
+            verdict[cid] = (False, "recent_bad_rating")
+        else:
+            verdict[cid] = (True, "")
+    return verdict
+
+
 async def check_marketing_eligible(db: AsyncSession, customer_id) -> tuple[bool, str]:
     """THE single gate (owner's spec): opt-out, active order, monthly cap,
     recent bad rating — one call, so nothing is ever forgotten."""

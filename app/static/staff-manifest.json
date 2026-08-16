@@ -1,0 +1,14 @@
+{
+  "name": "Kwik Klin — Staff",
+  "short_name": "KK Staff",
+  "description": "Apna kaam, apne phone par",
+  "start_url": "/staff",
+  "scope": "/staff",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#111827",
+  "theme_color": "#111827",
+  "icons": [
+    {"src": "/staff/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}

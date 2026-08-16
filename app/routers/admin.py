@@ -30,7 +30,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -48,20 +48,27 @@ from app.models import (
     Expense,
     OpenQuestion,
     Order,
+    OrderStatus,
     OrderStatusHistory,
     Payment,
+    PaymentStatus,
     Rate,
     Staff,
     StaffRole,
 )
 from app.services import audit
 from app.utils.phone import normalize_phone as _norm_phone
-from app.routers.orders import require_admin_key
+from app.routers.orders import require_admin_key, require_admin_owner, require_feature
 from app.services.order_service import ACTIVE_STATUSES, get_active_orders_for_phone
 from app.services.whatsapp import SendError, WindowClosedError, send_image, send_message
 from app.utils.phone import normalize_phone
 
 _MEDIA_DIR = Path(__file__).resolve().parent.parent / "media"
+
+# Dukaan IST mein jeeti hai. "5 August ke bill" ka matlab wahan ka poora
+# din hai, UTC ka nahi — warna subah 5:30 se pehle ke bill pichhle din
+# mein gin jaate.
+IST = timezone(timedelta(hours=5, minutes=30))
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 log = structlog.get_logger()
@@ -194,6 +201,179 @@ async def customers_list(
     ]
 
 
+@router.get("/api/bills", dependencies=[Depends(require_admin_key)])
+async def bills_page(
+    db: AsyncSession = Depends(get_db),
+    q: str = Query(default="", max_length=60),
+    status: str = Query(default=""),
+    payment: str = Query(default=""),
+    date_from: str = Query(default=""),
+    date_to: str = Query(default=""),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    """Bills ka EK page — chunaav, chhantai aur ginti sab DB par.
+
+    Pehle ye page sabse naye 200 order utaar kar browser mein chhaanta
+    tha. Ek dukaan ke shuruati mahinon tak wo chalta hai, phir do tarah se
+    tootta hai: 201-wa bill kabhi milta hi nahi (na search se, na page
+    badalne se), aur har baar poora 200 ka bojh phone par utarta hai.
+
+    Ab page wahi maangta hai jo dikhana hai — 25 rows — aur `total` alag
+    se aata hai taaki "Page 3 of 47" sach bata sake. Saare filter (search,
+    status, payment, tareekh) DB tak jaate hain, isliye purana bill bhi
+    utni hi aasani se milta hai jitna aaj ka.
+
+    Tenant ka pehra alag se lagane ki zaroorat nahi — wo har query par
+    apne aap lagta hai (loader criteria + RLS).
+    """
+    where = []
+    term = q.strip()
+    if term:
+        digits = re.sub(r"\D", "", term)
+        like = f"%{term}%"
+        # Order number, naam, ya number — teenon ek hi khaane se
+        conds = [Order.order_number.ilike(like), Customer.name.ilike(like)]
+        if digits and len(digits) >= 3:
+            conds.append(Customer.phone.ilike(f"%{digits}%"))
+        where.append(or_(*conds))
+    if status:
+        try:
+            where.append(Order.status == OrderStatus[status.upper()])
+        except KeyError:
+            raise HTTPException(status_code=400, detail=f"unknown status {status!r}")
+    if payment:
+        try:
+            where.append(Order.payment_status == PaymentStatus[payment.upper()])
+        except KeyError:
+            raise HTTPException(status_code=400, detail=f"unknown payment {payment!r}")
+    for raw, op in ((date_from, ">="), (date_to, "<=")):
+        if not raw:
+            continue
+        try:
+            d = date.fromisoformat(raw)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"bad date {raw!r}")
+        # Din ki seema IST mein soch kar banti hai, kyunki dukaan wahi jeeti hai
+        edge = datetime.combine(d, time.min if op == ">=" else time.max, tzinfo=IST)
+        where.append(Order.created_at >= edge if op == ">=" else Order.created_at <= edge)
+
+    base = select(Order, Customer).join(Customer, Order.customer_id == Customer.id)
+    if where:
+        base = base.where(*where)
+    total = (
+        await db.execute(
+            select(func.count()).select_from(
+                base.with_only_columns(Order.id).order_by(None).subquery()
+            )
+        )
+    ).scalar_one()
+    rows = (
+        await db.execute(base.order_by(Order.created_at.desc()).limit(limit).offset(offset))
+    ).all()
+    return {
+        "total": total,
+        "items": [
+            {
+                "order_number": o.order_number,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+                "customer_name": c.name,
+                "customer_phone": c.phone,
+                "items": o.items,
+                "total_amount": str(o.total_amount) if o.total_amount is not None else None,
+                "amount_paid": str(o.amount_paid or 0),
+                "status": o.status.name,
+                "payment_status": o.payment_status.name,
+                "expected_delivery": (
+                    o.expected_delivery.isoformat() if o.expected_delivery else None
+                ),
+                "priority": o.priority,
+            }
+            for o, c in rows
+        ],
+    }
+
+
+@router.get("/api/events", dependencies=[Depends(require_admin_key)])
+async def admin_events(request: Request) -> StreamingResponse:
+    """Live updates ka connection — dashboard khud ko taaza rakhta hai.
+
+    Yahi wo cheez hai jiske na hone se "Ajit ne bill banaya par dashboard
+    par dikha hi nahi" hota tha. Data hamesha sahi tha; khuli hui page ne
+    dobara poocha hi nahi tha.
+
+    Is route par jaan-boojh kar `Depends(get_db)` NAHI hai. Wo session poore
+    stream ke waqt tak — yani ghanton — pakda rehta, aur do-chaar dashboard
+    khulte hi pool khali ho jaata; baaki har request wahin ruk jaati. Tenant
+    middleware se aa chuka hota hai, isliye yahan DB ki zaroorat hi nahi.
+    """
+    from app.services import events, tenant_context
+
+    tid = tenant_context.current_tenant_id.get()
+    return StreamingResponse(
+        events.stream(tid, request.is_disconnected),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            # nginx/cloudflared ko: is stream ko buffer mat karo, warna
+            # khabar tabhi pahunchti hai jab kaafi jama ho jaye
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/api/customers/search", dependencies=[Depends(require_admin_key)])
+async def customers_search(
+    db: AsyncSession = Depends(get_db),
+    q: str = Query(default="", max_length=60),
+    limit: int = Query(default=8, ge=1, le=25),
+) -> list[dict]:
+    """Naam ya number ka tukda -> chand milte-julte customer. Bill ke liye.
+
+    Ye kaam pehle BROWSER karta tha: poori customer list utar kar wahin
+    filter. Ek dukaan aur teen sau customer tak wo chalta hai; pandrah
+    dukaanon aur lakhon rows par wo do tarah se tootta hai — page bhaari ho
+    jaata hai, aur jo customer pehle 300 mein nahi tha wo mila hi nahi
+    karta tha (staff ko lagta tha "naya customer hai", aur duplicate ban
+    jaata tha).
+
+    Ab chunaav DB karta hai: tenant ka pehra RLS/loader-criteria se apne
+    aap lagta hai, aur `limit` DB tak jaata hai — network par sirf aath
+    row aati hain, chahe customer paanch lakh hon.
+
+    Number likha ho to number se, warna naam se. Dono par index hai
+    (ix_customers_tenant_phone_prefix / ix_customers_name_trgm).
+    """
+    term = q.strip()
+    if len(term) < 2:
+        return []       # ek akshar par poori dukaan lautana bekaar hai
+    digits = re.sub(r"\D", "", term)
+    if digits and len(digits) >= 3:
+        # Number ka tukda: aage se bhi mile aur beech se bhi (log 98765...
+        # bhi likhte hain aur +91 98765... bhi)
+        where = Customer.phone.ilike(f"%{digits}%")
+    else:
+        where = Customer.name.ilike(f"%{term}%")
+    rows = (
+        await db.execute(
+            select(Customer)
+            .where(where, Customer.is_active)
+            .order_by(Customer.last_message_at.desc().nulls_last())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return [
+        {
+            "name": c.name,
+            "phone": c.phone,
+            "address": c.address,
+            "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
+        }
+        for c in rows
+    ]
+
+
 class CustomerEditIn(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, min_length=6, max_length=20)
@@ -249,7 +429,7 @@ async def customer_edit(
     return {"ok": True, "phone": cust.phone}
 
 
-@router.delete("/api/customers/{phone}", dependencies=[Depends(require_admin_key)])
+@router.delete("/api/customers/{phone}", dependencies=[Depends(require_admin_owner)])
 async def customer_delete(
     phone: str,
     db: AsyncSession = Depends(get_db),
@@ -317,7 +497,7 @@ class ExpenseIn(BaseModel):
     description: str | None = Field(default=None, max_length=300)
 
 
-@router.get("/api/expenses", dependencies=[Depends(require_admin_key)])
+@router.get("/api/expenses", dependencies=[Depends(require_admin_owner)])
 async def expenses_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
     rows = (
         await db.execute(select(Expense).order_by(Expense.spent_on.desc()).limit(200))
@@ -334,7 +514,7 @@ async def expenses_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
     ]
 
 
-@router.post("/api/expenses", dependencies=[Depends(require_admin_key)], status_code=201)
+@router.post("/api/expenses", dependencies=[Depends(require_admin_owner)], status_code=201)
 async def expense_create(body: ExpenseIn, db: AsyncSession = Depends(get_db)) -> dict:
     exp = Expense(
         category=body.category,
@@ -348,7 +528,7 @@ async def expense_create(body: ExpenseIn, db: AsyncSession = Depends(get_db)) ->
     return {"id": str(exp.id)}
 
 
-@router.delete("/api/expenses/{expense_id}", dependencies=[Depends(require_admin_key)])
+@router.delete("/api/expenses/{expense_id}", dependencies=[Depends(require_admin_owner)])
 async def expense_delete(expense_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     try:
         eid = uuid_module.UUID(expense_id)
@@ -365,7 +545,7 @@ async def expense_delete(expense_id: str, db: AsyncSession = Depends(get_db)) ->
 
 # ---------- Reports ----------
 
-@router.get("/api/reports/summary", dependencies=[Depends(require_admin_key)])
+@router.get("/api/reports/summary", dependencies=[Depends(require_admin_owner), Depends(require_feature("reports"))])
 async def reports_summary(db: AsyncSession = Depends(get_db)) -> dict:
     """Money overview. NOTE: revenue is approximated as payments recorded on
     orders CREATED in the period (a proper payments ledger is in ROADMAP).
@@ -455,7 +635,7 @@ async def rates_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
     ]
 
 
-@router.post("/api/rates", dependencies=[Depends(require_admin_key)], status_code=201)
+@router.post("/api/rates", dependencies=[Depends(require_admin_owner)], status_code=201)
 async def rate_create(body: RateIn, db: AsyncSession = Depends(get_db)) -> dict:
     rate = Rate(service=body.service.strip(), garment=body.garment.strip(),
                 unit=body.unit, rate=body.rate)
@@ -469,7 +649,7 @@ async def rate_create(body: RateIn, db: AsyncSession = Depends(get_db)) -> dict:
     return {"id": str(rate.id)}
 
 
-@router.put("/api/rates/{rate_id}", dependencies=[Depends(require_admin_key)])
+@router.put("/api/rates/{rate_id}", dependencies=[Depends(require_admin_owner)])
 async def rate_update(rate_id: str, body: RateUpdateIn, db: AsyncSession = Depends(get_db)) -> dict:
     try:
         rid = uuid_module.UUID(rate_id)
@@ -492,13 +672,13 @@ async def rate_update(rate_id: str, body: RateUpdateIn, db: AsyncSession = Depen
 class StaffIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     phone: str
-    role: str = Field(pattern="^(WASHER|DELIVERY|ADMIN)$")
+    role: str = Field(pattern="^(WASHER|DELIVERY|SUPERVISOR|MANAGER|ADMIN)$")
 
 
 class StaffUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=120)
     phone: str | None = Field(default=None, min_length=6, max_length=20)
-    role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY|ADMIN)$")
+    role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY|SUPERVISOR|MANAGER|ADMIN)$")
     is_active: bool | None = None
 
 
@@ -519,6 +699,50 @@ async def _active_order_count(db: AsyncSession, staff_id: uuid_module.UUID) -> i
     ).scalar_one()
 
 
+async def _customer_clash(db: AsyncSession, phone: str) -> str | None:
+    """Ye number kisi customer ka bhi to nahi?
+
+    Number badalna owner ka haq hai — isliye ye rokta nahi, sirf batata hai.
+    Wajah: ek hi number staff aur customer dono ho, to uske WhatsApp message
+    STAFF ke roop mein handle hote hain — customer wala AI jawab nahi milta.
+    Ye chup-chaap hota tha (Kiran ka message bina reply ke reh gaya tha).
+    """
+    row = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    who = row.name or phone
+    return (
+        f"Dhyan dein: {phone} customer list mein bhi hai ({who}). "
+        "Is number se aane wale message ab STAFF ke message maane jayenge, "
+        "customer ka AI reply nahi milega."
+    )
+
+
+def _staff_ready_note(staff: Staff) -> str:
+    """Save ke turant baad saaf-saaf batao ki agent ab kya kar sakta hai.
+
+    Number badalna aasan hona chahiye — aur uske baad owner ko andaaza
+    lagana na pade ki system ne pakda ya nahi. Lookup har baar DB se hota
+    hai (koi cache nahi), isliye pehchan turant hai; sirf WhatsApp ki 24
+    ghante wali window ka farq batana zaroori hai.
+    """
+    role = {
+        "WASHER": "Washerman", "DELIVERY": "Delivery",
+        "SUPERVISOR": "Washerman / Manager", "MANAGER": "Manager", "ADMIN": "Admin",
+    }.get(staff.role.name, staff.role.name)
+    if not staff.is_active:
+        return f"{staff.name} ({role}) band hai — agent inhe kaam nahi bhejega."
+    who = f"{staff.name} ({role}) ab {staff.phone} par hai. Agent turant pehchan lega"
+    if staff.last_message_at is None:
+        return (
+            f"{who}; pehla message approved template se jayega. "
+            "Wo ek baar WhatsApp par likh denge to normal chat chalu."
+        )
+    return f"{who} — WhatsApp chat abhi khuli hai."
+
+
 @router.get("/api/staff", dependencies=[Depends(require_admin_key)])
 async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
     """Active first, then inactive, alphabetical within each group."""
@@ -529,6 +753,18 @@ async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
 
     default_washer = await app_settings.get(db, "default_washer_phone")
     default_delivery = await app_settings.get(db, "default_delivery_phone")
+    # Jo number customer list mein bhi hai — uske message staff ke maane
+    # jate hain, customer ka AI jawab band. Ye sirf save ke waqt batana
+    # kaafi nahi; list mein hamesha dikhna chahiye.
+    also_customer = set(
+        (
+            await db.execute(
+                select(Customer.phone).where(
+                    Customer.phone.in_([s.phone for s in rows] or [""])
+                )
+            )
+        ).scalars().all()
+    )
     out = []
     for s in rows:
         out.append(
@@ -538,12 +774,15 @@ async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
                 # the UI needs these to explain WHY delete is blocked
                 "active_orders": await _active_order_count(db, s.id),
                 "is_default": s.phone in (default_washer, default_delivery),
+                "also_customer": s.phone in also_customer,
+                # panel login hai ya nahi — Settings mein button isi se badalta hai
+                "has_login": bool(s.password_hash),
             }
         )
     return out
 
 
-@router.post("/api/staff", dependencies=[Depends(require_admin_key)], status_code=201)
+@router.post("/api/staff", dependencies=[Depends(require_admin_owner)], status_code=201)
 async def staff_create(body: StaffIn, db: AsyncSession = Depends(get_db)) -> dict:
     try:
         phone = _norm_phone(body.phone)
@@ -557,10 +796,14 @@ async def staff_create(body: StaffIn, db: AsyncSession = Depends(get_db)) -> dic
         await db.rollback()
         raise HTTPException(status_code=409, detail="This phone number is already a staff member")
     log.info("staff_created_via_settings", name=body.name, phone=phone, role=body.role)
-    return {"id": str(staff.id)}
+    return {
+        "id": str(staff.id),
+        "ready": _staff_ready_note(staff),
+        "warning": await _customer_clash(db, phone),
+    }
 
 
-@router.put("/api/staff/{staff_id}", dependencies=[Depends(require_admin_key)])
+@router.put("/api/staff/{staff_id}", dependencies=[Depends(require_admin_owner)])
 async def staff_update(staff_id: str, body: StaffUpdateIn, db: AsyncSession = Depends(get_db)) -> dict:
     try:
         sid = uuid_module.UUID(staff_id)
@@ -574,12 +817,14 @@ async def staff_update(staff_id: str, body: StaffUpdateIn, db: AsyncSession = De
         if len(name) < 2:
             raise HTTPException(status_code=400, detail="Name must be at least 2 characters")
         staff.name = name
+    warning: str | None = None
     if body.phone is not None:
         try:
             phone = _norm_phone(body.phone)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         if phone != staff.phone:
+            warning = await _customer_clash(db, phone)
             clash = (
                 await db.execute(select(Staff).where(Staff.phone == phone, Staff.id != sid))
             ).scalar_one_or_none()
@@ -590,22 +835,244 @@ async def staff_update(staff_id: str, body: StaffUpdateIn, db: AsyncSession = De
                 )
             old_phone = staff.phone
             staff.phone = phone
+            # 24-ghante ki WhatsApp window NUMBER ki hoti hai, insaan ki
+            # nahi. Purane number ka waqt naye number par rakh dete to
+            # system samajhta "window khuli hai", free-form message bhejta,
+            # Meta use thukra deta aur wo chupchaap retry-queue mein pada
+            # rehta. Reset karne se pehla message seedhe approved template
+            # se jata hai — turant pahunchta hai.
+            staff.last_message_at = None
             # keep the default-washer/delivery settings pointing at them
             from app.services import app_settings
 
             for key in ("default_washer_phone", "default_delivery_phone"):
                 if await app_settings.get(db, key) == old_phone:
                     await app_settings.set_value(db, key, phone)
+            log.info(
+                "staff_phone_changed", staff=staff.name,
+                old=old_phone, new=phone,
+            )
     if body.role is not None:
         staff.role = StaffRole[body.role]
     if body.is_active is not None:
         staff.is_active = body.is_active
     await db.commit()
     log.info("staff_updated_via_settings", staff_id=staff_id)
-    return {"ok": True}
+    return {"ok": True, "ready": _staff_ready_note(staff), "warning": warning}
 
 
-@router.delete("/api/staff/{staff_id}/permanent", dependencies=[Depends(require_admin_key)])
+class PanelAccessIn(BaseModel):
+    role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY|SUPERVISOR|MANAGER)$")
+
+
+@router.post("/api/staff/{staff_id}/access", dependencies=[Depends(require_admin_owner)])
+async def grant_panel_access(
+    staff_id: str, body: PanelAccessIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Staff ko panel ka login do (ya password reset karo).
+
+    Staff KHUD account nahi bana sakta — ye jaan-boojh kar owner ke haath
+    mein hai. Password ek baar dikhta hai aur hashed hi store hota hai;
+    pehli baar login par usse badalna padta hai.
+
+    Seat limit plan se aati hai (plans.effective_limits) — wahi ek jagah
+    jise billing, quota aur ye sab padhte hain.
+    """
+    from app.models.tenant import Tenant as _T
+    from app.services import auth as auth_service
+    from app.services import plans, staff_auth, tenant_context
+
+    try:
+        sid = uuid_module.UUID(staff_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid staff id")
+    staff = await db.get(Staff, sid)
+    if staff is None:
+        raise HTTPException(status_code=404, detail="staff not found")
+
+    tid = tenant_context.current_tenant_id.get()
+    tenant = (await db.get(_T, tid)) if tid else await auth_service.home_tenant(db)
+    plan_code = tenant.plan if tenant else plans.DEFAULT_PLAN
+    if not plans.feature_on(plan_code, "staff_panel"):
+        raise HTTPException(status_code=402, detail="Is plan mein staff panel nahi hai")
+
+    # Seat: sirf wo log ginte hain jinke paas panel login hai
+    limit = plans.effective_limits(tenant).get("max_staff")
+    if limit is not None and staff.password_hash is None:
+        used = (
+            await db.execute(
+                select(func.count()).select_from(Staff).where(Staff.password_hash.is_not(None))
+            )
+        ).scalar_one()
+        if used >= limit:
+            need = plans.plan_with_feature("staff_roles")
+            raise HTTPException(
+                status_code=402,
+                detail=(
+                    f"{plans.get(plan_code).name} plan mein {limit} staff login "
+                    f"ho sakte hain. Aur chahiye to {plans.get(need).name} lijiye."
+                ),
+            )
+
+    if body.role and staff.role is not StaffRole.ADMIN:
+        # Role ka batwara upar ke plan ki suvidha hai
+        if body.role != "WASHER" and not plans.feature_on(plan_code, "staff_roles"):
+            raise HTTPException(
+                status_code=402,
+                detail="Role ka batwara Premium plan se milta hai",
+            )
+        staff.role = StaffRole[body.role]
+    # ADMIN ko yahan se KABHI utara nahi jaata.
+    #
+    # Is modal ke dropdown mein ADMIN hai hi nahi (owner koi "role" nahi
+    # hai, wo maalik hai). Owner ne khud ko panel login diya to wahi
+    # dropdown use chup-chaap MANAGER bana deta tha — aur uske saath hi
+    # team.is_admin_phone() ne unhe pehchanna band kar diya, yani owner
+    # ke apne WhatsApp par order/payment ki khabar aani band. Login dena
+    # aur owner ka darja chheenna do alag baatein hain; ye endpoint sirf
+    # pehla kaam karta hai.
+
+    temp = auth_service.temp_password()
+    await staff_auth.set_password(db, staff, temp, temp=True)
+    await staff_auth.revoke_all(db, staff.id)   # purane phone ke session khatam
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="staff_panel_access_granted",
+        args={"staff": staff.name, "role": staff.role.name}, result="temp password issued",
+    )
+    return {
+        "ok": True,
+        "name": staff.name,
+        "role": staff.role.name,
+        # Ek baar dikhega — DB mein sirf hash jaata hai
+        "temp_password": temp,
+        "login_url": "/staff",
+    }
+
+
+class ShareAccessIn(BaseModel):
+    # Wahi password jo abhi issue hua — server ise hash se milaakar hi bhejta hai
+    password: str = Field(min_length=6, max_length=64)
+
+
+@router.post("/api/staff/{staff_id}/access/share", dependencies=[Depends(require_admin_owner)])
+async def share_panel_access(
+    staff_id: str, body: ShareAccessIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Abhi bane hue login creds staff ke WhatsApp par bhej do.
+
+    Owner ko password haath se likhkar bhejna na pade — ek tap mein chala
+    jaye. Teen baatein jaan-boojh kar aisi hain:
+
+    1. Password body mein AATA hai, par server use hash se milaata hai.
+       Warna ye endpoint "kisi bhi staff ko koi bhi text bhejo" ban jaata.
+    2. Sirf TEMP password share hota hai (must_change_password). Staff ne
+       apna khud ka rakh liya, to wo hum kabhi nahi bhejenge.
+    3. Hamare apne message log mein password NAHI jaata (log_as), aur
+       transient fail par queue mein bhi nahi (enqueue_on_fail=False).
+       WhatsApp use le jayega — hamari database nahi.
+    """
+    from app.models.tenant import Tenant as _T
+    from app.services import auth as auth_service
+    from app.services import google_auth, tenant_context
+
+    try:
+        sid = uuid_module.UUID(staff_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid staff id")
+    staff = await db.get(Staff, sid)
+    if staff is None:
+        raise HTTPException(status_code=404, detail="staff not found")
+    if not staff.phone:
+        raise HTTPException(status_code=400, detail="This staff member has no phone number")
+    if not staff.password_hash or not staff.must_change_password:
+        raise HTTPException(
+            status_code=409,
+            detail="Nothing to share — create a fresh password first",
+        )
+    if not auth_service.verify_password(body.password, staff.password_hash):
+        # Purani modal khuli reh gayi aur beech mein naya password ban gaya
+        raise HTTPException(
+            status_code=409,
+            detail="That password is no longer current — create a new one",
+        )
+
+    tid = tenant_context.current_tenant_id.get()
+    tenant = (await db.get(_T, tid)) if tid else None
+    shop = (tenant.shop_name if tenant and tenant.shop_name else "Kwik Klin")
+    base = (await google_auth.public_base(db)).rstrip("/")
+    url = f"{base}/staff"
+
+    text = (
+        f"{staff.name}, your {shop} work panel is ready.\n\n"
+        f"Open: {url}\n"
+        f"Number: {staff.phone}\n"
+        f"Password: {body.password}\n\n"
+        "Log in and set your own password the first time. "
+        "Please don't forward this message."
+    )
+    # Log mein sirf ye jaayega — password kabhi nahi
+    redacted = f"[panel login sent to {staff.name} — password hidden]"
+
+    try:
+        await send_message(
+            db, to_phone=staff.phone, text=text, sent_by="manager",
+            log_as=redacted, enqueue_on_fail=False,
+        )
+        how = "text"
+    except WindowClosedError:
+        try:
+            await send_message(
+                db, to_phone=staff.phone,
+                template_name="kk_staff_alert",
+                template_params=[" ".join(text.split())[:600]],
+                sent_by="manager", log_as=redacted, enqueue_on_fail=False,
+            )
+            how = "template"
+        except SendError as exc:
+            log.warning("panel_creds_share_failed", staff=staff.name)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not send on WhatsApp ({exc}) — copy it and send by hand",
+            ) from exc
+    except SendError as exc:
+        log.warning("panel_creds_share_failed", staff=staff.name)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not send on WhatsApp ({exc}) — copy it and send by hand",
+        ) from exc
+
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="staff_panel_creds_shared",
+        args={"staff": staff.name, "to": staff.phone}, result=f"sent via {how}",
+    )
+    log.info("panel_creds_shared", staff=staff.name, how=how)
+    return {"ok": True, "to": staff.phone, "how": how}
+
+
+@router.post("/api/staff/{staff_id}/access/revoke", dependencies=[Depends(require_admin_owner)])
+async def revoke_panel_access(staff_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Panel access wapas lo — phone kho gaya ya aadmi chala gaya."""
+    from app.services import staff_auth
+
+    try:
+        sid = uuid_module.UUID(staff_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid staff id")
+    staff = await db.get(Staff, sid)
+    if staff is None:
+        raise HTTPException(status_code=404, detail="staff not found")
+    staff.password_hash = None
+    db.add(staff)
+    await db.commit()
+    killed = await staff_auth.revoke_all(db, staff.id)
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="staff_panel_access_revoked",
+        args={"staff": staff.name}, result=f"{killed} sessions killed",
+    )
+    return {"ok": True, "sessions_killed": killed}
+
+
+@router.delete("/api/staff/{staff_id}/permanent", dependencies=[Depends(require_admin_owner)])
 async def staff_delete_permanent(
     staff_id: str, db: AsyncSession = Depends(get_db)
 ) -> dict:
@@ -646,6 +1113,15 @@ async def staff_delete_permanent(
         .where(Order.assigned_delivery_id == sid)
         .values(assigned_delivery_id=None)
     )
+    # Tasks BUSINESS ka record hain — aadmi jaane par wo mitne nahi chahiye.
+    # Unka naam hata dete hain, kaam ka itihaas rehne dete hain. Yahi wo
+    # kadam tha jo chhoot gaya tha: FK tootti thi aur owner ko sirf
+    # "purana record juda hua hai" dikh kar delete ruk jata tha.
+    from app.models import Task as _Task
+
+    await db.execute(
+        update(_Task).where(_Task.assigned_staff_id == sid).values(assigned_staff_id=None)
+    )
     # conversations require a participant (XOR check constraint), so their
     # chat history goes with them — that is what a hard delete means here.
     await db.execute(delete(Conversation).where(Conversation.staff_id == sid))
@@ -678,7 +1154,7 @@ def _csv_response(filename: str, header: list[str], rows: list[list]) -> Respons
     )
 
 
-@router.delete("/api/staff/{staff_id}", dependencies=[Depends(require_admin_key)])
+@router.delete("/api/staff/{staff_id}", dependencies=[Depends(require_admin_owner)])
 async def staff_delete(staff_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     """Soft-delete: is_active=False keeps history (orders reference staff)."""
     try:
@@ -694,7 +1170,7 @@ async def staff_delete(staff_id: str, db: AsyncSession = Depends(get_db)) -> dic
     return {"deactivated": True}
 
 
-@router.get("/api/export/orders.csv", dependencies=[Depends(require_admin_key)])
+@router.get("/api/export/orders.csv", dependencies=[Depends(require_admin_owner), Depends(require_feature("reports"))])
 async def export_orders(db: AsyncSession = Depends(get_db)) -> Response:
     rows = (
         await db.execute(
@@ -719,7 +1195,7 @@ async def export_orders(db: AsyncSession = Depends(get_db)) -> Response:
     )
 
 
-@router.get("/api/export/customers.csv", dependencies=[Depends(require_admin_key)])
+@router.get("/api/export/customers.csv", dependencies=[Depends(require_admin_owner), Depends(require_feature("reports"))])
 async def export_customers(db: AsyncSession = Depends(get_db)) -> Response:
     # reuse the ledger query — export means ALL customers, not one page
     data = await customers_list(db, limit=1_000_000, offset=0)
@@ -748,7 +1224,7 @@ def _window_state(last_inbound: datetime | None) -> dict:
     }
 
 
-@router.get("/api/inbox/threads", dependencies=[Depends(require_admin_key)])
+@router.get("/api/inbox/threads", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
 async def inbox_threads(
     db: AsyncSession = Depends(get_db),
     limit: int = Query(default=50, ge=1, le=500),
@@ -919,7 +1395,7 @@ async def inbox_threads(
     }
 
 
-@router.get("/api/inbox/thread", dependencies=[Depends(require_admin_key)])
+@router.get("/api/inbox/thread", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
 async def inbox_thread(
     phone: str = Query(...),
     db: AsyncSession = Depends(get_db),
@@ -1007,7 +1483,7 @@ class InboxSendIn(BaseModel):
     reply_to: str | None = Field(default=None, max_length=120)
 
 
-@router.post("/api/inbox/send", dependencies=[Depends(require_admin_key)])
+@router.post("/api/inbox/send", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
 async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> dict:
     """Manager sends a free-form message from the Inbox."""
     try:
@@ -1033,7 +1509,7 @@ class InboxPingIn(BaseModel):
     phone: str
 
 
-@router.post("/api/inbox/ping", dependencies=[Depends(require_admin_key)])
+@router.post("/api/inbox/ping", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
 async def inbox_ping(body: InboxPingIn, db: AsyncSession = Depends(get_db)) -> dict:
     """Nudge this person — 'bhai, jawab do'.
 
@@ -1089,7 +1565,7 @@ class TemplateSendIn(BaseModel):
     params: list[str] = Field(default_factory=list)
 
 
-@router.post("/api/inbox/send-template", dependencies=[Depends(require_admin_key)])
+@router.post("/api/inbox/send-template", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
 async def inbox_send_template(
     body: TemplateSendIn, db: AsyncSession = Depends(get_db)
 ) -> dict:
@@ -1124,7 +1600,7 @@ class NewChatIn(BaseModel):
     name: str | None = None
 
 
-@router.post("/api/inbox/new-chat", dependencies=[Depends(require_admin_key)])
+@router.post("/api/inbox/new-chat", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
 async def inbox_new_chat(body: NewChatIn, db: AsyncSession = Depends(get_db)) -> dict:
     """Create/open a thread for any number (even brand new)."""
     try:
@@ -1148,7 +1624,7 @@ class BulkCustomersIn(BaseModel):
     text: str = Field(min_length=3)  # lines: "number" or "name, number"
 
 
-@router.post("/api/customers/bulk", dependencies=[Depends(require_admin_key)])
+@router.post("/api/customers/bulk", dependencies=[Depends(require_admin_owner)])
 async def customers_bulk(body: BulkCustomersIn, db: AsyncSession = Depends(get_db)) -> dict:
     """Paste a list of numbers (one per line, 'name, number' allowed)."""
     import re as _re
@@ -1242,7 +1718,7 @@ def _import_rows(raw: bytes, filename: str) -> list[list[str]]:
     ]
 
 
-@router.post("/api/customers/import-file", dependencies=[Depends(require_admin_key)])
+@router.post("/api/customers/import-file", dependencies=[Depends(require_admin_owner)])
 async def customers_import_file(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
@@ -1357,7 +1833,7 @@ async def customers_import_file(
     }
 
 
-@router.post("/api/inbox/send-media", dependencies=[Depends(require_admin_key)])
+@router.post("/api/inbox/send-media", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
 async def inbox_send_media(
     phone: str = Form(...),
     caption: str = Form(default=""),
@@ -1427,8 +1903,10 @@ async def serve_media(
     if not allowed and kk_session:
         from app.services import auth as auth_service
 
+        # Self-serve gate: koi bhi valid session. Filenames random-UUID hain
+        # (unguessable); asli per-tenant media partitioning backlog note mein.
         user = await auth_service.user_for_token(db, kk_session)
-        allowed = await auth_service.is_home_user(db, user)
+        allowed = user is not None
     if not allowed:
         raise HTTPException(status_code=401, detail="key ya login chahiye")
     # basename() guard: no traversal
@@ -1503,12 +1981,18 @@ async def dashboard_page(
     broken styling).
     """
     if kk_session:
+        from app.models.tenant import Tenant as _T
         from app.services import auth as auth_service
 
+        # Self-serve gate: har tenant apna dashboard. Sirf band accounts
+        # (locked/suspended/cancelled) welcome par jaate hain — wahan renew
+        # CTA hai; unka API waise bhi 402 deta.
         user = await auth_service.user_for_token(db, kk_session)
-        if user is not None and not await auth_service.is_home_user(db, user):
-            log.info("cross_tenant_dashboard_redirect", user=user.email)
-            return RedirectResponse(url="/welcome", status_code=303)
+        if user is not None:
+            t = await db.get(_T, user.tenant_id)
+            if t is not None and t.status in ("locked", "suspended", "cancelled"):
+                log.info("closed_account_dashboard_redirect", user=user.email)
+                return RedirectResponse(url="/welcome", status_code=303)
 
     html = _DASHBOARD_FILE.read_text(encoding="utf-8")
     static_dir = _DASHBOARD_FILE.parent

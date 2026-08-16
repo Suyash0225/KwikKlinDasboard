@@ -14,7 +14,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, fun
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 
 # status values, kept as plain strings so adding one needs no migration
 TASK_OPEN = "OPEN"
@@ -22,14 +22,14 @@ TASK_DONE = "DONE"
 TASK_CANCELLED = "CANCELLED"
 
 
-class Task(Base):
+class Task(Base, TenantScoped):
     __tablename__ = "tasks"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     # short human code used in WhatsApp ("done T-14") — unique, searchable
-    code: Mapped[str] = mapped_column(String(12), unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(12), index=True)
 
     # what to do, in the owner's own words (already rewritten to address
     # the assignee directly, never "pucho ki...")
@@ -67,6 +67,14 @@ class Task(Base):
         DateTime(timezone=True), server_default=func.now(), index=True
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # --- cancel MAANGNA (karna nahi) ---
+    # Staff panel se koi kaam seedha cancel nahi hota. Wo wajah ke saath
+    # maangta hai, manager approve ya reject karta hai. Warna jo kaam
+    # karna nahi chahte wo chupchaap gayab ho jaate.
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_by: Mapped[str | None] = mapped_column(String(80))
+    cancel_reason: Mapped[str | None] = mapped_column(String(300))
 
     def __repr__(self) -> str:
         return f"<Task {self.code} {self.status}>"

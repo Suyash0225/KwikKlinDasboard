@@ -154,7 +154,9 @@ async def test_transient_send_failure_lands_in_queue(_window_open_customer, monk
             )
         ).scalar_one()
     assert row.status == "queued"
-    assert row.payload["text"] == "kal ready hoga"
+    # qatar mein wahi text jata hai jo bheja ja raha tha — AI sign ke saath,
+    # taaki retry par customer ko adhoora message na mile
+    assert row.payload["text"].startswith("kal ready hoga")
 
 
 async def test_drain_sends_queued_message(_window_open_customer, monkeypatch) -> None:

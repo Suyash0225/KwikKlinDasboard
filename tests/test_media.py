@@ -258,3 +258,102 @@ async def test_transcription_failure_never_loses_the_message(monkeypatch) -> Non
         assert await wh._transcribe(p, {"mime_type": "audio/ogg"}) is None
     finally:
         p.unlink(missing_ok=True)
+
+
+# --- voice: awaaz na samajh aaye to chuppi nahi -------------------------
+
+
+async def test_transcription_falls_back_to_the_cheap_model(monkeypatch) -> None:
+    """Free tier bade model ko pehle throttle karta hai (429).
+
+    Transcription akeli aisi jagah thi jahan fallback tha hi nahi — us din
+    ki har voice note bina shabdon ke reh gayi: na Inbox mein kuch padhne
+    ko, na staff ko jawab.
+    """
+    import app.services.llm_client as llm
+
+    tried: list[str] = []
+
+    async def fake_generate(system, user_text, model, max_tokens, schema=None, image=None):
+        tried.append(model)
+        if model == llm.MODEL_SMART:
+            raise llm.LLMUnavailable("429 rate limited")
+        return "do shirt aur ek pant dhulai ke liye"
+
+    monkeypatch.setattr(llm, "_generate", fake_generate)
+    monkeypatch.setattr(llm, "SUPPORTS_AUDIO", True)
+    said = await llm.transcribe_audio(b"fake-ogg-bytes", "audio/ogg")
+    assert said == "do shirt aur ek pant dhulai ke liye"
+    assert llm.MODEL_SMART in tried and llm.MODEL_CHEAP in tried
+
+
+async def test_unreadable_voice_note_from_staff_gets_an_honest_reply(
+    client, sent, monkeypatch
+) -> None:
+    """Owner ne voice se bill bolna chaha aur use KUCH wapas nahi mila.
+
+    Shabd na nikle to "[audio:...]" par har handler chup ho jata hai —
+    isliye ab saaf batate hain ki samajh nahi aaya, likh dijiye.
+    """
+    from app.config import settings
+    from tests.conftest import meta_payload, sign_body
+
+    import app.routers.webhook as webhook_module
+
+    async def no_download(media_id, media_dir):
+        return "in-testvoice.ogg"
+
+    async def no_transcript(path, part):
+        return None
+
+    import app.services.whatsapp as wa_module
+
+    monkeypatch.setattr(wa_module, "download_media", no_download)
+    monkeypatch.setattr(webhook_module, "_transcribe", no_transcript)
+
+    owner = settings.MANAGER_PHONE.lstrip("+")
+    body = meta_payload(messages=[{
+        "from": owner, "id": "wamid.TESTvoice1", "type": "audio",
+        "audio": {"id": "media123", "mime_type": "audio/ogg; codecs=opus"},
+    }])
+    r = await client.post("/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)})
+    assert r.status_code == 200
+    mine = [c for c in sent if c["to"].lstrip("+") == owner]
+    assert mine, "voice note par chuppi nahi honi chahiye"
+    assert "samajh nahi paya" in (mine[0]["text"] or ""), mine[0]["text"]
+
+
+async def test_a_transcribed_voice_note_still_runs_the_command(
+    client, sent, monkeypatch
+) -> None:
+    """Shabd nikal aaye to wo normal message ki tarah hi chalein."""
+    from app.config import settings
+    from tests.conftest import meta_payload, sign_body
+
+    import app.routers.webhook as webhook_module
+
+    async def no_download(media_id, media_dir):
+        return "in-testvoice2.ogg"
+
+    async def transcript(path, part):
+        return "aaj ka kaam batao"
+
+    seen: dict = {}
+
+    async def fake_staff(db, *, sender_phone, sender_label, text):
+        seen.update(text=text)
+        return None
+
+    import app.services.whatsapp as wa_module
+
+    monkeypatch.setattr(wa_module, "download_media", no_download)
+    monkeypatch.setattr(webhook_module, "_transcribe", transcript)
+    monkeypatch.setattr(webhook_module, "handle_staff_message", fake_staff)
+
+    body = meta_payload(messages=[{
+        "from": settings.MANAGER_PHONE.lstrip("+"), "id": "wamid.TESTvoice2",
+        "type": "audio", "audio": {"id": "media456", "mime_type": "audio/ogg"},
+    }])
+    r = await client.post("/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)})
+    assert r.status_code == 200
+    assert seen.get("text") == "aaj ka kaam batao", "shabd hi aage jane chahiye, marker nahi"

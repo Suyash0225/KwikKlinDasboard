@@ -112,6 +112,12 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
 
     ENVIRONMENT: Literal["development", "production"] = "development"
+
+    # Per-tenant API rate limit (requests/min). Ek runaway client (loop mein
+    # fansa script, scraper) sabko slow na kare. Itna ooncha hai ki asli
+    # dashboard use (aur pura test-suite bhi) kabhi nahi chhuega; DDoS-scale
+    # ke liye upar CDN/proxy hai. 0 = off.
+    RATE_LIMIT_PER_MIN: int = 6000
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
 

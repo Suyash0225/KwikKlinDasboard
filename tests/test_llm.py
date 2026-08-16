@@ -34,12 +34,23 @@ def _status_error(code: int, msg: str = "boom"):
     return cls(msg, response=resp, body=None)
 
 
+def _patch_claude(monkeypatch, create):
+    """Claude ka client ab lazy hai — client ki jagah banane wale ko patch
+    karo, warna test purane module-level `_client` par tikta hai."""
+    class _Stub:
+        class messages:
+            pass
+    _Stub.messages.create = staticmethod(create)
+    monkeypatch.setattr(llm, "_anthropic", lambda: _Stub)
+    monkeypatch.setattr(llm, "_anthropic_client", None, raising=False)
+
+
 async def test_ask_returns_text(monkeypatch) -> None:
     async def fake_create(**kw):
         assert kw["model"] == llm.MODEL_CHEAP
         return _fake_response("namaste ji")
 
-    monkeypatch.setattr(llm._client.messages, "create", fake_create)
+    _patch_claude(monkeypatch, fake_create)
     assert await ask(system="s", user_text="hi") == "namaste ji"
 
 
@@ -48,7 +59,7 @@ async def test_ask_json_parses(monkeypatch) -> None:
         assert kw["output_config"]["format"]["type"] == "json_schema"
         return _fake_response('{"intent": "GREETING", "language": "hi"}')
 
-    monkeypatch.setattr(llm._client.messages, "create", fake_create)
+    _patch_claude(monkeypatch, fake_create)
     out = await ask_json(system="s", user_text="hi", schema={"type": "object"})
     assert out == {"intent": "GREETING", "language": "hi"}
 
@@ -57,7 +68,7 @@ async def test_ask_json_bad_json_raises_llmerror(monkeypatch) -> None:
     async def fake_create(**kw):
         return _fake_response("not json at all")
 
-    monkeypatch.setattr(llm._client.messages, "create", fake_create)
+    _patch_claude(monkeypatch, fake_create)
     with pytest.raises(LLMError):
         await ask_json(system="s", user_text="hi", schema={"type": "object"})
 
@@ -68,7 +79,7 @@ async def test_network_error_is_unavailable(monkeypatch) -> None:
             request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         )
 
-    monkeypatch.setattr(llm._client.messages, "create", fake_create)
+    _patch_claude(monkeypatch, fake_create)
     with pytest.raises(LLMUnavailable):
         await ask(system="s", user_text="hi")
 
@@ -77,14 +88,14 @@ async def test_5xx_is_unavailable_but_4xx_is_hard_error(monkeypatch) -> None:
     async def fake_500(**kw):
         raise _status_error(500)
 
-    monkeypatch.setattr(llm._client.messages, "create", fake_500)
+    _patch_claude(monkeypatch, fake_500)
     with pytest.raises(LLMUnavailable):
         await ask(system="s", user_text="hi")
 
     async def fake_400(**kw):
         raise _status_error(400, "bad request")
 
-    monkeypatch.setattr(llm._client.messages, "create", fake_400)
+    _patch_claude(monkeypatch, fake_400)
     with pytest.raises(LLMError):
         await ask(system="s", user_text="hi")
 
@@ -95,7 +106,7 @@ async def test_bad_key_is_unavailable(monkeypatch) -> None:
     async def fake_create(**kw):
         raise _status_error(401, "invalid x-api-key")
 
-    monkeypatch.setattr(llm._client.messages, "create", fake_create)
+    _patch_claude(monkeypatch, fake_create)
     with pytest.raises(LLMUnavailable):
         await ask(system="s", user_text="hi")
 
@@ -233,3 +244,109 @@ async def test_classify_intent_none_when_llm_down(monkeypatch) -> None:
 
     monkeypatch.setattr(intent_module.llm_client, "ask_json", fake_ask_json)
     assert await classify_intent("hi") is None
+
+
+# --- naye pehre: refusal, truncation, caching, thinking -------------------
+
+
+def _fake_response_full(text: str, stop: str = "end_turn"):
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=text)],
+        usage=SimpleNamespace(
+            input_tokens=10, output_tokens=5, cache_read_input_tokens=0
+        ),
+        stop_reason=stop,
+    )
+
+
+async def test_claude_refusal_is_hard_error_not_empty_reply(monkeypatch) -> None:
+    """Naye Claude models 200 ke saath stop_reason='refusal' lauta sakte hain.
+
+    Pehle wo khaali text ban kar aage badhta — JSON path par "bad JSON",
+    text path par customer ko khaali message. Ab saaf LLMError: caller ka
+    degrade path (rule-based reply) chalta hai.
+    """
+
+    async def fake_create(**kw):
+        return SimpleNamespace(
+            content=[],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=0),
+            stop_reason="refusal",
+        )
+
+    _patch_claude(monkeypatch, fake_create)
+    with pytest.raises(LLMError):
+        await ask(system="s", user_text="hi")
+
+
+async def test_claude_truncated_json_is_named_not_confusing(monkeypatch) -> None:
+    """max_tokens par kata JSON = LLMError jiska naam truncation hai.
+
+    Sonnet 5 par thinking default-on hai aur max_tokens thinking+jawab dono
+    ka dhakkan — bina is check ke log mein sirf "bad JSON" dikhta aur koi
+    kabhi na samajhta ki asli wajah token budget thi.
+    """
+
+    async def fake_create(**kw):
+        return _fake_response_full('{"reply": "aadha kata hu', stop="max_tokens")
+
+    _patch_claude(monkeypatch, fake_create)
+    with pytest.raises(LLMError):
+        await ask_json(system="s", user_text="hi", schema={"type": "object"})
+
+
+async def test_claude_request_shape_caching_floor_thinking(monkeypatch) -> None:
+    """Ek hi call mein teen pehre:
+
+    1. system cache-friendly block hai (cache_control) — repeat calls sasti.
+    2. max_tokens ka floor 1024 — thinking wale model par 400 ka cap JSON
+       ko beech mein kaat deta tha.
+    3. Sonnet 5 par thinking saaf-saaf band — WhatsApp ka jawab 25s ke
+       andar chahiye, thinking wahan sirf latency hai.
+    """
+    seen: dict = {}
+
+    async def fake_create(**kw):
+        seen.update(kw)
+        return _fake_response_full('{"ok": true}')
+
+    _patch_claude(monkeypatch, fake_create)
+    await ask_json(
+        system="stable system prompt", user_text="hi",
+        schema={"type": "object"}, model="claude-sonnet-5", max_tokens=400,
+    )
+    assert seen["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert seen["system"][0]["text"] == "stable system prompt"
+    assert seen["max_tokens"] >= 1024
+    assert seen["thinking"] == {"type": "disabled"}
+
+
+async def test_claude_haiku_gets_no_thinking_param(monkeypatch) -> None:
+    """Haiku 4.5 purana scheme use karta hai — naya param bhejna 400 ka
+    khatra hai, aur wahan thinking waise bhi band hai."""
+    seen: dict = {}
+
+    async def fake_create(**kw):
+        seen.update(kw)
+        return _fake_response_full("theek hai")
+
+    _patch_claude(monkeypatch, fake_create)
+    await ask(system="s", user_text="hi", model="claude-haiku-4-5")
+    assert "thinking" not in seen
+
+
+async def test_gemini_truncated_json_is_hard_error(monkeypatch) -> None:
+    monkeypatch.setattr(llm, "PROVIDER", "gemini")
+
+    async def fake_post(model, payload):
+        return _gemini_response(200, {
+            "candidates": [{
+                "content": {"parts": [{"text": '{"reply": "aadha'}]},
+                "finishReason": "MAX_TOKENS",
+            }],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
+        })
+
+    monkeypatch.setattr(llm, "_gemini_post", fake_post)
+    with pytest.raises(LLMError):
+        await ask_json(system="s", user_text="hi", schema={"type": "object"})

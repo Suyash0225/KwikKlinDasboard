@@ -27,24 +27,27 @@ OUTSIDER_PASS = "outsider12345"
 @pytest.fixture(autouse=True)
 async def _clean():
     async def wipe():
+        # Self-serve ke baad outsider apne tenant mein BUSINESS data bhi
+        # banata hai — tenant delete se pehle wo sab (FK-safe order mein).
+        sub = "(SELECT id FROM tenants WHERE owner_phone = :p)"
         async with async_session_factory() as s:
-            await s.execute(
-                sqltext(
-                    "DELETE FROM login_sessions WHERE user_id IN (SELECT id FROM users "
-                    "WHERE tenant_id IN (SELECT id FROM tenants WHERE owner_phone = :p))"
-                ),
-                {"p": OUTSIDER_PHONE},
-            )
-            await s.execute(
-                sqltext(
-                    "DELETE FROM users WHERE tenant_id IN "
-                    "(SELECT id FROM tenants WHERE owner_phone = :p)"
-                ),
-                {"p": OUTSIDER_PHONE},
-            )
-            await s.execute(
-                sqltext("DELETE FROM tenants WHERE owner_phone = :p"), {"p": OUTSIDER_PHONE}
-            )
+            for q in [
+                f"DELETE FROM order_status_history WHERE order_id IN "
+                f"(SELECT id FROM orders WHERE tenant_id IN {sub})",
+                f"DELETE FROM tasks WHERE tenant_id IN {sub}",
+                f"DELETE FROM payments WHERE tenant_id IN {sub}",
+                f"DELETE FROM conversations WHERE tenant_id IN {sub}",
+                f"DELETE FROM orders WHERE tenant_id IN {sub}",
+                f"DELETE FROM customers WHERE tenant_id IN {sub}",
+                f"DELETE FROM settings_kv WHERE tenant_id IN {sub}",
+                f"DELETE FROM audit_log WHERE tenant_id IN {sub}",
+                f"DELETE FROM invites WHERE tenant_id IN {sub}",
+                f"DELETE FROM login_sessions WHERE user_id IN (SELECT id FROM users "
+                f"WHERE tenant_id IN {sub})",
+                f"DELETE FROM users WHERE tenant_id IN {sub}",
+                "DELETE FROM tenants WHERE owner_phone = :p",
+            ]:
+                await s.execute(sqltext(q), {"p": OUTSIDER_PHONE})
             await s.commit()
 
     await wipe()
@@ -85,37 +88,80 @@ async def _signup_outsider(client) -> None:
         "/api/login", json={"email": OUTSIDER_EMAIL, "password": OUTSIDER_PASS}
     )
     assert r.status_code == 200
-    # server khud bhejta hai — dashboard par NAHI
-    assert r.json()["next_url"] == "/welcome"
+    # self-serve gate: chalu tenant seedha APNE dashboard par jaata hai
+    assert r.json()["next_url"] == "/admin"
     assert r.json()["is_home"] is False
 
 
 async def test_outsider_cannot_read_this_shops_data(client, home_tenant) -> None:
+    """Self-serve gate ke baad: outsider dashboard USE kar sakta hai (200),
+    lekin usme IS dukaan ka EK BYTE nahi — RLS scoping hi asli deewar hai."""
     await _signup_outsider(client)
+    # home ka ek pehchana customer hona chahiye jo leak-check ka marker bane
     for path in (
         "/admin/api/dashboard",
-        "/admin/api/customers",
+        "/admin/api/customers?limit=500",
         "/admin/api/inbox/threads",
         "/orders",
     ):
         r = await client.get(path)
-        assert r.status_code == 403, f"{path} ne {r.status_code} diya — data leak!"
+        assert r.status_code == 200, f"{path} -> {r.status_code}"
+        assert "+91870" not in r.text, f"{path}: home ka data outsider ko dikh gaya!"
+        assert "Kwik Klin" not in r.text.replace("Kwik Klin AI", ""), \
+            f"{path}: home shop ka naam leak"
 
 
-async def test_outsider_cannot_write_either(client, home_tenant) -> None:
+async def test_outsider_writes_go_to_their_own_tenant(client, home_tenant) -> None:
+    """Outsider ka create HOME mein nahi girta — apne tenant mein girta hai."""
     await _signup_outsider(client)
     r = await client.post(
         "/orders",
-        json={"customer_phone": "+919999900011", "items": [{"type": "Shirt", "qty": 1}]},
+        json={"customer_phone": "+919999900067", "items": [{"type": "Shirt", "qty": 1}]},
     )
-    assert r.status_code == 403
+    assert r.status_code == 201, r.text
+    # home ki nazar se (API key, BINA outsider cookie ke — session cookie
+    # key par jeet-ti hai, wahi design hai) wo customer exist hi nahi karta
+    client.cookies.delete("kk_session")
+    r = await client.get("/admin/api/customers?limit=500", headers=AUTH)
+    assert "+919999900067" not in r.text, "outsider ka data home mein ghusa!"
+    async with async_session_factory() as s:
+        await s.execute(
+            sqltext(
+                "DELETE FROM order_status_history WHERE order_id IN "
+                "(SELECT id FROM orders WHERE customer_id IN "
+                " (SELECT id FROM customers WHERE phone='+919999900067'))"
+            )
+        )
+        await s.execute(
+            sqltext(
+                "DELETE FROM tasks WHERE order_id IN (SELECT id FROM orders "
+                "WHERE customer_id IN (SELECT id FROM customers WHERE phone='+919999900067'))"
+            )
+        )
+        await s.execute(
+            sqltext(
+                "DELETE FROM conversations WHERE customer_id IN "
+                "(SELECT id FROM customers WHERE phone='+919999900067')"
+            )
+        )
+        await s.execute(
+            sqltext(
+                "DELETE FROM orders WHERE customer_id IN "
+                "(SELECT id FROM customers WHERE phone='+919999900067')"
+            )
+        )
+        await s.execute(
+            sqltext("DELETE FROM customers WHERE phone='+919999900067'")
+        )
+        await s.commit()
 
 
-async def test_outsider_lands_on_their_own_welcome_page(client, home_tenant) -> None:
+async def test_outsider_lands_on_their_own_dashboard_page(client, home_tenant) -> None:
+    """Self-serve: chalu tenant ko /admin page milta hai (redirect nahi) —
+    data waise bhi RLS-scoped hai."""
     await _signup_outsider(client)
     r = await client.get("/admin", follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/welcome"
+    assert r.status_code == 200
 
 
 async def test_home_user_gets_in_with_just_a_session(client, home_tenant) -> None:
@@ -124,7 +170,8 @@ async def test_home_user_gets_in_with_just_a_session(client, home_tenant) -> Non
         user = (
             await s.execute(
                 select(User).where(
-                    User.tenant_id == home_tenant, User.role == ROLE_OWNER
+                    User.tenant_id == home_tenant, User.role == ROLE_OWNER,
+                    User.is_active.is_(True),   # revoked user ka session banta hi nahi
                 )
             )
         ).scalars().first()

@@ -110,15 +110,20 @@ def _token_hash(token: str) -> str:
 
 
 async def start_session(
-    db: AsyncSession, user: User, *, ip: str = "", user_agent: str = ""
+    db: AsyncSession, user: User, *, ip: str = "", user_agent: str = "",
+    minutes: int | None = None,
 ) -> str:
-    """Naya session banao; client ko RAW token milta hai (DB mein hash)."""
+    """Naya session banao; client ko RAW token milta hai (DB mein hash).
+
+    minutes: chhota TTL (impersonation jaise cases) — default 30 din."""
     token = secrets.token_urlsafe(32)
     db.add(
         LoginSession(
             user_id=user.id,
             token_hash=_token_hash(token),
-            expires_at=datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS),
+            expires_at=datetime.now(timezone.utc) + (
+                timedelta(minutes=minutes) if minutes else timedelta(days=SESSION_DAYS)
+            ),
             ip=ip[:64] or None,
             user_agent=user_agent[:200] or None,
         )

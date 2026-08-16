@@ -172,6 +172,19 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "✅ Order {order_number} created (₹{total}). Customer has been notified.",
     },
     "bill_cancelled": {"hi": "❌ Draft cancel kar diya.", "en": "❌ Draft cancelled."},
+    # Voice note aayi par shabd nahi nikle. Chup rehna sabse bura tha —
+    # owner ne voice se bill bolna chaha aur use kuch bhi wapas nahi mila,
+    # na jawab na wajah. Ye owner Settings se badal sakta hai.
+    "voice_unclear_staff": {
+        "hi": (
+            "🎧 Voice note mil gaya, par abhi awaaz samajh nahi paya. "
+            "Ek line likh dijiye — bill, status ya kaam — main turant kar dunga."
+        ),
+        "en": (
+            "🎧 Got your voice note, but I couldn't make out the words. "
+            "Please type one line — bill, status or task — and I'll do it right away."
+        ),
+    },
     "staff_cmd_unknown": {
         "hi": "🤔 Samajh nahi aaya. Bill: customer + kapde + service. Delay: order number + nayi date. Status: order number + stage. Message bhejna: 'Ravi ko bolo ...'",
         "en": "🤔 Didn't understand. Bill: customer + items + service. Delay: order number + new date. Status: order number + stage. Relay: 'Ravi ko bolo ...'",
@@ -241,9 +254,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "⚠️ The AI agent is unavailable right now (API key or network). Use the dashboard for bills; try again shortly.",
     },
     # --- scheduler: standup + reminders ---
+    # {greet} waqt se banta hai (scheduler._greeting) — sham 6 baje
+    # "Good morning" bhejna bot ko bewakoof dikhata hai.
     "standup_header": {
-        "hi": "🌅 Good morning {name}! Aaj {count} kaam pending hain:",
-        "en": "🌅 Good morning {name}! {count} jobs pending today:",
+        "hi": "{greet} {name}! Abhi {count} kaam pending hain:",
+        "en": "{greet} {name}! {count} jobs pending right now:",
     },
     "standup_footer": {
         "hi": "Kaun se ho gaye? Kahin koi dikkat? Bas reply kar dein (jaise: '1 aur 2 ho gaya, 3 kal hoga').",

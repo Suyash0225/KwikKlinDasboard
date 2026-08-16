@@ -1,8 +1,10 @@
 """The people side: who is an admin, who hears what, who is asked when.
 
 Owner's rules (06 Aug):
-- Suyash (+918933871103) is an ADMIN — the agent reports orders, payments
-  and problems to him, and his messages carry manager powers.
+- The owner's number (settings.MANAGER_PHONE) carries owner powers — the
+  agent reports orders, payments and problems there, and messages from it
+  carry manager powers. Ye .env se aata hai, kisi staff row ke role se
+  nahi: role dashboard se kabhi bhi badal sakta hai.
 - A customer problem reaches ALL of Suyash, Ravi and Ajit.
 - Ajit is the delivery boy: every pickup AND every delivery is asked of him,
   his answer is stored on the task, and the owner is told.
@@ -31,10 +33,20 @@ from app.models import (
 from app.services import app_settings, escalation, order_service, team
 from tests.conftest import TEST_CUSTOMER_PHONE, purge_phones
 
-SUYASH = "+918933871103"   # ADMIN (also MANAGER_PHONE)
-RAVI = "+918707093136"     # WASHER
-AJIT = "+919336393612"     # DELIVERY
+# Owner ka number config se aata hai, hardcode nahi — .env badla to test
+# apne aap uske saath chalega. Staff ke number to owner dashboard se kabhi
+# bhi badal sakta hai, isliye unhe DB se role ke hisaab se dhoondte hain.
+OWNER = "+" + settings.MANAGER_PHONE.lstrip("+")
 BOY_PHONE = "+919999900089"  # a throwaway delivery boy for the job tests
+
+
+async def _phones_with_role(db, role: StaffRole) -> set[str]:
+    rows = (
+        await db.execute(
+            select(Staff.phone).where(Staff.role == role, Staff.is_active.is_(True))
+        )
+    ).scalars().all()
+    return {p for p in rows if p}
 
 
 @pytest.fixture
@@ -65,22 +77,60 @@ async def boy(sent):
 # --- who is who -----------------------------------------------------------
 
 
-async def test_suyash_is_a_saved_admin() -> None:
-    """The owner is a person in the DB, not just a number in .env."""
+async def test_the_owner_always_carries_owner_powers() -> None:
+    """Config ka owner number hamesha owner hai — DB mein kuch bhi ho.
+
+    Pehle ye test owner ke apne STAFF ROW ka role pin karta tha (ADMIN).
+    Wo galat pin tha: role dashboard se kabhi bhi badal sakta hai, aur ek
+    baar wo galti se badla to ye test toot gaya — jabki system bilkul
+    theek chal raha tha. Jo cheez sach mein zaroori hai wo yahi hai: .env
+    ka owner number kabhi owner-level powers na khoye, chahe uska staff
+    row ho ya na ho.
+    """
     async with async_session_factory() as db:
-        st = (
-            await db.execute(select(Staff).where(Staff.phone == SUYASH))
-        ).scalar_one_or_none()
-        assert st is not None, "Suyash ka number staff mein hona chahiye"
-        assert st.role is StaffRole.ADMIN and st.is_active
-        assert await team.is_admin_phone(db, SUYASH)
-        assert SUYASH in await team.admin_phones(db)
+        assert await team.is_admin_phone(db, OWNER)
+        assert OWNER in await team.admin_phones(db)
+
+
+async def test_an_admin_staff_row_gets_owner_powers() -> None:
+    """DB mein ADMIN likha ho to us number ko bhi owner ki taakat milti hai.
+
+    Ye apna aadmi khud banata hai — kisi zinda staff par nirbhar nahi,
+    isliye owner staff ka number/role kabhi bhi badle to bhi ye sach rehta
+    hai.
+    """
+    phone = "+919999900093"
+    async with async_session_factory() as db:
+        db.add(Staff(phone=phone, name="Test Admin", role=StaffRole.ADMIN, is_active=True))
+        await db.commit()
+    try:
+        async with async_session_factory() as db:
+            assert await team.is_admin_phone(db, phone)
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Staff).where(Staff.phone == phone))
+            await db.commit()
 
 
 async def test_a_worker_is_not_an_admin() -> None:
+    """Koi bhi non-admin staff owner nahi hai.
+
+    Owner ka apna number is jaanch se bahar hai: use taakat .env se milti
+    hai, uske staff row ke role se nahi. Wo jaan-boojh kar aisa hai — owner
+    apne aap ko galti se bhi apni hi dukaan se bahar na kar de.
+    """
     async with async_session_factory() as db:
-        assert not await team.is_admin_phone(db, RAVI)
-        assert not await team.is_admin_phone(db, AJIT)
+        workers = [
+            st
+            for st in (
+                await db.execute(select(Staff).where(Staff.role != StaffRole.ADMIN))
+            ).scalars().all()
+            if st.phone != OWNER
+        ]
+        assert workers, "kam se kam ek worker staff mein hona chahiye"
+        for st in workers:
+            assert not await team.is_admin_phone(db, st.phone), \
+                f"{st.name} ko owner-level powers nahi milni chahiye"
 
 
 async def test_admin_keeps_manager_powers_in_the_webhook(monkeypatch, sent) -> None:
@@ -98,7 +148,7 @@ async def test_admin_keeps_manager_powers_in_the_webhook(monkeypatch, sent) -> N
         await webhook_module._handle_inbound_message(
             {
                 "id": "wamid.TESTadmin1",
-                "from": SUYASH.lstrip("+"),
+                "from": OWNER.lstrip("+"),
                 "type": "text",
                 "text": {"body": "aaj kitna kaam hua"},
             },
@@ -114,9 +164,16 @@ async def test_admin_keeps_manager_powers_in_the_webhook(monkeypatch, sent) -> N
 
 async def test_escalation_reaches_the_owner_and_the_washerman(sent) -> None:
     """Owner's rule (revised 06 Aug): a customer problem goes to the people
-    who can answer it — him and Ravi. Ajit was getting delivery escalations
-    as template alerts he could do nothing about."""
+    who can answer it — the owner and the washermen. The delivery boy was
+    getting escalations he could do nothing about."""
     async with async_session_factory() as db:
+        # SUPERVISOR ("Washerman / Manager") bhi dhulai wala hi hai —
+        # customer ki dikkat uske paas bhi jaani chahiye.
+        washers = (
+            await _phones_with_role(db, StaffRole.WASHER)
+            | await _phones_with_role(db, StaffRole.SUPERVISOR)
+        )
+        delivery_only = await _phones_with_role(db, StaffRole.DELIVERY) - washers
         cust = Customer(phone=TEST_CUSTOMER_PHONE, name="Pareshan Grahak")
         db.add(cust)
         await db.commit()
@@ -125,9 +182,10 @@ async def test_escalation_reaches_the_owner_and_the_washerman(sent) -> None:
         )
     try:
         reached = {c["to"] for c in sent}
-        assert {SUYASH, RAVI} <= reached, f"sab tak nahi pahuncha: {reached}"
-        assert AJIT not in reached, "delivery boy ko customer escalation nahi jani chahiye"
-        body = next(c["text"] for c in sent if c["to"] == RAVI)
+        assert washers, "kam se kam ek washer hona chahiye"
+        assert ({OWNER} | washers) <= reached, f"sab tak nahi pahuncha: {reached}"
+        assert not (delivery_only & reached),             "delivery boy ko customer escalation nahi jani chahiye"
+        body = next(c["text"] for c in sent if c["to"] in washers)
         assert "Pareshan Grahak" in body and "koi jawab nahi" in body
     finally:
         await purge_phones(TEST_CUSTOMER_PHONE)
@@ -150,7 +208,7 @@ async def test_new_order_and_payment_are_reported_to_the_owner(sent) -> None:
                 items=[{"type": "Kurta", "qty": 2}], total_amount=Decimal("200"),
                 created_by="agent",
             )
-            to_owner = [c["text"] for c in sent if c["to"] == SUYASH]
+            to_owner = [c["text"] for c in sent if c["to"] == OWNER]
             assert any(order.order_number in t and "Naya order" in t for t in to_owner)
 
             sent.clear()
@@ -158,7 +216,7 @@ async def test_new_order_and_payment_are_reported_to_the_owner(sent) -> None:
                 db, order, amount=Decimal("150"), method=PaymentMethod.CASH,
                 recorded_by="Ravi",
             )
-        to_owner = [c["text"] for c in sent if c["to"] == SUYASH]
+        to_owner = [c["text"] for c in sent if c["to"] == OWNER]
         assert any("150" in t and "baaki" in t for t in to_owner), to_owner
     finally:
         await purge_phones(TEST_CUSTOMER_PHONE)
@@ -172,7 +230,7 @@ async def test_owner_is_not_told_about_his_own_bill(sent) -> None:
                 db, customer_phone=TEST_CUSTOMER_PHONE, items=[{"type": "Kurta", "qty": 1}],
                 created_by="manager",
             )
-        assert not [c for c in sent if c["to"] == SUYASH]
+        assert not [c for c in sent if c["to"] == OWNER]
     finally:
         await purge_phones(TEST_CUSTOMER_PHONE)
 
@@ -207,7 +265,7 @@ async def test_ready_order_asks_the_delivery_boy_for_a_time(boy, sent) -> None:
             )
         ).scalars().one()
     assert task.status == "OPEN" and task.assigned_staff_id == boy
-    assert any(task.code in c["text"] for c in sent if c["to"] == SUYASH), "owner ko batao"
+    assert any(task.code in c["text"] for c in sent if c["to"] == OWNER), "owner ko batao"
 
 
 async def test_his_delivery_time_is_stored_and_the_owner_told(boy, sent) -> None:
@@ -230,7 +288,7 @@ async def test_his_delivery_time_is_stored_and_the_owner_told(boy, sent) -> None
         ).scalars().one()
     assert task.eta_text == "sham 6 baje tak de dunga", "samay DB mein likha jana chahiye"
 
-    owner = [c["text"] for c in sent if c["to"] == SUYASH]
+    owner = [c["text"] for c in sent if c["to"] == OWNER]
     assert any("sham 6 baje" in t for t in owner), owner
     customer = [c["text"] for c in sent if c["to"] == TEST_CUSTOMER_PHONE]
     assert any("sham 6 baje" in t for t in customer), "customer ko bhi samay pata chale"
@@ -261,7 +319,7 @@ async def test_yes_on_delivery_marks_the_order_delivered(boy, sent) -> None:
         saved = await task_service.get_by_code(db, task.code)
     assert fresh.status is OrderStatus.DELIVERED
     assert saved.status == "DONE"
-    assert [c for c in sent if c["to"] == SUYASH], "owner ko delivery ki khabar mile"
+    assert [c for c in sent if c["to"] == OWNER], "owner ko delivery ki khabar mile"
 
 
 async def test_one_delivery_task_per_order(boy, sent) -> None:

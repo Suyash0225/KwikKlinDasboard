@@ -25,7 +25,7 @@ from app.models import (
     FaqEntry,
     OpenQuestion,
 )
-from app.routers.orders import require_admin_key
+from app.routers.orders import require_admin_owner, require_feature
 from app.services import app_settings, audit
 from app.services.marketing import (
     campaign_stats,
@@ -36,7 +36,7 @@ from app.services.marketing import (
 from app.utils.phone import normalize_phone
 
 router = APIRouter(
-    prefix="/admin/api", tags=["agent-admin"], dependencies=[Depends(require_admin_key)]
+    prefix="/admin/api", tags=["agent-admin"], dependencies=[Depends(require_admin_owner)]
 )
 log = structlog.get_logger()
 
@@ -46,7 +46,7 @@ log = structlog.get_logger()
 # ---------------------------------------------------------------------------
 
 
-@router.get("/segments")
+@router.get("/segments", dependencies=[Depends(require_feature("campaigns"))])
 async def segments(db: AsyncSession = Depends(get_db)) -> dict:
     segs = await compute_segments(db)
     return {
@@ -61,7 +61,7 @@ async def segments(db: AsyncSession = Depends(get_db)) -> dict:
     }
 
 
-@router.get("/campaigns")
+@router.get("/campaigns", dependencies=[Depends(require_feature("campaigns"))])
 async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
     rows = (
         (await db.execute(select(Campaign).order_by(Campaign.created_at.desc()).limit(50)))
@@ -98,7 +98,7 @@ class CampaignIn(BaseModel):
     coupon_code: str | None = None
 
 
-@router.post("/campaigns", status_code=201)
+@router.post("/campaigns", dependencies=[Depends(require_feature("campaigns"))], status_code=201)
 async def create_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) -> dict:
     c = Campaign(
         name=body.name, segment=body.segment, message_text=body.message_text,
@@ -109,7 +109,7 @@ async def create_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) 
     return {"id": str(c.id), "status": c.status}
 
 
-@router.post("/campaigns/{campaign_id}/approve")
+@router.post("/campaigns/{campaign_id}/approve", dependencies=[Depends(require_feature("campaigns"))])
 async def approve_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     c = await db.get(Campaign, uuid_module.UUID(campaign_id))
     if c is None:
@@ -127,7 +127,7 @@ async def approve_campaign(campaign_id: str, db: AsyncSession = Depends(get_db))
     return {"queued": queued, "status": "approved"}
 
 
-@router.post("/campaigns/{campaign_id}/cancel")
+@router.post("/campaigns/{campaign_id}/cancel", dependencies=[Depends(require_feature("campaigns"))])
 async def cancel_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     c = await db.get(Campaign, uuid_module.UUID(campaign_id))
     if c is None:
@@ -152,7 +152,7 @@ class CouponIn(BaseModel):
     total_limit: int | None = None
 
 
-@router.get("/coupons")
+@router.get("/coupons", dependencies=[Depends(require_feature("campaigns"))])
 async def list_coupons(db: AsyncSession = Depends(get_db)) -> list[dict]:
     rows = (
         (await db.execute(select(Coupon).order_by(Coupon.created_at.desc()).limit(100)))
@@ -182,7 +182,7 @@ async def list_coupons(db: AsyncSession = Depends(get_db)) -> list[dict]:
     return out
 
 
-@router.post("/coupons", status_code=201)
+@router.post("/coupons", dependencies=[Depends(require_feature("campaigns"))], status_code=201)
 async def create_coupon(body: CouponIn, db: AsyncSession = Depends(get_db)) -> dict:
     from datetime import date as _date
     from decimal import Decimal as D
@@ -202,7 +202,7 @@ async def create_coupon(body: CouponIn, db: AsyncSession = Depends(get_db)) -> d
     return {"code": code}
 
 
-@router.post("/coupons/{code}/toggle")
+@router.post("/coupons/{code}/toggle", dependencies=[Depends(require_feature("campaigns"))])
 async def toggle_coupon(code: str, db: AsyncSession = Depends(get_db)) -> dict:
     c = await db.get(Coupon, code.upper())
     if c is None:
@@ -250,7 +250,7 @@ class FaqIn(BaseModel):
     audience: str = Field(default="customer", pattern="^(customer|staff|all)$")
 
 
-@router.get("/training/faq")
+@router.get("/training/faq", dependencies=[Depends(require_feature("service_agent"))])
 async def list_faq(db: AsyncSession = Depends(get_db)) -> list[dict]:
     rows = (
         (await db.execute(select(FaqEntry).order_by(FaqEntry.created_at.desc()).limit(500)))
@@ -266,7 +266,7 @@ async def list_faq(db: AsyncSession = Depends(get_db)) -> list[dict]:
     ]
 
 
-@router.post("/training/faq", status_code=201)
+@router.post("/training/faq", dependencies=[Depends(require_feature("service_agent"))], status_code=201)
 async def add_faq(body: FaqIn, db: AsyncSession = Depends(get_db)) -> dict:
     row = FaqEntry(question=body.question, answer=body.answer, audience=body.audience)
     db.add(row)
@@ -274,7 +274,7 @@ async def add_faq(body: FaqIn, db: AsyncSession = Depends(get_db)) -> dict:
     return {"id": str(row.id)}
 
 
-@router.delete("/training/faq/{faq_id}")
+@router.delete("/training/faq/{faq_id}", dependencies=[Depends(require_feature("service_agent"))])
 async def delete_faq(faq_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     row = await db.get(FaqEntry, uuid_module.UUID(faq_id))
     if row is None:
@@ -290,7 +290,7 @@ class CorrectionIn(BaseModel):
     audience: str = Field(default="customer", pattern="^(customer|staff|all)$")
 
 
-@router.get("/training/corrections")
+@router.get("/training/corrections", dependencies=[Depends(require_feature("service_agent"))])
 async def list_corrections(db: AsyncSession = Depends(get_db)) -> list[dict]:
     rows = (
         (
@@ -310,7 +310,7 @@ async def list_corrections(db: AsyncSession = Depends(get_db)) -> list[dict]:
     ]
 
 
-@router.post("/training/corrections", status_code=201)
+@router.post("/training/corrections", dependencies=[Depends(require_feature("service_agent"))], status_code=201)
 async def add_correction(body: CorrectionIn, db: AsyncSession = Depends(get_db)) -> dict:
     row = Correction(
         question=body.question, correct_reply=body.correct_reply, audience=body.audience
@@ -320,7 +320,7 @@ async def add_correction(body: CorrectionIn, db: AsyncSession = Depends(get_db))
     return {"id": str(row.id)}
 
 
-@router.delete("/training/corrections/{cid}")
+@router.delete("/training/corrections/{cid}", dependencies=[Depends(require_feature("service_agent"))])
 async def delete_correction(cid: str, db: AsyncSession = Depends(get_db)) -> dict:
     row = await db.get(Correction, uuid_module.UUID(cid))
     if row is None:
@@ -354,7 +354,7 @@ def _chunk_text(text: str) -> list[str]:
     return chunks[:200]  # sanity cap per document
 
 
-@router.post("/training/upload", status_code=201)
+@router.post("/training/upload", dependencies=[Depends(require_feature("service_agent"))], status_code=201)
 async def upload_training_doc(
     file: UploadFile = File(...), db: AsyncSession = Depends(get_db)
 ) -> dict:
@@ -408,7 +408,7 @@ async def upload_training_doc(
     return {"document": name, "chunks": len(chunks)}
 
 
-@router.get("/training/docs")
+@router.get("/training/docs", dependencies=[Depends(require_feature("service_agent"))])
 async def list_training_docs(db: AsyncSession = Depends(get_db)) -> list[dict]:
     from app.models import DocChunk
 
@@ -424,7 +424,7 @@ async def list_training_docs(db: AsyncSession = Depends(get_db)) -> list[dict]:
     ]
 
 
-@router.delete("/training/docs/{document}")
+@router.delete("/training/docs/{document}", dependencies=[Depends(require_feature("service_agent"))])
 async def delete_training_doc(document: str, db: AsyncSession = Depends(get_db)) -> dict:
     from sqlalchemy import delete as sqldelete
 
@@ -432,12 +432,16 @@ async def delete_training_doc(document: str, db: AsyncSession = Depends(get_db))
 
     r = await db.execute(sqldelete(DocChunk).where(DocChunk.document == document))
     await db.commit()
+    # bulk DELETE skips the ORM unit of work, so the cache event never fires
+    from app.services.knowledge import invalidate as _drop_knowledge_cache
+
+    _drop_knowledge_cache()
     if r.rowcount == 0:
         raise HTTPException(status_code=404, detail="document not found")
     return {"deleted": document, "chunks": r.rowcount}
 
 
-@router.get("/training/teachme")
+@router.get("/training/teachme", dependencies=[Depends(require_feature("service_agent"))])
 async def teachme_queue(db: AsyncSession = Depends(get_db)) -> list[dict]:
     rows = (
         await db.execute(
@@ -464,7 +468,7 @@ class TeachIn(BaseModel):
     send_to_customer: bool = True
 
 
-@router.post("/training/teachme/{qid}/answer")
+@router.post("/training/teachme/{qid}/answer", dependencies=[Depends(require_feature("service_agent"))])
 async def answer_teachme(qid: str, body: TeachIn, db: AsyncSession = Depends(get_db)) -> dict:
     oq = await db.get(OpenQuestion, uuid_module.UUID(qid))
     if oq is None:
@@ -612,7 +616,7 @@ async def _graph(method: str, path: str, **kw):
     return r.status_code, r.json()
 
 
-@router.get("/usage")
+@router.get("/usage", dependencies=[Depends(require_feature("reports"))])
 async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(default=30, ge=1, le=180)) -> dict:
     """AI usage and cost: today, this month, per model, and where it's going.
 
@@ -770,6 +774,10 @@ async def list_tasks(
                 "ping_count": t.ping_count,
                 "escalated": t.escalated_at is not None,
                 "age_hours": int((now - t.created_at).total_seconds() // 3600),
+                # detail card ke liye — kab aakhri baar poocha aur unhone
+                # kya samay diya; ye pehle sirf DB mein tha, kahin dikhta nahi
+                "last_ping_at": t.last_ping_at.isoformat() if t.last_ping_at else None,
+                "eta_text": t.eta_text,
                 "created_by": t.created_by,
                 "created_at": t.created_at.isoformat(),
                 "completed_at": t.completed_at.isoformat() if t.completed_at else None,
@@ -853,7 +861,7 @@ async def trigger_task_followups() -> dict:
     return {"sent": await run_task_followups()}
 
 
-@router.get("/leads")
+@router.get("/leads", dependencies=[Depends(require_feature("marketing_agent"))])
 async def list_leads(
     db: AsyncSession = Depends(get_db),
     stage: str | None = None,
@@ -1023,7 +1031,7 @@ async def delete_template(name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/agents/overview")
+@router.get("/agents/overview", dependencies=[Depends(require_feature("service_agent"))])
 async def agents_overview(db: AsyncSession = Depends(get_db)) -> dict:
     """One call powering the Agents control-room page."""
     from zoneinfo import ZoneInfo
@@ -1167,7 +1175,7 @@ class AgentToggleIn(BaseModel):
     paused: bool
 
 
-@router.post("/inbox/toggle-agent")
+@router.post("/inbox/toggle-agent", dependencies=[Depends(require_feature("service_agent"))])
 async def toggle_agent(body: AgentToggleIn, db: AsyncSession = Depends(get_db)) -> dict:
     try:
         phone = normalize_phone(body.phone)
@@ -1188,7 +1196,7 @@ async def toggle_agent(body: AgentToggleIn, db: AsyncSession = Depends(get_db)) 
     return {"phone": phone, "agent_paused": cust.agent_paused}
 
 
-@router.get("/whatsapp/stats")
+@router.get("/whatsapp/stats", dependencies=[Depends(require_feature("reports"))])
 async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
     """Today's WhatsApp traffic (our DB) + live Meta template/quality data."""
     from zoneinfo import ZoneInfo

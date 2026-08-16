@@ -4,14 +4,14 @@ editable knowledge (FAQ + corrections) and hot-reloadable settings."""
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 
 
-class AuditLog(Base):
+class AuditLog(Base, TenantScoped):
     """Every agent/scheduler action — who did what, with what, what happened."""
 
     __tablename__ = "audit_log"
@@ -30,7 +30,7 @@ class AuditLog(Base):
     ok: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
 
-class OpenQuestion(Base):
+class OpenQuestion(Base, TenantScoped):
     """A customer question the bot could not answer — stays open until the
     admin replies, then the answer is relayed back and the row closes."""
 
@@ -68,7 +68,7 @@ class SentEvent(Base):
     )
 
 
-class FaqEntry(Base):
+class FaqEntry(Base, TenantScoped):
     """Owner-editable knowledge — the agent answers from these, hot-reloaded."""
 
     __tablename__ = "faq_entries"
@@ -87,7 +87,7 @@ class FaqEntry(Base):
     )
 
 
-class Correction(Base):
+class Correction(Base, TenantScoped):
     """'When asked X, the right reply is Y' — taught from real conversations."""
 
     __tablename__ = "corrections"
@@ -106,7 +106,7 @@ class Correction(Base):
     )
 
 
-class DocChunk(Base):
+class DocChunk(Base, TenantScoped):
     """Text chunks from owner-uploaded documents (PDF/TXT/CSV) — the agent
     retrieves the best-matching chunks per question (lightweight RAG)."""
 
@@ -124,12 +124,22 @@ class DocChunk(Base):
     )
 
 
-class SettingKV(Base):
-    """Hot-reloadable app settings the owner edits from the UI — no restarts."""
+class SettingKV(Base, TenantScoped):
+    """Hot-reloadable app settings the owner edits from the UI — no restarts.
+
+    Self-serve gate ke baad PER-TENANT: unique (tenant_id, key) — har shop
+    ki apni settings. Reads/writes hamesha effective tenant se scoped
+    (app_settings.py)."""
 
     __tablename__ = "settings_kv"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "key", name="uq_settings_kv_tenant_key"),
+    )
 
-    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    key: Mapped[str] = mapped_column(String(60), index=True)
     value: Mapped[dict] = mapped_column(JSONB)  # always {'v': <actual value>}
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

@@ -29,6 +29,13 @@ class OrderStatus(enum.Enum):
 class StaffRole(enum.Enum):
     WASHER = "WASHER"
     DELIVERY = "DELIVERY"
+    # Poore business ka kaam dekhta hai — kis-kis ne kya kiya, kya pending
+    # hai, cancel maang kaun raha hai. Settings aur billing usse door
+    # rehte hain: wo sirf owner ke paas hai.
+    MANAGER = "MANAGER"
+    # "Washerman / Manager" — senior aadmi jo khud bhi dhulai karta hai aur
+    # baaki ka kaam bhi dekhta hai. Chhoti dukaan ka sabse aam sach.
+    SUPERVISOR = "SUPERVISOR"
     # The shop's owner/manager side. An ADMIN is not a worker: they get every
     # escalation, every new order and every payment, and their WhatsApp
     # messages carry manager powers.

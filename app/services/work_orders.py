@@ -12,9 +12,99 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Customer, Order, Staff
 from app.services import app_settings
 from app.services.messages import get_message
-from app.services.whatsapp import SendError, WindowClosedError, send_message
+from app.services.whatsapp import (
+    MAX_LIST_ROWS,
+    Button,
+    ListRow,
+    SendError,
+    WindowClosedError,
+    send_message,
+)
 
 log = structlog.get_logger()
+
+
+# Staff ko jo bhi kaam ka message jaye — naya order, aaj-delivery ka
+# reminder, subah ka standup, task ki yaad-dahani — uspar HAMESHA yahi teen
+# jawab hone chahiye. Ajit aur Ravi ka poora din inhi teen tap par chalta
+# hai; button ke id mein order number / task code hota hai, isliye 5-6 kaam
+# khule hone par bhi "kaunsa" kabhi galat nahi hota (aur AI ko bhi kuch
+# samajhna nahi padta — id seedha bata deti hai).
+MAX_BUTTON_TITLE = 20   # WhatsApp ki hadd
+
+
+async def _labels(db: AsyncSession) -> dict[str, str]:
+    """Is shop ke apne button-shabd. Har shop alag rakh sakti hai."""
+    out = {}
+    for slot, key in (
+        ("done", "agent_btn_done"),
+        ("later", "agent_btn_later"),
+        ("problem", "agent_btn_problem"),
+    ):
+        try:
+            label = (await app_settings.get(db, key) or "").strip()
+        except Exception:
+            label = ""
+        # Khali chhod diya ya bahut lamba likh diya to bhi message jana
+        # chahiye — Meta 20 se lamba title reject karta hai.
+        out[slot] = (label or app_settings.DEFAULTS[key])[:MAX_BUTTON_TITLE]
+    return out
+
+
+async def list_button_label(db: AsyncSession) -> str:
+    try:
+        label = (await app_settings.get(db, "agent_list_button") or "").strip()
+    except Exception:
+        label = ""
+    return (label or app_settings.DEFAULTS["agent_list_button"])[:MAX_BUTTON_TITLE]
+
+
+async def order_buttons(db: AsyncSession, order_number: str) -> list[Button]:
+    lb = await _labels(db)
+    return [
+        Button(f"ord:{order_number}:done", lb["done"]),
+        Button(f"ord:{order_number}:later", lb["later"]),
+        Button(f"ord:{order_number}:problem", lb["problem"]),
+    ]
+
+
+async def task_buttons(db: AsyncSession, code: str) -> list[Button]:
+    lb = await _labels(db)
+    return [
+        Button(f"task:{code}:done", lb["done"]),
+        Button(f"task:{code}:later", lb["later"]),
+        Button(f"task:{code}:problem", lb["problem"]),
+    ]
+
+
+async def work_rows(db: AsyncSession, orders, tasks=()) -> list[ListRow]:
+    """Kaam ki tappable list — buttons sirf 3 ho sakte hain, list 10.
+
+    Meta ki hadd: title 24 akshar, description 72 — isliye yahin kaat dete
+    hain, warna Meta poora message reject kar deta aur staff tak kuch nahi
+    pahunchta.
+    """
+    rows: list[ListRow] = []
+    for o in orders:
+        if len(rows) >= MAX_LIST_ROWS:
+            break
+        cust = await db.get(Customer, o.customer_id)
+        who = (cust.name or cust.phone) if cust else "?"
+        desc = f"{who} — {items_summary(o)}"
+        if o.priority == "urgent":
+            desc = "🔴 " + desc
+        rows.append(
+            ListRow(id=f"pick:o:{o.order_number}", title=o.order_number[:24],
+                    description=desc[:72])
+        )
+    for t in tasks:
+        if len(rows) >= MAX_LIST_ROWS:
+            break
+        rows.append(
+            ListRow(id=f"pick:t:{t.code}", title=f"{t.code} · {t.title}"[:24],
+                    description=(("🔴 " if t.urgent else "") + t.title)[:72])
+        )
+    return rows
 
 
 def items_summary(order: Order) -> str:
@@ -79,7 +169,12 @@ async def send_work_order(
         extra=extra or "-",
     )
     try:
-        await send_message(db, to_phone=staff.phone, text=text)
+        # Buttons ke saath — Ajit/Ravi ko likhna na pade. Free-form text
+        # ka wahi rasta hai, bas teen tap upar se.
+        await send_message(
+            db, to_phone=staff.phone, text=text,
+            buttons=await order_buttons(db, order.order_number),
+        )
         return "sent"
     except WindowClosedError:
         try:

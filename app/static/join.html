@@ -85,6 +85,16 @@
   .hero h1 { font-size:28px; }
   .row { grid-template-columns:1fr; }
   @media (min-width:768px){ .hero h1{font-size:38px} .row{grid-template-columns:1fr 1fr} }
+
+/* password field: show/hide eye (login, signup, set-password) */
+.pw-wrap { position: relative; display: block; }
+.pw-wrap input { width: 100%; padding-right: 44px; }
+.pw-wrap .eye {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; font-size: 16px;
+  line-height: 1; padding: 4px 6px; border-radius: 6px;
+}
+.pw-wrap .eye:focus-visible { outline: 3px solid #ffd166; outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -324,6 +334,32 @@ async function doLogin() {
   } catch (e) {
     $("plans").innerHTML = `<p class="note">Could not load plans: ${esc(e.message)}</p>`;
   }
+})();
+
+/* Har password field par show/hide eye — user apna typed password dekh
+   sake (galat password ki sabse aam wajah yahi hoti hai). */
+(function attachEyes() {
+  var SHOW = "👁", HIDE = "🙈";
+  document.querySelectorAll('input[type="password"]').forEach(function (inp) {
+    if (inp.closest(".pw-wrap")) return;
+    var wrap = document.createElement("div");
+    wrap.className = "pw-wrap";
+    inp.parentNode.insertBefore(wrap, inp);
+    wrap.appendChild(inp);
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "eye";
+    b.textContent = SHOW;
+    b.setAttribute("aria-label", "Show password");
+    b.addEventListener("click", function () {
+      var show = inp.type === "password";
+      inp.type = show ? "text" : "password";
+      b.textContent = show ? HIDE : SHOW;
+      b.setAttribute("aria-label", show ? "Hide password" : "Show password");
+      inp.focus();
+    });
+    wrap.appendChild(b);
+  });
 })();
 </script>
 </body>

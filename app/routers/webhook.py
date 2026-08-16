@@ -108,6 +108,7 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
     if kind == "bad":
         # unhappy customer: humans take over, owner alerted immediately
         customer.agent_paused = True
+        customer.agent_paused_at = datetime.now(timezone.utc)
         await db.commit()
         try:
             await send_message(
@@ -373,42 +374,123 @@ def _signature_valid(body: bytes, header: str | None) -> bool:
     return hmac.compare_digest(expected, header.removeprefix("sha256="))
 
 
+async def _resolve_wa_tenant(db: AsyncSession, phone_number_id: str):
+    """Kis tenant ka number hai ye — multi-tenant routing ka dil.
+
+    Returns (tenant_id | None, known: bool). Resolution order:
+    1. tenants.wa_phone_number_id match      -> us tenant ka message
+    2. .env ka WHATSAPP_PHONE_NUMBER_ID / khali (DotPe shape) -> home tenant
+    3. bilkul anjaan number -> (None, False): process MAT karo — galat
+       tenant ke under store karne se better hai skip + loud log.
+    """
+    from app.services import tenant_context
+
+    if phone_number_id:
+        from app.models.tenant import Tenant
+        from sqlalchemy import select as _select
+
+        t = (
+            await db.execute(
+                _select(Tenant.id).where(Tenant.wa_phone_number_id == phone_number_id)
+            )
+        ).scalar_one_or_none()
+        if t is not None:
+            return t, True
+    if not phone_number_id or phone_number_id == settings.WHATSAPP_PHONE_NUMBER_ID:
+        return await tenant_context.get_home_tenant_id(), True
+    return None, False
+
+
 async def _process_payload(payload: dict, db: AsyncSession) -> None:
-    """Walk Meta's entry/changes structure; handle messages and statuses."""
+    """Walk Meta's entry/changes structure; handle messages and statuses.
+
+    Har change apne bhejne wale number (value.metadata.phone_number_id) ke
+    TENANT ke context mein process hota hai — customer/conversation rows
+    usi tenant par stamp hote hain, replies usi tenant ke token se jaate
+    hain, RLS usi tenant par scope karta hai.
+    """
+    from app.services import tenant_context
+
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
             value = change.get("value", {})
-            # Meta names the sender for us: every inbound batch carries the
-            # WhatsApp profile name next to the number. Without this an
-            # unknown number stayed "+9198..." forever and the owner had to
-            # ask "aap kaun?" to a person WhatsApp had already introduced.
-            profiles = {
-                str(c.get("wa_id") or ""): ((c.get("profile") or {}).get("name") or "")
-                for c in value.get("contacts", []) or []
-            }
-            for msg in value.get("messages", []):
-                await _handle_inbound_message(
-                    msg, db, profile_name=profiles.get(str(msg.get("from") or ""), "")
+            pnid = str((value.get("metadata") or {}).get("phone_number_id") or "")
+            tid, known = await _resolve_wa_tenant(db, pnid)
+            if not known:
+                log.warning(
+                    "webhook_unknown_phone_number_id",
+                    phone_number_id=pnid,
+                    hint="kisi tenant ka connected number nahi — skip",
                 )
-            for status in value.get("statuses", []):
-                log.info(
-                    "whatsapp_status",
-                    wa_message_id=status.get("id"),
-                    status=status.get("status"),
-                    recipient=status.get("recipient_id"),
-                )
-                await _record_delivery_status(
-                    db, status.get("id", ""), status.get("status", "")
-                )
-                # campaign delivered/read tracking — never breaks the webhook
+                continue
+            # Transaction boundary ZAROORI hai: RLS ka GUC transaction ke
+            # SHURU mein set hota hai (database.py ka begin event). Purani
+            # transaction (request-tenant ke GUC wali) yahin band karo taaki
+            # agla query is tenant ke GUC ke saath naya transaction khole.
+            await db.commit()
+            ctx_token = tenant_context.current_tenant_id.set(tid)
+            try:
+                await _process_change_value(value, db)
+            finally:
                 try:
-                    from app.services.marketing import track_status_update
-
-                    await track_status_update(
-                        db, status.get("id", ""), status.get("status", "")
-                    )
+                    await db.commit()  # tenant ki transaction isi ctx mein band ho
                 except Exception:
-                    log.exception("campaign_status_track_failed")
+                    # Chupchaap rollback SABSE bura tha: message store ho
+                    # chuka dikhta tha (log mein "inbound_stored"), event
+                    # "processed" ban jaata tha, aur row kahin hoti hi nahi.
+                    # Ab wajah stack ke saath dikhti hai aur event 'failed'
+                    # rehta hai, taaki retry job ise dobara chalaye.
+                    log.exception("webhook_change_commit_failed", tenant=str(tid))
+                    await db.rollback()
+                    tenant_context.current_tenant_id.reset(ctx_token)
+                    raise
+                tenant_context.current_tenant_id.reset(ctx_token)
+
+
+async def _process_change_value(value: dict, db: AsyncSession) -> None:
+    """Ek change ka asli kaam — tenant context set hone ke BAAD."""
+    # Meta names the sender for us: every inbound batch carries the
+    # WhatsApp profile name next to the number. Without this an
+    # unknown number stayed "+9198..." forever and the owner had to
+    # ask "aap kaun?" to a person WhatsApp had already introduced.
+    profiles = {
+        str(c.get("wa_id") or ""): ((c.get("profile") or {}).get("name") or "")
+        for c in value.get("contacts", []) or []
+    }
+    # Ek hi batch mein ek hi aadmi ke KAI message aayen ("11 iron" phir
+    # "3 dryclean") to jawab sirf AAKHRI par banta hai — wo poori baat
+    # dekh kar ek jawab deta hai. Pehle har message ka apna jawab jata
+    # tha aur customer ko lagta tha bot ne ek hi baat do baar bheji.
+    messages = value.get("messages", []) or []
+    for i, msg in enumerate(messages):
+        sender = str(msg.get("from") or "")
+        has_followup = any(
+            str(m.get("from") or "") == sender for m in messages[i + 1:]
+        )
+        await _handle_inbound_message(
+            msg, db,
+            profile_name=profiles.get(sender, ""),
+            batch_followup=has_followup,
+        )
+    for status in value.get("statuses", []):
+        log.info(
+            "whatsapp_status",
+            wa_message_id=status.get("id"),
+            status=status.get("status"),
+            recipient=status.get("recipient_id"),
+        )
+        await _record_delivery_status(
+            db, status.get("id", ""), status.get("status", "")
+        )
+        # campaign delivered/read tracking — never breaks the webhook
+        try:
+            from app.services.marketing import track_status_update
+
+            await track_status_update(
+                db, status.get("id", ""), status.get("status", "")
+            )
+        except Exception:
+            log.exception("campaign_status_track_failed")
 
 
 # WhatsApp's ladder. A status may arrive out of order (read before
@@ -455,13 +537,17 @@ def _clean_profile_name(raw: str) -> str:
 
 
 async def _handle_inbound_message(
-    msg: dict, db: AsyncSession, profile_name: str = ""
+    msg: dict, db: AsyncSession, profile_name: str = "", batch_followup: bool = False
 ) -> None:
     """Store one inbound message; open the sender's 24h window.
 
     profile_name is the sender's WhatsApp display name, which Meta sends
     with every inbound batch. We use it ONLY to fill a blank — a name the
     shop typed itself always wins.
+
+    batch_followup=True: isi batch mein isi aadmi ka ek AUR message aane
+    wala hai — ye message store hota hai, par AI ka jawab aakhri message
+    par banega (wo poori baat dekh kar EK jawab dega).
     """
     wa_message_id = msg.get("id")
     raw_from = msg.get("from", "")
@@ -537,18 +623,17 @@ async def _handle_inbound_message(
     assert participant is not None  # one of the two is always set
     participant.last_message_at = now
 
-    db.add(
-        Conversation(
-            customer_id=customer.id if customer else None,
-            staff_id=staff.id if staff else None,
-            direction=Direction.INBOUND,
-            message_text=text,
-            wa_message_id=wa_message_id,
-            # they swiped-to-reply on one of our messages: keep the link so
-            # the Inbox shows WHICH message they are answering
-            reply_to_wamid=(msg.get("context") or {}).get("id"),
-        )
+    convo = Conversation(
+        customer_id=customer.id if customer else None,
+        staff_id=staff.id if staff else None,
+        direction=Direction.INBOUND,
+        message_text=text,
+        wa_message_id=wa_message_id,
+        # they swiped-to-reply on one of our messages: keep the link so
+        # the Inbox shows WHICH message they are answering
+        reply_to_wamid=(msg.get("context") or {}).get("id"),
     )
+    db.add(convo)
     try:
         await db.commit()
     except IntegrityError as exc:
@@ -577,6 +662,8 @@ async def _handle_inbound_message(
     from app.services.ai_agent import _voice_transcript
 
     spoken = _voice_transcript(text) or text
+    # Sirf marker, koi shabd nahi = awaaz padhi hi nahi ja saki
+    _UNREAD_VOICE_RE = re.compile(r"^\[(?:audio|voice):/admin/media/[\w.\-]+\]\s*$")
 
     # An ADMIN staff row (the owner, Suyash) carries manager powers even
     # though he is in the staff table — otherwise adding him as a person
@@ -584,9 +671,23 @@ async def _handle_inbound_message(
     from app.models import StaffRole
 
     is_manager = phone == normalize_phone(settings.MANAGER_PHONE) or (
-        staff is not None and staff.role is StaffRole.ADMIN
+        staff is not None and staff.is_active and staff.role is StaffRole.ADMIN
     )
-    if staff is not None or is_manager:
+    # Jise owner ne Settings mein band kar diya, uske paas se ab koi command
+    # nahi chalti — bill, payment, status kuch nahi. Pehle deactivate karne
+    # par sirf naye kaam milne band hote the, purani taakat bani rehti thi.
+    # Unka message record hota hai, jawab koi nahi.
+    if (staff is not None and staff.is_active) or is_manager:
+        # Voice note aayi par shabd nahi nikle (transcription down/unclear):
+        # aage bhejne ka koi matlab nahi — "[audio:...]" par har handler
+        # chup ho jata hai. Owner ne aaj voice se bill bolna chaha aur use
+        # KUCH bhi wapas nahi mila. Ab saaf batate hain.
+        if _UNREAD_VOICE_RE.match(text or "") and spoken == text:
+            try:
+                await send_message(db, to_phone=phone, text=get_message("voice_unclear_staff"))
+            except SendError:
+                log.exception("voice_unclear_reply_failed", phone=phone)
+            return
         try:
             command_reply = await handle_staff_message(
                 db,
@@ -650,23 +751,71 @@ async def _handle_inbound_message(
                 log.exception("start_confirm_send_failed", phone=phone)
             return
         if customer.agent_paused:
-            # Owner pressed 'Take over' in the Inbox — humans only here.
-            log.info("agent_paused_thread", phone=phone)
+            # Pause hamesha ke liye nahi. Complaint par bot chup hota hai
+            # taaki insaan sambhal le — par utne ghante baad customer ka
+            # agla sawal bina jawab ke nahi mar sakta.
+            from app.services import app_settings as _as2
+            from app.services import audit as _audit2
+
+            hours = int(await _as2.get(db, "agent_pause_hours") or 0)
+            since = customer.agent_paused_at
+            expired = (
+                hours > 0
+                and since is not None
+                and (datetime.now(timezone.utc) - since) >= timedelta(hours=hours)
+            )
+            if not expired:
+                log.info("agent_paused_thread", phone=phone)
+                return
+            customer.agent_paused = False
+            customer.agent_paused_at = None
+            await db.commit()
+            log.info("agent_auto_resumed", phone=phone, after_hours=hours)
+            await _audit2.record(
+                actor_role="system", actor="agent", action="agent_auto_resumed",
+                args={"phone": phone, "paused_hours": hours},
+            )
+        # Agent OFF (per-tenant kill switch) = BOT CHUP. Pehle ye sirf AI
+        # band karta tha aur rule-based replies chalti rehti thi — owner ke
+        # liye wo "band" nahi lagta. Message store ho chuka hai; owner
+        # Inbox se khud jawab dega. STOP/START upar handle ho chuke hain
+        # (compliance kabhi band nahi hota).
+        from app.services import app_settings as _as
+
+        if not await _as.get(db, "agent_enabled"):
+            log.info("agent_disabled_no_autoreply", phone=phone)
             return
+        # Ek baat, ek jawab. Jaldi-jaldi aaye messages ("11 iron" ... 7s
+        # baad "3 dryclean") par pehle HAR message ka apna AI jawab jata
+        # tha — doosra jawab pehli poori baat dohrata tha aur customer
+        # ko wahi cheez do baar milti thi (Sakshi, 11 Aug). Do pehre:
+        #   1. Isi batch mein agla message hai -> abhi jawab mat banao.
+        #   2. Jawab BANNE ke dauraan (LLM ke 4-10 second) naya message
+        #      aa gaya -> ye jawab adhoori baat par bana hai, roko. Naye
+        #      message ka handler poori baat dekh kar EK jawab dega.
+        # Order-number wale deterministic jawab par ye lagoo NAHI hota —
+        # wo specific sawaal ka specific jawab hai, hamesha jata hai.
+        reply = None
         try:
             if ORDER_NUMBER_RE.search(spoken):
                 reply = await _build_customer_reply(db, customer, spoken)
+            elif batch_followup:
+                log.info("reply_deferred_to_followup", phone=phone)
             else:
                 reply = await build_ai_reply(db, customer, spoken)
                 if reply is None:
                     reply = await _build_customer_reply(db, customer, spoken)
+                if reply and await _newer_inbound_exists(db, customer.id, convo):
+                    log.info("reply_superseded_by_newer_message", phone=phone)
+                    reply = None
         except Exception:
             log.exception("reply_build_failed", phone=phone)
             reply = get_message("error_fallback")
-        try:
-            await send_message(db, to_phone=phone, text=reply)
-        except SendError:
-            log.exception("reply_send_failed", phone=phone)
+        if reply:
+            try:
+                await send_message(db, to_phone=phone, text=reply)
+            except SendError:
+                log.exception("reply_send_failed", phone=phone)
         # first-contact numbers with no orders -> lead pipeline (never raises)
         try:
             from app.services.leads import note_inquiry
@@ -674,6 +823,35 @@ async def _handle_inbound_message(
             await note_inquiry(db, customer, text or "")
         except Exception:
             log.exception("lead_capture_failed")
+
+
+async def _newer_inbound_exists(db: AsyncSession, customer_id, convo: Conversation) -> bool:
+    """Kya is message ke BAAD isi customer ka koi aur message aa chuka hai?
+
+    AI ka jawab banne mein 4-10 second lagte hain — asli duniya mein doosra
+    message aksar isi khidki mein aata hai. Tab ye jawab adhoori baat par
+    bana hota hai; ise rok kar naye message ke handler ko poori baat ka EK
+    jawab dene dete hain.
+
+    Shak ho to False — jawab jaana rokne se jawab chala jaana behtar hai.
+    """
+    try:
+        from sqlalchemy import func as _f
+
+        n = (
+            await db.execute(
+                select(_f.count()).select_from(Conversation).where(
+                    Conversation.customer_id == customer_id,
+                    Conversation.direction == Direction.INBOUND,
+                    Conversation.created_at >= convo.created_at,
+                    Conversation.id != convo.id,
+                )
+            )
+        ).scalar_one()
+        return n > 0
+    except Exception:
+        log.exception("newer_inbound_check_failed")
+        return False
 
 
 async def _build_customer_reply(db: AsyncSession, customer: Customer, text: str) -> str:
@@ -756,6 +934,11 @@ def _extract_text(msg: dict) -> str:
         inter = msg.get("interactive", {})
         if inter.get("type") == "button_reply":
             reply = inter.get("button_reply", {})
+            return f"[button:{reply.get('id')}] {reply.get('title', '')}"
+        if inter.get("type") == "list_reply":
+            # List se chuni gayi line bhi wahi shakl leti hai jo button ki
+            # hai — handler ek hi rehta hai, chahe 3 options ho ya 10.
+            reply = inter.get("list_reply", {})
             return f"[button:{reply.get('id')}] {reply.get('title', '')}"
         return f"[interactive:{inter.get('type')}]"
     if mtype == "button":  # template quick-reply buttons arrive as this type

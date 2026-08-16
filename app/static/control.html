@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="KwikKlin Control — vendor panel for tenants, billing, usage and audit.">
+<meta name="color-scheme" content="dark">
+<title>KwikKlin Control</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f1420'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%237cbaff' font-family='sans-serif'%3EK%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/admin/static/control.css?v=__V__">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="row">
+  <div class="grow">
+    <h1>KwikKlin Control</h1>
+    <p class="muted">Vendor panel · <span id="session-label">not signed in</span>
+      · <span class="kbd">Ctrl</span>+<span class="kbd">K</span> commands
+      · <span class="kbd">/</span> search</p>
+  </div>
+</header>
+
+<!-- Sign-in: the key is sent ONCE and exchanged for an httpOnly cookie. -->
+<form id="signin" class="toolbar" autocomplete="off">
+  <label class="sr-only" for="key">Admin API key</label>
+  <input id="key" name="kk-admin-key" type="password" placeholder="Admin API key" autofocus
+         autocomplete="new-password" spellcheck="false" required>
+  <button type="submit" class="btn-primary">Sign in</button>
+</form>
+
+<div id="appbar" class="toolbar hidden">
+  <button id="btn-add" class="btn-primary">＋ Add Tenant</button>
+  <button id="btn-backup">💾 Backup now</button>
+  <button id="btn-sweep">🧹 Sweep + dunning</button>
+  <button id="btn-palette">⌘ Commands</button>
+  <span class="grow"></span>
+  <button id="btn-signout">Sign out</button>
+</div>
+
+<section id="signedout" class="state">
+  <span class="ico">🔐</span>
+  <div class="title">Sign in to see your clients</div>
+  <p>Paste your admin API key above. It is exchanged for a secure session cookie —
+     the key itself is never stored in this browser.</p>
+</section>
+
+<main id="main" class="hidden">
+  <h2 id="kpi-h">Overview <span class="muted">— click a tile to filter</span></h2>
+  <div class="cards" id="summary" aria-labelledby="kpi-h"></div>
+
+  <h2 id="tenants-h">Tenants</h2>
+  <div class="toolbar" role="search">
+    <label class="sr-only" for="t-search">Search tenants</label>
+    <input id="t-search" type="search" placeholder="Search shop, slug, owner, phone, city">
+    <label class="sr-only" for="t-status">Filter by status</label>
+    <select id="t-status">
+      <option value="">Status: all</option>
+      <option value="trial">Trial</option>
+      <option value="active">Active</option>
+      <option value="past_due">Past due</option>
+      <option value="locked">Locked</option>
+      <option value="suspended">Suspended</option>
+      <option value="cancelled">Cancelled</option>
+    </select>
+    <label class="sr-only" for="t-plan">Filter by plan</label>
+    <select id="t-plan">
+      <option value="">Plan: all</option>
+      <option value="starter">Basic</option>
+      <option value="premium">Premium</option>
+      <option value="business">Business</option>
+    </select>
+    <label class="inline"><input type="checkbox" id="show-deleted"> Recycle bin</label>
+    <button id="btn-export-tenants">⬇ CSV</button>
+    <span class="muted" id="t-count" aria-live="polite"></span>
+    <span class="grow"></span>
+    <button id="t-prev" disabled>← Prev</button>
+    <button id="t-next" disabled>Next →</button>
+  </div>
+  <div class="tbl-wrap">
+    <table id="tenants" class="stack">
+      <caption class="sr-only">Tenants — click a shop name to open its profile</caption>
+      <thead><tr>
+        <th scope="col" aria-sort="none"><button type="button" class="sort" data-sort="shop_name">Shop</button></th>
+        <th scope="col" aria-sort="none"><button type="button" class="sort" data-sort="plan">Plan</button></th>
+        <th scope="col" aria-sort="none"><button type="button" class="sort" data-sort="status">Status</button></th>
+        <th scope="col" aria-sort="none"><button type="button" class="sort" data-sort="trial_ends_at">Days left</button></th>
+        <th scope="col">WhatsApp</th>
+        <th scope="col">Orders (mo)</th>
+        <th scope="col">WA msgs (mo)</th>
+        <th scope="col">AI (mo)</th>
+        <th scope="col">Staff</th>
+        <th scope="col">Users</th>
+        <th scope="col">MRR</th>
+        <th scope="col">Owner</th>
+        <th scope="col">Actions</th>
+      </tr></thead>
+      <tbody id="tenants-body"></tbody>
+    </table>
+  </div>
+
+  <h2 id="billing-h">Billing events</h2>
+  <div class="tbl-wrap" id="billing-wrap">
+    <table id="billing" class="stack">
+      <caption class="sr-only">Recent billing events</caption>
+      <thead><tr>
+        <th scope="col">When</th><th scope="col">Tenant</th>
+        <th scope="col">Event</th><th scope="col">Amount</th>
+      </tr></thead>
+      <tbody id="billing-body"></tbody>
+    </table>
+  </div>
+
+  <h2 id="audit-h">Audit log <span class="muted">— who did what, with IP</span></h2>
+  <div class="toolbar">
+    <label class="sr-only" for="audit-tenant">Filter audit by tenant slug</label>
+    <input id="audit-tenant" type="search" placeholder="Tenant slug (blank = all)">
+    <button id="btn-audit-filter">Filter</button>
+    <button id="btn-export-audit">⬇ CSV</button>
+  </div>
+  <div class="tbl-wrap" id="audit-wrap">
+    <table id="audit" class="stack">
+      <caption class="sr-only">Audit log</caption>
+      <thead><tr>
+        <th scope="col">When</th><th scope="col">Tenant</th><th scope="col">Actor</th>
+        <th scope="col">Action</th><th scope="col">Details</th><th scope="col">Result</th>
+      </tr></thead>
+      <tbody id="audit-body"></tbody>
+    </table>
+  </div>
+  <div class="toolbar"><button id="btn-audit-more" class="hidden">Load more</button></div>
+
+  <h2 id="keys-h">Admin keys <span class="muted">— rotate: create new, revoke old</span></h2>
+  <div class="toolbar"><button id="btn-new-key">＋ New key</button></div>
+  <div class="tbl-wrap" id="keys-wrap">
+    <table id="keys" class="stack">
+      <caption class="sr-only">Per-admin API keys</caption>
+      <thead><tr>
+        <th scope="col">Label</th><th scope="col">Level</th><th scope="col">Created</th>
+        <th scope="col">Last used</th><th scope="col">Status</th><th scope="col">Actions</th>
+      </tr></thead>
+      <tbody id="keys-body"></tbody>
+    </table>
+  </div>
+</main>
+
+<div id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+<p id="live" class="sr-only" role="status" aria-live="polite"></p>
+
+<div class="ov" id="ov" hidden role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="sheet" id="modal"></div>
+</div>
+
+<div class="ov" id="palette-ov" hidden role="dialog" aria-modal="true" aria-label="Command palette">
+  <div class="sheet sheet-plain">
+    <label class="sr-only" for="palette-input">Type a command or tenant name</label>
+    <input id="palette-input" type="text" placeholder="Type a command or tenant name…"
+           autocomplete="off" role="combobox" aria-expanded="true"
+           aria-controls="palette-list" aria-activedescendant="">
+    <ul id="palette-list" role="listbox" aria-label="Commands"></ul>
+  </div>
+</div>
+
+<script src="/admin/static/control.js?v=__V__" defer></script>
+</body>
+</html>

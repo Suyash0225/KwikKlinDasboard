@@ -24,7 +24,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import structlog
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -117,12 +117,54 @@ async def create_order(
         if not isinstance(item, dict) or "type" not in item or "qty" not in item:
             raise OrderError(f"each item needs at least type and qty: {item!r}")
 
+    # Plan limit: is mahine ke orders (server-side enforcement — UI kuch
+    # bhi kahe, yahan se aage nahi). None = unlimited.
+    from app.services import plans as _plans
+    from app.services import tenant_context
+
+    _tid = tenant_context.current_tenant_id.get() or tenant_context.cached_home_tenant_id()
+    if _tid is not None:
+        from app.models.tenant import Tenant as _T
+
+        _t = await db.get(_T, _tid)
+        _limits = _plans.effective_limits(_t)
+        _plan = _plans.get(_t.plan if _t else _plans.DEFAULT_PLAN)
+        if _limits["max_orders_month"] is not None:
+            from datetime import timezone as _tz
+
+            _month_start = datetime.now(_tz.utc).replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+            _used = (
+                await db.execute(
+                    select(func.count()).select_from(Order).where(
+                        Order.created_at >= _month_start, Order.tenant_id == _tid
+                    )
+                )
+            ).scalar_one()
+            if _used >= _limits["max_orders_month"]:
+                nxt = _plans.next_plan_after(_plan.code)
+                hint = f" {_plans.get(nxt).name} plan mein unlimited." if nxt else ""
+                raise OrderError(
+                    f"Is mahine ki order limit ({_limits['max_orders_month']}) "
+                    f"khatam — Upgrade karein.{hint}"
+                )
+
     # Concurrency-safe upsert: two simultaneous creates for the same new
     # customer must not race — ON CONFLICT makes insert-or-skip atomic.
+    # Core insert ORM ke before_flush stamp ko bypass karta hai, isliye
+    # tenant_id yahan explicitly (RLS WITH CHECK bhi yahi maangta hai).
+
     await db.execute(
         pg_insert(Customer)
-        .values(phone=phone, name=customer_name)
-        .on_conflict_do_nothing(index_elements=["phone"])
+        .values(
+            phone=phone,
+            name=customer_name,
+            tenant_id=tenant_context.effective_tenant_id(),
+        )
+        # Grahak ab per-dukaan unique hai: ek hi number do alag laundry ka
+        # customer ho sakta hai. Conflict bhi usi jodi par dekhna hoga.
+        .on_conflict_do_nothing(index_elements=["tenant_id", "phone"])
     )
     customer = (
         await db.execute(select(Customer).where(Customer.phone == phone))
@@ -216,7 +258,29 @@ async def create_order(
         )
     except Exception:
         log.exception("order_admin_fyi_failed", order_number=order_number)
+    _announce(order, "created", by=created_by)
     return order
+
+
+def _announce(order, action: str, *, by: str = "") -> None:
+    """Khuli hui screens ko ishara: is order par kuch hua.
+
+    Yahi wo cheez thi jo Ajit ke banaye bill par nahi chali — bill DB mein
+    theek baitha tha, par owner ka khula hua dashboard usse poochta hi
+    nahi tha. Ab wo khud bata deta hai.
+
+    Kabhi raise nahi karta: ek bhi order, ek bhi payment live-update ki
+    wajah se nahi girna chahiye.
+    """
+    try:
+        from app.services import events
+
+        events.publish(
+            order.tenant_id, "order",
+            number=order.order_number, action=action, by=by,
+        )
+    except Exception:      # noqa: BLE001
+        log.debug("order_event_skipped", order_number=getattr(order, "order_number", "?"))
 
 
 # Actors that ARE the owner side — telling them what they just did is noise.
@@ -303,6 +367,7 @@ async def update_status(
         new=new_status.name,
         changed_by=changed_by,
     )
+    _announce(order, "status", by=changed_by)
 
     # Kapde taiyar = ab delivery ka sawaal. Owner's rule (06 Aug): delivery
     # boy se turant pucho "kab tak?", jawab DB mein rakho, owner ko batao.
@@ -450,6 +515,7 @@ async def record_payment(
         )
     except Exception:
         log.exception("payment_admin_fyi_failed", order_number=order.order_number)
+    _announce(order, "payment", by=recorded_by)
     return order
 
 

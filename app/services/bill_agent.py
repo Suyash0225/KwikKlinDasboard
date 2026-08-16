@@ -96,6 +96,67 @@ class PendingPayment:
         return datetime.now(timezone.utc) - self.created_at > _DRAFT_TTL
 
 
+@dataclass
+class PendingTaskEta:
+    """Staff ne "⏳ Time lagega" dabaya — agla message uska ETA hai."""
+
+    code: str
+    at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def expired(self) -> bool:
+        return (datetime.now(timezone.utc) - self.at) > timedelta(hours=6)
+
+
+@dataclass
+class PendingTaskIssue:
+    """Staff ne "❓ Dikkat hai" dabaya — agla message wajah hai."""
+
+    code: str
+    at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def expired(self) -> bool:
+        return (datetime.now(timezone.utc) - self.at) > timedelta(hours=6)
+
+
+@dataclass
+class PendingRelay:
+    """"Ajit ko bhej do" — kiske paas bhejna hai pata hai, KYA bhejna hai
+    nahi. Agla message hi wo baat hai."""
+
+    target: str
+    at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def expired(self) -> bool:
+        return (datetime.now(timezone.utc) - self.at) > timedelta(minutes=30)
+
+
+@dataclass
+class PendingOrderEta:
+    """Wahi baat order par — "⏳ Time lagega" ke baad ka jawab."""
+
+    number: str
+    at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def expired(self) -> bool:
+        return (datetime.now(timezone.utc) - self.at) > timedelta(hours=6)
+
+
+@dataclass
+class PendingOrderIssue:
+    """Order par "❓ Dikkat hai" — agla message wajah hai."""
+
+    number: str
+    at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def expired(self) -> bool:
+        return (datetime.now(timezone.utc) - self.at) > timedelta(hours=6)
+
+
 # sender phone -> action awaiting 'haan' (a bill draft or a payment)
 _PENDING: dict[str, PendingBill | PendingPayment] = {}
 
@@ -104,6 +165,15 @@ _PENDING: dict[str, PendingBill | PendingPayment] = {}
 _TEST_MODE: dict[str, dict] = {}
 
 _STATUS_NAMES = [s.name for s in OrderStatus]
+
+# Khali extraction — jab hum khud (bina LLM ke) koi action banate hain.
+_EMPTY_EXTRACT: dict = {
+    "action": "other", "customer_name": "", "customer_phone": "", "items": [],
+    "advance": 0, "expected_delivery": "", "order_number": "", "new_date": "",
+    "reason": "", "new_status": "NONE", "relay_to": "", "relay_message": "",
+    "priority": "NONE", "staff_name": "", "note": "", "amount": 0,
+    "method": "NONE", "done_refs": [], "pending_refs": [], "problem": "",
+}
 
 _EXTRACT_SCHEMA = {
     "type": "object",
@@ -204,14 +274,549 @@ _EXTRACT_SYSTEM = (
 )
 
 
+# Task ke teen buttons (tasks.py `_send_to_assignee`): tap = zero typing.
+# Button id mein code hota hai — "task:T-11:done" — isliye 5-6 kaam ek saath
+# hone par bhi kaunsa kaam hai ye kabhi galat nahi hota. Jise likhna hai wo
+# likh sakta hai; ye sirf sabse aam jawab ka shortcut hai.
+_TASK_BTN_RE = re.compile(r"^\s*\[button:task:(T-?\d+):(done|later|problem)\]", re.I)
+# List se chuna gaya kaam ("pick:o:KK-...", "pick:t:T-11") aur order card ke
+# apne teen button. Order ke button ko pehle parkha jata hai — warna
+# "ord:KK-..:done" ko pick samajh liya jata.
+_WORK_PICK_RE = re.compile(r"^\s*\[button:pick:(o|t):([^\]:]+)\]", re.I)
+_ORDER_BTN_RE = re.compile(r"^\s*\[button:ord:(KK-\S+?):(done|later|problem)\]", re.I)
+
+
+async def _handle_task_button(
+    db: AsyncSession, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """Task ke button ka jawab. None = ye button nahi hai."""
+    m = _TASK_BTN_RE.match(text or "")
+    if not m:
+        return None
+    code, action = m.group(1).upper(), m.group(2).lower()
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        return get_message("task_unknown_code", code=code)
+
+    if action == "done":
+        # Wahi rasta jo "done T-11" likhne par chalta hai — ek hi jagah
+        # sach rahe: task band, owner ko khabar, aur job task ho to order
+        # ka status bhi aage badhe.
+        return await _close_task_by_code(db, sender_phone, sender_label, code)
+
+    if action == "later":
+        _PENDING[sender_phone] = PendingTaskEta(code=code)
+        return (
+            f"Theek hai 👍 [{code}] kab tak ho jayega?\n"
+            "Bas likh dijiye — jaise: 2 baje / sham tak / kal subah."
+        )
+
+    # problem: owner ko turant khabar, aur staff se wajah poochho
+    _PENDING[sender_phone] = PendingTaskIssue(code=code)
+    from app.services import team
+
+    await team.notify_admins(
+        db, f"❓ {sender_label} ne [{code}] par dikkat batayi: {task.title}"
+    )
+    return f"Kya dikkat aa rahi hai [{code}] mein? Likh dijiye, main {settings.SHOP_NAME} ko bata deta hoon."
+
+
+async def _send_with_buttons(
+    db: AsyncSession, to_phone: str, text: str, buttons: list
+) -> str | None:
+    """Buttons ke saath bhejo. Na ja paye to wahi baat text mein wapas do —
+    caller use normal reply ki tarah bhej dega (kuch bhi chupke se gire na)."""
+    try:
+        await send_message(db, to_phone=to_phone, text=text, buttons=buttons)
+        return None
+    except (WindowClosedError, SendError) as exc:
+        log.warning("work_card_buttons_failed", to=to_phone, error=str(exc)[:120])
+        return text
+
+
+async def _handle_work_pick(
+    db: AsyncSession, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """List mein se chuna gaya order/task -> uska card + teen buttons."""
+    m = _WORK_PICK_RE.match(text or "")
+    if not m:
+        return None
+    kind, ref = m.group(1).lower(), m.group(2).strip()
+    if kind == "t":
+        from app.services import tasks as task_service
+
+        task = await task_service.get_by_code(db, ref.upper())
+        if task is None:
+            return get_message("task_unknown_code", code=ref.upper())
+        body = f"📝 [{task.code}] {task.title}"
+        if task.urgent:
+            body += "\n🔴 URGENT"
+        body += f"\n\nKya status hai? Ya likh dijiye: done {task.code}"
+        from app.services.work_orders import task_buttons
+
+        return await _send_with_buttons(
+            db, sender_phone, body, await task_buttons(db, task.code)
+        ) or ""
+
+    try:
+        order = await get_order(db, ref.upper())
+    except OrderNotFoundError:
+        return get_message("order_not_found_staff", order_number=ref.upper())
+    from app.services.work_orders import items_summary, order_buttons
+
+    cust = await db.get(Customer, order.customer_id)
+    body = (
+        f"🧺 {order.order_number}\n"
+        f"{cust.name or cust.phone if cust else '?'} — {items_summary(order)}\n"
+        f"Abhi: {status_label(order.status)}"
+    )
+    if order.expected_delivery:
+        body += f"\nDelivery: {order.expected_delivery.strftime('%d %b')}"
+    if order.priority == "urgent":
+        body += "\n🔴 URGENT"
+    body += f"\n\nKya status hai? Ya likh dijiye: done {order.order_number}"
+    return await _send_with_buttons(
+        db, sender_phone, body, await order_buttons(db, order.order_number)
+    ) or ""
+
+
+async def _handle_order_button(
+    db: AsyncSession, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """Order card ke button ka jawab. None = ye button nahi hai."""
+    m = _ORDER_BTN_RE.match(text or "")
+    if not m:
+        return None
+    number, action = m.group(1).upper(), m.group(2).lower()
+    try:
+        order = await get_order(db, number)
+    except OrderNotFoundError:
+        return get_message("order_not_found_staff", order_number=number)
+
+    if action == "done":
+        # Wahi rasta jo "done KK-..." likhne par chalta hai — role hi tay
+        # karta hai ki 'ho gaya' ka matlab READY hai ya DELIVERED.
+        return await _apply_done(db, sender_phone, sender_label, number)
+
+    if action == "later":
+        _PENDING[sender_phone] = PendingOrderEta(number=number)
+        return (
+            f"Theek hai 👍 {number} kab tak ho jayega?\n"
+            "Bas likh dijiye — jaise: 2 baje / sham tak / kal subah."
+        )
+
+    _PENDING[sender_phone] = PendingOrderIssue(number=number)
+    from app.services import team
+
+    await team.notify_admins(
+        db, f"❓ {sender_label} ne {number} par dikkat batayi."
+    )
+    return f"Kya dikkat aa rahi hai {number} mein? Likh dijiye, main {settings.SHOP_NAME} ko bata deta hoon."
+
+
+# Staff kisi ORDER par dikkat bata raha hai — "lehenga khrab hai", "service
+# nahi hogi", "daag nahi gaya". Ye sirf 'note' nahi hai: kaam ruk gaya hai,
+# aur customer ko shayad "ready" ka message ja bhi chuka hai. Isliye ye
+# deterministic hai — LLM ke mood par nahi chhoda ja sakta (ek hi baat ek
+# baar 'note' bani thi aur ek baar bilkul chup rah gayi thi).
+_TROUBLE_RE = re.compile(
+    r"kh?arab|khrab|kharaab|phat\s*ga|fat\s*ga|toot|tut\s*ga|"
+    r"daag|dhabba|rang\s*(chala|nikal|utar)|sikud|jal\s*ga|"
+    r"service\s*(nahi|nhi|na)|nahi\s*ho\s*(payega|paye|sakta|sakti)|"
+    r"nhi\s*ho(g|ga|gi|payega)?\b|possible\s*nahi|mana\s*kar|"
+    r"kam\s*hai|kapda\s*(kam|missing)|missing|gum\s*ga",
+    re.I,
+)
+_ORDER_REF_RE = re.compile(r"\b(?:KK-)?(\d{8}-\d{2,})\b", re.I)
+
+
+async def _order_from_text(db: AsyncSession, text: str) -> Order | None:
+    """Message mein likha order — "KK-20260809-01" ya sirf "20260809-01"."""
+    m = _ORDER_REF_RE.search(text or "")
+    if not m:
+        return None
+    try:
+        return await get_order(db, f"KK-{m.group(1)}")
+    except OrderNotFoundError:
+        return None
+
+
+async def _shop_trouble_word(db: AsyncSession, text: str) -> bool:
+    """Shop ke apne shabd (Settings se) — code wale default ke UPAR.
+
+    Har dukaan ki bol-chaal alag hai; ek client "kharab" kehta hai, doosra
+    "reject", teesra apni bhasha mein. Ye list wahi khud bharta hai.
+    """
+    try:
+        words = await app_settings.get(db, "agent_trouble_words")
+    except Exception:
+        return False
+    low = (text or "").casefold()
+    return any(w.strip().casefold() in low for w in (words or []) if str(w).strip())
+
+
+async def _handle_order_problem(
+    db: AsyncSession, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """Staff ne order par dikkat batayi -> owner ko turant, customer ko kuch nahi.
+
+    Customer ko khud se kuch nahi bhejte: kapda kharab hona paise aur
+    bharose ka mamla hai, wo faisla owner ka hai. Owner ko poori tasveer
+    jaati hai — kaunsa order, kya hua, abhi status kya hai, aur customer
+    ko pehle kya bataya ja chuka hai.
+    """
+    if sender_label == "manager" or not text or text.startswith("["):
+        return None
+    if not _TROUBLE_RE.search(text) and not await _shop_trouble_word(db, text):
+        return None
+    order = await _order_from_text(db, text)
+    if order is None:
+        return None
+
+    said = text.strip()[:300]
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    line = f"[{stamp} {sender_label}] ⚠️ {said}"
+    order.notes = f"{order.notes}\n{line}" if order.notes else line
+    db.add(order)
+    await db.commit()
+
+    cust = await db.get(Customer, order.customer_id)
+    who = (cust.name or cust.phone) if cust else "?"
+    alert = [
+        f"🚨 {sender_label} ne {order.order_number} par dikkat batayi:",
+        f'"{said}"',
+        "",
+        f"Customer: {who}",
+        f"Abhi status: {status_label(order.status)}",
+    ]
+    # Customer ko pehle hi "ready/nikal gaya/de diya" bola ja chuka hai to
+    # ye sabse zaroori baat hai — warna wo aaj hi kapde maangega.
+    if order.status in (
+        OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY, OrderStatus.DELIVERED
+    ):
+        alert.append(
+            f"⚠️ Customer ko '{status_label(order.status)}' ka message ja chuka hai."
+        )
+    alert.append("")
+    alert.append("Customer ko maine kuch nahi bheja — aap batayein kya karna hai.")
+    await _alert_owner_with_hold(db, order, "\n".join(alert))
+
+    log.info("order_problem_reported", order=order.order_number, by=sender_label)
+    await audit.record(
+        actor_role="staff", actor=sender_label, action="order_problem",
+        args={"order": order.order_number}, result=said[:150],
+    )
+    return (
+        f"Samajh gaya 🙏 {order.order_number} ki dikkat maine {settings.SHOP_NAME} "
+        f"ko bata di hai. Customer ko abhi kuch nahi bheja gaya."
+    )
+
+
+async def _alert_owner_with_hold(db: AsyncSession, order: Order, text: str) -> None:
+    """Owner ko alert + ek tap ka faisla: order rok du ya chalne du?
+
+    Status khud se nahi badalte — galat samajh par order chupchaap ruk
+    jata. Faisla owner ka, bas ek button ki doori par.
+    """
+    from app.services import team
+    from app.services.whatsapp import Button
+
+    owner = "+" + settings.MANAGER_PHONE.lstrip("+")
+    buttons = [
+        Button(f"hold:{order.order_number}:yes", "🛑 Order rok do"),
+        Button(f"hold:{order.order_number}:no", "▶️ Chalne do"),
+    ]
+    try:
+        await send_message(db, to_phone=owner, text=text, buttons=buttons)
+        return
+    except (WindowClosedError, SendError):
+        log.info("owner_hold_buttons_failed", order=order.order_number)
+    await team.notify_admins(db, text)
+
+
+_HOLD_BTN_RE = re.compile(r"^\s*\[button:hold:(KK-\S+?):(yes|no)\]", re.I)
+
+
+async def _handle_hold_button(
+    db: AsyncSession, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """Owner ka faisla: order hold par daalo ya chalne do."""
+    m = _HOLD_BTN_RE.match(text or "")
+    if not m:
+        return None
+    number, answer = m.group(1).upper(), m.group(2).lower()
+    if sender_label != "manager":
+        return None
+    try:
+        order = await get_order(db, number)
+    except OrderNotFoundError:
+        return get_message("order_not_found_staff", order_number=number)
+    if answer == "no":
+        return f"Theek hai 👍 {number} waise hi chalta rahega."
+    try:
+        await update_status(db, order, OrderStatus.ON_HOLD, changed_by=sender_label)
+    except InvalidTransitionError:
+        return f"{number} abhi {status_label(order.status)} hai — ise hold nahi kar sakte."
+    # Ruke hue order ki delivery ka peechha karna band — warna Ajit ko us
+    # kaam ke reminder jaate rehte jo ho hi nahi sakta.
+    from app.services import tasks as task_service
+
+    stopped = await task_service.cancel_open_tasks_for_order(db, order.id)
+    tail = f" {stopped} pending kaam bhi roke." if stopped else ""
+    return f"🛑 {number} hold par daal diya.{tail} Customer ko kuch nahi bheja gaya."
+
+
+async def _handle_task_followup(
+    db: AsyncSession, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """Button ke baad ka free-text jawab (ETA ya dikkat ki wajah)."""
+    pending = _PENDING.get(sender_phone)
+    if not isinstance(
+        pending,
+        (PendingTaskEta, PendingTaskIssue, PendingOrderEta, PendingOrderIssue, PendingRelay),
+    ) or not text:
+        return None
+    if text.startswith("["):          # media/button — ye jawab nahi hai
+        return None
+    _PENDING.pop(sender_phone, None)
+
+    # "Ajit ko kya bhejun?" ka jawab — ab bhejne wale ke apne shabd hain
+    if isinstance(pending, PendingRelay):
+        return await _apply_relay(
+            db, sender_label,
+            {**_EMPTY_EXTRACT, "relay_to": pending.target, "relay_message": text.strip()},
+            sender_text=f"{pending.target} {text}", sender_phone=sender_phone,
+        )
+
+    # Order wale jawab: ETA/dikkat order ke notes par chadhti hai aur owner
+    # ko turant jaati hai — wahi behaviour jo task par hai.
+    if isinstance(pending, (PendingOrderEta, PendingOrderIssue)):
+        from app.services import team
+
+        said = text.strip()[:300]
+        try:
+            order = await get_order(db, pending.number)
+        except OrderNotFoundError:
+            return None
+        if isinstance(pending, PendingOrderEta):
+            stamp = datetime.now(timezone.utc).strftime("%d %b %H:%M")
+            order.notes = (
+                (order.notes or "") + f"\n[{stamp}] {sender_label} — ETA: {said[:120]}"
+            ).strip()
+            db.add(order)
+            await db.commit()
+            await team.notify_admins(
+                db, f"⏳ {sender_label}: {pending.number} — {said[:120]}"
+            )
+            return f"👍 Note kar liya: {said[:120]}"
+        await team.notify_admins(
+            db, f"❗ {sender_label} ki dikkat {pending.number}: {said}"
+        )
+        return "Samajh gaya 🙏 Maine owner ko bata diya hai."
+    from app.services import tasks as task_service
+    from app.services import team
+
+    task = await task_service.get_by_code(db, pending.code)
+    if task is None:
+        return None
+    if isinstance(pending, PendingTaskEta):
+        task.eta_text = text.strip()[:120]
+        db.add(task)
+        await db.commit()
+        await team.notify_admins(
+            db, f"⏳ {sender_label}: [{task.code}] {task.title} — {task.eta_text}"
+        )
+        return f"👍 Note kar liya: {task.eta_text}"
+    await team.notify_admins(
+        db, f"❗ {sender_label} ki dikkat [{task.code}]: {text.strip()[:300]}"
+    )
+    return "Samajh gaya 🙏 Maine owner ko bata diya hai."
+
+
+# "aaj ka kaam kya hai", "order details do", "kitne order pending hai" —
+# staff apna kaam poochh raha hai. Pehle sirf MANAGER ka sawal answer hota
+# tha aur staff ko CHUPPI milti thi: Ravi ne 5 baar "order details do"
+# likha, ek baar bhi jawab nahi gaya. Ab ye deterministic hai — zero LLM,
+# seedha DB se.
+_WORK_ASK_RE = re.compile(
+    r"(?:^|\s)(?:"
+    r"order[\s-]*(?:ki\s*)?(?:detail|details|list|status)"
+    r"|(?:detail|details|list)\s*(?:do|dijiye|bhejo|bhej|batao|bata)"
+    r"|(?:aaj|aj|आज)\s*(?:ka|k)?\s*(?:kaam|kam|order|orders|work)"
+    r"|kya\s*(?:kaam|kam|karna)\b"
+    r"|(?:mera|apna)\s*(?:kaam|kam|order|orders)"
+    r"|kitne?\s*order"
+    r"|pending\s*(?:order|orders|kaam|kam)"
+    r"|kaam\s*(?:kya|batao|bata|do|dijiye)"
+    r")",
+    re.I,
+)
+
+
+async def _staff_worklist(
+    db: AsyncSession, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """Staff ke apne pending order + khule task — unhi ke shabdon ke jawab mein.
+
+    Wahi list jo roz subah standup mein jaati hai, bas jab wo khud maange.
+    """
+    if sender_label == "manager" or not text or text.startswith("["):
+        return None
+    if _PENDING.get(sender_phone) is not None:   # bill/payment draft beech mein
+        return None
+    if not _WORK_ASK_RE.search(text):
+        return None
+    staff = (
+        await db.execute(select(Staff).where(Staff.phone == sender_phone))
+    ).scalar_one_or_none()
+    if staff is None or not staff.is_active:
+        return None
+
+    from app.services import tasks as task_service
+    from app.services.scheduler import _pending_orders_for
+    from app.services.work_orders import items_summary
+
+    default_phone = await app_settings.get(db, "default_washer_phone")
+    orders = await _pending_orders_for(db, staff, default_phone)
+    open_tasks = await task_service.open_tasks_for_staff(db, staff.id)
+    # Chhoti dukaan mein zyadatar order kisi ke naam par likhe hi nahi
+    # jaate. Sirf "aapke naam par kuch nahi" keh dena galat lagta hai jab
+    # shop mein kaam pada ho — bina assign wale order alag se dikhte hain.
+    unclaimed = await _unclaimed_orders(db, staff, [o.id for o in orders])
+
+    if not orders and not open_tasks and not unclaimed:
+        return f"{staff.name} ji, abhi koi pending order ya kaam nahi hai 👍"
+
+    async def _order_line(i: int, o: Order) -> str:
+        cust = await db.get(Customer, o.customer_id)
+        flags = []
+        if o.priority == "urgent":
+            flags.append("🔴 URGENT")
+        if o.expected_delivery and o.expected_delivery <= date.today():
+            flags.append("aaj delivery")
+        return (
+            f"{i}. {o.order_number} — {cust.name or cust.phone if cust else '?'} — "
+            f"{items_summary(o)} — {status_label(o.status)}"
+            + (f" [{', '.join(flags)}]" if flags else "")
+        )
+
+    lines: list[str] = []
+    if orders:
+        lines.append(f"📋 {staff.name} ji, aapke {len(orders)} order:")
+        for i, o in enumerate(orders[:10], 1):
+            lines.append(await _order_line(i, o))
+        if len(orders) > 10:
+            lines.append(f"...aur {len(orders) - 10} aur")
+    if unclaimed:
+        if lines:
+            lines.append("")
+        lines.append(f"🧺 Bina assign ke {len(unclaimed)} order:")
+        for i, o in enumerate(unclaimed[:10], 1):
+            lines.append(await _order_line(i, o))
+        if len(unclaimed) > 10:
+            lines.append(f"...aur {len(unclaimed) - 10} aur")
+    if open_tasks:
+        if lines:
+            lines.append("")
+        lines.append(f"📝 Khule kaam ({len(open_tasks)}):")
+        for t in open_tasks[:10]:
+            lines.append(f"• [{t.code}] {t.title}" + (" 🔴" if t.urgent else ""))
+    lines.append("")
+    lines.append("Ho jaye to likh dijiye: done KK-... ya done T-..")
+    blob = "\n".join(lines)
+    log.info("staff_worklist_answered", staff=staff.name, orders=len(orders),
+             unclaimed=len(unclaimed), tasks=len(open_tasks))
+
+    # Tap-to-pick: ek list bhejte hain jisme har order/task apni line par
+    # hai. Isse "kis par jawab diya" ka sawal hi khatam — chuni hui line ka
+    # id wapas aata hai. List na ja paye (window band / provider) to wahi
+    # baat text mein chali jati hai.
+    from app.services.work_orders import list_button_label, work_rows
+
+    rows = await work_rows(db, list(orders) + list(unclaimed), open_tasks)
+    if rows:
+        try:
+            await send_message(
+                db, to_phone=sender_phone,
+                text=f"{staff.name} ji, ye raha aaj ka kaam 👇\nJispar update dena ho use chuniye.",
+                list_rows=rows, list_button=await list_button_label(db),
+                list_title="Aaj ka kaam",
+            )
+            return ""
+        except (WindowClosedError, SendError) as exc:
+            log.warning("worklist_list_failed", error=str(exc)[:120])
+    return blob
+
+
+
+
+async def _unclaimed_orders(
+    db: AsyncSession, staff: Staff, mine: list
+) -> list[Order]:
+    """Active order jo abhi kisi ke naam par nahi hain — role ke hisaab se.
+
+    Washer ko wo jinka washer khali hai; delivery wale ko wo jo Ready/
+    Out-for-delivery hain aur jinka delivery khali hai.
+    """
+    rows = (
+        await db.execute(
+            select(Order)
+            .where(Order.status.in_(ACTIVE_STATUSES))
+            .order_by(Order.priority.desc(), Order.created_at)
+        )
+    ).scalars().all()
+    seen = set(mine)
+    out = []
+    for o in rows:
+        if o.id in seen:
+            continue
+        if staff.role.name == "DELIVERY":
+            ready = o.status in (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)
+            if ready and o.assigned_delivery_id is None:
+                out.append(o)
+        elif o.assigned_washer_id is None:
+            out.append(o)
+    return out
+
+
 async def handle_staff_message(
     db: AsyncSession, *, sender_phone: str, sender_label: str, text: str
 ) -> str | None:
     """Reply for a staff/manager inbound, or None to stay silent."""
+    # Band kiya gaya aadmi: yahan tak pahunchna hi nahi chahiye (webhook
+    # pehle hi rok deta hai), par ye doosra taala hai — bill, payment,
+    # status, sab isi darwaze se guzarta hai.
+    if sender_label != "manager":
+        who = (
+            await db.execute(select(Staff).where(Staff.phone == sender_phone))
+        ).scalar_one_or_none()
+        if who is not None and not who.is_active:
+            log.info("inactive_staff_command_ignored", staff=who.name)
+            return None
+
     pending = _PENDING.get(sender_phone)
     if pending and pending.expired:
         _PENDING.pop(sender_phone, None)
         pending = None
+
+    # Task ke buttons + unka follow-up — dono deterministic, zero LLM.
+    btn_reply = await _handle_task_button(db, sender_phone, sender_label, text or "")
+    if btn_reply is not None:
+        return btn_reply
+    ord_reply = await _handle_order_button(db, sender_phone, sender_label, text or "")
+    if ord_reply is not None:
+        return ord_reply
+    picked = await _handle_work_pick(db, sender_phone, sender_label, text or "")
+    if picked is not None:
+        return picked
+    hold = await _handle_hold_button(db, sender_phone, sender_label, text or "")
+    if hold is not None:
+        return hold
+    followup = await _handle_task_followup(db, sender_phone, sender_label, text or "")
+    if followup is not None:
+        return followup
 
     # "done KK-20260803-01" — staff quick-confirm, zero LLM (owner's spec)
     if text:
@@ -228,6 +833,17 @@ async def handle_staff_message(
     pickup_reply = await _handle_pickup_exchange(db, sender_phone, sender_label, text or "")
     if pickup_reply is not None:
         return pickup_reply
+
+    # Order par dikkat — LLM se pehle, kyunki ye khone wali baat nahi hai.
+    problem = await _handle_order_problem(db, sender_phone, sender_label, text or "")
+    if problem is not None:
+        return problem
+
+    # "order details do" — staff apna kaam poochh raha hai. Ye pickup ke
+    # baad aata hai taaki chal rahi baat-cheet beech mein na kate.
+    worklist = await _staff_worklist(db, sender_phone, sender_label, text or "")
+    if worklist is not None:
+        return worklist
 
     # Campaign approvals are deterministic commands, no LLM needed.
     if sender_label == "manager" and text:
@@ -292,13 +908,15 @@ async def handle_staff_message(
     elif action == "status_update":
         reply = await _apply_status(db, sender_label, extracted, sender_phone)
     elif action == "relay":
-        reply = await _apply_relay(db, sender_label, extracted)
+        reply = await _apply_relay(
+            db, sender_label, extracted, sender_text=text or "", sender_phone=sender_phone
+        )
     elif action == "set_priority":
         reply = await _apply_priority(db, sender_label, extracted)
     elif action == "assign_staff":
         reply = await _apply_assign(db, sender_label, extracted)
     elif action == "add_note":
-        reply = await _apply_note(db, sender_label, extracted)
+        reply = await _apply_note(db, sender_label, extracted, sender_phone)
     elif action == "record_payment":
         reply = await _stage_payment(db, sender_phone, sender_label, extracted)
     elif action == "standup_reply" and sender_label != "manager":
@@ -902,7 +1520,9 @@ async def _apply_assign(db: AsyncSession, sender_label: str, extracted: dict) ->
     )
 
 
-async def _apply_note(db: AsyncSession, sender_label: str, extracted: dict) -> str:
+async def _apply_note(
+    db: AsyncSession, sender_label: str, extracted: dict, sender_phone: str = ""
+) -> str:
     from app.services.work_orders import send_work_order
 
     order, err = await _find_order_flex(db, extracted)
@@ -915,7 +1535,26 @@ async def _apply_note(db: AsyncSession, sender_label: str, extracted: dict) -> s
     line = f"[{stamp} {sender_label}] {note}"
     order.notes = f"{order.notes}\n{line}" if order.notes else line
     await db.commit()
-    # instructions are for the worker too — forward as a work order
+
+    if sender_label != "manager":
+        # Staff ne order ke baare mein kuch kaha — wo owner tak jana hi
+        # chahiye. Pehle ye sirf note mein dafan ho jata tha aur owner ko
+        # pata hi nahi chalta tha ki kaam par kya chal raha hai. Aur use
+        # wapas usi staff ko "work order" bana kar bhejne ka koi matlab
+        # nahi tha — jawab bhi wahi confusing aata tha.
+        from app.services import team
+
+        await team.notify_admins(
+            db,
+            f"📝 {sender_label} — {order.order_number} ({status_label(order.status)}): {note}",
+            skip_phone=sender_phone,
+        )
+        return get_message(
+            "note_done", order_number=order.order_number,
+            notified=f"{settings.SHOP_NAME} ko bata bhi diya",
+        )
+
+    # Owner ka instruction kaam karne wale tak jana chahiye
     outcome = await send_work_order(db, order, headline="Instruction", extra=note)
     return get_message(
         "note_done", order_number=order.order_number,
@@ -1412,12 +2051,83 @@ async def _order_in_text(db: AsyncSession, text: str) -> Order | None:
     ).scalar_one_or_none()
 
 
-async def _apply_relay(db: AsyncSession, sender_label: str, extracted: dict) -> str:
+# Relay ke do pakke niyam — dono code mein, prompt par bharosa nahi:
+#
+# 1. Jis aadmi ka naam BHEJNE WALE ne likha hi nahi, uske paas message
+#    nahi jayega. (09 Aug: owner ne likha "Message bhejo message kyo nhi
+#    bheje" — kisi ka naam nahi tha — aur wo Ravi ko chala gaya.)
+# 2. Bhejne wale ke apne shabd hi message banenge. Sirf "Ajit ko bhej do"
+#    likha ho to model ne pichhla BOT ka jawab utha kar bhej diya tha —
+#    Ajit ke paas task bana "Note save ho gaya hai (KK-...)".
+_RELAY_NOISE_RE = re.compile(
+    r"\b(ko|se|ka|ki|ke|ye|yeh|wo|is|isko|usko|please|plz|zara|abhi|"
+    r"bhej|bhejo|bhej\s*do|bheje|bhejna|bol|bolo|bol\s*do|kah|kaho|kah\s*do|"
+    r"bata|batao|bata\s*do|puch|pucho|puch\s*lo|forward|message|msg|"
+    r"kar|karo|kar\s*do|de|do|dedo|de\s*do)\b",
+    re.I,
+)
+
+
+def _sender_named(target: str, text: str) -> bool:
+    """Kya bhejne wale ne sach mein ye naam likha tha?"""
+    t, low = (target or "").strip().casefold(), (text or "").casefold()
+    if not t:
+        return False
+    if t in low:
+        return True
+    # "Ajit bhai" / "ajitji" jaise likhawat par pehla hissa bhi kaafi hai
+    head = t.split()[0]
+    return len(head) >= 3 and head in low
+
+
+def _leftover_words(target: str, text: str) -> str:
+    """Naam aur "ko bhej do" jaise shabd hata kar bachi hui asli baat."""
+    low = (text or "")
+    for piece in (target or "").split():
+        low = re.sub(re.escape(piece), " ", low, flags=re.I)
+    low = _RELAY_NOISE_RE.sub(" ", low)
+    return re.sub(r"[\s\.,!?]+", " ", low).strip()
+
+
+async def _relay_target_exists(db: AsyncSession, target: str) -> bool:
+    """Ye naam kisi jaante-pehchante aadmi ka hai?"""
+    if target.lower() in ("manager", "boss", "malik"):
+        return True
+    rows = (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
+    low = target.lower()
+    return sum(
+        1 for s in rows if s.name and (s.name.lower() in low or low in s.name.lower())
+    ) == 1
+
+
+async def _apply_relay(
+    db: AsyncSession, sender_label: str, extracted: dict, sender_text: str = "",
+    sender_phone: str = "",
+) -> str:
     """Forward a message to a staff member or the manager — known phones only."""
     target = extracted["relay_to"].strip()
     message = extracted["relay_message"].strip()
     if not target or not message:
         return get_message("staff_cmd_unknown")
+
+    if sender_text and not _sender_named(target, sender_text):
+        names = ", ".join(
+            s.name for s in (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
+            if s.name
+        ) or "-"
+        log.info("relay_target_not_named", guessed=target, text=sender_text[:80])
+        return f"Kisko bhejun? Naam likh dijiye 🙏\nStaff: {names}"
+
+    if sender_text and len(_leftover_words(target, sender_text)) < 4:
+        # Naam to hai, baat nahi — model se baat mangwane ke bajaye khud
+        # poochho, warna wo pichhla koi bhi text utha leta hai. (Anjaan
+        # naam par ye nahi poochhte — "wo hai hi nahi" batana zyada kaam ka
+        # hai, isliye wo faisla neeche wale rasta karta hai.)
+        if await _relay_target_exists(db, target):
+            if sender_phone:
+                _PENDING[sender_phone] = PendingRelay(target=target)
+            log.info("relay_message_missing", target=target, text=sender_text[:80])
+            return f"{target} ko kya bhejun? Baat likh dijiye 🙏"
 
     is_customer_target = False
     if target.lower() in ("manager", "boss", "malik"):

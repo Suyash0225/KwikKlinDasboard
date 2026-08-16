@@ -7,11 +7,11 @@ from sqlalchemy import DateTime, Enum, ForeignKey, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 from app.models.enums import EscalationStatus
 
 
-class Escalation(Base):
+class Escalation(Base, TenantScoped):
     __tablename__ = "escalations"
 
     id: Mapped[uuid.UUID] = mapped_column(

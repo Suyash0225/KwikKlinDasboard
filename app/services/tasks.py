@@ -17,7 +17,7 @@ from app.config import settings
 from app.database import async_session_factory
 from app.models import TASK_CANCELLED, TASK_DONE, TASK_OPEN, Order, Staff, Task
 from app.services import audit
-from app.services.whatsapp import SendError, WindowClosedError, send_message
+from app.services.whatsapp import Button, SendError, WindowClosedError, send_message
 
 log = structlog.get_logger()
 
@@ -28,6 +28,26 @@ PING_AFTER_HOURS = 2
 URGENT_PING_AFTER_HOURS = 1
 ESCALATE_AFTER_PINGS = 3
 QUIET_START, QUIET_END = settings.QUIET_HOURS_START, settings.QUIET_HOURS_END
+
+
+def _announce(task: Task, action: str, *, by: str = "") -> None:
+    """Khuli hui screens ko bata do ki is task ka kya hua.
+
+    Sirf ISHARA jaata hai — code, kya hua, kisne kiya. Task ka poora
+    matter nahi: har screen wahi maangti hai jo wo dikha rahi hai, aur
+    kisi ka data galat connection par ja hi nahi sakta.
+
+    Ye kabhi raise nahi karta. Live update suvidha hai; uski wajah se ek
+    bhi task band hona ya cancel hona nahi rukna chahiye.
+    """
+    try:
+        from app.services import events
+
+        events.publish(
+            task.tenant_id, "task", code=task.code, action=action, by=by,
+        )
+    except Exception:      # noqa: BLE001
+        log.debug("task_event_skipped", code=getattr(task, "code", "?"))
 
 
 def _in_quiet_hours(now_ist: datetime) -> bool:
@@ -51,7 +71,16 @@ async def _next_code(db: AsyncSession) -> str:
 
 
 async def find_staff(db: AsyncSession, name_or_phone: str) -> Staff | None:
-    """Match a staff member the way the owner refers to them."""
+    """Match a staff member the way the owner refers to them.
+
+    Do niyam jo ise rozmarra mein aasan banate hain:
+
+    - Sirf ACTIVE log. Jise owner ne band kar diya use naya kaam nahi jata.
+    - Poora naam/number bola ho to wahi jeetta hai. Pehle koi bhi do
+      mel khate rows (do "Ravi", ya "Ravi" aur "Ravindra") milte hi function
+      haar maan leta tha aur owner ko "staff list mein nahi mila" dikhta
+      tha — chahe usne poora naam theek likha ho.
+    """
     q = (name_or_phone or "").strip()
     if not q:
         return None
@@ -59,8 +88,20 @@ async def find_staff(db: AsyncSession, name_or_phone: str) -> Staff | None:
     cond = Staff.name.ilike(f"%{q}%")
     if len(digits) >= 6:
         cond = or_(cond, Staff.phone.ilike(f"%{digits}%"))
-    rows = (await db.execute(select(Staff).where(cond).limit(2))).scalars().all()
-    return rows[0] if len(rows) == 1 else None
+    rows = (
+        await db.execute(select(Staff).where(cond, Staff.is_active.is_(True)))
+    ).scalars().all()
+    if len(rows) == 1:
+        return rows[0]
+    if not rows:
+        return None
+    exact = [
+        s
+        for s in rows
+        if s.name.strip().casefold() == q.casefold()
+        or (len(digits) >= 6 and "".join(ch for ch in s.phone if ch.isdigit()) == digits)
+    ]
+    return exact[0] if len(exact) == 1 else None
 
 
 async def create_task(
@@ -99,6 +140,7 @@ async def create_task(
         result=title[:150],
     )
     log.info("task_created", code=task.code, staff=staff.name if staff else None)
+    _announce(task, "created", by=created_by)
     return task
 
 
@@ -115,15 +157,24 @@ async def _send_to_assignee(
     if first:
         body = (
             f"{head} [{task.code}]{order_bit}\n{task.title}\n\n"
-            f"Ho jaye to reply karein: done {task.code}"
+            f"Neeche button dabaiye — ya likh dijiye: done {task.code}"
         )
     else:
         body = (
             f"⏰ Reminder [{task.code}]{order_bit}\n{task.title}\n\n"
-            f"Kya status hai? Ho gaya ho to: done {task.code}"
+            f"Kya status hai? Button dabaiye — ya likh dijiye: done {task.code}"
         )
+    # Tap = zero typing. Button id mein task ka CODE hai, isliye 5-6 kaam
+    # ek saath pending hon tab bhi galat task kabhi band nahi hota. Likh kar
+    # jawab dena ("done T-11", ya poori baat) waise hi chalta rahega —
+    # button sirf sabse aam jawab ka shortcut hai.
+    from app.services.work_orders import task_buttons
+
+    buttons = await task_buttons(db, task.code)
     try:
-        await send_message(db, to_phone=staff.phone, text=body, sent_by="bot")
+        await send_message(
+            db, to_phone=staff.phone, text=body, buttons=buttons, sent_by="bot"
+        )
         return True
     except WindowClosedError:
         # Their 24h window is shut, so WhatsApp forbids free-form. Fall back
@@ -190,6 +241,14 @@ async def _delivery_staff(db: AsyncSession) -> Staff | None:
     return await team.delivery_staff(db)
 
 
+# "Kab tak?" par jaan-boojh kar koi button NAHI.
+# Baaki har jagah button hain (ho gaya / time lagega / dikkat hai) kyunki
+# wahan jawab gine-chune hote hain. Samay aisa nahi hai: delivery wala
+# haath ka kaam dekh kar batata hai — "1-2 ghante / sham tak / kal" jaise
+# chhape hue option na uske kaam se milte hain na owner ko sach dikhate
+# hain. Yahan uska apna jawab hi sahi jawab hai.
+
+
 async def _create_job_task(db: AsyncSession, order, kind: str) -> Task | None:
     """Ask the delivery boy about a pickup/delivery and track his answer.
 
@@ -239,22 +298,50 @@ async def _create_job_task(db: AsyncSession, order, kind: str) -> Task | None:
             + (f"Pata: {addr}\n" if addr else "")
             + f"\n{cfg['ask']}"
         )
+        delivered = "no"
         try:
             await send_message(db, to_phone=staff.phone, text=ask, sent_by="bot")
+            delivered = "yes"
+        except WindowClosedError:
+            # Unki 24h chat band hai — free-form Meta allow nahi karta. Ye
+            # chupchaap chhod dena sabse bura tha: owner ko "de di, samay
+            # pooch liya" chala jata tha jabki Ajit tak kuch pahuncha hi
+            # nahi hota. Ab approved template se jata hai.
+            one_line = " ".join(ask.split())[:600]
+            try:
+                await send_message(
+                    db, to_phone=staff.phone, template_name="kk_staff_alert",
+                    template_params=[one_line], sent_by="bot",
+                )
+                delivered = "template"
+            except SendError:
+                log.warning("job_ask_undelivered", kind=kind, code=task.code)
+        except SendError:
+            log.warning("job_ask_send_failed", kind=kind, code=task.code)
+        if delivered != "no":
             task.last_ping_at = datetime.now(timezone.utc)
             db.add(task)
             await db.commit()
-        except (SendError, WindowClosedError):
-            log.info("job_ask_undelivered", kind=kind, code=task.code)
 
-        # the owner side sees it the moment it is arranged, without asking
+        # the owner side sees it the moment it is arranged, without asking —
+        # aur sach-sach: pahuncha ya nahi, ye bhi
         from app.services import team
 
+        tail = {
+            "yes": "Unse samay pooch liya hai, pata chalte hi bata dunga.",
+            "template": (
+                f"Unki chat band thi, isliye template se bheja hai — "
+                f"jawab aate hi bata dunga."
+            ),
+            "no": (
+                f"⚠️ Par {staff.name} tak message NAHI pahuncha (chat band + "
+                f"template bhi fail). Unhe khud bata dijiye."
+            ),
+        }[delivered]
         await team.notify_admins(
             db,
             f"{cfg['emoji']} {order.order_number} — {who} ki {cfg['word']} "
-            f"{staff.name} ko de di [{task.code}]. Unse samay pooch liya hai, "
-            f"pata chalte hi bata dunga.",
+            f"{staff.name} ko de di [{task.code}]. {tail}",
         )
 
         await audit.record(
@@ -461,6 +548,7 @@ async def complete_task(
         action="task_completed", args={"code": task.code}, result=(reply or "done")[:150],
     )
     log.info("task_completed", code=task.code, by=by)
+    _announce(task, "done", by=by)
     return task
 
 
@@ -473,7 +561,24 @@ async def cancel_task(db: AsyncSession, task: Task, *, by: str = "dashboard") ->
         actor_role="admin", actor=by, action="task_cancelled",
         args={"code": task.code}, result="cancelled",
     )
+    _announce(task, "cancelled", by=by)
     return task
+
+
+async def cancel_open_tasks_for_order(db: AsyncSession, order_id, *, by: str = "agent") -> int:
+    """Us order ke khule kaam rok do. Returns kitne roke.
+
+    Order hold/cancel ho jaye to uski delivery ka peechha karte rehna sirf
+    Ajit ko pareshan karta hai — aur owner ko jhoothe reminder deta hai.
+    """
+    rows = (
+        await db.execute(
+            select(Task).where(Task.order_id == order_id, Task.status == TASK_OPEN)
+        )
+    ).scalars().all()
+    for t in rows:
+        await cancel_task(db, t, by=by)
+    return len(rows)
 
 
 async def get_by_code(db: AsyncSession, code: str) -> Task | None:
@@ -509,6 +614,9 @@ async def note_reply(db: AsyncSession, staff_id, text: str) -> Task | None:
     task.reply = text[:1000]
     db.add(task)
     await db.commit()
+    # Staff ne kuch kaha — "nahi ho paega", "ho gaya", "time lagega". Ye
+    # wahi baat hai jiske liye owner baar-baar refresh karta tha.
+    _announce(task, "reply", by="staff")
     return task
 
 

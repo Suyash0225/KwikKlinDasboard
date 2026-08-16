@@ -47,6 +47,11 @@ async def run_backup() -> str | None:
     proc = await asyncio.create_subprocess_exec(
         exe,
         "-h", info["host"], "-p", info["port"], "-U", info["user"],
+        # RLS is FORCED on tenant tables (data isolation); without this flag
+        # pg_dump refuses to run. The backup session has no app.tenant_id
+        # set, so the policies' system-context arm exposes every row and the
+        # dump stays complete.
+        "--enable-row-security",
         "-Fc", "-f", str(out), info["db"],
         env=env,
         stdout=asyncio.subprocess.PIPE,
@@ -62,5 +67,42 @@ async def run_backup() -> str | None:
             old.unlink()
         except OSError:
             pass
-    log.info("backup_ok", file=out.name, bytes=out.stat().st_size)
+
+    # Restore-test: jo backup restore nahi ho sakta wo backup hai hi nahi.
+    verified = await verify_backup(str(out))
+    from app.services import audit
+
+    await audit.record(
+        actor_role="system", actor="nightly-backup",
+        action="backup_ok" if verified else "backup_unverified",
+        args={"file": out.name, "bytes": out.stat().st_size, "verified": verified},
+        ok=verified,
+    )
+    log.info("backup_ok", file=out.name, bytes=out.stat().st_size, verified=verified)
     return str(out)
+
+
+async def verify_backup(path: str) -> bool:
+    """Dump ka restore-test (pg_restore --list): archive ka TOC poora padha
+    ja sakta hai ya nahi. Ye corruption/truncation turant pakadta hai bina
+    scratch DB ke. (Poora restore drill: scripts/restore_drill.ps1 —
+    mahine mein ek baar haath se chalao.)"""
+    exe = str(Path(settings.PG_DUMP_PATH).parent / "pg_restore.exe")
+    if not Path(exe).exists():
+        exe = "pg_restore"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            exe, "--list", path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out_b, err = await proc.communicate()
+        ok = proc.returncode == 0 and b"TABLE DATA" in out_b
+        if not ok:
+            log.error(
+                "backup_verify_failed", file=path, code=proc.returncode,
+                error=err.decode(errors="replace")[:300],
+            )
+        return ok
+    except Exception:
+        log.exception("backup_verify_crashed", file=path)
+        return False

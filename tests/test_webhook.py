@@ -12,8 +12,8 @@ from app.database import async_session_factory
 from app.models import Conversation, Customer, Staff
 from app.services.messages import get_message
 from tests.conftest import (
-    RAVI_PHONE,
-    RAVI_PHONE_RAW,
+    TEST_WASHER_PHONE,
+    TEST_WASHER_PHONE_RAW,
     TEST_CUSTOMER_PHONE,
     TEST_CUSTOMER_PHONE_RAW,
     meta_payload,
@@ -143,12 +143,42 @@ async def test_button_reply_preserves_id(client, sent) -> None:
         assert conv.message_text.startswith("[button:order:abc123:done]")
 
 
-# --- staff sender ---
+async def test_list_reply_arrives_as_a_button(client, sent) -> None:
+    """List se chuni gayi line bhi button jaisi hi dikhni chahiye.
 
-async def test_staff_message_goes_to_staff_row_no_ack(client, sent) -> None:
+    Buttons max 3 hote hain; 5-6 kaam chunwane ke liye list hi ek rasta hai.
+    Agar iska shape alag hota to har handler ko do bar likhna padta.
+    """
     body = meta_payload(
         messages=[{
-            "from": RAVI_PHONE_RAW,
+            "from": TEST_CUSTOMER_PHONE_RAW,
+            "id": "wamid.TEST-list",
+            "type": "interactive",
+            "interactive": {
+                "type": "list_reply",
+                "list_reply": {
+                    "id": "pick:o:KK-20260809-01",
+                    "title": "KK-20260809-01",
+                    "description": "Pooja — 1 x Lehenga",
+                },
+            },
+        }]
+    )
+    r = await client.post("/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)})
+    assert r.status_code == 200
+    async with async_session_factory() as s:
+        conv = (
+            await s.execute(select(Conversation).where(Conversation.wa_message_id == "wamid.TEST-list"))
+        ).scalar_one()
+        assert conv.message_text.startswith("[button:pick:o:KK-20260809-01]")
+
+
+# --- staff sender ---
+
+async def test_staff_message_goes_to_staff_row_no_ack(client, sent, test_washer) -> None:
+    body = meta_payload(
+        messages=[{
+            "from": TEST_WASHER_PHONE_RAW,
             "id": "wamid.TEST-ravi",
             "type": "text",
             "text": {"body": "aaj 5 order complete"},
@@ -158,17 +188,17 @@ async def test_staff_message_goes_to_staff_row_no_ack(client, sent) -> None:
     assert r.status_code == 200
 
     async with async_session_factory() as s:
-        ravi = (
-            await s.execute(select(Staff).where(Staff.phone == RAVI_PHONE))
+        washer = (
+            await s.execute(select(Staff).where(Staff.phone == TEST_WASHER_PHONE))
         ).scalar_one()
-        assert ravi.last_message_at is not None, "staff window did not open"
+        assert washer.last_message_at is not None, "staff window did not open"
         conv = (
             await s.execute(select(Conversation).where(Conversation.wa_message_id == "wamid.TEST-ravi"))
         ).scalar_one()
-        assert conv.staff_id == ravi.id and conv.customer_id is None
+        assert conv.staff_id == washer.id and conv.customer_id is None
         # no customer row must appear for a staff phone
         ghost = (
-            await s.execute(select(Customer).where(Customer.phone == RAVI_PHONE))
+            await s.execute(select(Customer).where(Customer.phone == TEST_WASHER_PHONE))
         ).scalar_one_or_none()
         assert ghost is None
     assert sent == [], "staff messages must not be acked"
@@ -293,3 +323,109 @@ async def test_status_receipt_stores_nothing(client, sent) -> None:
         ).scalars().all()
         assert rows == []
     assert sent == []
+
+
+# --- ek baat, EK jawab (coalescing) ----------------------------------------
+
+
+async def test_two_texts_in_one_batch_get_one_reply(client, sent) -> None:
+    """"11 iron" + "3 dryclean" ek hi batch mein = EK jawab, do nahi.
+
+    Pehle har message ka apna jawab jata tha — doosra jawab pehli poori
+    baat dohrata tha aur customer puchta tha "ye do baar kyon bheja?"
+    (Sakshi, 11 Aug). Jawab aakhri message par banta hai jo poori baat
+    dekh chuka hota hai.
+    """
+    body = meta_payload(
+        messages=[
+            {
+                "from": TEST_CUSTOMER_PHONE_RAW,
+                "id": "wamid.TESTco1",
+                "type": "text",
+                "text": {"body": "11 iron"},
+            },
+            {
+                "from": TEST_CUSTOMER_PHONE_RAW,
+                "id": "wamid.TESTco2",
+                "type": "text",
+                "text": {"body": "3 dryclean"},
+            },
+        ]
+    )
+    r = await client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
+    )
+    assert r.status_code == 200
+
+    # dono message store hue — coalescing sirf JAWAB rokta hai, record nahi
+    async with async_session_factory() as s:
+        for wamid in ("wamid.TESTco1", "wamid.TESTco2"):
+            row = (
+                await s.execute(
+                    select(Conversation).where(Conversation.wa_message_id == wamid)
+                )
+            ).scalar_one()
+            assert row is not None
+
+    replies = [m for m in sent if m["to"] == TEST_CUSTOMER_PHONE]
+    assert len(replies) == 1, f"ek baat par {len(replies)} jawab gaye: {replies}"
+
+
+async def test_reply_superseded_by_newer_message_is_not_sent(client, sent, monkeypatch) -> None:
+    """Jawab BANTE waqt (LLM ke 4-10s) naya message aa jaye to wo jawab
+    adhoori baat par bana hai — bhejna nahi, naye wale ko poori baat ka
+    ek jawab dene do. Yahi Sakshi wali asli timeline hai: msg1 05:42:15,
+    msg2 05:42:22, reply1 05:42:26 (adhoora), reply2 05:42:37 (poora).
+    """
+    import app.routers.webhook as wh
+    from app.models import Direction
+
+    async def slow_ai_reply(db, customer, text, **kw):
+        # LLM ke sochne ke dauraan doosra message aa gaya — wahi race
+        db.add(
+            Conversation(
+                customer_id=customer.id,
+                direction=Direction.INBOUND,
+                message_text="3 dryclean",
+                wa_message_id="wamid.TESTco-race2",
+            )
+        )
+        await db.commit()
+        return "11 items ka jawab (adhoora)"
+
+    monkeypatch.setattr(wh, "build_ai_reply", slow_ai_reply)
+
+    body = meta_payload(
+        messages=[{
+            "from": TEST_CUSTOMER_PHONE_RAW,
+            "id": "wamid.TESTco-race1",
+            "type": "text",
+            "text": {"body": "11 iron"},
+        }]
+    )
+    r = await client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
+    )
+    assert r.status_code == 200
+    replies = [m for m in sent if m["to"] == TEST_CUSTOMER_PHONE]
+    assert replies == [], f"adhoore jawab ko rukna chahiye tha: {replies}"
+
+
+async def test_single_message_still_replies_instantly(client, sent) -> None:
+    """Coalescing sirf jaldi-jaldi wale messages par — akela message
+    pehle jaisa turant jawab paata hai (upar wala inbound test bhi yahi
+    dekhta hai; ye uska saaf naam wala prahari hai)."""
+    body = meta_payload(
+        messages=[{
+            "from": TEST_CUSTOMER_PHONE_RAW,
+            "id": "wamid.TESTco-solo",
+            "type": "text",
+            "text": {"body": "kya haal"},
+        }]
+    )
+    r = await client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
+    )
+    assert r.status_code == 200
+    replies = [m for m in sent if m["to"] == TEST_CUSTOMER_PHONE]
+    assert len(replies) == 1

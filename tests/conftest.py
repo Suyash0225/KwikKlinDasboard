@@ -26,8 +26,13 @@ from app.main import app
 
 TEST_CUSTOMER_PHONE_RAW = "919999900011"
 TEST_CUSTOMER_PHONE = "+919999900011"
-RAVI_PHONE_RAW = "918707093136"
-RAVI_PHONE = "+918707093136"
+
+# Suite ka apna staff. Pehle yahan asli seeded washer (Ravi) ka number tha,
+# isliye owner ke dashboard se number badalte hi 6 tests red ho jaate the.
+# Number badalna owner ka haq hai — to ab suite khud apna staff banati hai.
+TEST_WASHER_PHONE_RAW = "919999900094"
+TEST_WASHER_PHONE = "+919999900094"
+TEST_WASHER_NAME = "Qawasher"
 
 
 async def purge_phones(*phones: str) -> None:
@@ -96,6 +101,101 @@ def meta_payload(
 
 
 @pytest.fixture(autouse=True)
+def _fresh_throttles():
+    """Har test saaf throttle-state se shuru ho.
+
+    ASGI test-client ka IP hamesha 'testclient' hota hai — alag-alag files
+    ke jaan-boojh kar wale bad-key tests milkar per-IP brute-force window
+    (10 fail / 10 min) paar kar dete, aur aage ke sahi-key tests 429 khate
+    (jo production mein design hai, suite mein cross-test pollution).
+    """
+    import app.main as main_mod
+    import app.routers.orders as orders_mod
+    from app.services import auth as auth_mod
+
+    orders_mod._FAILED_AUTH.clear()
+    auth_mod._FAILED.clear()
+    main_mod._RL_BUCKETS.clear()
+    yield
+
+
+@pytest.fixture(autouse=True)
+async def _prime_home_tenant():
+    """Home-tenant cache ko har test se pehle bharo.
+
+    Production mein ye lifespan startup par hota hai; tests ka ASGITransport
+    lifespan nahi chalata. Cache ke bina direct-DB inserts NULL-tenant stamp
+    hote aur tenant-scoped API reads unhe kabhi nahi dekh paati.
+    """
+    from app.services import tenant_context
+
+    await tenant_context.get_home_tenant_id()
+
+
+@pytest.fixture
+def real_agent_switch():
+    """Ye fixture maangne wale tests par _agent_switch_on patch nahi lagta —
+    unhe asli (DB wali) agent_enabled value chahiye."""
+    return True
+
+
+@pytest.fixture(autouse=True)
+def _agent_switch_on(monkeypatch, request):
+    """Tests LIVE DB par chalte hain aur `agent_enabled` owner ki ASLI
+    setting hai — owner ne bot band kiya ho to har auto-reply test jhootha
+    fail hota. Read ke waqt True lauta dete hain (DB ko haath nahi lagate,
+    warna owner ki setting badal jaati).
+    """
+    if "real_agent_switch" in request.fixturenames:
+        return
+    from app.services import app_settings
+
+    real_get = app_settings.get
+
+    async def _get(db, key):
+        if key == "agent_enabled":
+            return True
+        return await real_get(db, key)
+
+    monkeypatch.setattr(app_settings, "get", _get)
+
+
+@pytest.fixture
+async def test_washer():
+    """Ek saaf WASHER row — naam/number aise jo owner ke data se kabhi
+    na takrayein. Yield karta hai staff id."""
+    from sqlalchemy import select
+
+    from app.models import Staff, StaffRole
+
+    async with async_session_factory() as db:
+        row = (
+            await db.execute(select(Staff).where(Staff.phone == TEST_WASHER_PHONE))
+        ).scalar_one_or_none()
+        if row is None:
+            row = Staff(
+                phone=TEST_WASHER_PHONE, name=TEST_WASHER_NAME,
+                role=StaffRole.WASHER, is_active=True,
+            )
+            db.add(row)
+            await db.commit()
+        sid = row.id
+    try:
+        yield sid
+    finally:
+        async with async_session_factory() as db:
+            for q in (
+                "DELETE FROM conversations WHERE staff_id = :i",
+                "UPDATE tasks SET assigned_staff_id = NULL WHERE assigned_staff_id = :i",
+                "UPDATE orders SET assigned_washer_id = NULL WHERE assigned_washer_id = :i",
+                "UPDATE orders SET assigned_delivery_id = NULL WHERE assigned_delivery_id = :i",
+                "DELETE FROM staff WHERE id = :i",
+            ):
+                await db.execute(sqltext(q), {"i": str(sid)})
+            await db.commit()
+
+
+@pytest.fixture(autouse=True)
 def _no_live_llm(monkeypatch):
     """No test may reach a real LLM — block at the HTTP/SDK boundary.
 
@@ -115,7 +215,16 @@ def _no_live_llm(monkeypatch):
             request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         )
 
-    monkeypatch.setattr(llm_module._client.messages, "create", _anthropic_down)
+    # Claude ka client ab pehli baar istemaal par banta hai (lazy) — isliye
+    # hum client ki jagah BANANE WALE ko patch karte hain. Purana patch
+    # module-level `_client` par tha; wo hatte hi ye fixture khud phatne
+    # lagi thi aur tests LLM ke naam par kuch aur hi dikhane lage the.
+    class _DeadClient:
+        class messages:
+            create = staticmethod(_anthropic_down)
+
+    monkeypatch.setattr(llm_module, "_anthropic", lambda: _DeadClient)
+    monkeypatch.setattr(llm_module, "_anthropic_client", None, raising=False)
 
 
 @pytest.fixture
@@ -205,35 +314,77 @@ async def _cleanup_test_rows():
             sqltext(
                 "DELETE FROM webhook_events WHERE payload::text LIKE '%wamid.TEST%' "
                 f"OR payload::text LIKE '%{TEST_CUSTOMER_PHONE_RAW}%' "
-                f"OR payload::text LIKE '%{RAVI_PHONE_RAW}%'"
+                f"OR payload::text LIKE '%{TEST_WASHER_PHONE_RAW}%'"
             )
         )
         await s.execute(
             sqltext(
                 "DELETE FROM outbound_queue WHERE to_phone IN "
-                f"('{TEST_CUSTOMER_PHONE}', '{RAVI_PHONE}')"
+                f"('{TEST_CUSTOMER_PHONE}', '{TEST_WASHER_PHONE}')"
             )
         )
-        # live-LLM accidents may have raised escalations on the test customer
+        await s.commit()
+    # Test customer ka poora saaf-safai purge_phones se — wo FK ka sahi
+    # kram jaanta hai (orders, payments, tasks... phir customer). Pehle
+    # yahan seedha "DELETE FROM customers" tha: jis test ne order banaya
+    # aur khud saaf nahi kiya, uske baad har agla test isi FK error par
+    # gir jaata tha, aur wajah bilkul alag jagah dikhti thi.
+    await purge_phones(TEST_CUSTOMER_PHONE)
+    async with async_session_factory() as s:
+        # Safety net: agar kisi test ne galti se kisi ASLI staff ki 24h
+        # window NULL kar di, to Inbox mein uska thread jhooth-much "closed"
+        # dikhne lagta hai. Sirf repair karte hain — jahan value gayab hai
+        # lekin uska inbound message maujood hai, wahan wapas bhar dete hain.
+        # Kisi maujooda value ko chhedte nahi.
         await s.execute(
             sqltext(
-                "DELETE FROM escalations WHERE customer_id IN "
-                f"(SELECT id FROM customers WHERE phone = '{TEST_CUSTOMER_PHONE}')"
+                "UPDATE staff s SET last_message_at = i.last_inbound FROM ("
+                "  SELECT staff_id, max(created_at) AS last_inbound"
+                "  FROM conversations WHERE staff_id IS NOT NULL"
+                "    AND direction = 'INBOUND' GROUP BY staff_id"
+                ") i WHERE i.staff_id = s.id AND s.last_message_at IS NULL"
             )
-        )
-        # any conversation attached to the test customer (whatever its wamid)
-        # must go before the customer row — FK order
-        await s.execute(
-            sqltext(
-                "DELETE FROM conversations WHERE customer_id IN "
-                f"(SELECT id FROM customers WHERE phone = '{TEST_CUSTOMER_PHONE}')"
-            )
-        )
-        await s.execute(
-            sqltext(f"DELETE FROM customers WHERE phone = '{TEST_CUSTOMER_PHONE}'")
-        )
-        await s.execute(
-            sqltext(f"UPDATE staff SET last_message_at = NULL WHERE phone = '{RAVI_PHONE}'")
         )
         await s.commit()
     await engine.dispose()
+
+
+# --------------------------------------------------------------------------
+# Test-run ka apna kachra: audit_log
+# --------------------------------------------------------------------------
+# Suite LIVE DB par chalti hai (alag test DB abhi nahi hai). App ka har
+# action audit_log mein likhta hai, isliye har run owner ke asli audit
+# feed mein 1000+ jhoothi rows chhod jaata tha — panel padhne layak hi
+# nahi bachta. Ye fixture SIRF un rows ko hataata hai jo is run ke dauraan
+# bani AUR jinke markers pakke test ke hain (real data kabhi nahi chhuta:
+# time-window akela kaafi nahi maana, marker bhi match hona chahiye).
+_TEST_AUDIT_MARKERS = r"""
+     actor ILIKE '%@test.local' OR actor ILIKE '%@example.com'
+  OR actor ILIKE 'test-%' OR actor = 'Qatestwala'
+  OR args::text ~ '(test-sec-|test-ops-|test-panel-|test-prof-|test-scale-|test-ss-|test-wa-|test-roles-|test-sweep-|test-rl-|test-import|bahar-wali-laundry|trial-test-shop|@test\.local|@example\.com|\+9199999000)'
+  OR args::text ILIKE '%TestService%' OR args::text ILIKE '%test-winback%'
+  OR args::text ILIKE '%test-pricelist.txt%' OR args::text ILIKE '%Qatestwala%'
+"""
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _purge_test_audit_rows():
+    """Session ke baad is run ke test-audit rows delete."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    started = datetime.now(timezone.utc)
+
+    async def purge():
+        async with async_session_factory() as db:
+            await db.execute(
+                sqltext(f"DELETE FROM audit_log WHERE at >= :t AND ({_TEST_AUDIT_MARKERS})"),
+                {"t": started},
+            )
+            await db.commit()
+
+    yield
+    try:
+        asyncio.run(purge())
+    except Exception:
+        pass  # cleanup kabhi suite ko fail na kare

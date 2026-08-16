@@ -14,7 +14,7 @@ from app.config import settings
 from app.database import async_session_factory
 from app.models import Conversation, Customer
 from app.services import dotpe
-from app.services.whatsapp import Button, SendError, send_message
+from app.services.whatsapp import AI_SIGNATURE, Button, SendError, send_message
 
 PHONE = "+919999900055"
 PHONE_RAW = "919999900055"
@@ -143,14 +143,18 @@ async def test_send_door_routes_to_dotpe(monkeypatch) -> None:
         wa_id = await send_message(db, to_phone=PHONE, text="namaste")
 
     assert wa_id == "dotpe:kk-test"
-    assert calls == [{"to": PHONE, "body": "namaste"}]
+    # customer ko jaane wale har automated message par AI sign lagta hai —
+    # provider badalne se wo niyam nahi badalta
+    assert len(calls) == 1 and calls[0]["to"] == PHONE
+    assert calls[0]["body"].startswith("namaste")
+    assert AI_SIGNATURE in calls[0]["body"]
     async with async_session_factory() as s:
         conv = (
             await s.execute(
                 select(Conversation).where(Conversation.wa_message_id == "dotpe:kk-test")
             )
         ).scalar_one()
-        assert conv.message_text == "namaste"
+        assert conv.message_text.startswith("namaste")
 
 
 async def test_dotpe_provider_rejects_buttons(monkeypatch) -> None:

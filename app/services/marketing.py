@@ -9,6 +9,7 @@ Compliance is CODE, not convention — every send passes eligible():
 """
 
 import asyncio
+import hashlib
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -161,26 +162,66 @@ async def month_send_count(db: AsyncSession) -> int:
     ).scalar_one()
 
 
+# Below this reach a holdout is pointless — you cannot read a lift signal
+# out of two people, and you've silenced customers for nothing.
+MIN_REACH_FOR_HOLDOUT = 20
+
+
+def _is_holdout(campaign_id, customer_id, percent: int) -> bool:
+    """Stable, campaign-specific coin flip.
+
+    sha256 and not hash(): Python salts string hashing per process, so the
+    same customer would land in the holdout on one worker and get the
+    message on another — the measurement would be nonsense.
+    """
+    digest = hashlib.sha256(f"{campaign_id}:{customer_id}".encode()).digest()
+    return (int.from_bytes(digest[:4], "big") % 100) < percent
+
+
 async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
-    """Create recipient rows for the campaign's segment. Returns queued count."""
+    """Create recipient rows for the campaign's segment. Returns queued count.
+
+    Eligible customers are split into 'queued' (get the message) and
+    'holdout' (deliberately do NOT). Comparing the two afterwards is the
+    only honest way to say a campaign earned anything — see campaign_stats.
+    """
     segs = await compute_segments(db)
     targets = segs.get(campaign.segment, [])
-    queued = 0
-    from app.services.leads import check_marketing_eligible
+    if not targets:
+        return 0
+    from app.services.leads import check_marketing_eligible_bulk
 
+    # THE single gate: opt-out, cap, complaints, active order, bad rating —
+    # for the whole segment in a fixed number of queries.
+    verdicts = await check_marketing_eligible_bulk(db, [st["id"] for st in targets])
+    eligible_ids = [st["id"] for st in targets if verdicts.get(st["id"], (False, ""))[0]]
+
+    holdout_pct = int(await app_settings.get(db, "marketing_holdout_percent"))
+    if len(eligible_ids) < MIN_REACH_FOR_HOLDOUT:
+        holdout_pct = 0
+
+    queued = 0
     for st in targets:
-        # THE single gate: opt-out, cap, complaints, active order, bad rating
-        ok, reason = await check_marketing_eligible(db, st["id"])
-        rec = CampaignRecipient(
-            campaign_id=campaign.id,
-            customer_id=st["id"],
-            status="queued" if ok else "skipped",
-            detail=None if ok else reason,
-        )
-        db.add(rec)
-        if ok:
+        ok, reason = verdicts.get(st["id"], (False, "unknown"))
+        if not ok:
+            status, detail = "skipped", reason
+        elif holdout_pct and _is_holdout(campaign.id, st["id"], holdout_pct):
+            status, detail = "holdout", "control group"
+        else:
+            status, detail = "queued", None
             queued += 1
+        db.add(
+            CampaignRecipient(
+                campaign_id=campaign.id, customer_id=st["id"],
+                status=status, detail=detail,
+            )
+        )
     await db.commit()
+    log.info(
+        "campaign_queued",
+        campaign=campaign.name, eligible=len(eligible_ids),
+        queued=queued, holdout=len(eligible_ids) - queued,
+    )
     return queued
 
 
@@ -206,48 +247,81 @@ async def send_campaign(campaign_id) -> None:
         campaign.status = "sending"
         await db.commit()
 
+        # Do chhatein: owner ka apna budget setting, AUR plan ka marketing cap.
+        # Plan cap isliye zaroori hai ki marketing hi sabse mehngi cheez hai
+        # (~₹0.80/msg) — bina cap ke ek client poore plan ka paisa jala de.
         budget = int(await app_settings.get(db, "marketing_monthly_msg_budget"))
+        from app.models.tenant import Tenant as _T
+        from app.services import plans as _plans
+        from app.services import tenant_context as _tc
+
+        _tid = _tc.current_tenant_id.get() or _tc.cached_home_tenant_id()
+        if _tid is not None:
+            _t = await db.get(_T, _tid)
+            _cap = _plans.get(_t.plan if _t else _plans.DEFAULT_PLAN).max_campaign_msgs_month
+            # override bhi chalta hai: -1 = unlimited
+            _ov = (getattr(_t, "limit_overrides", None) or {}).get("max_campaign_msgs_month")
+            if _ov is not None:
+                _cap = None if _ov == -1 else int(_ov)
+            if _cap is not None:
+                budget = min(budget, _cap)
+        # The month's spend is counted ONCE and then tracked locally. It used
+        # to be a full COUNT over campaign_recipients before every single
+        # message; re-syncing periodically keeps us honest when two
+        # campaigns run at the same time, at 1/25th the cost.
+        spent = await month_send_count(db)
         sent_now = 0
         while True:
-            rec = (
+            # Page the queue instead of re-querying one row at a time, and
+            # bring each recipient's customer along — 'queued' is still the
+            # only status we touch, so a crash mid-page resumes cleanly.
+            page = (
                 await db.execute(
-                    select(CampaignRecipient)
+                    select(CampaignRecipient, Customer)
+                    .join(Customer, Customer.id == CampaignRecipient.customer_id)
                     .where(
                         CampaignRecipient.campaign_id == campaign.id,
                         CampaignRecipient.status == "queued",
                     )
-                    .limit(1)
+                    .limit(50)
                 )
-            ).scalar_one_or_none()
-            if rec is None:
+            ).all()
+            if not page:
                 break
-            await db.refresh(campaign)
-            if campaign.status == "cancelled":  # owner hit the brake mid-send
-                log.info("campaign_cancelled_mid_send", campaign=str(campaign_id))
-                return
-            if _in_quiet_hours_now():
-                log.info("campaign_paused_quiet_hours", campaign=str(campaign_id))
-                return
-            if await month_send_count(db) >= budget:
-                rec.status = "skipped"
-                rec.detail = "budget_hit"
+            for rec, cust in page:
+                await db.refresh(campaign)
+                if campaign.status == "cancelled":  # owner hit the brake mid-send
+                    log.info("campaign_cancelled_mid_send", campaign=str(campaign_id))
+                    return
+                if _in_quiet_hours_now():
+                    log.info("campaign_paused_quiet_hours", campaign=str(campaign_id))
+                    return
+                if sent_now and sent_now % 25 == 0:
+                    spent = await month_send_count(db)
+                if spent >= budget:
+                    rec.status = "skipped"
+                    rec.detail = "budget_hit"
+                    await db.commit()
+                    log.warning("campaign_budget_hit", campaign=str(campaign_id))
+                    continue
+                text = campaign.message_text.replace("{name}", cust.name or "ji")
+                try:
+                    # Campaign = MARKETING category: Meta par sabse mehnga
+                    # (~₹0.80/msg) — billable meter isse alag ginta hai.
+                    wamid = await send_message(
+                        db, to_phone=cust.phone, text=text, category="marketing"
+                    )
+                    rec.status = "sent"
+                    rec.wa_message_id = wamid
+                    cust.last_marketing_at = datetime.now(timezone.utc)
+                    sent_now += 1
+                    spent += 1
+                except SendError as exc:
+                    # window closed & no approved marketing template -> honest fail
+                    rec.status = "failed"
+                    rec.detail = str(exc)[:200]
                 await db.commit()
-                log.warning("campaign_budget_hit", campaign=str(campaign_id))
-                continue
-            cust = await db.get(Customer, rec.customer_id)
-            text = campaign.message_text.replace("{name}", (cust.name or "ji") if cust else "ji")
-            try:
-                wamid = await send_message(db, to_phone=cust.phone, text=text)
-                rec.status = "sent"
-                rec.wa_message_id = wamid
-                cust.last_marketing_at = datetime.now(timezone.utc)
-                sent_now += 1
-            except SendError as exc:
-                # window closed & no approved marketing template -> honest fail
-                rec.status = "failed"
-                rec.detail = str(exc)[:200]
-            await db.commit()
-            await asyncio.sleep(1.0)  # Meta-friendly pace
+                await asyncio.sleep(1.0)  # Meta-friendly pace
 
         campaign.status = "sent"
         campaign.sent_at = datetime.now(timezone.utc)
@@ -259,7 +333,58 @@ async def send_campaign(campaign_id) -> None:
         )
 
 
+SENT_STATUSES = ("sent", "delivered", "read", "replied")
+
+
+async def _window_conversions(
+    db: AsyncSession, campaign_id, statuses: tuple[str, ...], window_days: int
+) -> tuple[int, int, int, float]:
+    """(recipients, distinct converters, orders, revenue) for one group.
+
+    Same measurement applied to the messaged group and the holdout, so the
+    two are actually comparable.
+    """
+    recipients = (
+        await db.execute(
+            select(func.count())
+            .select_from(CampaignRecipient)
+            .where(
+                CampaignRecipient.campaign_id == campaign_id,
+                CampaignRecipient.status.in_(statuses),
+            )
+        )
+    ).scalar_one()
+    if not recipients:
+        return 0, 0, 0, 0.0
+    converters, orders, revenue = (
+        await db.execute(
+            select(
+                func.count(func.distinct(CampaignRecipient.customer_id)),
+                func.count(Order.id),
+                func.coalesce(func.sum(Order.total_amount), 0),
+            )
+            .select_from(CampaignRecipient)
+            .join(Order, Order.customer_id == CampaignRecipient.customer_id)
+            .where(
+                CampaignRecipient.campaign_id == campaign_id,
+                CampaignRecipient.status.in_(statuses),
+                Order.created_at >= CampaignRecipient.updated_at,
+                Order.created_at
+                <= CampaignRecipient.updated_at + timedelta(days=window_days),
+            )
+        )
+    ).one()
+    return recipients, converters, orders, float(revenue)
+
+
 async def campaign_stats(db: AsyncSession, campaign_id) -> dict:
+    """Per-status counts, naive attribution, and TRUE incremental lift.
+
+    Naive attribution ("they ordered after we messaged, so we caused it")
+    flatters every campaign — regulars would have ordered anyway. The
+    holdout group never got the message, so the gap between the two
+    conversion rates is the part the campaign actually caused.
+    """
     rows = (
         await db.execute(
             select(CampaignRecipient.status, func.count())
@@ -268,27 +393,32 @@ async def campaign_stats(db: AsyncSession, campaign_id) -> dict:
         )
     ).all()
     stats = {status: count for status, count in rows}
-    # revenue attribution: orders created within the window after a send
+
     window_days = int(await app_settings.get(db, "attribution_window_days"))
-    attributed = (
-        await db.execute(
-            select(
-                func.count(Order.id),
-                func.coalesce(func.sum(Order.total_amount), 0),
-            )
-            .select_from(CampaignRecipient)
-            .join(Order, Order.customer_id == CampaignRecipient.customer_id)
-            .where(
-                CampaignRecipient.campaign_id == campaign_id,
-                CampaignRecipient.status.in_(("sent", "delivered", "read", "replied")),
-                Order.created_at >= CampaignRecipient.updated_at,
-                Order.created_at
-                <= CampaignRecipient.updated_at + timedelta(days=window_days),
-            )
-        )
-    ).one()
-    stats["orders_attributed"] = attributed[0]
-    stats["revenue_attributed"] = float(attributed[1])
+    sent_n, sent_conv, sent_orders, sent_rev = await _window_conversions(
+        db, campaign_id, SENT_STATUSES, window_days
+    )
+    stats["orders_attributed"] = sent_orders
+    stats["revenue_attributed"] = sent_rev
+
+    hold_n, hold_conv, _, _ = await _window_conversions(
+        db, campaign_id, ("holdout",), window_days
+    )
+    if sent_n and hold_n:
+        rate_sent = sent_conv / sent_n
+        rate_hold = hold_conv / hold_n
+        lift = rate_sent - rate_hold
+        # Extra customers this campaign produced beyond "they'd have come
+        # anyway" — can be negative, and that is the useful case: it means
+        # the messages annoyed more people than they moved.
+        incremental_customers = lift * sent_n
+        avg_order = (sent_rev / sent_orders) if sent_orders else 0.0
+        stats["holdout_size"] = hold_n
+        stats["conversion_sent"] = round(rate_sent, 4)
+        stats["conversion_holdout"] = round(rate_hold, 4)
+        stats["lift"] = round(lift, 4)
+        stats["incremental_orders"] = round(incremental_customers, 1)
+        stats["incremental_revenue"] = round(incremental_customers * avg_order, 2)
     return stats
 
 

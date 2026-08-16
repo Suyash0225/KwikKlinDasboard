@@ -10,10 +10,10 @@ from app.database import async_session_factory
 from app.models import Order, OrderStatus
 from app.services.bill_agent import handle_staff_message
 from app.services.order_service import create_order, update_status
+from tests.conftest import TEST_WASHER_NAME, TEST_WASHER_PHONE
 
 PHONE = "+919999900555"
 SUPERMAN = "+919336393612"  # seeded DELIVERY role
-RAVI = "+918707093136"      # seeded WASHER role
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +58,7 @@ async def test_done_command_by_delivery_boy(sent) -> None:
         assert fresh.status is OrderStatus.DELIVERED
 
 
-async def test_washer_cannot_touch_delivery_status(monkeypatch, sent) -> None:
+async def test_washer_cannot_touch_delivery_status(monkeypatch, sent, test_washer) -> None:
     async with async_session_factory() as db:
         order = await create_order(
             db, customer_phone=PHONE, items=[{"type": "Shirt", "qty": 1}],
@@ -78,7 +78,7 @@ async def test_washer_cannot_touch_delivery_status(monkeypatch, sent) -> None:
     monkeypatch.setattr(bill_module.llm_client, "ask_json", fake_ask_json)
     async with async_session_factory() as db:
         reply = await handle_staff_message(
-            db, sender_phone=RAVI, sender_label="Ravi",
+            db, sender_phone=TEST_WASHER_PHONE, sender_label=TEST_WASHER_NAME,
             text=f"{order.order_number} delivery pe nikal gaya",
         )
     assert "role ka kaam nahi" in reply

@@ -245,3 +245,58 @@ async def test_no_orders_falls_back_to_ack(client, sent) -> None:
     assert r.status_code == 200
     assert len(sent) == 1
     assert sent[0]["text"] == get_message("ack_received")
+
+
+async def test_paused_thread_auto_resumes_after_the_window(client, sent) -> None:
+    """Complaint par bot chup hota hai — par HAMESHA ke liye nahi.
+
+    Asli bug: customer ne complaint ki, bot ne khud ko pause kiya, aur
+    agle din uska normal sawal ("shop kab khulegi") bhi bina jawab ke
+    reh gaya. Ab pause window guzarne par agla message use resume karta hai.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select as _select
+
+    from app.models import Customer
+    from tests.conftest import purge_phones
+
+    await purge_phones(PHONE)          # is test ka apna saaf customer chahiye
+    async with async_session_factory() as db:
+        db.add(Customer(
+            phone=PHONE, name="Paused Grahak",
+            last_message_at=datetime.now(timezone.utc),
+            agent_paused=True,
+            agent_paused_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        ))
+        await db.commit()
+    try:
+        # 2 ghante purana pause, window 24h -> abhi bhi chup
+        import uuid as _uuid
+
+        # unique wamid: journal ka body-hash dedup pichle run se na takraye
+        tag = _uuid.uuid4().hex[:8]
+        sent.clear()
+        r = await _post_text(client, "shop kab khulegi", f"wamid.PAUSE-{tag}-1")
+        assert r.status_code == 200
+        assert sent == [], "window ke andar bot ko chup rehna chahiye"
+
+        # pause ko 25 ghante purana bana do -> agla message resume kare
+        async with async_session_factory() as db:
+            c = (
+                await db.execute(_select(Customer).where(Customer.phone == PHONE))
+            ).scalar_one()
+            c.agent_paused_at = datetime.now(timezone.utc) - timedelta(hours=25)
+            await db.commit()
+
+        r = await _post_text(client, "shop kab khulegi", f"wamid.PAUSE-{tag}-2")
+        assert r.status_code == 200
+        assert len(sent) == 1, "window guzar gayi — ab jawab jaana chahiye"
+
+        async with async_session_factory() as db:
+            c = (
+                await db.execute(_select(Customer).where(Customer.phone == PHONE))
+            ).scalar_one()
+            assert c.agent_paused is False and c.agent_paused_at is None
+    finally:
+        await purge_phones(PHONE)

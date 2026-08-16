@@ -7,17 +7,17 @@ from sqlalchemy import Boolean, DateTime, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 
 
-class Customer(Base):
+class Customer(Base, TenantScoped):
     __tablename__ = "customers"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     # E.164, e.g. +919876543210. Normalised by app/utils/phone.py before insert.
-    phone: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    phone: Mapped[str] = mapped_column(String(20), index=True)
     name: Mapped[str | None] = mapped_column(String(120))
     address: Mapped[str | None] = mapped_column(Text)
 
@@ -41,10 +41,14 @@ class Customer(Base):
     )
     # When we last sent them a MARKETING message — enforces the frequency cap.
     last_marketing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Agent paused on this thread (owner pressed 'Take over' in Inbox).
+    # Agent paused on this thread (owner pressed 'Take over' in Inbox, ya
+    # complaint/bura-rating par bot ne khud). Pause HAMESHA ke liye nahi:
+    # agent_pause_hours guzarne par agla inbound message use resume kar
+    # deta hai — warna customer ka agla normal sawal bhi mar jaata tha.
     agent_paused: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    agent_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Optional — for birthday greetings if the owner fills it in.
     birthday: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

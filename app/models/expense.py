@@ -9,10 +9,10 @@ from sqlalchemy import Date as SADate
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 
 
-class Expense(Base):
+class Expense(Base, TenantScoped):
     __tablename__ = "expenses"
 
     id: Mapped[uuid.UUID] = mapped_column(

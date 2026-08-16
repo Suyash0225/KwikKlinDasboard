@@ -47,6 +47,62 @@ GRAPH_URL = (
 )
 SERVICE_WINDOW = timedelta(hours=24)
 
+_GRAPH = "https://graph.facebook.com/v21.0"
+
+
+class WaCreds:
+    """Kis number se bhejna hai — token + phone_number_id ek saath.
+
+    Multi-tenant: har tenant apna WhatsApp number connect kar sakta hai
+    (tenants.wa_phone_number_id / wa_token). Creds current tenant context
+    se resolve hote hain; DB mein na hon to .env wale (home/legacy path).
+    """
+
+    __slots__ = ("token", "phone_number_id")
+
+    def __init__(self, token: str, phone_number_id: str):
+        self.token = token
+        self.phone_number_id = phone_number_id
+
+    @property
+    def messages_url(self) -> str:
+        return f"{_GRAPH}/{self.phone_number_id}/messages"
+
+    @property
+    def media_url(self) -> str:
+        return f"{_GRAPH}/{self.phone_number_id}/media"
+
+
+def _env_creds() -> WaCreds:
+    return WaCreds(settings.WHATSAPP_TOKEN, settings.WHATSAPP_PHONE_NUMBER_ID)
+
+
+async def resolve_creds(db: AsyncSession) -> WaCreds:
+    """Current tenant ke apne WhatsApp creds (DB), warna .env fallback."""
+    from app.models.tenant import Tenant
+    from app.services import tenant_context
+
+    tid = tenant_context.current_tenant_id.get() or tenant_context.cached_home_tenant_id()
+    if tid is not None:
+        t = await db.get(Tenant, tid)
+        if t is not None and t.wa_token and t.wa_phone_number_id:
+            return WaCreds(t.wa_token, t.wa_phone_number_id)
+    return _env_creds()
+
+
+async def validate_credentials(phone_number_id: str, token: str) -> bool:
+    """Connect karte waqt creds ko Graph se live check karo (read-only call)."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"{_GRAPH}/{phone_number_id}",
+                params={"fields": "display_phone_number"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        return r.status_code < 300
+    except httpx.TransportError:
+        return False
+
 # Every media type WhatsApp can send, mapped to a real extension. Anything
 # missing still saves (see download_media) — this just keeps the common
 # ones openable by name.
@@ -67,6 +123,11 @@ MEDIA_EXT = {
 }
 MAX_BUTTONS = 3
 MAX_BUTTON_TITLE = 20  # WhatsApp hard limit
+# List message (jab 3 se zyada cheezein chunni ho) — Meta ki hadd
+MAX_LIST_ROWS = 10
+MAX_ROW_TITLE = 24
+MAX_ROW_DESC = 72
+MAX_LIST_BUTTON = 20
 
 
 class Button(NamedTuple):
@@ -74,6 +135,19 @@ class Button(NamedTuple):
 
     id: str
     title: str
+
+
+class ListRow(NamedTuple):
+    """List message ki ek line — tap karte hi id wapas aata hai.
+
+    Buttons sirf 3 ho sakte hain; 5-6 order ya task chunwane ke liye Meta
+    ka 'list' hi ek tareeka hai. Jawab wapas button_reply jaisa hi aata
+    hai, isliye handler dono ke liye ek hi rehta hai.
+    """
+
+    id: str
+    title: str
+    description: str = ""
 
 
 class SendError(Exception):
@@ -128,29 +202,44 @@ async def send_message(
     to_phone: str,
     text: str | None = None,
     buttons: list[Button] | None = None,
+    list_rows: list[ListRow] | None = None,
+    list_button: str = "Chuniye",
+    list_title: str = "",
     template_name: str | None = None,
     template_params: list[str] | None = None,
     sent_by: str = "bot",
     enqueue_on_fail: bool = True,
     reply_to: str | None = None,
+    category: str | None = None,
+    log_as: str | None = None,
 ) -> str:
     """Send one WhatsApp message. Returns Meta's wa_message_id.
 
     Exactly one mode:
       text                      -> free-form text        (window required)
       text + buttons            -> interactive buttons    (window required)
+      text + list_rows          -> interactive list       (window required)
       template_name [+ params]  -> template               (always allowed)
 
     reply_to: a wamid to quote, so the recipient sees which message this
     answers — the same as swiping to reply in WhatsApp.
 
+    log_as: what to WRITE INTO our own message log instead of the real body.
+    For the one case where the text is a secret (a staff member's temporary
+    panel password): WhatsApp has to carry it, but our Inbox, our outbound
+    queue and our backups must not. Callers that use this should also pass
+    enqueue_on_fail=False, or a transient failure parks the plaintext in the
+    retry queue.
+
     Raises WindowClosedError / SendError. Never returns silently on failure.
     """
     # --- validate the mode ---
-    if template_name and (text or buttons):
-        raise ValueError("template cannot be combined with text/buttons")
-    if buttons and not text:
-        raise ValueError("buttons need a text body")
+    if template_name and (text or buttons or list_rows):
+        raise ValueError("template cannot be combined with text/buttons/list")
+    if buttons and list_rows:
+        raise ValueError("a message is either buttons or a list, not both")
+    if (buttons or list_rows) and not text:
+        raise ValueError("buttons/list need a text body")
     if not template_name and not text:
         raise ValueError("nothing to send: give text or template_name")
     if buttons:
@@ -159,6 +248,26 @@ async def send_message(
         for b in buttons:
             if len(b.title) > MAX_BUTTON_TITLE:
                 raise ValueError(f"button title too long (max {MAX_BUTTON_TITLE}): {b.title!r}")
+    if list_rows:
+        if len(list_rows) > MAX_LIST_ROWS:
+            raise ValueError(f"WhatsApp allows max {MAX_LIST_ROWS} list rows")
+        if len(list_button) > MAX_LIST_BUTTON:
+            raise ValueError(f"list button too long (max {MAX_LIST_BUTTON})")
+        for r in list_rows:
+            if not r.title or len(r.title) > MAX_ROW_TITLE:
+                raise ValueError(f"row title must be 1-{MAX_ROW_TITLE} chars: {r.title!r}")
+            if len(r.description) > MAX_ROW_DESC:
+                raise ValueError(f"row description too long (max {MAX_ROW_DESC})")
+
+    # Plan ki WhatsApp quota — send se PEHLE. Exceeded -> permanent
+    # SendError: direct sends fail loudly, queued sends dead-letter hote
+    # hain (kabhi silent drop nahi). Owner upgrade kare to turant chalu.
+    from app.services.quota import QuotaExceeded, check_wa_quota
+
+    try:
+        await check_wa_quota(db)
+    except QuotaExceeded as exc:
+        raise SendError(str(exc), transient=False) from exc
 
     customer, staff = await _find_recipient(db, to_phone)
 
@@ -186,7 +295,7 @@ async def send_message(
 
     # --- DotPe provider: delegate the actual send, keep everything else ---
     if settings.WHATSAPP_PROVIDER == "dotpe":
-        if buttons:
+        if buttons or list_rows:
             # DotPe's API has no interactive reply buttons (their docs:
             # text/media/location only). Callers must use numbered text
             # options on this provider.
@@ -209,7 +318,9 @@ async def send_message(
             raise SendError(str(exc)) from exc
         log.info("whatsapp_sent", to=to_phone, provider="dotpe", wa_message_id=wa_message_id)
         await _record_outbound(
-        db, customer, staff, logged_text, wa_message_id, to_phone, sent_by, reply_to
+        db, customer, staff, (log_as if log_as is not None else logged_text),
+        wa_message_id, to_phone, sent_by, reply_to,
+        _billing_category(template_name, category),
     )
         return wa_message_id
 
@@ -235,6 +346,27 @@ async def send_message(
             },
         }
         logged_text = f"{text} [buttons: {', '.join(b.title for b in buttons)}]"
+    elif list_rows:
+        payload["type"] = "interactive"
+        payload["interactive"] = {
+            "type": "list",
+            "body": {"text": text},
+            "action": {
+                "button": list_button,
+                "sections": [
+                    {
+                        "title": (list_title or "Options")[:MAX_ROW_TITLE],
+                        "rows": [
+                            {"id": r.id, "title": r.title, "description": r.description}
+                            if r.description
+                            else {"id": r.id, "title": r.title}
+                            for r in list_rows
+                        ],
+                    }
+                ],
+            },
+        }
+        logged_text = f"{text} [list: {', '.join(r.title for r in list_rows)}]"
     else:
         payload["type"] = "text"
         payload["text"] = {"body": text, "preview_url": False}
@@ -266,9 +398,23 @@ async def send_message(
     )
 
     await _record_outbound(
-        db, customer, staff, logged_text, wa_message_id, to_phone, sent_by, reply_to
+        db, customer, staff, (log_as if log_as is not None else logged_text),
+        wa_message_id, to_phone, sent_by, reply_to,
+        _billing_category(template_name, category),
     )
     return wa_message_id
+
+
+def _billing_category(template_name: str | None, category: str | None) -> str:
+    """Meta ke paise ka hisaab, ek jagah.
+
+    Customer ke 24h window mein diya gaya free-form jawab = 'service'
+    (Meta par FREE). Template gaya = billable: campaigns 'marketing'
+    bhejti hain, baaki 'utility'.
+    """
+    if category in ("service", "utility", "marketing"):
+        return category
+    return "utility" if template_name else "service"
 
 
 async def _record_outbound(
@@ -280,6 +426,7 @@ async def _record_outbound(
     to_phone: str,
     sent_by: str,
     reply_to: str | None = None,
+    category: str = "service",
 ) -> None:
     """Record an outbound message in conversations (needs a participant row).
 
@@ -297,6 +444,7 @@ async def _record_outbound(
                 sent_by=sent_by,
                 status="sent",
                 reply_to_wamid=reply_to,
+                billing_category=category,
             )
         )
         await db.commit()
@@ -326,8 +474,9 @@ async def send_image(
     if last_inbound is None or _now() - last_inbound > SERVICE_WINDOW:
         raise WindowClosedError(f"24h window closed for {to_phone} — media needs an open window")
 
-    headers = {"Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"}
-    media_url = f"https://graph.facebook.com/v21.0/{settings.WHATSAPP_PHONE_NUMBER_ID}/media"
+    creds = await resolve_creds(db)
+    headers = {"Authorization": f"Bearer {creds.token}"}
+    media_url = creds.media_url
     try:
         with open(file_path, "rb") as fh:
             async with httpx.AsyncClient(timeout=60) as client:
@@ -367,11 +516,17 @@ async def download_media(media_id: str, dest_dir: str) -> str | None:
     import os
     import uuid as _uuid
 
-    headers = {"Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"}
+    # Inbound processing ke context ka tenant — usi ke token se media milta
+    # hai (Meta media sirf apne number ke token se download hota hai).
+    from app.database import async_session_factory as _asf
+
+    async with _asf() as _db:
+        creds = await resolve_creds(_db)
+    headers = {"Authorization": f"Bearer {creds.token}"}
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             meta = await client.get(
-                f"https://graph.facebook.com/v21.0/{media_id}", headers=headers
+                f"{_GRAPH}/{media_id}", headers=headers
             )
             if meta.status_code >= 400:
                 log.warning("media_meta_failed", media_id=media_id, status=meta.status_code)
@@ -419,17 +574,28 @@ async def _find_recipient(
         raise
 
 
-async def _post_with_retry(payload: dict, to_phone: str) -> dict:
+async def _post_with_retry(
+    payload: dict, to_phone: str, creds: WaCreds | None = None
+) -> dict:
     """POST to the Graph API. One retry on network error / 5xx / 429, then
-    raise SendError — transient=True for anything worth retrying later."""
-    headers = {"Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"}
+    raise SendError — transient=True for anything worth retrying later.
+
+    creds optional — na do to current tenant context se khud resolve hota
+    hai (call sites aur test-fakes ka 2-arg signature waisa hi chalta hai).
+    """
+    if creds is None:
+        from app.database import async_session_factory as _asf
+
+        async with _asf() as _db:
+            creds = await resolve_creds(_db)
+    headers = {"Authorization": f"Bearer {creds.token}"}
     last_error: str = "unknown"
     transient = False
 
     for attempt in (1, 2):
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                r = await client.post(GRAPH_URL, headers=headers, json=payload)
+                r = await client.post(creds.messages_url, headers=headers, json=payload)
         except httpx.TransportError as exc:
             last_error = f"network error: {exc}"
             transient = True

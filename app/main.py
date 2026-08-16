@@ -27,7 +27,14 @@ log = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("startup", shop=settings.SHOP_NAME, environment=settings.ENVIRONMENT)
-    from app.services import scheduler
+    from app.services import scheduler, tenant_context
+
+    # Prime the home-tenant cache before any traffic: the sync DB events
+    # (insert stamping) can only read the cache, never resolve it themselves.
+    try:
+        await tenant_context.get_home_tenant_id()
+    except Exception:
+        log.exception("home_tenant_prime_failed")
 
     scheduler.start()
     # owner's edited message formats survive restarts
@@ -64,6 +71,91 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 @app.middleware("http")
+async def tenant_scope(request: Request, call_next):
+    """Data isolation, layer 1: har HTTP request par tenant context set karo.
+
+    - Valid kk_session cookie -> us user ka tenant.
+    - Warna (anonymous, API key, webhook) -> is instance ka HOME tenant.
+
+    Aage kya hota hai: app/database.py isi context se har transaction par
+    Postgres ko `SET LOCAL app.tenant_id` bhejta hai (RLS enforce karta hai),
+    har ORM SELECT par tenant filter lagta hai, aur har naya row isi tenant
+    par stamp hota hai. HTTP se aane wali koi query kabhi unscoped nahi
+    chal sakti — chahe endpoint code filter karna bhool bhi jaye.
+    """
+    from app.services import tenant_context
+
+    path = request.url.path
+    if path.startswith("/admin/static/") or path == "/health":
+        return await call_next(request)  # no tenant data behind these
+
+    tid = None
+    # Staff panel ka apna rasta: tenant us aadmi ke TOKEN se aata hai.
+    # Login se pehle (token nahi hai) context system rehta hai — us waqt
+    # hum jaante hi nahi ki kis dukaan ka aadmi hai, aur home tenant maan
+    # lena galat hoga: doosri dukaan ka staff kabhi login hi na kar paata.
+    if path.startswith("/staff"):
+        staff_token = request.cookies.get("kk_staff", "")
+        tid = (
+            await tenant_context.tenant_id_for_staff_token(staff_token)
+            if staff_token
+            else None
+        )
+        ctx_token = tenant_context.current_tenant_id.set(tid)
+        try:
+            return await call_next(request)
+        finally:
+            tenant_context.current_tenant_id.reset(ctx_token)
+
+    token = request.cookies.get("kk_session", "")
+    if token:
+        tid = await tenant_context.tenant_id_for_session(token)
+    if tid is None:
+        tid = await tenant_context.get_home_tenant_id()
+
+    # Per-tenant rate limit: ek client ka runaway loop baaki sab tenants ko
+    # slow nahi kar sakta. Sirf API paths par; webhook (Meta ka traffic,
+    # burst aata hai) aur static exempt hain.
+    if tid is not None and _rate_limited(tid, request.url.path):
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Bahut tezi se requests — thoda ruk kar try karein."},
+            headers={"Retry-After": "30"},
+        )
+
+    ctx_token = tenant_context.current_tenant_id.set(tid)
+    try:
+        return await call_next(request)
+    finally:
+        tenant_context.current_tenant_id.reset(ctx_token)
+
+
+# Sliding window per tenant (in-memory — restart par reset, theek hai).
+from collections import defaultdict as _dd, deque as _deque
+import time as _time
+
+_RL_BUCKETS: dict = _dd(lambda: _deque(maxlen=4096))
+_RL_PREFIXES = ("/admin/api", "/admin/media", "/orders", "/api/", "/control", "/staff/api")
+
+
+def _rate_limited(tid, path: str) -> bool:
+    if not path.startswith(_RL_PREFIXES):
+        return False
+    limit = settings.RATE_LIMIT_PER_MIN
+    if limit <= 0:
+        return False  # 0/negative = disabled
+    now = _time.monotonic()
+    dq = _RL_BUCKETS[tid]
+    while dq and now - dq[0] > 60:
+        dq.popleft()
+    if len(dq) >= limit:
+        log.warning("tenant_rate_limited", tenant=str(tid), path=path)
+        return True
+    dq.append(now)
+    return False
+
+
+@app.middleware("http")
 async def security_headers(request: Request, call_next):
     """Baseline hardening headers on every response.
 
@@ -94,6 +186,12 @@ app.include_router(account_router)
 from app.routers.control import router as control_router
 
 app.include_router(control_router)
+
+# Dukaan ke aadmi ka apna panel — owner ke dashboard se bilkul alag rasta,
+# alag cookie, alag pehre (app/routers/staff_panel.py)
+from app.routers.staff_panel import router as staff_panel_router
+
+app.include_router(staff_panel_router)
 
 # Static assets for the dashboard (CSS/JS — no secrets, safe to serve openly)
 from pathlib import Path
@@ -173,6 +271,150 @@ async def join_page():
         media_type="text/html",
         headers={"Cache-Control": "no-store"},
     )
+
+
+# Super-admin (vendor) panel ka HTML shell. Shell mein zero data hai — har
+# API call X-API-Key maangti hai (require_vendor_key), jo page par daalni
+# padti hai. Isi liye ye route control router (key-gated) ke BAHAR hai.
+_CONTROL_FILE = Path(__file__).resolve().parent / "static" / "control.html"
+
+
+@app.get("/control", include_in_schema=False)
+async def control_page():
+    """Vendor panel ka shell.
+
+    STRICT CSP: script/style sirf apne origin se (no 'unsafe-inline') —
+    isi liye JS/CSS externalized hain aur markup mein koi inline handler
+    ya style attribute nahi. XSS ghus bhi jaye to script chal hi nahi
+    sakti, aur vendor session cookie httpOnly hai to padhi bhi nahi jaa
+    sakti. Asset links ?v=<mtime> se aate hain, isliye HTML no-store
+    rehta hai par JS/CSS immutable cache hote hain.
+    """
+    from fastapi.responses import Response as _Resp
+
+    html = _CONTROL_FILE.read_text(encoding="utf-8")
+    static_dir = _CONTROL_FILE.parent
+    v = int(max(
+        (static_dir / "control.js").stat().st_mtime,
+        (static_dir / "control.css").stat().st_mtime,
+    ))
+    html = html.replace("__V__", str(v))
+    return _Resp(
+        content=html,
+        media_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Robots-Tag": "noindex",
+            "Content-Security-Policy": (
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
+                "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+            ),
+        },
+    )
+
+
+_BILLING_FILE = Path(__file__).resolve().parent / "static" / "billing.html"
+
+
+@app.get("/billing", include_in_schema=False)
+async def billing_page():
+    """Client ka plan/usage/recharge page (data /api/billing/* se, session par)."""
+    from fastapi.responses import Response as _Resp
+
+    return _Resp(
+        content=_BILLING_FILE.read_text(encoding="utf-8"),
+        media_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+_STAFF_FILE = Path(__file__).resolve().parent / "static" / "staff.html"
+
+
+@app.get("/staff", include_in_schema=False)
+async def staff_page():
+    """Dukaan ke aadmi ka panel. Page khud khula hai — data har call par
+    kk_staff cookie se guzarta hai, aur wo cookie sirf /staff par jaati hai.
+
+    CSP yahan bhi sakht: koi inline script nahi, koi bahar ka origin nahi.
+    """
+    from fastapi.responses import Response as _Resp
+
+    html = _STAFF_FILE.read_text(encoding="utf-8")
+    static_dir = _STAFF_FILE.parent
+    v = int(max(
+        (static_dir / "staff.js").stat().st_mtime,
+        (static_dir / "staff.css").stat().st_mtime,
+    ))
+    import re as _re
+
+    html = _re.sub(r"(staff\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
+    return _Resp(
+        content=html,
+        media_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": (
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "img-src 'self' data:; connect-src 'self'; form-action 'none'; "
+                "frame-ancestors 'none'; base-uri 'none'"
+            ),
+        },
+    )
+
+
+@app.get("/staff/manifest.webmanifest", include_in_schema=False)
+async def staff_manifest():
+    """Phone par 'Add to home screen' — isi file se app ki tarah lagta hai."""
+    from fastapi.responses import Response as _Resp
+
+    path = Path(__file__).resolve().parent / "static" / "staff-manifest.json"
+    return _Resp(
+        content=path.read_text(encoding="utf-8"),
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.get("/staff/icon.svg", include_in_schema=False)
+async def staff_icon():
+    from fastapi.responses import Response as _Resp
+
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">'
+        '<rect width="192" height="192" rx="42" fill="#111827"/>'
+        '<rect x="26" y="26" width="140" height="140" rx="34" fill="#f97316"/>'
+        '<text x="96" y="124" font-family="system-ui,sans-serif" font-size="72" '
+        'font-weight="800" fill="#fff" text-anchor="middle">KK</text></svg>'
+    )
+    return _Resp(content=svg, media_type="image/svg+xml",
+                 headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/staff/sw.js", include_in_schema=False)
+async def staff_sw():
+    """Service worker — sirf itna ki app install ho sake aur kholte hi
+    khul jaye. Kaam ka data JAAN-BOOJH KAR cache nahi hota: purana order
+    dikhana kisi ko galat kaam par bhej sakta hai."""
+    from fastapi.responses import Response as _Resp
+
+    js = (
+        "const SHELL='kkstaff-v2';\n"
+        "self.addEventListener('install',e=>{e.waitUntil(caches.open(SHELL)"
+        ".then(c=>c.addAll(['/staff','/admin/static/staff.css','/admin/static/staff.js'])))});\n"
+        "self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(k=>"
+        "Promise.all(k.filter(x=>x!==SHELL).map(x=>caches.delete(x)))))});\n"
+        "self.addEventListener('fetch',e=>{\n"
+        "  const u=new URL(e.request.url);\n"
+        "  if(e.request.method!=='GET'||u.pathname.startsWith('/staff/api')) return;\n"
+        "  e.respondWith(fetch(e.request).then(r=>{\n"
+        "    const copy=r.clone(); caches.open(SHELL).then(c=>c.put(e.request,copy)); return r;\n"
+        "  }).catch(()=>caches.match(e.request)));\n"
+        "});\n"
+    )
+    return _Resp(content=js, media_type="application/javascript",
+                 headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/staff"})
 
 
 @app.get("/social/{name}")

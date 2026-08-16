@@ -461,6 +461,36 @@ async def _nightly_tick() -> None:
         await run_backup()
     except Exception:
         log.exception("nightly_backup_failed")
+    # Dashboard KPI snapshot — trends isi se bante hain (Phase 1).
+    try:
+        from app.services.kpis import snapshot_today
+
+        async with async_session_factory() as db:
+            await snapshot_today(db)
+    except Exception:
+        log.exception("kpi_snapshot_failed")
+    # Recharge credits ki validity khatam -> balance se kaato (ledger mein
+    # trail rehta hai). Data kabhi delete nahi hota.
+    try:
+        from app.services.credits import expire_due_credits
+
+        async with async_session_factory() as db:
+            cut = await expire_due_credits(db)
+        if cut["ai"] or cut["wa"]:
+            log.info("credits_expiry_sweep", **cut)
+    except Exception:
+        log.exception("credits_expiry_failed")
+    # Trial/subscription sweep: expired trial -> past_due (read-only),
+    # 30-din grace khatam -> locked. Data kabhi delete nahi hota.
+    try:
+        from app.services.billing import run_subscription_sweep
+
+        async with async_session_factory() as db:
+            moved = await run_subscription_sweep(db)
+        if moved["past_due"] or moved["locked"]:
+            log.info("subscription_sweep", **moved)
+    except Exception:
+        log.exception("subscription_sweep_failed")
     # prune grow-forever tables (keys older than any retry window)
     try:
         from sqlalchemy import delete
@@ -503,9 +533,18 @@ async def _nightly_tick() -> None:
     try:
         now_ist = datetime.now(IST)
         if now_ist.weekday() == 0:  # Monday night: weekly suggestion
-            from app.services.marketing_agent import weekly_suggestion
+            # marketing_agent feature sirf Business plan mein hai
+            from app.services import auth as _auth
+            from app.services import plans as _plans
 
-            await weekly_suggestion()
+            async with async_session_factory() as db:
+                home = await _auth.home_tenant(db)
+            if home is not None and not _plans.feature_on(home.plan, "marketing_agent"):
+                log.info("marketing_agent_feature_off", plan=home.plan)
+            else:
+                from app.services.marketing_agent import weekly_suggestion
+
+                await weekly_suggestion()
     except Exception:
         log.exception("weekly_suggestion_failed")
 
@@ -538,7 +577,12 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
                 continue
             if not await _claim(f"{key_prefix}:{today_key}:{st.phone}"):
                 continue
-            lines = [get_message("standup_header", name=st.name, count=str(len(orders)))]
+            lines = [
+                get_message(
+                    "standup_header", greet=_greeting(now_ist),
+                    name=st.name, count=str(len(orders)),
+                )
+            ]
             for i, o in enumerate(orders[:10], 1):
                 cust = await db.get(Customer, o.customer_id)
                 flags = []
@@ -554,7 +598,17 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
             lines.append(get_message("standup_footer"))
             text = "\n".join(lines)
             try:
-                await send_message(db, to_phone=st.phone, text=text)
+                # Roz subah ki list bhi tappable — jis order par update dena
+                # ho use chun lo, phir teen button. Ye wahi list hai jo staff
+                # ke "order details do" poochhne par jaati hai.
+                from app.services.work_orders import list_button_label, work_rows
+
+                rows = await work_rows(db, orders[:10])
+                await send_message(
+                    db, to_phone=st.phone, text=text, list_rows=rows,
+                    list_button=await list_button_label(db),
+                    list_title="Aaj ka kaam",
+                )
                 sends += 1
             except WindowClosedError:
                 try:
@@ -575,17 +629,54 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
     return sends
 
 
+# Kis role ka kaam kis stage par hai. Delivery wale ko "kapde mil gaye,
+# dhulai shuru hogi" wala order bhejna bekaar hai — uske paas tab kaam
+# aata hai jab pickup karna ho ya kapde nikalne ho.
+_WASH_STAGES = (
+    OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
+    OrderStatus.IN_DRY, OrderStatus.IN_IRON,
+)
+_DELIVERY_STAGES = (
+    OrderStatus.PICKUP_ASSIGNED, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY,
+)
+
+
+def _greeting(now_ist: datetime) -> str:
+    """Waqt ke hisaab se namaskaar. Standup ka waqt owner badal sakta hai
+    (standup_hour), aur owner khud bhi kabhi bhi bhej sakta hai — isliye
+    "Good morning" gaad dena galat tha."""
+    h = now_ist.hour
+    if h < 12:
+        return "🌅 Good morning"
+    if h < 17:
+        return "☀️ Namaste"
+    return "🌇 Good evening"
+
+
 async def _pending_orders_for(db, st: Staff, default_phone: str) -> list[Order]:
-    """Orders this staff member is responsible for (assigned or default)."""
+    """Is aadmi ka aaj ka asli kaam — role ke hisaab se.
+
+    Pehle yahan sirf "kya ye order iske naam par hai" dekha jaata tha.
+    Isliye Ajit (delivery) ko dhulai wale order ki list chali gayi thi,
+    jiska uske liye koi matlab hi nahi tha — aur asli delivery ka kaam
+    usi bheed mein dab gaya.
+    """
     cond = Order.status.in_(ACTIVE_STATUSES)
     q = select(Order).where(cond).order_by(Order.priority.desc(), Order.created_at)
     rows = (await db.execute(q)).scalars().all()
-    mine = []
+    is_delivery = st.role.name == "DELIVERY"
+    stages = _DELIVERY_STAGES if is_delivery else _WASH_STAGES
     is_default = bool(default_phone) and st.phone == default_phone
+    mine = []
     for o in rows:
-        if o.assigned_washer_id == st.id or o.assigned_delivery_id == st.id:
+        if o.status not in stages:
+            continue
+        mine_by_name = (
+            o.assigned_delivery_id == st.id if is_delivery else o.assigned_washer_id == st.id
+        )
+        if mine_by_name:
             mine.append(o)
-        elif o.assigned_washer_id is None and is_default and st.role.name != "DELIVERY":
+        elif o.assigned_washer_id is None and is_default and not is_delivery:
             mine.append(o)
     return mine
 

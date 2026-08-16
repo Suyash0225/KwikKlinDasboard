@@ -19,10 +19,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 
 
-class Lead(Base):
+class Lead(Base, TenantScoped):
     """Marketing Agent spec: enquiry -> follow-up ladder -> customer."""
 
     __tablename__ = "leads"
@@ -49,7 +49,7 @@ class Lead(Base):
     )
 
 
-class Campaign(Base):
+class Campaign(Base, TenantScoped):
     __tablename__ = "campaigns"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -101,7 +101,7 @@ class CampaignRecipient(Base):
     )
 
 
-class Coupon(Base):
+class Coupon(Base, TenantScoped):
     __tablename__ = "coupons"
 
     code: Mapped[str] = mapped_column(String(30), primary_key=True)  # stored UPPER

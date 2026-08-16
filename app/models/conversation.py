@@ -12,11 +12,11 @@ from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, Strin
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 from app.models.enums import Direction
 
 
-class Conversation(Base):
+class Conversation(Base, TenantScoped):
     __tablename__ = "conversations"
     __table_args__ = (
         # XOR: one side NULL, the other NOT NULL.
@@ -47,6 +47,11 @@ class Conversation(Base):
     # insert the same inbound message twice.
     wa_message_id: Mapped[str | None] = mapped_column(String(120), unique=True)
 
+    # Meta ke paise ka hisaab: 'service' = customer ke 24h window mein
+    # diya gaya jawab (FREE), 'utility' = order/payment template,
+    # 'marketing' = offer/campaign (sabse mehnga). Quota sirf billable
+    # (utility+marketing) ginta hai — free replies kabhi block nahi hote.
+    billing_category: Mapped[str | None] = mapped_column(String(10))
     # Who authored an OUTBOUND message: "bot", "manager", "system".
     # NULL on inbound rows (sender is the participant) and on old rows.
     sent_by: Mapped[str | None] = mapped_column(String(40))

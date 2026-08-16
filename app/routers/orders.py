@@ -29,6 +29,7 @@ from app.models import (
     OrderStatus,
     OrderStatusHistory,
     Payment,
+    Task,
 )
 from app.services import audit
 from app.schemas.orders import (
@@ -91,6 +92,11 @@ async def require_admin_key(
         raise HTTPException(status_code=429, detail="too many failed attempts — wait 10 minutes")
 
     # 1. session first — that is what a real browser user has
+    #
+    # SELF-SERVE GATE: HAR tenant ka user apna dashboard use karta hai.
+    # Data isolation yahan bharosa nahi, guarantee hai: middleware ne ctx
+    # isi session ke tenant par set kiya hai -> RLS + ORM filter har query
+    # ko usi tenant tak scope karte hain (test_selfserve_gate.py proof).
     if kk_session:
         from app.database import async_session_factory
         from app.services import auth as auth_service
@@ -98,23 +104,295 @@ async def require_admin_key(
         async with async_session_factory() as db:
             user = await auth_service.user_for_token(db, kk_session)
             if user is not None:
-                if await auth_service.is_home_user(db, user):
-                    request.state.user_email = user.email
-                    return
-                log.warning(
-                    "cross_tenant_dashboard_blocked",
-                    user=user.email, path=request.url.path,
-                )
-                raise HTTPException(
-                    status_code=403,
-                    detail="Ye dashboard aapke account ka nahi hai.",
-                )
+                request.state.user_email = user.email
+                # Role neeche require_admin_owner jaise gates padhte hain.
+                request.state.admin_role = user.role
+                await _enforce_tenant_billing(request, db, user.tenant_id)
+                return
 
     # 2. API key
-    if not hmac.compare_digest(x_api_key, settings.ADMIN_API_KEY):
-        _FAILED_AUTH[ip].append(time.monotonic())
-        log.warning("admin_api_bad_key", ip=ip, path=request.url.path)
+    if not _key_matches(x_api_key):
+        if x_api_key:  # galat key = attempt; khali = bas logged-out request
+            _FAILED_AUTH[ip].append(time.monotonic())
+            log.warning("admin_api_bad_key", ip=ip, path=request.url.path)
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
+    # Key = owner's own tooling — full access (home tenant par).
+    request.state.admin_role = "key"
+    from app.database import async_session_factory as _asf
+
+    async with _asf() as db:
+        await _enforce_tenant_billing(request, db, None)
+
+
+async def _enforce_tenant_billing(
+    request: Request, db: AsyncSession, tenant_id
+) -> None:
+    """Trial/subscription gate — har dashboard request par, USI tenant ke
+    status par jiska session hai (key path = home tenant).
+
+    locked   -> kuch nahi chalta (reads bhi nahi); data DB mein safe hai,
+                payment aate hi sab wapas. /api/me isse bahar hai taaki
+                user apni haalat dekh sake.
+    past_due -> READ-ONLY: GET chalta hai, POST/PUT/DELETE par 402.
+    (Vendor ka /control require_vendor_key par hai — us par gate nahi.)
+    """
+    from app.models.tenant import TENANT_LOCKED, WRITABLE_STATUSES, Tenant
+    from app.services import auth as auth_service
+
+    if tenant_id is not None:
+        home = await db.get(Tenant, tenant_id)
+    else:
+        home = await auth_service.home_tenant(db)
+    if home is None:
+        return
+    if home.status == TENANT_LOCKED:
+        raise HTTPException(
+            status_code=402,
+            detail="Account locked hai — subscription renew karein. "
+                   "Aapka poora data safe hai, kuch bhi delete nahi hua.",
+        )
+    if request.method not in ("GET", "HEAD", "OPTIONS") and (
+        home.status not in WRITABLE_STATUSES
+    ):
+        raise HTTPException(
+            status_code=402,
+            detail="Account read-only hai (trial/subscription khatam). "
+                   "Renew karte hi likhna wapas chalu — data safe hai.",
+        )
+
+
+def require_feature(feature: str):
+    """Route dependency: ye feature home tenant ke PLAN mein on hona chahiye.
+
+    Auth pehle chalta hai (require_admin_key — cached, dobara nahi chalta).
+    Feature off -> 402 with "Upgrade" detail; frontend isi se Upgrade
+    prompt dikhata hai. Naya plan/feature = sirf plans.py mein entry.
+    """
+
+    async def _dep(request: Request, _: None = Depends(require_admin_key)) -> None:
+        from app.database import async_session_factory as _asf
+        from app.models.tenant import Tenant as _T
+        from app.services import auth as auth_service
+        from app.services import plans, tenant_context
+
+        # SESSION tenant ka plan (ctx middleware ne set kiya); key path = home
+        tid = tenant_context.current_tenant_id.get()
+        async with _asf() as db:
+            home = (await db.get(_T, tid)) if tid else await auth_service.home_tenant(db)
+        code = home.plan if home else plans.DEFAULT_PLAN
+        if plans.feature_on(code, feature):
+            return
+        need = plans.plan_with_feature(feature)
+        hint = f" {plans.get(need).name} plan mein milega." if need else ""
+        log.info("feature_blocked", feature=feature, plan=code, path=request.url.path)
+        raise HTTPException(
+            status_code=402,
+            detail=f"Upgrade needed: ye feature ({feature}) aapke "
+                   f"{plans.get(code).name} plan mein nahi hai.{hint}",
+        )
+
+    _dep.__name__ = f"require_feature_{feature}"
+    return _dep
+
+
+def _key_matches(candidate: str) -> bool:
+    """Constant-time key compare; non-ASCII junk = mismatch, not a 500."""
+    try:
+        return hmac.compare_digest(candidate, settings.ADMIN_API_KEY)
+    except TypeError:
+        return False
+
+
+async def require_admin_owner(
+    request: Request, _: None = Depends(require_admin_key)
+) -> None:
+    """Owner-level dashboard endpoints: paisa, settings, staff, exports.
+
+    Pehle require_admin_key chalta hai (home-tenant session ya API key).
+    Uske upar: session wale user ka role OWNER/MANAGER hona chahiye —
+    STAFF/ACCOUNTANT ko 403. API-key path hamesha full access hai
+    (wo owner ki apni tooling hai).
+    """
+    from app.models.tenant import ROLE_MANAGER, ROLE_OWNER
+
+    role = getattr(request.state, "admin_role", None)
+    if role in ("key", ROLE_OWNER, ROLE_MANAGER):
+        return
+    log.warning(
+        "admin_role_blocked",
+        role=role, path=request.url.path,
+        user=getattr(request.state, "user_email", None),
+    )
+    raise HTTPException(
+        status_code=403, detail="Sirf owner/manager ke liye. Apne owner se kahein."
+    )
+
+
+_VENDOR_LEVELS = {"read": 0, "write": 1, "danger": 2}
+
+# --- vendor session cookie ---------------------------------------------
+# Panel ki master key ab browser storage mein NAHI rehti. Key sirf EK BAAR
+# POST /control/api/session par jaati hai; server usse verify karke ye
+# short-lived signed token httpOnly cookie mein set karta hai. XSS bhi ho
+# jaye to JS token padh hi nahi sakta, aur key kahin persist nahi hoti.
+VENDOR_COOKIE = "kk_vendor"
+# Apna session kholna/band karna "write" nahi hai — warna read-level key
+# panel mein sign-in hi nahi kar paati (sirf dekhne wale admin bhi bahar).
+_VENDOR_SESSION_PATHS = ("/control/api/session", "/control/api/session/logout")
+VENDOR_SESSION_HOURS = 8
+
+
+def mint_vendor_token(level: str, label: str, kid: str = "env") -> str:
+    """Signed, self-contained session token (HMAC over ADMIN_API_KEY)."""
+    import base64
+    import hashlib
+
+    exp = int(time.time()) + VENDOR_SESSION_HOURS * 3600
+    payload = f"{level}|{label}|{kid}|{exp}"
+    sig = hmac.new(
+        settings.ADMIN_API_KEY.encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()
+    raw = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    return f"{raw}.{sig}"
+
+
+async def verify_vendor_token(token: str) -> tuple[str, str] | None:
+    """(level, label) ya None. Per-admin key REVOKE hote hi cookie bhi
+    mar jaati hai — isliye har request par kid DB mein check hota hai."""
+    import base64
+    import hashlib
+
+    try:
+        raw, sig = token.split(".", 1)
+        payload = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode()
+        expected = hmac.new(
+            settings.ADMIN_API_KEY.encode(), payload.encode(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            return None
+        level, rest = payload.split("|", 1)
+        label, kid, exp = rest.rsplit("|", 2)
+        if level not in _VENDOR_LEVELS or int(exp) < time.time():
+            return None
+    except Exception:
+        return None
+    if kid != "env":
+        from app.database import async_session_factory as _asf
+        from app.models import AdminKey
+
+        async with _asf() as db:
+            k = await db.get(AdminKey, kid)
+        if k is None or k.revoked_at is not None:
+            return None
+    return level, label
+
+
+async def require_vendor_key(
+    request: Request,
+    x_api_key: str = Header(default=""),
+    kk_vendor: str = Cookie(default=""),
+) -> None:
+    """Control panel (vendor ka apna) — client-user sessions yahan kabhi nahi.
+
+    Do tarah ki keys chalti hain:
+    1. Legacy .env ADMIN_API_KEY — full (danger) access, hamesha.
+    2. Per-admin keys (admin_keys table, hash-only) — level ke saath:
+       read (sirf GET) < write (mutations) < danger (delete/reset/keys).
+       Rotation = nayi banao, purani revoke.
+
+    Key do rasto se aa sakti hai — dono ka level/label logic EK hi hai:
+    - `X-API-Key` header (scripts/curl, jaisa tha waisa hi), ya
+    - `kk_vendor` httpOnly cookie (browser panel) jo POST
+      /control/api/session se banti hai. Cookie sirf storage-location fix
+      hai; permission model bilkul nahi badla.
+
+    Method-level enforcement yahin: read key se koi mutation nahi.
+    Danger-only routes par upar se Depends(require_vendor_danger) lagta hai.
+    """
+    ip = request.client.host if request.client else "?"
+    if _auth_throttled(ip):
+        log.warning("vendor_api_throttled", ip=ip)
+        raise HTTPException(status_code=429, detail="too many failed attempts — wait 10 minutes")
+
+    # 1. browser panel ka cookie session (key browser mein kahin nahi hoti)
+    if not x_api_key and kk_vendor:
+        got = await verify_vendor_token(kk_vendor)
+        if got is not None:
+            request.state.admin_role = "key"
+            request.state.vendor_level, request.state.vendor_label = got
+            request.state.vendor_via = "cookie"
+            if _is_vendor_write(request) and _VENDOR_LEVELS[got[0]] < 1:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"'{got[1]}' read-only key hai — write nahi kar sakti",
+                )
+            return
+        log.info("vendor_cookie_invalid", ip=ip, path=request.url.path)
+        raise HTTPException(status_code=401, detail="session expired — sign in again")
+
+    level: str | None = None
+    label = "env-key"
+    kid = "env"
+    if _key_matches(x_api_key):
+        level = "danger"  # legacy master key
+    elif x_api_key:
+        import hashlib as _hl
+        from datetime import datetime as _dt, timezone as _tz
+
+        from app.database import async_session_factory as _asf
+        from app.models import AdminKey
+
+        h = _hl.sha256(x_api_key.encode()).hexdigest()
+        async with _asf() as db:
+            k = (
+                await db.execute(
+                    select(AdminKey).where(
+                        AdminKey.key_hash == h, AdminKey.revoked_at.is_(None)
+                    )
+                )
+            ).scalar_one_or_none()
+            if k is not None:
+                k.last_used_at = _dt.now(_tz.utc)
+                await db.commit()
+                level, label, kid = k.level, k.label, str(k.id)
+
+    if level is None:
+        # Throttle SIRF galat credential par. "Koi credential hi nahi" (panel
+        # ka pehla load, logged-out tab) attack nahi hai — use ginne se panel
+        # aur dashboard dono 429 mein chale jaate the (dono ka counter ek hai).
+        if x_api_key:
+            _FAILED_AUTH[ip].append(time.monotonic())
+            log.warning("vendor_api_bad_key", ip=ip, path=request.url.path)
+        raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
+
+    request.state.admin_role = "key"
+    request.state.vendor_level = level
+    request.state.vendor_label = label
+    request.state.vendor_kid = kid
+    request.state.vendor_via = "header"
+    if _is_vendor_write(request) and _VENDOR_LEVELS[level] < 1:
+        raise HTTPException(
+            status_code=403, detail=f"'{label}' read-only key hai — write nahi kar sakti"
+        )
+
+
+def _is_vendor_write(request: Request) -> bool:
+    """Level check ke liye: kya ye request sach mein kuch badal rahi hai?"""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return False
+    return request.url.path not in _VENDOR_SESSION_PATHS
+
+
+async def require_vendor_danger(
+    request: Request, _: None = Depends(require_vendor_key)
+) -> None:
+    """Delete / password-reset / key-management — sirf danger-level keys."""
+    if _VENDOR_LEVELS.get(getattr(request.state, "vendor_level", "read"), 0) < 2:
+        raise HTTPException(
+            status_code=403,
+            detail=f"'{getattr(request.state, 'vendor_label', '?')}' key ko is "
+                   "action ki permission nahi (danger level chahiye)",
+        )
 
 
 async def _order_out(
@@ -143,7 +421,7 @@ async def _order_out(
     )
 
 
-@router.post("", dependencies=[Depends(require_admin_key)], status_code=201)
+@router.post("", dependencies=[Depends(require_admin_key), Depends(require_feature("billing"))], status_code=201)
 async def create_order(body: OrderCreateIn, db: AsyncSession = Depends(get_db)) -> OrderOut:
     try:
         order = await order_service.create_order(
@@ -264,7 +542,7 @@ class OrderEditIn(BaseModel):
     edited_by: str = "dashboard"
 
 
-@router.put("/{order_number}", dependencies=[Depends(require_admin_key)])
+@router.put("/{order_number}", dependencies=[Depends(require_admin_owner), Depends(require_feature("billing"))])
 async def edit_order(
     order_number: str, body: OrderEditIn, db: AsyncSession = Depends(get_db)
 ) -> OrderOut:
@@ -310,7 +588,7 @@ async def edit_order(
     return await _order_out(db, order, include_notes=True)
 
 
-@router.delete("/{order_number}", dependencies=[Depends(require_admin_key)])
+@router.delete("/{order_number}", dependencies=[Depends(require_admin_owner)])
 async def delete_order(
     order_number: str,
     db: AsyncSession = Depends(get_db),
@@ -336,6 +614,10 @@ async def delete_order(
     await db.execute(
         sa_update(OpenQuestion).where(OpenQuestion.order_id == oid).values(order_id=None)
     )
+    # Tasks bhi order par latakte hain (pickup/work orders). Inhe delete
+    # nahi karte — kaam ka record hai — bas link tod dete hain, warna FK
+    # delete ko rok deta tha aur owner ko "delete nahi ho raha" dikhta tha.
+    await db.execute(sa_update(Task).where(Task.order_id == oid).values(order_id=None))
     await db.delete(order)
     try:
         await db.commit()
@@ -356,7 +638,7 @@ async def delete_order(
     return {"ok": True, "deleted": order_number}
 
 
-@router.post("/{order_number}/status", dependencies=[Depends(require_admin_key)])
+@router.post("/{order_number}/status", dependencies=[Depends(require_admin_key), Depends(require_feature("billing"))])
 async def update_status(
     order_number: str, body: StatusUpdateIn, db: AsyncSession = Depends(get_db)
 ) -> OrderOut:
@@ -374,7 +656,7 @@ async def update_status(
     return await _order_out(db, order)
 
 
-@router.post("/{order_number}/payment", dependencies=[Depends(require_admin_key)])
+@router.post("/{order_number}/payment", dependencies=[Depends(require_admin_key), Depends(require_feature("billing"))])
 async def record_payment(
     order_number: str, body: PaymentIn, db: AsyncSession = Depends(get_db)
 ) -> OrderOut:

@@ -13,10 +13,10 @@ from sqlalchemy import Boolean, DateTime, Numeric, String, UniqueConstraint, fun
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 
 
-class Rate(Base):
+class Rate(Base, TenantScoped):
     __tablename__ = "rate_card"
     __table_args__ = (
         # one price per service+garment combination

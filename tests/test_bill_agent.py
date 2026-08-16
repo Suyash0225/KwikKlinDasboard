@@ -6,11 +6,13 @@ import pytest
 from sqlalchemy import select, text as sqltext
 
 import app.services.bill_agent as bill_module
+from app.config import settings as settings_module
 from app.database import async_session_factory
 from app.models import Customer, Order, OrderStatus, Rate
 from app.services.bill_agent import _PENDING, handle_staff_message
 from app.services.llm_client import LLMUnavailable
 from app.services.order_service import create_order
+from tests.conftest import TEST_WASHER_NAME, TEST_WASHER_PHONE
 
 SENDER = "+911111100001"          # pretend staff/manager phone
 CUST_PHONE = "+919999900124"      # bill target customer
@@ -295,7 +297,7 @@ async def no_task_residue():
 
 
 async def test_relay_to_known_staff_becomes_a_tracked_task(
-    monkeypatch, no_task_residue
+    monkeypatch, no_task_residue, test_washer
 ) -> None:
     """Work handed to staff is tracked, not just forwarded and forgotten."""
     import app.services.tasks as tasks_module
@@ -310,21 +312,26 @@ async def test_relay_to_known_staff_becomes_a_tracked_task(
     _patch_extract(
         monkeypatch,
         _extract_result(
-            action="relay", relay_to="Ravi", relay_message="naya order aya hai, ready ho jao"
+            action="relay",
+            relay_to=TEST_WASHER_NAME,
+            relay_message="naya order aya hai, ready ho jao",
         ),
     )
     async with async_session_factory() as db:
         reply = await handle_staff_message(
-            db, sender_phone=SENDER, sender_label="manager", text="Ravi ko bata do order aya"
+            db,
+            sender_phone=SENDER,
+            sender_label="manager",
+            text=f"{TEST_WASHER_NAME} ko bata do order aya",
         )
-    assert reply.startswith("✅") and "Ravi" in reply
+    assert reply.startswith("✅") and TEST_WASHER_NAME in reply
     assert "T-" in reply, "the owner gets a code he can follow up on"
-    assert calls and calls[0]["to"] == "+918707093136"  # Ravi's seeded number
+    assert calls and calls[0]["to"] == TEST_WASHER_PHONE
     assert "naya order aya hai" in calls[0]["text"]
-    assert "done T-" in calls[0]["text"], "Ravi must know how to close it"
+    assert "done T-" in calls[0]["text"], "the assignee must know how to close it"
 
 
-async def test_relay_unknown_target_lists_staff(monkeypatch) -> None:
+async def test_relay_unknown_target_lists_staff(monkeypatch, test_washer) -> None:
     async def fake_send(db, **kw):
         raise AssertionError("must not send")
 
@@ -337,11 +344,12 @@ async def test_relay_unknown_target_lists_staff(monkeypatch) -> None:
         reply = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="manager", text="Chintu ko bolo"
         )
-    assert "nahi mila" in reply and "Ravi" in reply
+    # reply lists whoever is actually on staff — our own washer proves the list
+    assert "nahi mila" in reply and TEST_WASHER_NAME in reply
 
 
 async def test_task_window_closed_falls_back_to_template(
-    monkeypatch, no_task_residue
+    monkeypatch, no_task_residue, test_washer
 ) -> None:
     """Window shut -> WhatsApp forbids free-form, so the task rides an
     approved template instead of silently never arriving."""
@@ -359,11 +367,16 @@ async def test_task_window_closed_falls_back_to_template(
     monkeypatch.setattr(tasks_module, "send_message", fake_send)
     _patch_extract(
         monkeypatch,
-        _extract_result(action="relay", relay_to="Ravi", relay_message="jaldi\naao bhai"),
+        _extract_result(
+            action="relay", relay_to=TEST_WASHER_NAME, relay_message="jaldi\naao bhai"
+        ),
     )
     async with async_session_factory() as db:
         reply = await handle_staff_message(
-            db, sender_phone=SENDER, sender_label="manager", text="Ravi ko bolo jaldi aao"
+            db,
+            sender_phone=SENDER,
+            sender_label="manager",
+            text=f"{TEST_WASHER_NAME} ko bolo jaldi aao",
         )
     assert reply.startswith("✅"), "it did go out, just via a template"
     assert calls[1]["template_name"] == "kk_staff_alert"
@@ -373,7 +386,7 @@ async def test_task_window_closed_falls_back_to_template(
 
 
 async def test_task_totally_unreachable_is_reported_honestly(
-    monkeypatch, no_task_residue
+    monkeypatch, no_task_residue, test_washer
 ) -> None:
     import app.services.tasks as tasks_module
     from app.services.whatsapp import SendError, WindowClosedError
@@ -386,11 +399,14 @@ async def test_task_totally_unreachable_is_reported_honestly(
     monkeypatch.setattr(tasks_module, "send_message", fake_send)
     _patch_extract(
         monkeypatch,
-        _extract_result(action="relay", relay_to="Ravi", relay_message="jaldi aao"),
+        _extract_result(action="relay", relay_to=TEST_WASHER_NAME, relay_message="jaldi aao"),
     )
     async with async_session_factory() as db:
         reply = await handle_staff_message(
-            db, sender_phone=SENDER, sender_label="manager", text="Ravi ko bolo jaldi aao"
+            db,
+            sender_phone=SENDER,
+            sender_label="manager",
+            text=f"{TEST_WASHER_NAME} ko bolo jaldi aao",
         )
     # never claim it was delivered when it wasn't — but the task is saved
     assert "⚠️" in reply and "nahi ja paya" in reply
@@ -652,3 +668,442 @@ async def test_llm_down_notifies_manager_but_not_staff(monkeypatch) -> None:
         )
     assert manager_reply is not None and "uplabdh nahi" in manager_reply
     assert staff_reply is None
+
+
+# --- "order details do" — staff apna kaam poochh raha hai ------------------
+
+
+async def test_staff_asking_for_work_gets_a_tappable_list(monkeypatch, sent, test_washer) -> None:
+    """Pehle staff ka ye sawal CHUP-CHAAP gir jata tha.
+
+    Ab jawab list ban kar jata hai — har order/task apni line par, taaki
+    "kis par jawab diya" ka sawal hi na bache. Sab DB se, koi LLM nahi.
+    """
+    async def no_llm(**kw):
+        raise AssertionError("ye jawab bina LLM ke aana chahiye")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=CUST_PHONE, customer_name="Detail Grahak",
+            items=[{"type": "Kurta", "qty": 2}], created_by="test",
+        )
+        number = order.order_number
+    sent.clear()   # order banne par customer ko gaya confirmation — wo setup hai
+
+    for asked in ("order details do", "aj k orders details do", "aaj ka kaam kya hai"):
+        sent.clear()
+        async with async_session_factory() as db:
+            reply = await handle_staff_message(
+                db, sender_phone=TEST_WASHER_PHONE,
+                sender_label=TEST_WASHER_NAME, text=asked,
+            )
+        assert reply == "", "list khud chali jati hai, webhook dobara na bheje"
+        assert len(sent) == 1 and sent[0]["to"] == TEST_WASHER_PHONE
+        rows = sent[0].get("list_rows") or []
+        assert any(r.id == f"pick:o:{number}" for r in rows), f"{asked!r} par order dikhna chahiye"
+
+
+async def test_worklist_falls_back_to_text_when_list_cannot_go(
+    monkeypatch, sent, test_washer
+) -> None:
+    """Window band ho to bhi kaam ki list milni chahiye — bina buttons ke."""
+    from app.services.whatsapp import WindowClosedError
+
+    async def no_llm(**kw):
+        raise AssertionError("ye jawab bina LLM ke aana chahiye")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+
+    async def closed(db, **kw):
+        raise WindowClosedError("24h window closed")
+
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=CUST_PHONE, items=[{"type": "Kurta", "qty": 1}],
+            created_by="test",
+        )
+        number = order.order_number
+    monkeypatch.setattr(bill_module, "send_message", closed)
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=TEST_WASHER_PHONE,
+            sender_label=TEST_WASHER_NAME, text="order details do",
+        )
+    assert reply and number in reply and "done KK-" in reply
+
+
+async def test_tapping_a_row_opens_that_one_with_buttons(monkeypatch, sent, test_washer) -> None:
+    """List se chuna hua order -> uska apna card + wahi teen buttons."""
+    async def no_llm(**kw):
+        raise AssertionError("button ke jawab mein LLM nahi chalna chahiye")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=CUST_PHONE, customer_name="Tap Grahak",
+            items=[{"type": "Kurta", "qty": 1}], created_by="test",
+        )
+        number = order.order_number
+    sent.clear()
+
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=TEST_WASHER_PHONE, sender_label=TEST_WASHER_NAME,
+            text=f"[button:pick:o:{number}] {number}",
+        )
+    assert reply == ""
+    card = next(c for c in sent if c["to"] == TEST_WASHER_PHONE)
+    assert number in card["text"] and "Tap Grahak" in card["text"]
+    ids = [b.id for b in (card.get("buttons") or [])]
+    assert ids == [f"ord:{number}:done", f"ord:{number}:later", f"ord:{number}:problem"]
+
+
+async def test_order_button_done_moves_the_order(monkeypatch, sent, test_washer) -> None:
+    """✅ dabate hi wahi hota hai jo 'done KK-...' likhne par hota hai."""
+    async def no_llm(**kw):
+        raise AssertionError("button ke jawab mein LLM nahi chalna chahiye")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=CUST_PHONE, items=[{"type": "Kurta", "qty": 1}],
+            created_by="test",
+        )
+        number = order.order_number
+
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=TEST_WASHER_PHONE, sender_label=TEST_WASHER_NAME,
+            text=f"[button:ord:{number}:done] ✅ Ho gaya",
+        )
+    assert reply and number in reply
+    async with async_session_factory() as s:
+        fresh = (
+            await s.execute(select(Order).where(Order.order_number == number))
+        ).scalar_one()
+        assert fresh.status is OrderStatus.READY, "washer ke liye 'ho gaya' = READY"
+
+
+async def test_order_button_later_records_the_eta(monkeypatch, sent, test_washer) -> None:
+    """⏳ ke baad ka jawab order par likha jaye aur owner tak pahunche."""
+    async def no_llm(**kw):
+        raise AssertionError("button ke jawab mein LLM nahi chalna chahiye")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=CUST_PHONE, items=[{"type": "Kurta", "qty": 1}],
+            created_by="test",
+        )
+        number = order.order_number
+
+    async with async_session_factory() as db:
+        ask = await handle_staff_message(
+            db, sender_phone=TEST_WASHER_PHONE, sender_label=TEST_WASHER_NAME,
+            text=f"[button:ord:{number}:later] ⏳ Time lagega",
+        )
+    assert ask and "kab tak" in ask.lower()
+
+    sent.clear()
+    async with async_session_factory() as db:
+        ack = await handle_staff_message(
+            db, sender_phone=TEST_WASHER_PHONE, sender_label=TEST_WASHER_NAME,
+            text="sham tak ho jayega",
+        )
+    assert ack and "sham tak" in ack
+    async with async_session_factory() as s:
+        fresh = (
+            await s.execute(select(Order).where(Order.order_number == number))
+        ).scalar_one()
+        assert "sham tak" in (fresh.notes or ""), "ETA order par likhi jaye"
+    assert any("sham tak" in (c.get("text") or "") for c in sent), "owner ko khabar jaye"
+
+
+async def test_worklist_stays_out_of_the_way(monkeypatch, sent, test_washer) -> None:
+    """Rozmarra ki baat-cheet par ye handler nahi jagna chahiye."""
+    seen: list[str] = []
+
+    async def fake_ask_json(**kw):
+        seen.append("llm")
+        return _extract_result()
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", fake_ask_json)
+    for chatter in ("thik hai bhaiya", "haan", "sham tak ho jayega", "Monday"):
+        async with async_session_factory() as db:
+            await handle_staff_message(
+                db, sender_phone=TEST_WASHER_PHONE,
+                sender_label=TEST_WASHER_NAME, text=chatter,
+            )
+    assert seen, "normal baat abhi bhi purane raste se jati hai"
+
+
+async def test_deactivated_staff_gets_no_worklist(monkeypatch, sent, test_washer) -> None:
+    """Band kiye gaye aadmi ko shop ka kaam nahi dikhna chahiye."""
+    from app.models import Staff
+
+    async with async_session_factory() as db:
+        st = await db.get(Staff, test_washer)
+        st.is_active = False
+        await db.commit()
+
+    async def no_llm(**kw):
+        raise AssertionError("band staff par LLM bhi nahi chalna chahiye")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=TEST_WASHER_PHONE,
+            sender_label=TEST_WASHER_NAME, text="order details do",
+        )
+    assert reply is None
+
+
+# --- staff ne order par dikkat batayi -------------------------------------
+
+
+async def test_damaged_garment_alerts_the_owner_not_the_customer(
+    monkeypatch, sent, test_washer
+) -> None:
+    """Asli ghatna (09 Aug): Ravi ne likha "lehenga khrab hai, service nahi
+    hogi". Wo sirf ek note ban kar order par baith gaya — owner ko kabhi
+    pata hi nahi chala, aur customer ko 'ready' ka message pehle hi ja
+    chuka tha. Ab: owner ko turant, customer ko kuch nahi.
+    """
+    async def no_llm(**kw):
+        raise AssertionError("dikkat pakadne ke liye LLM par bharosa nahi")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=CUST_PHONE, customer_name="Pooja",
+            items=[{"type": "Lehenga", "qty": 1}], created_by="test",
+        )
+        number = order.order_number
+    sent.clear()
+
+    bare_ref = number.replace("KK-", "")
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=TEST_WASHER_PHONE, sender_label=TEST_WASHER_NAME,
+            text=f"{bare_ref} isme ek lahenga hai uska service nhi hog kyoki wo khrab hai",
+        )
+    assert reply and "bata di" in reply
+    # customer ko kuch nahi
+    assert not [c for c in sent if c["to"] == CUST_PHONE], \
+        "kapda kharab hona owner ka faisla hai, bot customer ko na bole"
+    # owner ko poori baat, ek tap ke faisle ke saath
+    owner_msg = next(c for c in sent if number in (c.get("text") or ""))
+    assert "khrab" in owner_msg["text"] and TEST_WASHER_NAME in owner_msg["text"]
+    assert [b.id for b in (owner_msg.get("buttons") or [])] == [
+        f"hold:{number}:yes", f"hold:{number}:no",
+    ]
+    async with async_session_factory() as s:
+        fresh = (
+            await s.execute(select(Order).where(Order.order_number == number))
+        ).scalar_one()
+        assert "khrab" in (fresh.notes or ""), "baat order par likhi rahe"
+        assert fresh.status is OrderStatus.RECEIVED, "status apne aap na badle"
+
+
+async def test_owner_is_warned_when_the_customer_already_heard_ready(
+    monkeypatch, sent, test_washer
+) -> None:
+    from app.services.order_service import update_status
+
+    async def no_llm(**kw):
+        raise AssertionError("dikkat pakadne ke liye LLM par bharosa nahi")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=CUST_PHONE, customer_name="Pooja",
+            items=[{"type": "Lehenga", "qty": 1}], created_by="test",
+        )
+        await update_status(db, order, OrderStatus.READY, changed_by="test")
+        number = order.order_number
+    sent.clear()
+
+    async with async_session_factory() as db:
+        await handle_staff_message(
+            db, sender_phone=TEST_WASHER_PHONE, sender_label=TEST_WASHER_NAME,
+            text=f"{number} ka lehenga phat gaya hai",
+        )
+    owner_msg = next(c for c in sent if number in (c.get("text") or ""))
+    assert "ja chuka hai" in owner_msg["text"], \
+        "owner ko pata hona chahiye ki customer ko ready bola ja chuka hai"
+
+
+async def test_owner_can_hold_the_order_with_one_tap(monkeypatch, sent, test_washer) -> None:
+    """🛑 dabate hi order ruke aur uska peechha karna band ho."""
+    from app.models import Staff
+    from app.services import tasks as task_service
+
+    async def no_llm(**kw):
+        raise AssertionError("button ke jawab mein LLM nahi chahiye")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=CUST_PHONE, items=[{"type": "Lehenga", "qty": 1}],
+            created_by="test",
+        )
+        number = order.order_number
+        st = await db.get(Staff, test_washer)
+        await task_service.create_task(
+            db, title="is order ka kaam", staff=st, order=order, notify=False,
+        )
+    sent.clear()
+
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=settings_module.MANAGER_PHONE, sender_label="manager",
+            text=f"[button:hold:{number}:yes] 🛑 Order rok do",
+        )
+    assert reply and "hold" in reply.lower()
+    async with async_session_factory() as s:
+        fresh = (
+            await s.execute(select(Order).where(Order.order_number == number))
+        ).scalar_one()
+        assert fresh.status is OrderStatus.ON_HOLD
+        open_left = (
+            await s.execute(
+                sqltext(
+                    "SELECT count(*) FROM tasks WHERE order_id = :o AND status = 'OPEN'"
+                ),
+                {"o": str(fresh.id)},
+            )
+        ).scalar_one()
+        assert open_left == 0, "ruke order ka peechha karna band hona chahiye"
+    # customer ko hold ki koi khabar nahi jati
+    assert not [c for c in sent if c["to"] == CUST_PHONE]
+
+
+async def test_owner_can_let_it_run(monkeypatch, sent) -> None:
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=CUST_PHONE, items=[{"type": "Kurta", "qty": 1}],
+            created_by="test",
+        )
+        number = order.order_number
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=settings_module.MANAGER_PHONE, sender_label="manager",
+            text=f"[button:hold:{number}:no] ▶️ Chalne do",
+        )
+    assert reply and "chalta rahega" in reply
+    async with async_session_factory() as s:
+        fresh = (
+            await s.execute(select(Order).where(Order.order_number == number))
+        ).scalar_one()
+        assert fresh.status is OrderStatus.RECEIVED
+
+
+async def test_ordinary_chatter_is_not_treated_as_a_problem(
+    monkeypatch, sent, test_washer
+) -> None:
+    """Bina order ke shikayat, ya order ke saath saadi baat — dono par ye
+    handler na jage; warna har baat owner ko alert ban jayegi."""
+    seen: list[str] = []
+
+    async def fake_ask_json(**kw):
+        seen.append("llm")
+        return _extract_result()
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=CUST_PHONE, items=[{"type": "Kurta", "qty": 1}],
+            created_by="test",
+        )
+        number = order.order_number
+    for chatter in ("machine kharab hai", f"{number} kal dunga", "thik hai bhaiya"):
+        sent.clear()
+        async with async_session_factory() as db:
+            await handle_staff_message(
+                db, sender_phone=TEST_WASHER_PHONE,
+                sender_label=TEST_WASHER_NAME, text=chatter,
+            )
+        assert not [c for c in sent if "🚨" in (c.get("text") or "")], \
+            f"{chatter!r} par owner ko alert nahi jana chahiye"
+
+
+# --- relay: naam bhi sender ka, baat bhi sender ki -------------------------
+
+
+async def test_relay_never_guesses_who(monkeypatch, sent, test_washer) -> None:
+    """Asli galti (09 Aug): owner ne likha "Message bhejo message kyo nhi
+    bheje" — kisi ka naam tha hi nahi — aur bot ne Ravi ko bhej diya.
+    Ab jis naam ko sender ne likha hi nahi, uske paas kuch nahi jata.
+    """
+    _patch_extract(
+        monkeypatch,
+        _extract_result(
+            action="relay", relay_to=TEST_WASHER_NAME,
+            relay_message="Message kyun nahi bheje?",
+        ),
+    )
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager",
+            text="Message bhejo message kyo nhi bheje",
+        )
+    assert reply and "Kisko bhejun" in reply
+    assert TEST_WASHER_NAME in reply, "staff ke naam dikhne chahiye"
+    assert not [c for c in sent if c["to"] == TEST_WASHER_PHONE], "kisi ko kuch na jaye"
+
+
+async def test_relay_without_a_message_asks_instead_of_inventing(
+    monkeypatch, sent, no_task_residue, test_washer
+) -> None:
+    """"Ajit ko bhej do" — kise pata hai, kya nahi. Pehle model ne PICHHLA
+    BOT ka jawab utha kar bhej diya tha aur uska task bhi ban gaya tha.
+    """
+    _patch_extract(
+        monkeypatch,
+        _extract_result(
+            action="relay", relay_to=TEST_WASHER_NAME,
+            relay_message="Note save ho gaya hai (KK-20260809-01).",
+        ),
+    )
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager",
+            text=f"{TEST_WASHER_NAME} ko bhej do",
+        )
+    assert reply and "kya bhejun" in reply.lower()
+    assert not [c for c in sent if c["to"] == TEST_WASHER_PHONE]
+
+    # ab asli baat likhne par wahi jaati hai — aur task ban jata hai
+    sent.clear()
+
+    async def no_llm(**kw):
+        raise AssertionError("jawab pehle se pata hai, LLM ki zarurat nahi")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+    async with async_session_factory() as db:
+        done = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager",
+            text="kal subah 9 baje aa jana",
+        )
+    assert done and TEST_WASHER_NAME in done and "T-" in done
+    got = next(c for c in sent if c["to"] == TEST_WASHER_PHONE)
+    assert "kal subah 9 baje" in got["text"]
+
+
+async def test_a_named_relay_still_works(monkeypatch, sent, no_task_residue, test_washer) -> None:
+    """Rok-tok sirf andhere mein — naam aur baat dono ho to seedha jaye."""
+    _patch_extract(
+        monkeypatch,
+        _extract_result(
+            action="relay", relay_to=TEST_WASHER_NAME,
+            relay_message="Sharma ji ka order aaj hi nikalna hai",
+        ),
+    )
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager",
+            text=f"{TEST_WASHER_NAME} ko bolo Sharma ji ka order aaj hi nikalna hai",
+        )
+    assert reply and reply.startswith("✅")
+    assert [c for c in sent if c["to"] == TEST_WASHER_PHONE]
