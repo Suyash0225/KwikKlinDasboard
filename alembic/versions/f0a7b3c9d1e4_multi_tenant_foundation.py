@@ -102,7 +102,7 @@ def _resolve_home_tenant_id(conn) -> str:
     conn.execute(
         sa.text(
             "INSERT INTO settings_kv (key, value) "
-            "VALUES ('home_tenant_slug', :val::jsonb) "
+            "VALUES ('home_tenant_slug', CAST(:val AS jsonb)) "
             "ON CONFLICT (key) DO NOTHING"
         ),
         {"val": '{"v": "%s"}' % HOME_SLUG_FALLBACK},

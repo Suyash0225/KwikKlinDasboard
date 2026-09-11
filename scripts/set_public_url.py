@@ -45,6 +45,12 @@ async def _alive(url: str) -> bool:
 
 
 async def main(url: str, auto: bool) -> None:
+    # App ke bahar chalti hai: home-tenant cache khud bharo, warna settings
+    # NULL tenant par save hoti hain aur chalte app ko dikhti hi nahi.
+    from app.services import tenant_context
+
+    await tenant_context.get_home_tenant_id()
+
     async with async_session_factory() as db:
         if auto:
             await app_settings.set_value(db, "public_url_fixed", False)
