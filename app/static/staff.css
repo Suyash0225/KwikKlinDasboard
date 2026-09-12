@@ -17,30 +17,28 @@
  */
 
 :root {
-  /* Linen: thanda safed, kaagaz jaisa — dhoop mein bhi chubhta nahi */
-  --paper: #f7f8fa;
-  --sheet: #ffffff;
-  --ink: #131820;          /* neeli-slate siyahi, kaala nahi */
-  --ink-2: #4a5567;
-  --ink-3: #7b8798;
-  --rule: #e4e8ee;         /* register ki lakeer */
-  --rule-2: #f0f2f6;
+  /* Sab kuch tokens.css se. Ye file pehle se us design ke sabse kareeb thi
+   * (audit ne isi ko reference maana), isliye yahan koi value badli nahi —
+   * sirf naam jod diye gaye hain shared tokens ke. Local naam bane hue hain
+   * kyunki poori file unhi se likhi hai, aur unhe ek saath badalna is phase
+   * ka kaam nahi. */
+  --paper: var(--bg);
+  --sheet: var(--surface);
+  --rule: var(--border);
+  --rule-2: var(--border-soft);
 
   /* Status = rang. Ye sirf theme nahi, ye label hai. */
-  --pickup: #4f46e5;       /* lene jaana */
-  --wash: #0d9488;         /* dhulai/istri chal rahi */
-  --ready: #15803d;        /* taiyar */
-  --deliver: #b45309;      /* pahunchana */
-  --late: #be123c;         /* der ho gayi */
+  --pickup: var(--info);       /* lene jaana         */
+  --wash: var(--busy);         /* dhulai chal rahi   */
+  --ready: var(--success);     /* taiyar             */
+  --deliver: var(--warning);   /* pahunchana         */
+  --late: var(--error);        /* der ho gayi        */
+  --ok-bg: var(--success-soft);
+  --late-bg: var(--error-soft);
 
-  --brand: #ea580c;        /* sirf primary action */
-  --brand-ink: #9a3412;
-  --ok-bg: #ecfdf5;
-  --late-bg: #fff1f2;
-
-  --tap: 46px;
-  --r: 10px;
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --r: var(--r-md);
+  /* Webfont NAHI — dekho tokens.css mein --font-system ka comment. */
+  --font: var(--font-system);
   --shadow-up: 0 -1px 0 var(--rule);
 }
 
@@ -79,7 +77,7 @@ img { max-width: 100%; height: auto; }
 .mark { display: flex; align-items: center; gap: 10px; }
 .mark i {
   width: 38px; height: 38px; border-radius: 11px; background: var(--brand);
-  color: #fff; display: grid; place-items: center; font-weight: 800;
+  color: #fff; display: grid; place-items: center; font-weight: 700;
   font-style: normal; font-size: 14px; letter-spacing: -.02em;
 }
 .mark b { font-size: 15px; letter-spacing: -.01em; }
@@ -111,11 +109,14 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
 /* ─── buttons ────────────────────────────────────────────────────────── */
 .btn {
   background: var(--ink); color: #fff; border: 0; border-radius: var(--r);
-  padding: 10px 16px; min-height: var(--tap); font-weight: 650; cursor: pointer;
+  padding: 10px 16px; min-height: var(--tap); font-weight: 600; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   text-decoration: none;
 }
-.btn.go { background: var(--brand); }          /* ek hi jagah bold rang */
+/* Safed text iske upar baithta hai, isliye --brand-strong: 5.18:1 (AA).
+   --brand par wo 3.56 hai — bade text ke liye theek, button ke label ke
+   liye nahi. */
+.btn.go { background: var(--brand-strong); }   /* ek hi jagah bold rang */
 .btn.ghost { background: var(--sheet); color: var(--ink); border: 1.5px solid var(--rule); }
 .btn.danger { background: var(--late); }
 .btn.money { background: var(--deliver); }
@@ -123,7 +124,7 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
 .btn.sm { min-height: 38px; padding: 7px 12px; font-size: 13.5px; border-radius: 8px; }
 .btn:disabled { opacity: .5; }
 .btn:active { transform: translateY(1px); }
-.linkbtn { background: none; border: 0; color: var(--brand-ink); font-weight: 650; text-decoration: underline; cursor: pointer; padding: 4px; }
+.linkbtn { background: none; border: 0; color: var(--brand-ink); font-weight: 600; text-decoration: underline; cursor: pointer; padding: 4px; }
 
 .spin {
   display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.4);
@@ -153,8 +154,8 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
 /* Ghanti par ginti — bina ginti ke ghanti par koi nazar nahi daalta */
 .bell-n {
   position: absolute; top: 4px; right: 3px; min-width: 17px; height: 17px;
-  border-radius: 9px; background: var(--brand); color: #fff;
-  font-size: 10.5px; font-weight: 800; line-height: 17px; padding: 0 4px;
+  border-radius: 9px; background: var(--brand-strong); color: var(--on-brand);
+  font-size: 10.5px; font-weight: 700; line-height: 17px; padding: 0 4px;
 }
 
 .banner {
@@ -221,7 +222,7 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
 
 .body { min-width: 0; }
 .line1 { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
-.line1 b { font-size: 14.5px; font-weight: 650; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.line1 b { font-size: 14.5px; font-weight: 600; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .line1 .amt { font-size: 14px; font-weight: 700; white-space: nowrap; }
 .line1 .amt.due { color: var(--deliver); }
 .sub {
@@ -261,7 +262,7 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
 }
 .card h3 { margin: 0 0 10px; font-size: 15px; letter-spacing: -.01em; }
 .kv { display: flex; justify-content: space-between; gap: 14px; padding: 5px 0; font-size: 13.5px; color: var(--ink-3); }
-.kv b { color: var(--ink); font-weight: 650; text-align: right; overflow-wrap: anywhere; }
+.kv b { color: var(--ink); font-weight: 600; text-align: right; overflow-wrap: anywhere; }
 
 /* ─── naya bill ──────────────────────────────────────────────────────── */
 .frow { display: grid; gap: 9px; grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); }
@@ -319,7 +320,7 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
 /* Hisaab ka khaka */
 .sums { border-top: 1.5px solid var(--rule); margin-top: 8px; padding-top: 9px; }
 .s-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13.5px; color: var(--ink-3); }
-.s-row span:last-child { color: var(--ink); font-weight: 650; }
+.s-row span:last-child { color: var(--ink); font-weight: 600; }
 .s-row.off span:last-child { color: var(--ready); }
 .s-row.big { font-size: 16px; font-weight: 700; color: var(--ink); padding-top: 6px; }
 .s-row.warn span { color: var(--deliver); font-weight: 700; }
@@ -344,7 +345,7 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
   box-shadow: 0 8px 24px rgba(19,24,32,.20);
 }
 .paybar-sum { flex: 1 1 auto; min-width: 0; }
-.paybar-sum b { display: block; font-size: 21px; font-weight: 750; letter-spacing: -.02em; }
+.paybar-sum b { display: block; font-size: 21px; font-weight: 700; letter-spacing: -.02em; }
 .paybar-sum span { display: block; font-size: 11.5px; color: rgba(255,255,255,.65); }
 .paybar .btn { flex: 0 0 auto; }
 
@@ -363,7 +364,7 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
 .acp > div:first-child { border-top: 0; }
 .acp > div:active { background: var(--rule-2); }
 .acp .none { color: var(--ink-3); font-size: 12.5px; cursor: default; }
-.picked { margin-top: 8px; font-size: 13px; font-weight: 650; color: #065f46; background: var(--ok-bg); border-radius: 8px; padding: 8px 11px; }
+.picked { margin-top: 8px; font-size: 13px; font-weight: 600; color: #065f46; background: var(--ok-bg); border-radius: 8px; padding: 8px 11px; }
 
 /* ─── bottom nav ─────────────────────────────────────────────────────── */
 .bottom {
@@ -373,7 +374,7 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
 }
 .bottom button {
   flex: 1; background: none; border: 0; padding: 8px 2px 7px; min-height: 58px;
-  font-size: 11px; font-weight: 650; color: var(--ink-3); cursor: pointer;
+  font-size: 11px; font-weight: 600; color: var(--ink-3); cursor: pointer;
   display: flex; flex-direction: column; align-items: center; gap: 3px;
 }
 .bottom button i { font-style: normal; font-size: 18px; line-height: 1; }
@@ -457,7 +458,7 @@ input[type=file] { padding: 9px; }
 .pickbtn {
   flex: 1 1 auto; min-width: auto; min-height: var(--tap);
   background: var(--sheet); border: 1.5px solid var(--rule); border-radius: var(--r);
-  padding: 10px 12px; font-size: 13.5px; font-weight: 650; color: var(--ink-2); cursor: pointer;
+  padding: 10px 12px; font-size: 13.5px; font-weight: 600; color: var(--ink-2); cursor: pointer;
 }
 .pickbtn.on { background: var(--ink); border-color: var(--ink); color: #fff; }
 h3.mt-lg { margin-top: 20px; }
@@ -476,7 +477,7 @@ h3.mt-lg { margin-top: 20px; }
   width: 100%; border: 0; border-bottom: 1px solid var(--rule);
   padding: 11px clamp(14px, 4vw, 22px); min-height: var(--tap);
   background: var(--late-bg); color: var(--late);
-  font: inherit; font-size: 13.5px; font-weight: 650; text-align: left; cursor: pointer;
+  font: inherit; font-size: 13.5px; font-weight: 600; text-align: left; cursor: pointer;
 }
 .latebar b { font-weight: 700; text-decoration: underline; white-space: nowrap; }
 .latebar:active { background: #ffe4e6; }

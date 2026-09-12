@@ -359,6 +359,7 @@ async def control_page():
     v = int(max(
         (static_dir / "control.js").stat().st_mtime,
         (static_dir / "control.css").stat().st_mtime,
+        (static_dir / "tokens.css").stat().st_mtime,
     ))
     html = html.replace("__V__", str(v))
     return _Resp(
@@ -408,10 +409,11 @@ async def staff_page():
     v = int(max(
         (static_dir / "staff.js").stat().st_mtime,
         (static_dir / "staff.css").stat().st_mtime,
+        (static_dir / "tokens.css").stat().st_mtime,
     ))
     import re as _re
 
-    html = _re.sub(r"(staff\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
+    html = _re.sub(r"((?:staff|tokens)\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
     return _Resp(
         content=html,
         media_type="text/html",

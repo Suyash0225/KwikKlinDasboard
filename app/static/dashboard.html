@@ -12,11 +12,12 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- fonts load WITHOUT blocking first paint: text shows in the system font,
      Poppins swaps in when it lands (display=swap). media-flip trick, no JS lib. -->
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap"
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap"
       rel="stylesheet" media="print" onload="this.media='all';this.onload=null">
-<noscript><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
+<noscript><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet"></noscript>
 <!-- app.css is mobile-first and carries every breakpoint — one sheet, one cascade.
      It stays render-blocking on purpose: it IS the critical CSS (too big to inline). -->
+<link rel="stylesheet" href="/admin/static/tokens.css?v=rs1">
 <link rel="stylesheet" href="/admin/static/app.css?v=rs1">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
 <script src="/admin/static/app.js?v=rs1" defer></script>

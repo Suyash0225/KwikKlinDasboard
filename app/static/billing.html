@@ -5,17 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Plan & Recharge — Kwik Klin</title>
 <meta name="description" content="Your plan, what you have used this month, and top-up packs.">
+<link rel="stylesheet" href="/admin/static/tokens.css">
 <style>
   :root {
     --bg:#f6f7fb; --card:#fff; --ink:#101828; --mut:#667085; --line:#e6e9f0;
-    --brand:#f65a2b; --brand-50:#fff1ec; --ok:#12b76a; --warn:#f59e0b; --bad:#f43f5e;
+    /* --brand tokens.css se */
+    --brand-50:var(--brand-soft); --ok:var(--success); --warn:var(--warning); --bad:var(--error);
   }
   * { box-sizing:border-box; margin:0; }
   body { background:var(--bg); color:var(--ink); font:15px/1.6 "Segoe UI",system-ui,sans-serif; padding:20px; }
   .wrap { max-width:960px; margin:0 auto; }
   header { display:flex; align-items:center; gap:12px; margin-bottom:18px; flex-wrap:wrap; }
   .logo { width:40px; height:40px; border-radius:11px; background:var(--brand); color:#fff;
-          display:grid; place-items:center; font-weight:800; }
+          display:grid; place-items:center; font-weight: 700; }
   h1 { font-size:21px; } h2 { font-size:15px; margin:26px 0 10px; color:var(--mut);
        text-transform:uppercase; letter-spacing:.6px; }
   h3 { font-size:16px; }
@@ -38,7 +40,7 @@
   button.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); font-weight:600; }
   button:focus-visible, a:focus-visible { outline:3px solid #ffd166; outline-offset:2px; }
   .pack { display:flex; flex-direction:column; gap:8px; }
-  .pack .price { font-size:24px; font-weight:800; }
+  .pack .price { font-size:24px; font-weight: 700; }
   .pack .per { color:var(--mut); font-size:13px; }
   .note { background:var(--brand-50); border:1px solid #ffd9c9; border-radius:12px; padding:14px; }
   table { width:100%; border-collapse:collapse; margin-top:8px; }

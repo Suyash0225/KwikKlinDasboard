@@ -2001,10 +2001,15 @@ async def dashboard_page(
         (static_dir / "app.js").stat().st_mtime,
         (static_dir / "app.css").stat().st_mtime,
         (static_dir / "mobile.css").stat().st_mtime,
+        # tokens.css teenon surface ka source of truth hai. Isko version
+        # mein na ginne par ek brand-rang badalne par bhi browser purani
+        # file pakde rehta — aur dikkat "kabhi-kabhi purana orange" jaisi
+        # dikhti, jo dhoondhne mein sabse mehngi hoti hai.
+        (static_dir / "tokens.css").stat().st_mtime,
     ))
     import re as _re
 
-    html = _re.sub(r"((?:app|mobile)\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
+    html = _re.sub(r"((?:app|mobile|tokens)\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
     return Response(
         content=html, media_type="text/html",
         headers={"Cache-Control": "no-cache"},
