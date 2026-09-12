@@ -652,6 +652,7 @@ function billMenu(num) {
   openModal(`<h3>${num}</h3>
     <div class="frm">
       <button class="btn ghost" onclick="closeModal();printReceiptFromOrder('${num}')">🖨 Print receipt</button>
+      <button class="btn ghost" onclick="closeModal();shareBillFromOrder('${num}')">📲 Share on WhatsApp</button>
       <button class="btn ghost" onclick="closeModal();editBillModal('${num}')">✏️ Edit bill</button>
       <button class="btn ghost danger-ic" onclick="closeModal();deleteBillModal('${num}')">🗑 Delete bill</button>
     </div>
@@ -961,7 +962,8 @@ function showBillSuccess(o) {
     <p class="muted">Total ${o.total_amount ? money(o.total_amount) : "—"} · ${esc(o.customer_name || o.customer_phone)}. Customer notified on WhatsApp; staff got the work order.</p>
     <div class="btnrow" style="margin-top:12px">
       <button class="btn ghost" onclick="printReceipt(${esc(JSON.stringify(o)).replace(/"/g, "&quot;")})">🖨 Print receipt</button>
-      <button class="btn ghost" onclick="waBill(${esc(JSON.stringify(o)).replace(/"/g, "&quot;")})">📲 Send bill on WhatsApp</button>
+      <button class="btn ghost" onclick="waBill(${esc(JSON.stringify(o)).replace(/"/g, "&quot;")})">📲 Send from shop number</button>
+      <button class="btn ghost" onclick="closeModal();shareBillModal(${esc(JSON.stringify(o)).replace(/"/g, "&quot;")})">💬 Share on WhatsApp</button>
       <button class="btn" onclick="closeModal()">Done</button>
     </div>`);
 }
@@ -981,11 +983,74 @@ function printReceipt(o) { $("receipt").textContent = receiptText(o); window.pri
 async function printReceiptFromOrder(number) {
   try { const d = await api(`/orders/${number}`); printReceipt(d.order); } catch (e) { toast(e.message, true); }
 }
+/* ---- bill ko WhatsApp par bhejna ----
+ *
+ * Do raaste hain, aur dono chahiye:
+ *
+ *   1. Dukaan ke apne WhatsApp number se (Cloud API). Sabse achha — customer
+ *      ko shop ka number dikhta hai, thread inbox mein rehta hai. Par ye tabhi
+ *      chalta hai jab tenant ne WhatsApp connect kiya ho AUR 24h window khuli ho.
+ *
+ *   2. wa.me deep link. Owner ke apne phone/WhatsApp Web se khulta hai, bill
+ *      text pehle se bhara hua. Isme koi API, token ya setup nahi chahiye —
+ *      isliye ye kabhi gayab nahi hota.
+ *
+ * Pehle sirf (1) tha, to jis dukaan ne API connect nahi kiya uske liye bill
+ * bhejne ka koi rasta hi nahi bachta tha — button dabta tha aur error aata tha.
+ * Ab (1) fail hone par seedha (2) khul jaata hai, aur (2) har bill par apne
+ * aap bhi maujood hai.
+ *
+ * window.open() ko `await` ke baad bulana popup blocker khaa jaata hai (user
+ * gesture khatam ho chuka hota hai), isliye fallback ek modal deta hai jisme
+ * asli <a> link hota hai — us par click khud user ka gesture hai. */
+
+/* wa.me sirf digits leta hai, "+" ya space ke bina. 10-ank ke local number
+ * par default country code (91) lagta hai — baaki jaisa hai waisa. */
+function waDigits(phone) {
+  const d = String(phone || "").replace(/\D/g, "").replace(/^0+/, "");
+  if (!d) return "";
+  return d.length === 10 ? "91" + d : d;
+}
+function waShareUrl(phone, text) {
+  const n = waDigits(phone);
+  return `https://wa.me/${n}?text=${encodeURIComponent(text)}`;
+}
+
+let SHARE_TEXT = "";
+
+/* Deep-link wala share — bina kisi API ke, hamesha kaam karta hai. */
+function shareBillModal(o, note) {
+  SHARE_TEXT = receiptText(o);
+  const who = displayName(o.customer_name, o.customer_phone);
+  openModal(`<h3>Share bill ${esc(o.order_number)}</h3>
+    <p class="muted">${note ? esc(note) : `WhatsApp khulega, bill pehle se likha hua — bas Send dabana hai. To: ${esc(who)}`}</p>
+    <pre class="sharetext">${esc(SHARE_TEXT)}</pre>
+    <div class="btnrow" style="margin-top:12px">
+      <a class="btn" href="${esc(waShareUrl(o.customer_phone, SHARE_TEXT))}" target="_blank" rel="noopener"
+         onclick="closeModal()">📲 Open WhatsApp</a>
+      <button class="btn ghost" onclick="copyShareText()">📋 Copy text</button>
+      <button class="btn ghost" onclick="closeModal()">Close</button>
+    </div>`);
+}
+async function copyShareText() {
+  try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied — paste it in WhatsApp"); }
+  catch (e) { toast("Could not copy — select the text above and copy manually", true); }
+}
+
+/* Bill history se: order pehle server se lao, phir share modal. */
+async function shareBillFromOrder(number) {
+  try { const d = await api(`/orders/${number}`); shareBillModal(d.order); }
+  catch (e) { toast(e.message, true); }
+}
+
 async function waBill(o) {
   try {
     await api("/admin/api/inbox/send", { method: "POST", body: { phone: o.customer_phone, text: receiptText(o) } });
     toast(T.sent);
-  } catch (e) { toast(e.message, true); }
+  } catch (e) {
+    // API connect nahi hai / window band hai / send fail — kaam ruke nahi.
+    shareBillModal(o, `Shop ke number se nahi bheja ja saka (${e.message}). Apne WhatsApp se bhej dijiye:`);
+  }
 }
 
 /* ============================= bills ============================= */
@@ -1069,6 +1134,7 @@ function billRowHtml(o, kind) {
     <div class="kv"><span>${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
     <div class="act"><button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
     <button class="btn sm ghost" onclick="printReceiptFromOrder('${o.order_number}')">Print</button>
+    <button class="btn sm ghost" onclick="shareBillFromOrder('${o.order_number}')">Share</button>
     <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button>
     <button class="btn sm ghost" onclick="editBillModal('${o.order_number}')">Edit</button>
     <button class="btn sm danger" onclick="deleteBillModal('${o.order_number}')">Delete</button></div></div>`;
