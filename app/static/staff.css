@@ -272,10 +272,85 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
 .addrow .qty label { margin-top: 0; }
 .addrow .btn { flex: 1 1 auto; min-width: auto; }
 .cart { border-top: 1px solid var(--rule); margin-top: 12px; padding-top: 8px; }
-.cartrow { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; font-size: 13.5px; align-items: center; }
-.cartrow small { color: var(--ink-3); font-size: 11.5px; }
-.cartrow .rm { background: none; border: 0; color: var(--late); font-size: 15px; min-height: 32px; min-width: 32px; cursor: pointer; }
-.total { border-top: 1.5px solid var(--rule); margin-top: 6px; padding-top: 9px; font-size: 16px; font-weight: 700; display: flex; justify-content: space-between; }
+
+/* Cart ki har line ab do manzil hai: upar naam+rakam, neeche ginti aur
+   daam badalne ke control. Ek hi line par thoos dene par 360px ke phone
+   par rate ka box teen akshar ka bachta hai. */
+.cartrow { padding: 9px 0; border-bottom: 1px solid var(--rule-2); }
+.cartrow:last-of-type { border-bottom: 0; }
+.ci-top { display: flex; align-items: baseline; gap: 8px; }
+.ci-name { flex: 1 1 auto; min-width: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.ci-name small { color: var(--ink-3); font-size: 11.5px; }
+.ci-amt { font-size: 14px; font-weight: 700; white-space: nowrap; }
+.cartrow .rm {
+  background: none; border: 0; color: var(--late); font-size: 15px;
+  min-height: 32px; min-width: 32px; cursor: pointer; flex: 0 0 auto;
+}
+.ci-edit { display: flex; gap: 10px; align-items: center; margin-top: 7px; }
+
+/* − 2 + : geele haath aur ek angootha. Keyboard tabhi khule jab sach
+   mein koi anokhi ginti bharni ho. */
+.stepper { display: flex; align-items: stretch; }
+.stepper input {
+  width: 62px; text-align: center; border-radius: 0;
+  border-left: 0; border-right: 0; min-height: var(--tap); padding: 8px 2px;
+}
+.stepper .step {
+  flex: 0 0 auto; width: 42px; min-height: var(--tap);
+  background: var(--sheet); border: 1.5px solid var(--rule);
+  font-size: 19px; font-weight: 700; color: var(--ink-2); cursor: pointer;
+}
+.stepper .step:first-child { border-radius: var(--r) 0 0 var(--r); }
+.stepper .step:last-child { border-radius: 0 var(--r) var(--r) 0; }
+.stepper .step:active { background: var(--rule-2); }
+.stepper.sm input { width: 48px; min-height: 40px; }
+.stepper.sm .step { width: 36px; min-height: 40px; font-size: 17px; }
+
+/* Daam badalne ka box. Card ka daam neeche chhota likha rehta hai —
+   bina uske do din baad koi nahi bata sakta ki chhoot di gayi thi. */
+.ratebox { position: relative; flex: 1 1 auto; min-width: 0; }
+.ratebox .cur {
+  position: absolute; left: 10px; top: 9px; color: var(--ink-3);
+  font-size: 13.5px; pointer-events: none;
+}
+.ratebox input { min-height: 40px; padding: 8px 10px 8px 24px; font-size: 15px; }
+.ratebox small { display: block; font-size: 10.5px; color: var(--ink-3); margin-top: 2px; }
+
+/* Hisaab ka khaka */
+.sums { border-top: 1.5px solid var(--rule); margin-top: 8px; padding-top: 9px; }
+.s-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13.5px; color: var(--ink-3); }
+.s-row span:last-child { color: var(--ink); font-weight: 650; }
+.s-row.off span:last-child { color: var(--ready); }
+.s-row.big { font-size: 16px; font-weight: 700; color: var(--ink); padding-top: 6px; }
+.s-row.warn span { color: var(--deliver); font-weight: 700; }
+
+/* Chhoot: ₹/% ek taraf, ginti doosri — dono ek hi line par, kyunki ye ek
+   hi sawaal hai. */
+.discrow { display: flex; gap: 9px; align-items: center; }
+.discrow input { flex: 1 1 auto; min-width: 0; }
+.pick.sm { flex: 0 0 auto; }
+.pick.sm .pickbtn { min-width: 52px; padding: 9px 10px; }
+.pick.mb { margin-bottom: 12px; }
+
+/* Neeche chipki hui patti: kul rakam hamesha aankh ke saamne. Pehle
+   "Create bill" cart ke neeche tha aur das item ke baad scroll ho kar
+   gayab ho jaata tha. */
+.paybar {
+  position: sticky; bottom: 74px; z-index: 7;
+  display: flex; align-items: center; gap: 12px;
+  margin: 12px clamp(14px, 4vw, 22px);
+  padding: 11px 13px; border-radius: 14px;
+  background: var(--ink); color: #fff;
+  box-shadow: 0 8px 24px rgba(19,24,32,.20);
+}
+.paybar-sum { flex: 1 1 auto; min-width: 0; }
+.paybar-sum b { display: block; font-size: 21px; font-weight: 750; letter-spacing: -.02em; }
+.paybar-sum span { display: block; font-size: 11.5px; color: rgba(255,255,255,.65); }
+.paybar .btn { flex: 0 0 auto; }
+
+/* Sujhaav mein udhaar — chunne se PEHLE dikhna chahiye */
+.acdue { margin-left: auto; padding-left: 10px; color: var(--deliver); font-weight: 700; font-size: 12.5px; white-space: nowrap; }
+.picked.owes { color: var(--brand-ink); background: #fff7ed; }
 
 .ac-wrap { position: relative; }
 .acp {
@@ -348,6 +423,9 @@ input[type=file] { padding: 9px; }
   .toasts { left: auto; right: 24px; width: min(360px, 90vw); bottom: 24px; }
   .modal-ov { align-items: center; }
   .modal { border-radius: 18px; max-width: 540px; }
+  /* Bade screen par nav fixed nahi hai, isliye patti ko uski jagah
+     chhodne ki zaroorat bhi nahi. */
+  .paybar { bottom: 14px; }
 }
 
 [hidden] { display: none !important; }

@@ -173,9 +173,15 @@ async function start() {
 /* Har role ka pehla sawaal alag hai, isliye pehla tab bhi alag ho sakta
    hai — par sabke liye "Kaam" hi ghar hai. Bill alag jagah hai (pehle wo
    New-bill screen ke neeche chipka tha aur kisi ko milta hi nahi tha). */
+/* Plan `billing` kehta hai ki DUKAAN bill bana sakti hai; `can_bill` kehta
+   hai ki YE aadmi bana sakta hai (washerman nahi). Dono server se aate hain
+   aur dono ek hi jagah se padhe jaate hain — isliye tab dikhna aur API ka
+   maanna kabhi alag nahi ho sakte. */
+const canBill = () => ME.can_bill && ME.features.includes("billing");
+
 function navItems() {
   const out = [["work", "🧺", "Work"]];
-  if (ME.features.includes("billing")) {
+  if (canBill()) {
     out.push(["bills", "🧾", "Bills"], ["new", "＋", "New"]);
   }
   if (ME.is_manager && ME.features.includes("staff_reports")) out.push(["team", "👥", "Team"]);
@@ -561,25 +567,57 @@ function decideCancel(code) {
   $("m-no").onclick = (e) => send(e, false);
 }
 
-function askCollect(order, due) {
+async function askCollect(order, due) {
   // ₹250.50 due par "251" bharna server se "Only ₹250 is due" laata tha
   const dueStr = Number.isInteger(due) ? String(due) : due.toFixed(2);
+  // Purana udhaar bhi saamne rakhte hain. Delivery wala darwaze par ek hi
+  // baar khada hota hai — wahi ek mauka hai poora paisa maangne ka.
+  let prev = 0, prevBills = 0;
+  try {
+    const d = await api(`/orders/${encodeURIComponent(order)}/dues`);
+    prev = d.previous_due || 0; prevBills = d.previous_bills || 0;
+  } catch (e) { /* na mile to sirf is bill ka paisa — kaam rukta nahi */ }
+  const grand = Math.round((due + prev) * 100) / 100;
+
   openModal(`<h3>${esc(order)} — payment received</h3>
-    <p class="said">${money(due)} due</p>
+    <p class="said">${money(due)} is bill ka${prev > 0 ? ` · ${money(prev)} pichhla (${prevBills} bill)` : ""}</p>
+    ${prev > 0 ? `<div class="pick sm mb">
+      <button type="button" class="pickbtn on" data-only="1">Sirf ye bill<br><b>${money(due)}</b></button>
+      <button type="button" class="pickbtn" data-only="0">Kul dena hai<br><b>${money(grand)}</b></button>
+    </div>` : ""}
     <label for="m-amt">Amount</label>
-    <input id="m-amt" type="number" inputmode="decimal" value="${dueStr}" min="1" max="${dueStr}" step="0.01">
+    <input id="m-amt" type="number" inputmode="decimal" value="${dueStr}" min="1" step="0.01">
+    ${prev > 0 ? `<p class="hint" id="m-note2">Purana chukane par paisa sabse purane bill se lagega.</p>` : ""}
     <div class="btnrow">
       <button class="btn ghost" id="m-cash">💵 Cash</button>
       <button class="btn go" id="m-upi">📱 UPI</button>
     </div>
     <div class="btnrow"><button class="btn ghost" data-act="close">Not now</button></div>`);
+
+  let settlePrev = false;
+  document.querySelectorAll("[data-only]").forEach((b) => {
+    b.onclick = () => {
+      settlePrev = b.dataset.only === "0";
+      document.querySelectorAll("[data-only]").forEach((x) => x.classList.toggle("on", x === b));
+      $("m-amt").value = settlePrev ? String(grand) : dueStr;
+    };
+  });
+
   const send = (e, method) => {
     const amount = parseFloat($("m-amt").value);
+    const ceiling = settlePrev ? grand : due;
     if (!(amount > 0)) { toast("Enter the amount", true); return; }
-    if (amount > due + 0.01) { toast(`Only ${money(due)} is due`, true); return; }
+    if (amount > ceiling + 0.01) { toast(`Only ${money(ceiling)} is due`, true); return; }
     return busy(e.currentTarget, async () => {
-      const r = await api(`/orders/${encodeURIComponent(order)}/collect`, { method: "POST", body: { amount, method } });
-      closeModal(); toast(`${money(amount)} received ✅ — ${money(r.due)} left`);
+      const r = await api(`/orders/${encodeURIComponent(order)}/collect`, {
+        method: "POST", body: { amount, method, settle_previous: settlePrev },
+      });
+      closeModal();
+      const older = (r.settled_older || []).length;
+      toast(
+        `${money(amount)} received ✅ — ${money(r.due)} left`
+        + (older ? ` · ${older} purana bill chukta` : ""),
+      );
       loadToday(); refreshCurrent({ quiet: true });
     });
   };
@@ -722,11 +760,21 @@ async function shareBill(number) {
    bill par lagta hai. Do jagah do hisaab kabhi nahi. */
 
 let RATES = null, CART = [], PICKED = "", NEEDS_PICKUP = false;
+// Chhoot: mode "amt" ya "pct", aur ek value. Do alag field rakhne par log
+// dono bhar dete hain aur phir poochte hain ki kaunsa laga.
+let DISC = { mode: "amt", value: 0 };
+// Chune hue purane grahak ka baaki. Naye grahak par 0.
+let PREV_DUE = 0, PREV_BILLS = 0;
 
 async function showNewBill() {
   $("chips").innerHTML = "";
   if (!ME.features.includes("billing")) {
     $("list").innerHTML = `<div class="empty"><b>Billing is not in this plan</b>Ask the owner to upgrade.</div>`;
+    return;
+  }
+  if (!ME.can_bill) {
+    $("list").innerHTML = `<div class="empty"><b>Bill counter par banta hai</b>
+      Aapke role mein bill banana nahi hai. Manager ya delivery wale se kahein.</div>`;
     return;
   }
   if (RATES === null) {
@@ -768,9 +816,13 @@ async function showNewBill() {
       <div class="addrow">
         <div class="qty">
           <label for="b-qty">Qty</label>
-          <input id="b-qty" type="number" inputmode="decimal" value="1" min="0.1" step="0.5">
+          <div class="stepper">
+            <button type="button" class="step" data-step="-1" aria-label="One less">−</button>
+            <input id="b-qty" type="number" inputmode="decimal" value="1" min="0.1" step="0.5">
+            <button type="button" class="step" data-step="1" aria-label="One more">+</button>
+          </div>
         </div>
-        <button class="btn ghost" id="b-add">Add</button>
+        <button class="btn go" id="b-add">Add</button>
       </div>
       <div id="b-cart"></div>
     </div>
@@ -782,10 +834,26 @@ async function showNewBill() {
         <button type="button" class="pickbtn" data-pickup="1">Collect from customer</button>
       </div>
       <p class="hint" id="b-pickhint">The washing queue gets this bill.</p>
+
+      <h3 class="mt-lg">Discount</h3>
+      <div class="discrow">
+        <div class="pick sm">
+          <button type="button" class="pickbtn on" data-disc="amt">₹</button>
+          <button type="button" class="pickbtn" data-disc="pct">%</button>
+        </div>
+        <input id="b-disc" type="number" inputmode="decimal" value="0" min="0" placeholder="0">
+      </div>
+
       <h3 class="mt-lg">Payment</h3>
       <label for="b-adv">Received now (₹)</label>
       <input id="b-adv" type="number" inputmode="decimal" value="0" min="0">
-      <button class="btn go wide" id="b-save">Create bill</button>
+    </div>
+
+    <!-- Kul rakam hamesha aankh ke saamne. Counter par sabse zaroori number
+         yahi hai, aur pehle wo cart ke andar scroll ho kar chhup jaata tha. -->
+    <div class="paybar" id="b-bar" hidden>
+      <div class="paybar-sum" id="b-barsum"></div>
+      <button class="btn go" id="b-save">Create bill</button>
     </div>`;
 
   const fillItems = () => {
@@ -796,16 +864,48 @@ async function showNewBill() {
   };
   fillItems();
   $("b-svc").onchange = fillItems;
+
+  // Geele haath, dhoop, ek haath — 0.5 badhane ke liye keyboard kholna
+  // sazaa hai. Stepper se ek tap.
+  $("list").querySelectorAll("[data-step]").forEach((b) => {
+    b.onclick = () => {
+      const cur = parseFloat($("b-qty").value) || 0;
+      const next = Math.round((cur + parseFloat(b.dataset.step)) * 10) / 10;
+      $("b-qty").value = String(Math.max(0.5, next));
+    };
+  });
+
   $("b-add").onclick = () => {
     const svc = $("b-svc").value, item = $("b-item").value;
     const qty = parseFloat($("b-qty").value);
     if (!(qty > 0)) return toast("Enter how many", true);
-    const rate = (RATES.find((r) => r.service === svc && r.garment === item) || {}).rate || 0;
+    const card = (RATES.find((r) => r.service === svc && r.garment === item) || {}).rate || 0;
     const same = CART.find((x) => x.service === svc && x.garment === item);
-    if (same) same.qty += qty; else CART.push({ service: svc, garment: item, qty, rate });
+    // Wahi cheez dobara jodi to sirf ginti badhti hai — par uska badla hua
+    // rate waisa ka waisa rehta hai, warna mol-bhav har baar mit jaata.
+    if (same) same.qty = Math.round((same.qty + qty) * 100) / 100;
+    else CART.push({ service: svc, garment: item, qty, rate: card, card });
     $("b-qty").value = "1";
     renderCart();
   };
+
+  // Chhoot ka mode. ₹ se % par jaate hi value ka matlab badal jaata hai,
+  // isliye value shunya kar dete hain — "50" ka 50% ban jaana chori hai.
+  DISC = { mode: "amt", value: 0 };
+  $("list").querySelectorAll("[data-disc]").forEach((b) => {
+    b.onclick = () => {
+      DISC.mode = b.dataset.disc;
+      DISC.value = 0;
+      $("b-disc").value = "0";
+      $("list").querySelectorAll("[data-disc]").forEach((x) => x.classList.toggle("on", x === b));
+      renderCart();
+    };
+  });
+  $("b-disc").oninput = () => {
+    DISC.value = Math.max(0, parseFloat($("b-disc").value) || 0);
+    renderCart();
+  };
+  $("b-adv").oninput = renderCart;
   // Kapde kahan hain — yahi tay karta hai ki bill washer ki kataar mein
   // jayega ya delivery wale ke raaste mein. Pehle ye sawaal poocha hi
   // nahi jaata tha, isliye har bill washer ko jaata tha aur phone par
@@ -825,22 +925,99 @@ async function showNewBill() {
   renderCart();
 }
 
+/* Ek hisaab, ek jagah. UI aur server dono yahi kram lagate hain:
+   gross -> chhoot -> total -> advance -> is bill ka due -> + purana. */
+function billMath() {
+  const gross = CART.reduce((s, i) => s + i.qty * i.rate, 0);
+  const raw = DISC.mode === "pct" ? (gross * DISC.value) / 100 : DISC.value;
+  const discount = Math.min(Math.round(raw * 100) / 100, gross);
+  const total = Math.round((gross - discount) * 100) / 100;
+  const adv = Math.min(Math.max(0, parseFloat(($("b-adv") || {}).value) || 0), total);
+  const due = Math.round((total - adv) * 100) / 100;
+  return { gross, discount, total, adv, due, grand: Math.round((due + PREV_DUE) * 100) / 100 };
+}
+
 function renderCart() {
   const box = $("b-cart");
   if (!box) return;
-  $("b-pay").hidden = CART.length === 0;
-  if (!CART.length) { box.innerHTML = ""; return; }
-  const total = CART.reduce((s, i) => s + i.qty * i.rate, 0);
+  const empty = CART.length === 0;
+  $("b-pay").hidden = empty;
+  $("b-bar").hidden = empty;
+  if (empty) { box.innerHTML = ""; return; }
+
+  const m = billMath();
+  // Har line ka daam badla ja sakta hai. Rate card ka daam saath dikhta
+  // rehta hai — bina uske do din baad kisi ko yaad nahi rehta ki chhoot
+  // di gayi thi ya galti hui thi.
   box.innerHTML = `<div class="cart">${CART.map((i, n) => `
     <div class="cartrow">
-      <span>${esc(i.garment)} <small>${esc(i.service)}</small> × ${i.qty}</span>
-      <b>${money(i.qty * i.rate)}
-        <button class="rm" data-rm="${n}" aria-label="Remove">✕</button></b>
+      <div class="ci-top">
+        <span class="ci-name">${esc(i.garment)} <small>${esc(i.service)}</small></span>
+        <b class="ci-amt">${money(i.qty * i.rate)}</b>
+        <button class="rm" data-rm="${n}" aria-label="Remove">✕</button>
+      </div>
+      <div class="ci-edit">
+        <div class="stepper sm">
+          <button type="button" class="step" data-q="${n}" data-by="-1" aria-label="One less">−</button>
+          <input type="number" inputmode="decimal" data-qty="${n}" value="${i.qty}" min="0.1" step="0.5">
+          <button type="button" class="step" data-q="${n}" data-by="1" aria-label="One more">+</button>
+        </div>
+        <div class="ratebox">
+          <span class="cur">₹</span>
+          <input type="number" inputmode="decimal" data-rate="${n}" value="${i.rate}" min="0" aria-label="Rate">
+          <small>${i.rate === i.card ? "rate card" : "card ₹" + i.card}</small>
+        </div>
+      </div>
     </div>`).join("")}
-    <div class="total"><span>Total</span><span>${money(total)}</span></div></div>`;
+    <div class="sums">
+      <div class="s-row"><span>Subtotal</span><span>${money(m.gross)}</span></div>
+      ${m.discount > 0 ? `<div class="s-row off"><span>Discount${
+        DISC.mode === "pct" ? ` (${DISC.value}%)` : ""
+      }</span><span>−${money(m.discount)}</span></div>` : ""}
+      <div class="s-row big"><span>Total</span><span>${money(m.total)}</span></div>
+      ${m.adv > 0 ? `<div class="s-row"><span>Received now</span><span>−${money(m.adv)}</span></div>` : ""}
+      ${PREV_DUE > 0 ? `<div class="s-row warn"><span>Pichhla baaki (${PREV_BILLS})</span><span>${money(PREV_DUE)}</span></div>` : ""}
+    </div></div>`;
+
   box.querySelectorAll("[data-rm]").forEach((b) => {
-    b.onclick = () => { CART.splice(parseInt(b.dataset.rm), 1); renderCart(); };
+    b.onclick = () => { CART.splice(parseInt(b.dataset.rm, 10), 1); renderCart(); };
   });
+  box.querySelectorAll("[data-q]").forEach((b) => {
+    b.onclick = () => {
+      const i = CART[parseInt(b.dataset.q, 10)];
+      i.qty = Math.max(0.5, Math.round((i.qty + parseFloat(b.dataset.by)) * 10) / 10);
+      renderCart();
+    };
+  });
+  // input par re-render nahi karte: har akshar par DOM badalne se cursor
+  // field se kood jaata hai aur "40" likhna namumkin ho jaata hai. Sirf
+  // sums update karte hain; poora cart change (blur) par.
+  box.querySelectorAll("[data-qty],[data-rate]").forEach((inp) => {
+    const idx = parseInt(inp.dataset.qty ?? inp.dataset.rate, 10);
+    const isRate = inp.dataset.rate !== undefined;
+    inp.oninput = () => {
+      const v = parseFloat(inp.value);
+      if (!(v >= 0)) return;
+      CART[idx][isRate ? "rate" : "qty"] = v;
+      paintBar();
+    };
+    inp.onchange = () => {
+      if (!(CART[idx].qty > 0)) CART[idx].qty = 0.5;
+      renderCart();
+    };
+  });
+  paintBar();
+}
+
+/* Neeche chipki hui patti — kul rakam aur ek button. */
+function paintBar() {
+  const bar = $("b-barsum");
+  if (!bar) return;
+  const m = billMath();
+  bar.innerHTML = PREV_DUE > 0
+    ? `<b>${money(m.grand)}</b><span>${money(m.due)} is bill ka + ${money(PREV_DUE)} purana</span>`
+    : `<b>${money(m.due)}</b><span>${CART.length} item${CART.length > 1 ? "s" : ""}${
+        m.discount > 0 ? " · " + money(m.discount) + " chhoot" : ""}</span>`;
 }
 
 /* Naam likhte hi purana grahak. Counter par sabse badi galti yahi hoti
@@ -853,7 +1030,9 @@ function wireCustomerSearch() {
   const input = $("b-name"), box = $("b-ac");
   if (!input || !box) return;
   input.oninput = () => {
-    PICKED = ""; $("b-picked").hidden = true; $("b-phone").disabled = false;
+    PICKED = ""; PREV_DUE = 0; PREV_BILLS = 0;
+    $("b-picked").hidden = true; $("b-phone").disabled = false;
+    renderCart();
     const q = input.value.trim();
     clearTimeout(AC_TIMER);
     if (q.length < 2) { box.innerHTML = ""; return; }
@@ -865,18 +1044,26 @@ function wireCustomerSearch() {
       if (mine !== AC_SEQ) return;                // dheema jawab purani list na dikhaye
       AC_HITS = hits;
       box.innerHTML = hits.length
-        ? hits.map((c, i) => `<div data-pick="${i}">${esc(c.name || "No name")} · ${esc(c.phone_masked)}</div>`).join("")
+        ? hits.map((c, i) => `<div data-pick="${i}">${esc(c.name || "No name")} · ${esc(c.phone_masked)}${
+            c.due > 0 ? `<span class="acdue">${money(c.due)} baaki</span>` : ""}</div>`).join("")
         : `<div class="none">New customer — enter the number below</div>`;
       box.querySelectorAll("[data-pick]").forEach((row) => {
         row.onclick = () => {
           const c = AC_HITS[parseInt(row.dataset.pick, 10)];
           if (!c) return;
           PICKED = c.ref;
+          PREV_DUE = c.due || 0;
+          PREV_BILLS = c.due_bills || 0;
           input.value = c.name || "";
           box.innerHTML = "";
           $("b-phone").value = ""; $("b-phone").disabled = true;
           $("b-picked").hidden = false;
-          $("b-picked").textContent = `✓ ${c.name || "Customer"} · ${c.phone_masked}`;
+          // Purana udhaar yahin, is pal — grahak abhi saamne khada hai.
+          $("b-picked").className = PREV_DUE > 0 ? "picked owes" : "picked";
+          $("b-picked").textContent = PREV_DUE > 0
+            ? `⚠ ${c.name || "Customer"} · ${money(PREV_DUE)} pichhla baaki (${PREV_BILLS} bill)`
+            : `✓ ${c.name || "Customer"} · ${c.phone_masked}`;
+          renderCart();
         };
       });
     }, 250);
@@ -893,6 +1080,7 @@ async function saveBill(btn) {
   const phone = $("b-phone").value.trim();
   if (!PICKED && phone.replace(/\D/g, "").length < 10) return toast("Enter the full number", true);
   if (!CART.length) return toast("Add items first", true);
+  const m = billMath();
   await busy(btn, async () => {
     const r = await api("/bills", {
       method: "POST",
@@ -900,13 +1088,28 @@ async function saveBill(btn) {
         customer_ref: PICKED,
         customer_phone: PICKED ? "" : phone,
         customer_name: $("b-name").value.trim(),
-        advance: parseFloat($("b-adv").value) || 0,
+        advance: m.adv,
+        // Server dono nahi maanta — jo mode chuna hai wahi bhejte hain,
+        // doosra hamesha 0. Warna "kaunsa laga" ka jawab do jagah se aata.
+        discount_amount: DISC.mode === "amt" ? DISC.value : 0,
+        discount_percent: DISC.mode === "pct" ? DISC.value : 0,
         needs_pickup: NEEDS_PICKUP,
-        items: CART.map((i) => ({ service: i.service, garment: i.garment, qty: i.qty })),
+        items: CART.map((i) => ({
+          service: i.service, garment: i.garment, qty: i.qty,
+          // Card ka daam hi hai to rate bhejte hi nahi — server card se
+          // lagayega. Sirf sach mein badla hua daam override banta hai.
+          ...(i.rate !== i.card ? { rate: i.rate } : {}),
+        })),
       },
     });
-    CART = []; PICKED = "";
-    toast(`${r.order_number} created — ${money(r.total)}`, false, 5000);
+    CART = []; PICKED = ""; PREV_DUE = 0; PREV_BILLS = 0;
+    DISC = { mode: "amt", value: 0 };
+    toast(
+      r.previous_due > 0
+        ? `${r.order_number} — ${money(r.grand_total)} lena hai (${money(r.previous_due)} purana)`
+        : `${r.order_number} created — ${money(r.total)}`,
+      false, 5000,
+    );
     showNewBill();
     loadToday();
     // Grahak saamne khada hai — bill turant bhej dein
