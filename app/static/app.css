@@ -766,6 +766,17 @@ b.subhead { display: block; font-size: 13.5px; }
 
 .notice { background: var(--warn-50); border: 1px solid #fde68a; color: #92400e; border-radius: var(--radius-sm); padding: 10px 14px; font-size: 12.5px; margin-bottom: 12px; }
 
+/* WhatsApp share modal ka bill preview — wahi text jo bheja jaayega, monospace
+   mein taaki receipt ki lines seedhi dikhein. Lamba bill scroll ho jaata hai. */
+.sharetext {
+  margin: 10px 0 0; max-height: 240px; overflow: auto;
+  background: var(--n50); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.5; color: var(--n700);
+  white-space: pre-wrap; word-break: break-word;
+}
+
 /* bottom tab bar — thumb-zone nav on phones/tablets, gone on desktop */
 .tabbar {
   display: grid; position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
