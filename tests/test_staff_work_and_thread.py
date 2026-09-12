@@ -288,3 +288,51 @@ async def test_task_list_does_not_query_per_task(client, two_shops, sent) -> Non
         async with async_session_factory() as db:
             await db.execute(sqltext("DELETE FROM tasks WHERE code = ANY(:c)"), {"c": made})
             await db.commit()
+
+
+async def test_a_bill_that_needs_pickup_reaches_the_delivery_boy(
+    client, two_shops, delivery_guy, sent  # noqa: F811
+) -> None:
+    """Manager counter par bill banaye — kapde ghar par hon to delivery
+    wale ko dikhe, dukaan mein hon to washer ko.
+
+    Pehle har bill RECEIVED banta tha ("kapde dukaan mein hain"), aur
+    delivery wale ka panel sirf PICKUP_ASSIGNED/READY/OUT_FOR_DELIVERY
+    dikhata hai — to phone par aaya "lene aa jao" wala order uske paas
+    kabhi pahunchta hi nahi tha. `pickup_date` field maujood thi par
+    kisi cheez par asar nahi karti thi.
+    """
+    from decimal import Decimal
+
+    from app.models import Rate
+
+    tok = tenant_context.current_tenant_id.set(two_shops["a"])
+    try:
+        async with async_session_factory() as db:
+            db.add(Rate(service="PickSvc", garment="Shirt", unit="pc", rate=Decimal("30")))
+            await db.commit()
+    finally:
+        tenant_context.current_tenant_id.reset(tok)
+
+    await _login(client, A_MGR_PHONE)
+    try:
+        pickup = (await client.post("/staff/api/bills", json={
+            "customer_phone": DEL_CUST, "customer_name": "Ghar Wala",
+            "items": [{"service": "PickSvc", "garment": "Shirt", "qty": 2}],
+            "needs_pickup": True,
+        })).json()["order_number"]
+        walkin = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Counter Wala",
+            "items": [{"service": "PickSvc", "garment": "Shirt", "qty": 1}],
+        })).json()["order_number"]
+        client.cookies.clear()
+
+        await _login(client, DEL_PHONE)
+        stops = {s["number"] for s in (await client.get("/staff/api/route")).json()["stops"]}
+        assert pickup in stops, "lene jaane wala bill delivery wale ko dikhna chahiye"
+        assert walkin not in stops, "dukaan mein pade kapde delivery wale ka kaam nahi hain"
+    finally:
+        client.cookies.clear()
+        async with async_session_factory() as db:
+            await db.execute(sqltext("DELETE FROM rate_card WHERE service = 'PickSvc'"))
+            await db.commit()

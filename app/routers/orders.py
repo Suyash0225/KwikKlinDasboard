@@ -448,6 +448,10 @@ async def create_order(body: OrderCreateIn, db: AsyncSession = Depends(get_db)) 
             discount_amount=body.discount_amount,
             gst_amount=body.gst_amount,
             pickup_date=body.pickup_date,
+            # pickup_date bhara hai matlab kapde lene jaane hain — ab ye
+            # sach mein order ko delivery wale ki list mein daalta hai.
+            # Pehle ye field sirf DB mein padi rehti thi.
+            needs_pickup=body.pickup_date is not None,
             expected_delivery=body.expected_delivery,
             notes=body.notes,
             created_by="manager",

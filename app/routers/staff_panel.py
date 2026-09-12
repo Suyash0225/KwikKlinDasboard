@@ -759,6 +759,10 @@ class BillIn(BaseModel):
     customer_ref: str = Field(default="", max_length=64)
     items: list[BillItemIn] = Field(min_length=1, max_length=30)
     advance: float = Field(default=0, ge=0)
+    # Kapde dukaan mein hain (grahak khud laaya) ya lene jaana hai?
+    # Isi ek jawab se tay hota hai ki order delivery wale ke panel mein
+    # aayega ya washer ke. Default: dukaan mein — counter par yahi aam hai.
+    needs_pickup: bool = False
 
 
 @router.post("/bills", dependencies=[Depends(require_staff_feature("billing"))], status_code=201)
@@ -845,6 +849,7 @@ async def create_bill(
         expected_delivery=_date.today() + _td(days=max(turnaround, 1)),
         advance_hint=Decimal(str(body.advance)) if body.advance else None,
         created_by=p.staff.name,
+        needs_pickup=body.needs_pickup,
     )
     # Advance ko paisa maankar ledger mein likhte hain — create ke baad,
     # wahi rasta jo dashboard ke New Bill par hai.

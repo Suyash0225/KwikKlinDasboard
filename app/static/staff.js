@@ -721,7 +721,7 @@ async function shareBill(number) {
 /* Daam staff nahi bharta — rate card se aata hai, wahi jo WhatsApp wale
    bill par lagta hai. Do jagah do hisaab kabhi nahi. */
 
-let RATES = null, CART = [], PICKED = "";
+let RATES = null, CART = [], PICKED = "", NEEDS_PICKUP = false;
 
 async function showNewBill() {
   $("chips").innerHTML = "";
@@ -776,7 +776,13 @@ async function showNewBill() {
     </div>
 
     <div class="card" id="b-pay" hidden>
-      <h3>Payment</h3>
+      <h3>Where are the clothes?</h3>
+      <div class="pick">
+        <button type="button" class="pickbtn on" data-pickup="0">At the shop</button>
+        <button type="button" class="pickbtn" data-pickup="1">Collect from customer</button>
+      </div>
+      <p class="hint" id="b-pickhint">The washing queue gets this bill.</p>
+      <h3 class="mt-lg">Payment</h3>
       <label for="b-adv">Received now (₹)</label>
       <input id="b-adv" type="number" inputmode="decimal" value="0" min="0">
       <button class="btn go wide" id="b-save">Create bill</button>
@@ -800,6 +806,20 @@ async function showNewBill() {
     $("b-qty").value = "1";
     renderCart();
   };
+  // Kapde kahan hain — yahi tay karta hai ki bill washer ki kataar mein
+  // jayega ya delivery wale ke raaste mein. Pehle ye sawaal poocha hi
+  // nahi jaata tha, isliye har bill washer ko jaata tha aur phone par
+  // aaya "lene aa jao" wala order delivery wale ko kabhi nahi dikhta tha.
+  NEEDS_PICKUP = false;
+  $("list").querySelectorAll("[data-pickup]").forEach((b) => {
+    b.onclick = () => {
+      NEEDS_PICKUP = b.dataset.pickup === "1";
+      $("list").querySelectorAll("[data-pickup]").forEach((x) => x.classList.toggle("on", x === b));
+      $("b-pickhint").textContent = NEEDS_PICKUP
+        ? "Goes to the delivery route as a pickup."
+        : "The washing queue gets this bill.";
+    };
+  });
   $("b-save").onclick = (e) => saveBill(e.currentTarget);
   wireCustomerSearch();
   renderCart();
@@ -881,6 +901,7 @@ async function saveBill(btn) {
         customer_phone: PICKED ? "" : phone,
         customer_name: $("b-name").value.trim(),
         advance: parseFloat($("b-adv").value) || 0,
+        needs_pickup: NEEDS_PICKUP,
         items: CART.map((i) => ({ service: i.service, garment: i.garment, qty: i.qty })),
       },
     });

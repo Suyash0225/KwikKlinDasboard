@@ -109,6 +109,7 @@ async def create_order(
     discount_amount: Decimal | None = None,
     gst_amount: Decimal | None = None,
     pickup_date: date | None = None,
+    needs_pickup: bool = False,
     expected_delivery: date | None = None,
     notes: str | None = None,
     created_by: str = "system",
@@ -187,7 +188,7 @@ async def create_order(
     order = Order(
         order_number=order_number,
         customer_id=customer.id,
-        status=OrderStatus.RECEIVED,
+        status=OrderStatus.PICKUP_ASSIGNED if needs_pickup else OrderStatus.RECEIVED,
         items=items,
         total_amount=total_amount,
         discount_amount=discount_amount,
@@ -202,7 +203,7 @@ async def create_order(
         OrderStatusHistory(
             order_id=order.id,
             old_status=None,
-            new_status=OrderStatus.RECEIVED,
+            new_status=OrderStatus.PICKUP_ASSIGNED if needs_pickup else OrderStatus.RECEIVED,
             changed_by=created_by,
         )
     )
@@ -268,6 +269,28 @@ async def create_order(
         )
     except Exception:
         log.exception("order_admin_fyi_failed", order_number=order_number)
+    # Kapde grahak ke ghar hain — delivery wale ko lene jaana hai.
+    #
+    # Pehle har bill RECEIVED banta tha, yaani "kapde dukaan mein hain".
+    # Delivery wale ka panel sirf PICKUP_ASSIGNED / READY / OUT_FOR_DELIVERY
+    # dikhata hai, isliye counter par bana koi bhi bill uske paas kabhi
+    # pahunchta hi nahi tha — chahe wo phone par aaya order ho jise lene
+    # jaana hai. `pickup_date` field maujood thi par sirf store hoti thi,
+    # kisi cheez par asar nahi karti thi.
+    if needs_pickup:
+        try:
+            from app.services.work_orders import send_work_order
+
+            await send_work_order(
+                db, order,
+                headline=f"🛵 Pickup: {customer.name or phone}",
+                extra=((customer.address or "").strip() or "Address customer se poochein"),
+                role="DELIVERY",
+            )
+        except Exception:
+            # Kaam panel mein to dikh hi jayega — WhatsApp na jaana order
+            # banne se nahi rok sakta.
+            log.exception("pickup_work_order_failed", order_number=order_number)
     _announce(order, "created", by=created_by)
     return order
 
