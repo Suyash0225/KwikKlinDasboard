@@ -379,13 +379,27 @@ async function loadWork(opts = {}) {
   MORE_LEFT = (route.stops.length >= PAGE) || (tasks.tasks.length >= PAGE);
   WORK.sort((a, b) => (b.late - a.late) || (b.urgent - a.urgent));
   $("chips").innerHTML = workChips();
-  $("chips").querySelectorAll("[data-chip]").forEach((b) => {
-    b.onclick = () => { FILTER = b.dataset.chip; $("chips").innerHTML = workChips();
-      $("chips").querySelectorAll("[data-chip]").forEach((x) => { x.onclick = b.onclick; });
-      renderWork(); };
-  });
   renderWork();
 }
+
+/* Chips ka ek hi listener, container par — har chip par apna handler
+ * nahi. Pehle yahan wo handler dobara chipkaya jaata tha jo abhi dabaya
+ * gaya tha (`x.onclick = b.onclick`), aur wo closure PURANE `b` par band
+ * tha. Yani "Washing" dabate hi har chip ka matlab "Washing" ho jaata
+ * tha — doosra filter chunna namumkin, jab tak list dobara load na ho.
+ *
+ * Container kabhi dobara nahi banta, sirf uska andar ka HTML badalta hai,
+ * isliye ye listener ek hi baar lagta hai aur hamesha us chip ko padhta
+ * hai jispar sach mein tap hua.
+ */
+$("chips").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-chip]");
+  if (!b) return;
+  FILTER = b.dataset.chip;
+  if (NAV === "bills") { loadBills(); return; }
+  $("chips").innerHTML = workChips();
+  renderWork();
+});
 
 function renderWork() {
   const rows = WORK.filter((w) =>
@@ -677,9 +691,7 @@ async function loadBills(opts = {}) {
   if (ME.is_manager) chips.push(["mine", "Mine"]);
   $("chips").innerHTML = chips.map(([v, l]) =>
     `<button data-chip="${v}" class="${FILTER === v ? "on" : ""}">${l}</button>`).join("");
-  $("chips").querySelectorAll("[data-chip]").forEach((b) => {
-    b.onclick = () => { FILTER = b.dataset.chip; loadBills(); };
-  });
+  // Wiring upar wale delegated listener se — yahan dobara nahi.
 
   if (!BILLS.length) {
     $("list").innerHTML = q
