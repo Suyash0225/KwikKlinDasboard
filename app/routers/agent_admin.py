@@ -758,11 +758,35 @@ async def list_tasks(
         q = q.where(Task.status == status)
     rows = (await db.execute(q)).scalars().all()
 
+    # Staff ke sawaal. Ab tak ye DB mein likhe jaate the aur kahin dikhte
+    # nahi the — owner ko khabar sirf WhatsApp par jaati thi, aur API juda
+    # na ho to kahin nahi. Ek hi query mein sabke liye, warna sau task par
+    # sau round-trip.
+    #
+    # "Bina jawab ka" = us task ka aakhri sandesh staff ka hai. Ginti nahi,
+    # kram dekhte hain: owner ne jawab de diya aur staff ne phir se poocha,
+    # to wo dobara bina jawab ka hai.
+    from app.models import TaskMessage
+
+    threads: dict = {}
+    if rows:
+        msgs = (
+            await db.execute(
+                select(TaskMessage)
+                .where(TaskMessage.task_id.in_([t.id for t in rows]))
+                .order_by(TaskMessage.at)
+            )
+        ).scalars().all()
+        for m in msgs:
+            threads.setdefault(m.task_id, []).append(m)
+
     now = datetime.now(timezone.utc)
     out = []
     for t in rows:
         staff = await db.get(_S, t.assigned_staff_id) if t.assigned_staff_id else None
         order = await db.get(_O, t.order_id) if t.order_id else None
+        thread = threads.get(t.id, [])
+        waiting = bool(thread) and thread[-1].author_kind == "staff"
         out.append(
             {
                 "id": str(t.id), "code": t.code, "title": t.title,
@@ -774,6 +798,10 @@ async def list_tasks(
                 "ping_count": t.ping_count,
                 "escalated": t.escalated_at is not None,
                 "age_hours": int((now - t.created_at).total_seconds() // 3600),
+                # Sawaal ka hisaab — card par badge, sheet mein poora thread
+                "msg_count": len(thread),
+                "awaiting_reply": waiting,
+                "last_question": thread[-1].text[:160] if waiting else None,
                 # detail card ke liye — kab aakhri baar poocha aur unhone
                 # kya samay diya; ye pehle sirf DB mein tha, kahin dikhta nahi
                 "last_ping_at": t.last_ping_at.isoformat() if t.last_ping_at else None,
@@ -911,12 +939,10 @@ async def reply_to_task(
 
     delivered = False
     staff = await db.get(_S, task.assigned_staff_id) if task.assigned_staff_id else None
+    wa_text = f"[{task.code}] {task.title}\n\nJawab: {text[:500]}"
     if staff is not None:
         try:
-            await send_message(
-                db, to_phone=staff.phone,
-                text=f"[{task.code}] {task.title}\n\nJawab: {text[:500]}",
-            )
+            await send_message(db, to_phone=staff.phone, text=wa_text)
             delivered = True
         except SendError as exc:
             # Panel mein to dikh hi jayega — WhatsApp fail hona jawab ko
@@ -926,7 +952,18 @@ async def reply_to_task(
         actor_role="admin", actor="dashboard", action="task_replied",
         args={"code": task.code}, result=text[:150],
     )
-    return {"ok": True, "whatsapp": delivered}
+    # API se na gaya? To owner ke apne phone ka WhatsApp hai. Number aur
+    # bana-banaya text wapas bhejte hain taaki dashboard ek wa.me link de
+    # sake — wahi rasta jo staff panel bill share karne ke liye use karta
+    # hai. Bina iske jawab sirf panel mein baithta hai aur staff ko tab
+    # tak pata nahi chalta jab tak wo khud khol kar na dekhe.
+    return {
+        "ok": True,
+        "whatsapp": delivered,
+        "staff_phone": (staff.phone if staff is not None and not delivered else None),
+        "staff_name": (staff.name if staff is not None else None),
+        "wa_text": (wa_text if not delivered else None),
+    }
 
 
 @router.post("/jobs/task-followups")

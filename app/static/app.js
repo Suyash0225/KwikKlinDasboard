@@ -1681,7 +1681,9 @@ function renderTasks() {
         ${t.order_number ? `<span class="badge">${esc(t.order_number)}</span>` : ""}
         ${t.ping_count ? `<span class="badge">reminded ${t.ping_count}×</span>` : ""}
         ${t.escalated ? `<span class="badge warn">escalated to you</span>` : ""}
+        ${t.awaiting_reply ? `<span class="badge warn">❓ sawaal — jawab baaki</span>` : ""}
       </div>
+      ${t.awaiting_reply ? `<div class="tc-reply">❓ ${esc(t.staff || "they")}: ${esc(t.last_question)}</div>` : ""}
       ${t.reply ? `<div class="tc-reply">💬 ${esc(t.staff || "they")}: ${esc(t.reply)}</div>` : ""}
       ${open ? `
       <div class="tc-acts" onclick="event.stopPropagation()">
@@ -1693,15 +1695,18 @@ function renderTasks() {
   }).join("") + `</div>`;
 }
 
+/* Tareekh ka ek hi roop — pehle ye taskDetail ke andar band tha, isliye
+   thread use nahi kar pata tha. */
+const when = (s) => (s ? new Date(s).toLocaleString("en-IN", {
+  day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+}) : "—");
+
 /* Card par click -> poori kahani ek jagah: kise diya, kab, kitni baar
    yaad dilaya, usne kya kaha. Pehle ye sab kahin dikhta hi nahi tha. */
 function taskDetail(code) {
   const t = TASKS.find((x) => x.code === code);
   if (!t) return;
   const open = t.status === "OPEN";
-  const when = (s) => (s ? new Date(s).toLocaleString("en-IN", {
-    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
-  }) : "—");
   const row = (k, v) => `<div class="dt-row"><span>${k}</span><b>${v}</b></div>`;
   openModal(`
     <h3>${t.urgent ? "🔴 " : ""}${esc(t.title)}</h3>
@@ -1721,6 +1726,7 @@ function taskDetail(code) {
       ${t.completed_at ? row("Closed", when(t.completed_at)) : ""}
     </div>
     ${t.reply ? `<div class="tc-reply" style="margin-top:12px">💬 ${esc(t.staff || "they")}: ${esc(t.reply)}</div>` : ""}
+    <div id="tt-box"></div>
     <div class="btnrow">
       <button class="btn ghost" onclick="closeModal()">Close</button>
       ${open ? `
@@ -1728,7 +1734,68 @@ function taskDetail(code) {
         <button class="btn ghost" onclick="cancelTask('${t.code}', this, true)">Cancel task</button>
         <button class="btn" onclick="doneTask('${t.code}', this, true)">Mark done</button>` : ""}
     </div>`);
+  if (t.msg_count) loadTaskThread(t.code);
 }
+
+/* Staff ke sawaal aur unke jawab — wahi thread jo panel mein dikhta hai.
+ *
+ * Ye poora rasta backend mein pehle se bana pada tha (/tasks/{code}/messages
+ * aur /reply), par dashboard mein use bulane wala kuch nahi tha. Yani staff
+ * ka sawaal DB mein likha jata tha aur wahin mar jata tha: owner ko na
+ * koi screen milti thi, na — WhatsApp API juda na ho to — koi khabar.
+ *
+ * Isliye thread task ke andar hai, alag page par nahi: sawaal hamesha kisi
+ * ek kaam ke baare mein hota hai, aur uska jawab dene ke liye wahi kaam
+ * saamne hona chahiye. */
+async function loadTaskThread(code) {
+  const box = document.getElementById("tt-box");
+  if (!box) return;
+  box.innerHTML = `<div class="muted" style="margin-top:12px">Loading…</div>`;
+  let th;
+  try { th = await api(`/admin/api/tasks/${code}/messages`); }
+  catch (e) { box.innerHTML = `<div class="muted" style="margin-top:12px">${esc(e.message)}</div>`; return; }
+  if (!document.getElementById("tt-box")) return;      // sheet band ho gayi
+  box.innerHTML = `
+    <div class="tt-thread">
+      ${th.messages.map((m) => `
+        <div class="tt-msg ${m.who === "staff" ? "them" : "us"}">
+          ${esc(m.text)}
+          <span class="tt-at">${esc(m.who === "staff" ? m.name : "Aapne")} · ${when(m.at)}</span>
+        </div>`).join("")}
+    </div>
+    <textarea id="tt-text" rows="2" placeholder="Jawab likhein…"></textarea>
+    <div class="btnrow" style="margin-top:8px">
+      <button class="btn" onclick="sendTaskReply('${code}', this)">Send reply</button>
+    </div>
+    <div id="tt-wa"></div>`;
+}
+
+async function sendTaskReply(code, btn) {
+  const el = document.getElementById("tt-text");
+  const text = (el.value || "").trim();
+  if (text.length < 2) { toast("Jawab likhein pehle", true); return; }
+  await busy(btn, async () => {
+    const r = await api(`/admin/api/tasks/${code}/reply`, { method: "POST", body: { text } });
+    el.value = "";
+    await loadTaskThread(code);
+    loadTasks();
+    if (r.whatsapp) { toast("Jawab bhej diya"); return; }
+    // WhatsApp API se nahi gaya. Jawab panel mein to dikh hi raha hai, par
+    // staff ko tab tak pata nahi chalega jab tak wo khud khole. Owner ke
+    // apne phone ka WhatsApp hamesha hai — wahi rasta jo staff panel bill
+    // share karne ke liye use karta hai: link par tap khud user ka gesture
+    // hai, isliye popup blocker ise nahi rokta.
+    toast("Panel mein chala gaya — WhatsApp se bhejna ho to neeche");
+    const wa = document.getElementById("tt-wa");
+    if (wa && r.staff_phone) {
+      wa.innerHTML = `<div class="btnrow" style="margin-top:8px">
+        <a class="btn" target="_blank" rel="noopener"
+           href="${esc(waShareUrl(r.staff_phone, r.wa_text))}">📲 ${esc(r.staff_name || "Staff")} ko WhatsApp par bhejein</a>
+      </div>`;
+    }
+  });
+}
+
 
 /* Task ke teen kaam: pooch lo, band karo, radd karo.
  *
