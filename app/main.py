@@ -100,6 +100,23 @@ async def tenant_scope(request: Request, call_next):
     if path.startswith("/admin/static/") or path == "/health":
         return await call_next(request)  # no tenant data behind these
 
+    # Platform surfaces — kisi ek dukaan ke nahi, sabki: vendor control
+    # panel (key-gated) aur Razorpay ka webhook (jis dukaan ka paisa aaya,
+    # wo notes se nikalti hai). Ye SYSTEM context mein chalte hain, home
+    # mein nahi — warna invoices/billing_events par RLS lagte hi control
+    # panel ko sirf home dikhta aur doosri dukaan ka invoice insert hi na
+    # hota (WITH CHECK). Rate limit ke liye home ki id hi key rehti hai.
+    if path.startswith("/control") or path == "/webhooks/razorpay":
+        home = await tenant_context.get_home_tenant_id()
+        if home is not None and _rate_limited(home, path):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Bahut tezi se requests — thoda ruk kar try karein."},
+                headers={"Retry-After": "30"},
+            )
+        async with _noop():
+            return await call_next(request)
+
     tid = None
     # Staff panel ka apna rasta: tenant us aadmi ke TOKEN se aata hai.
     # Login se pehle (token nahi hai) context system rehta hai — us waqt
