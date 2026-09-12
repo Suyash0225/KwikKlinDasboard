@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     # deploy chalta rahe), par startup par WARNING. Banane ke liye:
     #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     TOKEN_ENCRYPTION_KEY: str = ""
+    # Vendor (platform) ka apna master key — /control ke liye. Pehle
+    # ADMIN_API_KEY hi dukaan ka bhi tha aur vendor ka bhi: ek string leak =
+    # home dukaan ka dashboard AUR sab 60 dukaanon ka control, dono khule.
+    # Khali = ADMIN_API_KEY hi chalta hai (purana deploy), par WARNING.
+    VENDOR_API_KEY: str = ""
 
     # --- Shop / locale ---
     SHOP_NAME: str

@@ -203,6 +203,20 @@ def _key_matches(candidate: str) -> bool:
         return False
 
 
+def vendor_master_key() -> str:
+    """/control ka master key. VENDOR_API_KEY set ho to wahi — ADMIN_API_KEY
+    (dukaan ka key) control par NAHI chalta. Set na ho to purana raasta:
+    ADMIN_API_KEY hi, taaki ek-dukaan wala deploy bina .env badle chale."""
+    return settings.VENDOR_API_KEY or settings.ADMIN_API_KEY
+
+
+def _vendor_key_matches(candidate: str) -> bool:
+    try:
+        return hmac.compare_digest(candidate, vendor_master_key())
+    except TypeError:
+        return False
+
+
 async def require_admin_owner(
     request: Request, _: None = Depends(require_admin_key)
 ) -> None:
@@ -243,14 +257,14 @@ VENDOR_SESSION_HOURS = 8
 
 
 def mint_vendor_token(level: str, label: str, kid: str = "env") -> str:
-    """Signed, self-contained session token (HMAC over ADMIN_API_KEY)."""
+    """Signed, self-contained session token (HMAC over the vendor master key)."""
     import base64
     import hashlib
 
     exp = int(time.time()) + VENDOR_SESSION_HOURS * 3600
     payload = f"{level}|{label}|{kid}|{exp}"
     sig = hmac.new(
-        settings.ADMIN_API_KEY.encode(), payload.encode(), hashlib.sha256
+        vendor_master_key().encode(), payload.encode(), hashlib.sha256
     ).hexdigest()
     raw = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
     return f"{raw}.{sig}"
@@ -266,7 +280,7 @@ async def verify_vendor_token(token: str) -> tuple[str, str] | None:
         raw, sig = token.split(".", 1)
         payload = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode()
         expected = hmac.new(
-            settings.ADMIN_API_KEY.encode(), payload.encode(), hashlib.sha256
+            vendor_master_key().encode(), payload.encode(), hashlib.sha256
         ).hexdigest()
         if not hmac.compare_digest(expected, sig):
             return None
@@ -333,8 +347,8 @@ async def require_vendor_key(
     level: str | None = None
     label = "env-key"
     kid = "env"
-    if _key_matches(x_api_key):
-        level = "danger"  # legacy master key
+    if _vendor_key_matches(x_api_key):
+        level = "danger"  # vendor master key (VENDOR_API_KEY, ya legacy ADMIN_API_KEY)
     elif x_api_key:
         import hashlib as _hl
         from datetime import datetime as _dt, timezone as _tz

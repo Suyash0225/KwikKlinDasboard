@@ -24,6 +24,36 @@ configure_logging()
 log = structlog.get_logger()
 
 
+async def _multi_tenant_hardening_check() -> None:
+    """60 dukaanon se pehle jo pakka hona chahiye — nahi hai to ERROR log."""
+    from sqlalchemy import func, select
+
+    from app.database import async_session_factory
+    from app.models.tenant import WRITABLE_STATUSES, Tenant
+
+    async with async_session_factory() as db:
+        n = (
+            await db.execute(
+                select(func.count()).select_from(Tenant).where(Tenant.status.in_(WRITABLE_STATUSES))
+            )
+        ).scalar_one()
+    if n <= 1:
+        return
+    gaps: list[str] = []
+    if not settings.TOKEN_ENCRYPTION_KEY:
+        gaps.append("TOKEN_ENCRYPTION_KEY empty — WhatsApp tokens stored in plaintext")
+    if not settings.VENDOR_API_KEY:
+        gaps.append("VENDOR_API_KEY empty — shop ADMIN_API_KEY doubles as vendor master key")
+    elif settings.VENDOR_API_KEY == settings.ADMIN_API_KEY:
+        gaps.append("VENDOR_API_KEY equals ADMIN_API_KEY — one leak opens both")
+    if settings.ADMIN_API_KEY.startswith("change-me"):
+        gaps.append("ADMIN_API_KEY is the .env.example placeholder")
+    if gaps:
+        log.error("multi_tenant_hardening_incomplete", active_tenants=n, gaps=gaps)
+    else:
+        log.info("multi_tenant_hardening_ok", active_tenants=n)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("startup", shop=settings.SHOP_NAME, environment=settings.ENVIRONMENT)
@@ -35,6 +65,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await tenant_context.get_home_tenant_id()
     except Exception:
         log.exception("home_tenant_prime_failed")
+
+    # Multi-tenant hardening check: ek se zyada dukaan aur secrets/keys
+    # single-shop wale hi hain to shuru mein hi chilla do. Rokta nahi —
+    # existing deploy chalta rahe — par log mein ERROR, har restart par.
+    try:
+        await _multi_tenant_hardening_check()
+    except Exception:
+        log.exception("hardening_check_failed")
 
     scheduler.start()
     # owner's edited message formats survive restarts
