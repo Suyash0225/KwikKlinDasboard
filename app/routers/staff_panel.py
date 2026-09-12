@@ -1417,6 +1417,73 @@ async def order_receipt(
     return {"phone": cust.phone, "name": cust.name or "Customer", "text": "\n".join(lines)}
 
 
+@router.post("/orders/{number}/remind")
+async def send_payment_reminder(
+    number: str,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Us grahak ko paise ki yaad dilao — abhi, haath se.
+
+    Scheduler khud 3 din / 15 din par yaad dilata hai, par wo dono cheezein
+    maanta hai jo yahan sach nahi hoti: ki order deliver ho chuka hai, aur
+    ki dukaan ka WhatsApp API juda hai. Counter par khada aadmi in dono ka
+    intezaar nahi kar sakta.
+
+    Text WAHI hai jo scheduler bhejta hai (`get_message`) — do raston se do
+    alag bhasha nahi. Aur agar API se na jaye to number + text wapas aata
+    hai taaki panel wa.me link de sake: staff ke apne phone ka WhatsApp
+    hamesha hai, dukaan ka API bhale na ho.
+    """
+    from app.services.messages import get_message
+    from app.services.whatsapp import SendError, send_message
+
+    order = await _my_order(db, p, number)
+    cust = await db.get(Customer, order.customer_id)
+    if cust is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    # Jisne mana kar diya use yaad nahi dilate — chahe panel se ho ya
+    # scheduler se. Ye grahak ka faisla hai, raste ka nahi.
+    if cust.opted_out or not cust.is_active:
+        raise HTTPException(status_code=400, detail="Is grahak ne message band karwa diye hain")
+
+    due = float((order.total_amount or 0) - (order.amount_paid or 0))
+    if due <= 0.009:
+        raise HTTPException(status_code=400, detail="Is bill ka paisa chukta hai")
+    prev, prev_bills = await customer_outstanding(db, cust.id, exclude_order_id=order.id)
+
+    text = get_message("payment_reminder", order_number=order.order_number, amount=f"{due:.0f}")
+    if prev > 0:
+        # Ek hi message mein poora sach — warna grahak is bill ka paisa
+        # dekar samajhta hai ki hisaab saaf ho gaya.
+        text += f"\n\nPichhla baaki: ₹{prev:.0f} ({prev_bills} bill). Kul: ₹{due + prev:.0f}"
+
+    sent = False
+    try:
+        await send_message(db, to_phone=cust.phone, text=text)
+        sent = True
+    except SendError as exc:
+        log.info("panel_reminder_api_failed", order=order.order_number, error=str(exc))
+
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="payment_reminder_manual",
+        args={"order": order.order_number, "due": due, "previous_due": prev,
+              "via": "api" if sent else "wa_link"},
+        result="sent" if sent else "fallback", tenant_id=p.staff.tenant_id,
+    )
+    return {
+        "sent": sent,
+        "due": round(due, 2),
+        "previous_due": prev,
+        # API se chala gaya to number bhejne ki zaroorat nahi — panel
+        # hamesha masked dikhata hai, aur poora number sirf tab jab wo
+        # sach mein chahiye (aur tab wo audit ho chuka hota hai).
+        "phone": None if sent else cust.phone,
+        "name": cust.name or "Customer",
+        "text": None if sent else text,
+    }
+
+
 @router.post("/orders/{number}/photo", status_code=201)
 async def attach_photo(
     number: str,

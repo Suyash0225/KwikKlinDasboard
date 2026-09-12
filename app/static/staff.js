@@ -707,6 +707,7 @@ async function loadBills(opts = {}) {
     b.onclick = () => {
       const num = b.closest("[data-num]").dataset.num;
       if (b.dataset.bill === "share") return shareBill(num);
+      if (b.dataset.bill === "remind") return remindBill(num, b);
       if (b.dataset.bill === "pay") return askCollect(num, parseFloat(b.dataset.due));
     };
   });
@@ -728,6 +729,7 @@ function billRow(b) {
       <div class="sub">${esc(b.number)} · ${esc(b.created)}${b.items ? " · " + esc(b.items) : ""}</div>
       <div class="acts">
         <button class="btn ghost sm" data-bill="share">🧾 Send</button>
+        ${b.due > 0 ? `<button class="btn ghost sm" data-bill="remind">🔔 Yaad dilao</button>` : ""}
         ${ME.features.includes("cod_collection") && b.due > 0
           ? `<button class="btn money sm" data-bill="pay" data-due="${b.due}">Collect</button>` : ""}
       </div>
@@ -765,6 +767,36 @@ async function shareBill(number) {
     try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied"); }
     catch (e) { toast("Could not copy — select the text above", true); }
   };
+}
+
+/* ─── paise ki yaad ─────────────────────────────────────────────────── */
+/* Scheduler khud 3 din / 15 din par yaad dilata hai, par wo maanta hai ki
+   order deliver ho chuka hai AUR dukaan ka WhatsApp API juda hai. Counter
+   par khada aadmi in dono ka intezaar nahi kar sakta — isliye ek button.
+
+   API se chala gaya to bas ek toast. Na gaya to wahi rasta jo bill share
+   karta hai: staff ke apne phone ka WhatsApp, text bhara hua. */
+async function remindBill(number, btn) {
+  await busy(btn, async () => {
+    const r = await api(`/orders/${encodeURIComponent(number)}/remind`, { method: "POST" });
+    if (r.sent) {
+      toast(`${r.name} ko yaad dila diya 🔔`);
+      return;
+    }
+    openModal(`<h3>Yaad dilayein</h3>
+      <p class="said">Dukaan ka WhatsApp API se nahi ja paya. Apne phone se bhej dijiye — ${esc(r.name)} ko.</p>
+      <pre class="sharetext">${esc(r.text)}</pre>
+      <div class="btnrow">
+        <a class="btn go" href="${esc(waUrl(r.phone, r.text))}" target="_blank" rel="noopener" data-act="close">📲 WhatsApp kholein</a>
+        <button class="btn ghost" id="m-copy">Copy</button>
+      </div>
+      <div class="btnrow"><button class="btn ghost" data-act="close">Band karein</button></div>`);
+    SHARE_TEXT = r.text;
+    $("m-copy").onclick = async () => {
+      try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied"); }
+      catch (e) { toast("Copy nahi hua — upar se select kar lijiye", true); }
+    };
+  });
 }
 
 /* ─── naya bill ─────────────────────────────────────────────────────── */

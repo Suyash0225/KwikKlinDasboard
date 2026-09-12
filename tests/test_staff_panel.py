@@ -1531,3 +1531,114 @@ async def test_dues_endpoint_answers_kitna_dena_hai(client, two_shops, sent) -> 
         assert r2["due"] == 80.0 and r2["previous_due"] == 30.0
     finally:
         await _drop_rate()
+
+
+# ------------------------------------------------------- paise ki yaad ----
+
+
+async def test_reminder_falls_back_to_a_wa_link_when_the_api_is_down(
+    client, two_shops, sent, monkeypatch
+) -> None:
+    """Dukaan ka WhatsApp juda na ho to yaad dilana rukna nahi chahiye.
+
+    Yahi is dukaan ka aam din hai: API dummy token par hai. Us haalat mein
+    server number aur bana-banaya text lautata hai taaki panel staff ke
+    APNE phone ka WhatsApp khol sake.
+    """
+    from app.services import whatsapp as wa_mod
+
+    await _panel_rate(two_shops["a"])
+    await _login(client, A_DEL_PHONE)
+    try:
+        bill = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Yaad Grahak",
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 2}],   # 80
+        })).json()
+
+        async def _dead(*a, **k):
+            raise wa_mod.SendError("no credentials")
+
+        monkeypatch.setattr("app.services.whatsapp.send_message", _dead)
+        r = await client.post(f"/staff/api/orders/{bill['order_number']}/remind")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["sent"] is False
+        assert body["due"] == 80.0
+        assert body["phone"] == CUST_A, "fallback ke liye poora number chahiye"
+        assert bill["order_number"] in body["text"]
+        assert "80" in body["text"]
+    finally:
+        await _drop_rate()
+
+
+async def test_reminder_carries_the_old_balance_and_keeps_the_number_hidden(
+    client, two_shops, sent, monkeypatch
+) -> None:
+    """API se chala gaya to number lautana bekaar hai — panel hamesha
+    masked dikhata hai. Aur message mein pichhla baaki bhi hona chahiye,
+    warna grahak is bill ka paisa dekar samajhta hai hisaab saaf ho gaya."""
+    sends: list = []
+
+    async def _ok(db, **k):
+        sends.append(k)
+        return {"ok": True}
+
+    await _panel_rate(two_shops["a"])
+    await _login(client, A_DEL_PHONE)
+    try:
+        await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Purana Grahak",
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 2}],   # 80
+        })
+        second = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A,
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 1}],   # 40
+        })).json()
+
+        monkeypatch.setattr("app.services.whatsapp.send_message", _ok)
+        r = await client.post(f"/staff/api/orders/{second['order_number']}/remind")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["sent"] is True
+        assert body["phone"] is None and body["text"] is None
+        assert body["previous_due"] == 80.0
+
+        assert len(sends) == 1
+        text = sends[0]["text"]
+        assert "Pichhla baaki: ₹80" in text
+        assert "Kul: ₹120" in text
+    finally:
+        await _drop_rate()
+
+
+async def test_reminder_respects_opt_out_and_a_paid_bill(
+    client, two_shops, sent
+) -> None:
+    """Mana kar chuke grahak ko yaad nahi dilate, aur chukta bill par to
+    sawal hi nahi. Ye grahak ka faisla hai, raste ka nahi — panel ka
+    button scheduler se dheela nahi hona chahiye."""
+    await _panel_rate(two_shops["a"])
+    await _login(client, A_DEL_PHONE)
+    try:
+        paid = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Chukta Grahak",
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 1}],   # 40
+            "advance": 40,
+        })).json()
+        r = await client.post(f"/staff/api/orders/{paid['order_number']}/remind")
+        assert r.status_code == 400 and "chukta" in r.json()["detail"]
+
+        due = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A,
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 1}],
+        })).json()
+        async with async_session_factory() as db:
+            await db.execute(
+                sqltext("UPDATE customers SET opted_out = true WHERE phone = :p"),
+                {"p": CUST_A},
+            )
+            await db.commit()
+        r = await client.post(f"/staff/api/orders/{due['order_number']}/remind")
+        assert r.status_code == 400, r.text
+    finally:
+        await _drop_rate()
