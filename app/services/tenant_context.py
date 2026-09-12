@@ -133,3 +133,133 @@ async def tenant_id_for_staff_token(token: str) -> uuid.UUID | None:
         return None
     finally:
         current_tenant_id.reset(prev)
+
+
+# ---------------------------------------------------------------------------
+# Tenant ka owner number + scheduler ke liye per-tenant loop
+# ---------------------------------------------------------------------------
+#
+# Pehle har "owner ko batao" wali jagah settings.MANAGER_PHONE padhti thi —
+# yaani .env wali EK dukaan ka number. Ek dukaan tak theek tha; 60 vendor
+# mein vendor B ka daily summary vendor A ke malik ko jaata. Ab number
+# context se aata hai: HTTP request par middleware set karta hai, scheduler
+# har tenant ke liye as_tenant() ke andar chalta hai. Context na ho (purana
+# single-shop rasta, tests) to .env wala hi milta hai — kuch tootta nahi.
+
+current_owner_phone: ContextVar[str | None] = ContextVar(
+    "current_owner_phone", default=None
+)
+
+
+def manager_phone() -> str:
+    """Abhi ke tenant ka owner number; context na ho to .env MANAGER_PHONE."""
+    from app.config import settings
+
+    return current_owner_phone.get() or settings.MANAGER_PHONE
+
+
+# tenant_id -> owner_phone. Har request par tenants table mat maaro; 5 min
+# ka cache kaafi hai (owner number saal mein ek baar badalta hai).
+_OWNER_TTL_S = 300
+_owner_cache: dict[uuid.UUID, tuple[str, float]] = {}
+
+
+def invalidate_owner_cache(tid: uuid.UUID | None = None) -> None:
+    if tid is None:
+        _owner_cache.clear()
+    else:
+        _owner_cache.pop(tid, None)
+
+
+async def owner_phone_for(tid: uuid.UUID | None) -> str | None:
+    """Tenant ka owner_phone — cached. tenants table RLS-scoped nahi hai,
+    isliye system context se bhi padh sakte hain."""
+    import time
+
+    if tid is None:
+        return None
+    hit = _owner_cache.get(tid)
+    if hit and hit[1] > time.monotonic():
+        return hit[0]
+    from app.database import async_session_factory
+    from app.models.tenant import Tenant
+
+    try:
+        async with async_session_factory() as db:
+            t = await db.get(Tenant, tid)
+    except Exception:
+        log.exception("owner_phone_lookup_failed", tenant=str(tid))
+        return None
+    phone = _valid_phone(t.owner_phone if t else None)
+    if phone:
+        _owner_cache[tid] = (phone, time.monotonic() + _OWNER_TTL_S)
+    return phone
+
+
+def _valid_phone(raw: str | None) -> str | None:
+    """E.164 ya None. Placeholder (+910000000000, bootstrap ka default) ya
+    kachra number par None — tab manager_phone() .env wale par gir jaata
+    hai, aur normalize_phone() call-site par kabhi nahi phat-ta."""
+    from app.utils.phone import normalize_phone
+
+    if not raw or not str(raw).strip():
+        return None
+    try:
+        return normalize_phone(str(raw))
+    except ValueError:
+        return None
+
+
+class as_tenant:
+    """`async with as_tenant(tid):` — is block ke andar sab kuch us tenant
+    ka hai: ORM filter, RLS GUC, naye rows ka stamp, send_message ke creds,
+    manager_phone(). Bahar nikalte hi context wapas jaisa tha.
+
+    Scheduler isi se har dukaan ka kaam alag-alag chalata hai. HTTP par
+    middleware yahi kaam karta hai; ye uska scheduler-side jud.wa hai.
+    """
+
+    def __init__(self, tid: uuid.UUID, owner_phone: str | None = None):
+        self.tid = tid
+        self.owner_phone = owner_phone
+        self._t1 = None
+        self._t2 = None
+
+    async def __aenter__(self):
+        phone = self.owner_phone or await owner_phone_for(self.tid)
+        self._t1 = current_tenant_id.set(self.tid)
+        self._t2 = current_owner_phone.set(phone)
+        return self
+
+    async def __aexit__(self, *exc):
+        current_owner_phone.reset(self._t2)
+        current_tenant_id.reset(self._t1)
+        return False
+
+
+async def active_tenants() -> list[tuple[uuid.UUID, str, str]]:
+    """(id, slug, owner_phone) un dukaanon ka jinke liye proactive kaam
+    (reminders, standup, summary) chalna chahiye — trial ya active. Band
+    (locked/suspended/cancelled) dukaan ke customers ko kuch nahi jaata.
+    System context mein chalta hai — tenants table RLS ke bahar hai."""
+    from sqlalchemy import select
+
+    from app.database import async_session_factory
+    from app.models.tenant import WRITABLE_STATUSES, Tenant
+
+    async with async_session_factory() as db:
+        rows = (
+            await db.execute(
+                select(Tenant.id, Tenant.slug, Tenant.owner_phone)
+                .where(Tenant.status.in_(WRITABLE_STATUSES))
+                .order_by(Tenant.created_at)
+            )
+        ).all()
+    return [(r[0], r[1], _valid_phone(r[2]) or "") for r in rows]
+
+
+def claim_prefix() -> str:
+    """sent_events ki key global hai (tenant_id nahi) — do dukaanon ka
+    'daysum:2026-09-12' takraye nahi, isliye tenant ka chhota hash aage."""
+    tid = current_tenant_id.get()
+    return f"t{tid.hex[:8]}:" if tid else ""

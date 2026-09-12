@@ -33,6 +33,7 @@ from app.services.messages import get_message, status_label
 from app.services.order_service import ACTIVE_STATUSES
 from app.services.whatsapp import SendError, WindowClosedError, send_message
 from app.services.work_orders import items_summary
+from app.services.tenant_context import manager_phone
 
 log = structlog.get_logger()
 
@@ -90,10 +91,18 @@ def _in_quiet_hours(now_ist: datetime) -> bool:
     return start_h <= h < end_h
 
 
+def _key(event_key: str) -> str:
+    """sent_events ki key global hai — tenant ka prefix lagao, warna dukaan
+    A ka 'daysum:2026-09-12' dukaan B ka summary rok deta."""
+    from app.services.tenant_context import claim_prefix
+
+    return (claim_prefix() + event_key)[:120]
+
+
 async def _claim(event_key: str) -> bool:
     """Atomically claim an idempotency key. False = already sent."""
     async with async_session_factory() as s:
-        s.add(SentEvent(event_key=event_key[:120]))
+        s.add(SentEvent(event_key=_key(event_key)))
         try:
             await s.commit()
             return True
@@ -109,7 +118,7 @@ async def _unclaim(event_key: str) -> None:
 
     try:
         async with async_session_factory() as s:
-            await s.execute(delete(SentEvent).where(SentEvent.event_key == event_key[:120]))
+            await s.execute(delete(SentEvent).where(SentEvent.event_key == _key(event_key)))
             await s.commit()
     except Exception:
         log.exception("unclaim_failed", event_key=event_key)
@@ -135,9 +144,38 @@ async def _durability_tick() -> None:
         log.exception("outbox_drain_failed")
 
 
+async def _for_each_tenant(job_name: str, fn) -> None:
+    """Har chalu dukaan ke liye fn(now_ist) alag context mein.
+
+    Pehle ye jobs bina tenant ke chalti thin — RLS band, ORM filter band —
+    to daily summary SAB dukaanon ke order gin kar .env wale malik ko jaata
+    tha, aur payment reminder doosri dukaan ke grahak ko is dukaan ke
+    number se. Ab har dukaan apne context mein: apna data, apna WhatsApp
+    number, apna malik. Ek dukaan ka crash doosri ko nahi rokta."""
+    from app.services.tenant_context import active_tenants, as_tenant
+
+    try:
+        tenants = await active_tenants()
+    except Exception:
+        log.exception("tenant_list_failed", job=job_name)
+        return
+    now_ist = datetime.now(IST)
+    for tid, slug, owner_phone in tenants:
+        try:
+            async with as_tenant(tid, owner_phone or None):
+                await fn(now_ist)
+        except Exception:
+            log.exception("tenant_job_failed", job=job_name, tenant=slug)
+
+
 async def _hourly_tick() -> None:
     """One entry point, so a bad hour never skips the others silently."""
-    now_ist = datetime.now(IST)
+    await _for_each_tenant("hourly", _hourly_for_tenant)
+    await _hourly_platform(datetime.now(IST))
+
+
+async def _hourly_for_tenant(now_ist: datetime) -> None:
+    """Ek dukaan ka ghante ka kaam — context set hai, sab scoped hai."""
     try:
         async with async_session_factory() as db:
             standup_hour = int(await app_settings.get(db, "standup_hour"))
@@ -182,7 +220,7 @@ async def _hourly_tick() -> None:
                 ).scalar_one()
                 try:
                     await send_message(
-                        db, to_phone=settings.MANAGER_PHONE,
+                        db, to_phone=manager_phone(),
                         text=f"📊 Mahine ki marketing report:\nLeads: {stages}\nSTOP kiye hue: {stops}",
                     )
                 except SendError as exc:
@@ -233,40 +271,6 @@ async def _hourly_tick() -> None:
             await run_daily_social()
     except Exception:
         log.exception("daily_social_failed")
-    # Meta block watcher: probe hourly; the moment access returns, tell
-    # the owner (the send itself only works once unblocked — perfect signal)
-    try:
-        import httpx as _hx
-
-        async with _hx.AsyncClient(timeout=15) as _c:
-            _r = await _c.get(
-                f"https://graph.facebook.com/v21.0/{settings.WHATSAPP_PHONE_NUMBER_ID}",
-                headers={"Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"},
-                params={"fields": "display_phone_number"},
-            )
-        if _r.status_code == 200 and await _claim(
-            f"meta-unblocked:{now_ist.strftime('%Y-%m-%d-%H')}"
-        ):
-            # block ke दौरान tunnel badla ho sakta hai — webhook turant sync
-            from app.services import app_settings as _as
-            from app.services.tunnel_guard import _update_meta_webhook
-
-            async with async_session_factory() as db:
-                base = (await _as.get(db, "public_base_url") or "").rstrip("/")
-            hooked = await _update_meta_webhook(base) if base else False
-            async with async_session_factory() as db:
-                try:
-                    await send_message(
-                        db, to_phone=settings.MANAGER_PHONE,
-                        text="🎉 Meta ka block hat gaya! Bot wapas zinda hai"
-                             + (" — webhook bhi sync ✅" if hooked else " (webhook sync retry hoga)")
-                             + ". Kuch karna nahi hai.",
-                    )
-                except SendError:
-                    pass
-    except Exception:
-        pass  # probe must never disturb the tick
-
     # resume campaigns that paused for quiet hours / restarts
     try:
         if not _in_quiet_hours(now_ist):
@@ -291,6 +295,54 @@ async def _hourly_tick() -> None:
                 asyncio.create_task(send_campaign(c.id))
     except Exception:
         log.exception("campaign_resume_failed")
+
+
+async def _hourly_platform(now_ist: datetime) -> None:
+    """Jo kaam dukaan ka nahi, platform ka hai — .env wale (home) number ka
+    Meta block watcher. Home tenant ke context mein, ek baar."""
+    from app.services.tenant_context import as_tenant, get_home_tenant_id
+
+    home = await get_home_tenant_id()
+    if home is None:
+        return
+    async with as_tenant(home):
+        await _meta_block_watch(now_ist)
+
+
+async def _meta_block_watch(now_ist: datetime) -> None:
+    # Meta block watcher: probe hourly; the moment access returns, tell
+    # the owner (the send itself only works once unblocked — perfect signal)
+    try:
+        import httpx as _hx
+
+        async with _hx.AsyncClient(timeout=15) as _c:
+            _r = await _c.get(
+                f"https://graph.facebook.com/v21.0/{settings.WHATSAPP_PHONE_NUMBER_ID}",
+                headers={"Authorization": f"Bearer {settings.WHATSAPP_TOKEN}"},
+                params={"fields": "display_phone_number"},
+            )
+        if _r.status_code == 200 and await _claim(
+            f"meta-unblocked:{now_ist.strftime('%Y-%m-%d-%H')}"
+        ):
+            # block ke दौरान tunnel badla ho sakta hai — webhook turant sync
+            from app.services import app_settings as _as
+            from app.services.tunnel_guard import _update_meta_webhook
+
+            async with async_session_factory() as db:
+                base = (await _as.get(db, "public_base_url") or "").rstrip("/")
+            hooked = await _update_meta_webhook(base) if base else False
+            async with async_session_factory() as db:
+                try:
+                    await send_message(
+                        db, to_phone=manager_phone(),
+                        text="🎉 Meta ka block hat gaya! Bot wapas zinda hai"
+                             + (" — webhook bhi sync ✅" if hooked else " (webhook sync retry hoga)")
+                             + ". Kuch karna nahi hai.",
+                    )
+                except SendError:
+                    pass
+    except Exception:
+        pass  # probe must never disturb the tick
 
 
 async def _tunnel_tick() -> None:
@@ -349,7 +401,7 @@ async def run_follow_up_pings() -> int:
                     if await _claim(f"esc6h:{o.order_number}:{now_ist.strftime('%Y-%m-%d')}"):
                         try:
                             await send_message(
-                                db, to_phone=settings.MANAGER_PHONE,
+                                db, to_phone=manager_phone(),
                                 text=(
                                     f"🚨 ESCALATION — {o.order_number}\n"
                                     f"Status: {o.status.name}, {int(stale_hours)} ghante se atka hai.\n"
@@ -442,7 +494,7 @@ async def run_daily_summary() -> None:
             f"LATE ORDERS:\n{late_line}"
         )
         try:
-            await send_message(db, to_phone=settings.MANAGER_PHONE, text=text)
+            await send_message(db, to_phone=manager_phone(), text=text)
         except SendError as exc:
             log.info("daily_summary_not_sent")
             if not exc.transient:  # transient goes via outbound_queue
@@ -461,7 +513,8 @@ async def _nightly_tick() -> None:
         await run_backup()
     except Exception:
         log.exception("nightly_backup_failed")
-    # Dashboard KPI snapshot — trends isi se bante hain (Phase 1).
+    # Control-panel KPI snapshot (clients, MRR, past_due) — platform ka,
+    # dukaan ka nahi; isliye jaan-boojh kar system context mein.
     try:
         from app.services.kpis import snapshot_today
 
@@ -516,6 +569,12 @@ async def _nightly_tick() -> None:
             await db.commit()
     except Exception:
         log.exception("nightly_prune_failed")
+    # Dukaan-wise raat ka kaam: STOP-rate throttle, customer segments,
+    # Monday ko weekly marketing suggestion (plan ke hisaab se).
+    await _for_each_tenant("nightly", _nightly_for_tenant)
+
+
+async def _nightly_for_tenant(now_ist: datetime) -> None:
     # STOP-rate auto-throttle (senior-architect P0)
     try:
         from app.services.leads import check_stop_throttle
@@ -531,16 +590,17 @@ async def _nightly_tick() -> None:
     except Exception:
         log.exception("nightly_segments_failed")
     try:
-        now_ist = datetime.now(IST)
         if now_ist.weekday() == 0:  # Monday night: weekly suggestion
-            # marketing_agent feature sirf Business plan mein hai
-            from app.services import auth as _auth
+            # marketing_agent feature plan par depend karta hai — IS dukaan ka
+            # plan, home ka nahi.
+            from app.models.tenant import Tenant
             from app.services import plans as _plans
+            from app.services.tenant_context import current_tenant_id
 
             async with async_session_factory() as db:
-                home = await _auth.home_tenant(db)
-            if home is not None and not _plans.feature_on(home.plan, "marketing_agent"):
-                log.info("marketing_agent_feature_off", plan=home.plan)
+                me = await db.get(Tenant, current_tenant_id.get())
+            if me is not None and not _plans.feature_on(me.plan, "marketing_agent"):
+                log.info("marketing_agent_feature_off", plan=me.plan)
             else:
                 from app.services.marketing_agent import weekly_suggestion
 
@@ -778,7 +838,7 @@ async def run_payment_reminders() -> int:
         if flagged and await _claim(f"payrem-adminflag:{now_ist.strftime('%Y-%m-%d')}"):
             try:
                 await send_message(
-                    db, to_phone=settings.MANAGER_PHONE,
+                    db, to_phone=manager_phone(),
                     text=get_message("overdue_admin_flag", listing="\n".join(flagged[:15])),
                 )
             except SendError:

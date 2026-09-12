@@ -45,6 +45,7 @@ from app.services.order_service import (
 )
 from app.services.whatsapp import SendError, send_message
 from app.utils.phone import normalize_phone
+from app.services.tenant_context import manager_phone
 
 router = APIRouter()
 log = structlog.get_logger()
@@ -112,7 +113,7 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
         await db.commit()
         try:
             await send_message(
-                db, to_phone=settings.MANAGER_PHONE,
+                db, to_phone=manager_phone(),
                 text=get_message(
                     "rate_bad_admin_alert",
                     customer_name=customer.name or "naam nahi pata",
@@ -670,7 +671,7 @@ async def _handle_inbound_message(
     # would quietly demote him to a washerman.
     from app.models import StaffRole
 
-    is_manager = phone == normalize_phone(settings.MANAGER_PHONE) or (
+    is_manager = phone == normalize_phone(manager_phone()) or (
         staff is not None and staff.is_active and staff.role is StaffRole.ADMIN
     )
     # Jise owner ne Settings mein band kar diya, uske paas se ab koi command

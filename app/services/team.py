@@ -20,6 +20,7 @@ from app.config import settings
 from app.models import Staff, StaffRole
 from app.services.whatsapp import SendError, WindowClosedError, send_message
 from app.utils.phone import normalize_phone
+from app.services.tenant_context import manager_phone
 
 log = structlog.get_logger()
 
@@ -49,7 +50,7 @@ async def admins(db: AsyncSession) -> list[Staff]:
 
 async def admin_phones(db: AsyncSession) -> list[str]:
     """Admin numbers, manager first. Never empty — MANAGER_PHONE is always in."""
-    out = [_norm(settings.MANAGER_PHONE)]
+    out = [_norm(manager_phone())]
     for st in await admins(db):
         p = _norm(st.phone)
         if p and p not in out:
@@ -79,7 +80,7 @@ async def alert_recipients(db: AsyncSession) -> list[tuple[str, str]]:
         if p:
             seen.setdefault(p, st.name or p)
     for phone, label in (
-        (settings.MANAGER_PHONE, "Manager"),
+        (manager_phone(), "Manager"),
         (settings.ESCALATION_CC_PHONE, "CC"),
     ):
         p = _norm(phone)

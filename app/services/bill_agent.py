@@ -61,6 +61,7 @@ from app.services.order_service import (
 )
 from app.services.whatsapp import SendError, WindowClosedError, send_message
 from app.utils.phone import normalize_phone
+from app.services.tenant_context import manager_phone
 
 log = structlog.get_logger()
 
@@ -523,7 +524,7 @@ async def _alert_owner_with_hold(db: AsyncSession, order: Order, text: str) -> N
     from app.services import team
     from app.services.whatsapp import Button
 
-    owner = "+" + settings.MANAGER_PHONE.lstrip("+")
+    owner = "+" + manager_phone().lstrip("+")
     buttons = [
         Button(f"hold:{order.order_number}:yes", "🛑 Order rok do"),
         Button(f"hold:{order.order_number}:no", "▶️ Chalne do"),
@@ -1678,7 +1679,7 @@ async def _apply_standup_reply(
     if unclear:
         summary.append(f"❓ Samajh nahi aaya: {', '.join(unclear)}")
     try:
-        await send_message(db, to_phone=settings.MANAGER_PHONE, text="\n".join(summary))
+        await send_message(db, to_phone=manager_phone(), text="\n".join(summary))
     except SendError:
         log.warning("standup_summary_not_sent")
 
@@ -2033,7 +2034,7 @@ async def _close_task_by_code(
     try:
         staff = await db.get(Staff, task.assigned_staff_id) if task.assigned_staff_id else None
         await send_message(
-            db, to_phone=settings.MANAGER_PHONE,
+            db, to_phone=manager_phone(),
             text=f"✅ {staff.name if staff else sender_label} ne {task.code} kar diya: {task.title}",
         )
     except SendError:
@@ -2131,7 +2132,7 @@ async def _apply_relay(
 
     is_customer_target = False
     if target.lower() in ("manager", "boss", "malik"):
-        to_phone, to_name = settings.MANAGER_PHONE, "Manager"
+        to_phone, to_name = manager_phone(), "Manager"
     else:
         staff_rows = (await db.execute(select(Staff))).scalars().all()
         matches = [

@@ -70,6 +70,17 @@ from fastapi.middleware.gzip import GZipMiddleware
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
+class _noop:
+    """Tenant na mile (staff panel par bina cookie) to context waisa hi —
+    None, yaani system; RLS kuch nahi dikhata, jo sahi hai."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
 @app.middleware("http")
 async def tenant_scope(request: Request, call_next):
     """Data isolation, layer 1: har HTTP request par tenant context set karo.
@@ -101,11 +112,8 @@ async def tenant_scope(request: Request, call_next):
             if staff_token
             else None
         )
-        ctx_token = tenant_context.current_tenant_id.set(tid)
-        try:
+        async with tenant_context.as_tenant(tid) if tid is not None else _noop():
             return await call_next(request)
-        finally:
-            tenant_context.current_tenant_id.reset(ctx_token)
 
     token = request.cookies.get("kk_session", "")
     if token:
@@ -123,11 +131,10 @@ async def tenant_scope(request: Request, call_next):
             headers={"Retry-After": "30"},
         )
 
-    ctx_token = tenant_context.current_tenant_id.set(tid)
-    try:
+    # Owner ka number bhi context mein — "malik ko batao" wali har jagah
+    # isi tenant ke malik ko bole, .env wale ko nahi.
+    async with tenant_context.as_tenant(tid) if tid is not None else _noop():
         return await call_next(request)
-    finally:
-        tenant_context.current_tenant_id.reset(ctx_token)
 
 
 # Sliding window per tenant (in-memory — restart par reset, theek hai).

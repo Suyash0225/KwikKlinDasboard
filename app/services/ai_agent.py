@@ -26,6 +26,7 @@ from app.services.intent import classify_intent
 from app.services.llm_client import LLMError
 from app.services.messages import get_message, status_label
 from app.services.order_service import get_active_orders_for_phone
+from app.services.tenant_context import manager_phone
 
 log = structlog.get_logger()
 
@@ -400,7 +401,7 @@ async def _notify_admin_fyi(db: AsyncSession, customer: Customer, note: str) -> 
         who = customer.name or customer.phone
         try:
             await send_message(
-                db, to_phone=app_config.MANAGER_PHONE,
+                db, to_phone=manager_phone(),
                 text=f"ℹ️ FYI — {who}: {note[:400]}",
             )
         except SendError:

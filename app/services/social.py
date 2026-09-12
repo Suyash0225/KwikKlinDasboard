@@ -25,6 +25,7 @@ from app.config import settings
 from app.database import async_session_factory
 from app.services import app_settings, audit
 from app.services.llm_client import LLMError
+from app.services.tenant_context import manager_phone
 
 log = structlog.get_logger()
 
@@ -177,12 +178,12 @@ async def run_daily_social(force: bool = False) -> str:
         }.get(ig_status, f"⚠️ Instagram post fail: {ig_status[:120]}")
         try:
             await send_image(
-                db, to_phone=settings.MANAGER_PHONE, file_path=str(path),
+                db, to_phone=manager_phone(), file_path=str(path),
                 mime_type="image/png", caption=f"📣 Aaj ka poster — {theme_title}",
                 local_url=f"/social/{fname}", sent_by="bot",
             )
             await send_message(
-                db, to_phone=settings.MANAGER_PHONE,
+                db, to_phone=manager_phone(),
                 text=(
                     f"{owner_note}\n\n📋 Caption (copy karke Google Business "
                     f"par bhi daal do — 10 second):\n\n{caption}"

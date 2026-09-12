@@ -17,6 +17,7 @@ from app.services import audit
 from app.services.messages import get_message
 from app.services.order_service import ACTIVE_STATUSES
 from app.services.whatsapp import SendError, send_message
+from app.services.tenant_context import manager_phone
 
 log = structlog.get_logger()
 
@@ -200,7 +201,7 @@ async def run_hot_lead_digest() -> int:
                 f"\"{last_in[:50]}\""
             )
         try:
-            await send_message(db, to_phone=settings.MANAGER_PHONE, text="\n".join(lines))
+            await send_message(db, to_phone=manager_phone(), text="\n".join(lines))
         except SendError:
             log.info("hot_digest_not_sent")
         await audit.record(
@@ -230,7 +231,7 @@ async def check_stop_throttle() -> None:
             await app_settings.set_value(db, "marketing_freq_cap_per_month", 1)
             try:
                 await send_message(
-                    db, to_phone=cfg.MANAGER_PHONE,
+                    db, to_phone=manager_phone(),
                     text=(
                         f"⚠️ Hafte mein {len(stops)} logon ne STOP kiya — messages "
                         "zyada ja rahe the. Maine marketing limit khud 2 se 1 kar "

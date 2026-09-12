@@ -18,6 +18,7 @@ from app.database import async_session_factory
 from app.models import TASK_CANCELLED, TASK_DONE, TASK_OPEN, Order, Staff, Task
 from app.services import audit
 from app.services.whatsapp import Button, SendError, WindowClosedError, send_message
+from app.services.tenant_context import manager_phone
 
 log = structlog.get_logger()
 
@@ -656,7 +657,7 @@ async def run_task_followups() -> int:
                 waited = int((now - task.created_at).total_seconds() // 3600)
                 try:
                     await send_message(
-                        db, to_phone=settings.MANAGER_PHONE,
+                        db, to_phone=manager_phone(),
                         text=(
                             f"🚨 {staff.name} ne {task.code} ka jawab nahi diya "
                             f"({waited} ghante ho gaye).\n{task.title}\n"

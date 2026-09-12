@@ -21,6 +21,7 @@ from app.services import app_settings, audit, llm_client
 from app.services.llm_client import LLMError
 from app.services.marketing import compute_segments, queue_campaign, send_campaign
 from app.services.whatsapp import SendError, send_message
+from app.services.tenant_context import manager_phone
 
 log = structlog.get_logger()
 
@@ -235,7 +236,7 @@ async def weekly_suggestion() -> None:
                 args={"segment": target_seg, "reach": reach}, result=campaign.name,
             )
         try:
-            await send_message(db, to_phone=settings.MANAGER_PHONE, text=text)
+            await send_message(db, to_phone=manager_phone(), text=text)
         except SendError:
             log.warning("weekly_suggestion_not_sent")  # dashboard still shows it
 

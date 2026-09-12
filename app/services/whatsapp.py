@@ -87,6 +87,14 @@ async def resolve_creds(db: AsyncSession) -> WaCreds:
         t = await db.get(Tenant, tid)
         if t is not None and t.wa_token and t.wa_phone_number_id:
             return WaCreds(t.wa_token, t.wa_phone_number_id)
+        # .env wale creds sirf HOME dukaan ke hain. Doosri dukaan ne WhatsApp
+        # nahi joda to uske grahak ko home ke number se message chala jaana
+        # cross-tenant leak hai — pehle yahi hota tha. Ab saaf mana.
+        if tid != tenant_context.cached_home_tenant_id():
+            raise SendError(
+                "WhatsApp not connected for this shop — connect a number first",
+                transient=False,
+            )
     return _env_creds()
 
 

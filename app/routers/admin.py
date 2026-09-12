@@ -62,6 +62,7 @@ from app.routers.orders import require_admin_key, require_admin_owner, require_f
 from app.services.order_service import ACTIVE_STATUSES, get_active_orders_for_phone
 from app.services.whatsapp import SendError, WindowClosedError, send_image, send_message
 from app.utils.phone import normalize_phone
+from app.services.tenant_context import manager_phone
 
 _MEDIA_DIR = Path(__file__).resolve().parent.parent / "media"
 
@@ -1296,13 +1297,13 @@ async def inbox_threads(
     if term:
         q_cust = q_cust.where(_match(Customer))
     rows = (await db.execute(q_cust)).all()
-    manager_phone = normalize_phone(settings.MANAGER_PHONE)
+    mgr_phone = normalize_phone(manager_phone())
     for cust, conv in rows:
         _add(
             {
                 # The owner's own number has a customer row from his tests —
                 # label him as the boss, not a customer.
-                "kind": "admin" if cust.phone == manager_phone else "customer",
+                "kind": "admin" if cust.phone == mgr_phone else "customer",
                 "phone": cust.phone,
                 "name": cust.name or cust.phone,
                 "last_text": conv.message_text[:80],
@@ -1374,7 +1375,7 @@ async def inbox_threads(
                 continue
             threads.append(
                 {
-                    "kind": "admin" if c.phone == manager_phone else "customer",
+                    "kind": "admin" if c.phone == mgr_phone else "customer",
                     "phone": c.phone,
                     "name": c.name or c.phone,
                     "last_text": "",
@@ -1450,7 +1451,7 @@ async def inbox_thread(
 
     if staff:
         kind = "admin" if staff.role is StaffRole.ADMIN else "staff"
-    elif phone == normalize_phone(settings.MANAGER_PHONE):
+    elif phone == normalize_phone(manager_phone()):
         kind = "admin"
     else:
         kind = "customer"
