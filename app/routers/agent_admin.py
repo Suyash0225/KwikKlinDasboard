@@ -853,6 +853,82 @@ async def ping_task_api(code: str, db: AsyncSession = Depends(get_db)) -> dict:
     return {"ok": ok, "detail": "bhej diya" if ok else "window band hai — nahi ja paya"}
 
 
+class TaskReplyIn(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+@router.get("/tasks/{code}/messages")
+async def task_thread_admin(code: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Is kaam par staff ne kya poocha aur kya jawab gaya — ek jagah."""
+    from app.models import TaskMessage
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    rows = (
+        await db.execute(
+            select(TaskMessage).where(TaskMessage.task_id == task.id).order_by(TaskMessage.at)
+        )
+    ).scalars().all()
+    return {
+        "code": task.code,
+        "title": task.title,
+        "messages": [
+            {"who": m.author_kind, "name": m.author_name, "text": m.text,
+             "at": m.at.isoformat(), "read": m.read_by_staff_at is not None}
+            for m in rows
+        ],
+    }
+
+
+@router.post("/tasks/{code}/reply")
+async def reply_to_task(
+    code: str, body: TaskReplyIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Staff ke sawaal ka jawab — thread mein bhi, uske WhatsApp par bhi.
+
+    Pehle jawab dene ka koi rasta hi nahi tha: sawaal owner ke WhatsApp par
+    aata tha aur wo wahin se reply karta tha, jo kisi record mein nahi
+    jaata tha. Ab dono taraf ek hi thread dikhta hai, aur panel mein
+    staff ko unread badge milta hai.
+    """
+    from app.models import Staff as _S
+    from app.models import TaskMessage
+    from app.services import tasks as task_service
+    from app.services.whatsapp import SendError, send_message
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    text = body.text.strip()
+    db.add(
+        TaskMessage(
+            task_id=task.id, author_kind="owner", author_name="Owner", text=text[:1000]
+        )
+    )
+    await db.commit()
+
+    delivered = False
+    staff = await db.get(_S, task.assigned_staff_id) if task.assigned_staff_id else None
+    if staff is not None:
+        try:
+            await send_message(
+                db, to_phone=staff.phone,
+                text=f"[{task.code}] {task.title}\n\nJawab: {text[:500]}",
+            )
+            delivered = True
+        except SendError as exc:
+            # Panel mein to dikh hi jayega — WhatsApp fail hona jawab ko
+            # rokta nahi.
+            log.warning("task_reply_wa_failed", code=task.code, error=str(exc))
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="task_replied",
+        args={"code": task.code}, result=text[:150],
+    )
+    return {"ok": True, "whatsapp": delivered}
+
+
 @router.post("/jobs/task-followups")
 async def trigger_task_followups() -> dict:
     """Run the follow-up sweep now (the button next to the task list)."""

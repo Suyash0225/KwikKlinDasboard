@@ -78,3 +78,27 @@ class Task(Base, TenantScoped):
 
     def __repr__(self) -> str:
         return f"<Task {self.code} {self.status}>"
+
+class TaskMessage(Base, TenantScoped):
+    """Ek kaam par hui baat-cheet — staff ka sawaal, owner ka jawab.
+
+    WhatsApp par bhi jaata hai (staff ka phone hamesha uske paas hai), par
+    sach yahan rehta hai: panel dono taraf wahi thread dikhata hai, aur
+    "kya maine iska jawab de diya" ka jawab ek jagah milta hai.
+    """
+
+    __tablename__ = "task_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), index=True
+    )
+    author_kind: Mapped[str] = mapped_column(String(10))   # staff | owner
+    author_name: Mapped[str] = mapped_column(String(80))
+    text: Mapped[str] = mapped_column(Text)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    read_by_staff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<TaskMessage {self.author_kind}: {self.text[:30]}>"
+

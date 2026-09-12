@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import (
+    PaymentStatus,
     TASK_CANCELLED,
     TASK_DONE,
     TASK_OPEN,
@@ -321,16 +322,110 @@ async def ask_about(
     """Sawal seedha owner/manager tak — panel se bhi, WhatsApp ki tarah."""
     from app.services import team
 
+    from app.models import TaskMessage
+
     t = await _my_task(db, p, code)
+    text = body.text.strip()
+    # Sawaal ab store hota hai — pehle sirf WhatsApp par ek line jaati thi,
+    # to staff ko apna hi sawaal wapas nahi dikhta tha aur jawab kabhi
+    # panel mein nahi aata tha.
+    msg = TaskMessage(
+        task_id=t.id, author_kind="staff", author_name=p.staff.name,
+        text=text[:1000], read_by_staff_at=datetime.now(timezone.utc),
+    )
+    db.add(msg)
+    await db.commit()
     await team.notify_admins(
-        db, f"❓ {p.staff.name} ka sawal [{t.code}] par: {body.text.strip()[:280]}",
+        db, f"❓ {p.staff.name} ka sawal [{t.code}] par: {text[:280]}",
         skip_phone=p.staff.phone,
     )
     await audit.record(
         actor_role="staff", actor=p.staff.name, action="staff_asked",
-        args={"code": t.code}, result=body.text[:150], tenant_id=p.staff.tenant_id,
+        args={"code": t.code}, result=text[:150], tenant_id=p.staff.tenant_id,
     )
     return {"ok": True}
+
+
+@router.get("/tasks/{code}/messages")
+async def task_thread(
+    code: str,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Is kaam par hui poori baat — sawaal aur jawab, kram se.
+
+    Kholte hi jo unread the wo read ho jaate hain (badge isi se ghatta hai).
+    """
+    from app.models import TaskMessage
+
+    t = await _my_task(db, p, code)
+    rows = (
+        await db.execute(
+            select(TaskMessage).where(TaskMessage.task_id == t.id).order_by(TaskMessage.at)
+        )
+    ).scalars().all()
+    now = datetime.now(timezone.utc)
+    changed = False
+    for m in rows:
+        if m.author_kind == "owner" and m.read_by_staff_at is None:
+            m.read_by_staff_at = now
+            changed = True
+    if changed:
+        await db.commit()
+    return {
+        "code": t.code,
+        "title": t.title,
+        "messages": [
+            {
+                "who": m.author_kind,
+                "name": m.author_name,
+                "text": m.text,
+                "at": m.at.astimezone(IST).strftime("%d %b, %I:%M %p"),
+            }
+            for m in rows
+        ],
+    }
+
+
+@router.get("/notifications")
+async def notifications(
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Jo baatein mere liye nayi hain — abhi: owner ke bina padhe jawab.
+
+    Panel ke ghante (bell) ka badge isi count se banta hai. Manager ko
+    apne hi kaam ke jawab dikhte hain, poori dukaan ke nahi — warna badge
+    hamesha laal rehta aur koi use dekhta hi nahi.
+    """
+    from app.models import TaskMessage
+
+    rows = (
+        await db.execute(
+            select(TaskMessage, Task)
+            .join(Task, Task.id == TaskMessage.task_id)
+            .where(
+                TaskMessage.author_kind == "owner",
+                TaskMessage.read_by_staff_at.is_(None),
+                Task.assigned_staff_id == p.staff.id,
+            )
+            .order_by(TaskMessage.at.desc())
+            .limit(20)
+        )
+    ).all()
+    return {
+        "unread": len(rows),
+        "items": [
+            {
+                "code": t.code,
+                "title": t.title,
+                "text": m.text,
+                "from": m.author_name,
+                "at": m.at.astimezone(IST).strftime("%d %b, %I:%M %p"),
+            }
+            for m, t in rows
+        ],
+    }
 
 
 class CancelIn(BaseModel):
@@ -717,6 +812,10 @@ async def create_bill(
 
 @router.get("/bills", dependencies=[Depends(require_staff_feature("billing"))])
 async def my_bills(
+    q: str = "",
+    pay: str = "",
+    days: int = 14,
+    mine: int = 0,
     p: StaffPrincipal = Depends(current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
@@ -730,18 +829,30 @@ async def my_bills(
     """
     from app.models.order import OrderStatusHistory
 
-    since = datetime.now(timezone.utc) - timedelta(days=14)
-    q = select(Order).where(Order.created_at >= since).order_by(Order.created_at.desc()).limit(50)
-    if not p.is_manager:
-        mine = (
-            select(OrderStatusHistory.order_id)
-            .where(
-                OrderStatusHistory.old_status.is_(None),
-                OrderStatusHistory.changed_by == p.staff.name,
-            )
+    since = datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 90)))
+    sel = select(Order).where(Order.created_at >= since).order_by(Order.created_at.desc()).limit(60)
+    # Worker ko sirf apne banaye bill. Manager ko poori dukaan ke — wahi
+    # to dekh-rekh karta hai — aur mine=1 se wo bhi apne tak simat sakta hai.
+    if not p.is_manager or mine:
+        made_by_me = select(OrderStatusHistory.order_id).where(
+            OrderStatusHistory.old_status.is_(None),
+            OrderStatusHistory.changed_by == p.staff.name,
         )
-        q = q.where(Order.id.in_(mine))
-    rows = (await db.execute(q)).scalars().all()
+        sel = sel.where(Order.id.in_(made_by_me))
+    if pay == "due":
+        sel = sel.where(Order.payment_status != PaymentStatus.PAID)
+    elif pay == "paid":
+        sel = sel.where(Order.payment_status == PaymentStatus.PAID)
+    term = q.strip()
+    if term:
+        # Number se, ya grahak ke naam/phone se — jo counter par yaad ho.
+        cust_ids = select(Customer.id).where(
+            or_(Customer.name.ilike(f"%{term}%"), Customer.phone.ilike(f"%{term}%"))
+        )
+        sel = sel.where(
+            or_(Order.order_number.ilike(f"%{term}%"), Order.customer_id.in_(cust_ids))
+        )
+    rows = (await db.execute(sel)).scalars().all()
     out = []
     for o in rows:
         cust = await db.get(Customer, o.customer_id)
@@ -1059,6 +1170,28 @@ async def today_summary(
     return out
 
 
+async def _shop_default_for(db: AsyncSession, role: str) -> Staff | None:
+    """Dukaan ka default delivery/washer aadmi — wahi jise work order jaata
+    hai jab order kisi ke naam par nahi hai (work_orders.resolve_worker)."""
+    from app.services import team
+
+    try:
+        if role == "DELIVERY":
+            return await team.delivery_staff(db)
+        from app.services import app_settings
+
+        phone = (await app_settings.get(db, "default_washer_phone") or "").strip()
+        if phone:
+            return (
+                await db.execute(select(Staff).where(Staff.phone == phone))
+            ).scalar_one_or_none()
+        washers = [s for s in await team.active_staff(db) if s.role is StaffRole.WASHER]
+        return washers[0] if len(washers) == 1 else None
+    except Exception:
+        log.exception("shop_default_lookup_failed", role=role)
+        return None
+
+
 @router.get("/route")
 async def my_route(
     p: StaffPrincipal = Depends(current_staff), db: AsyncSession = Depends(get_db)
@@ -1090,7 +1223,21 @@ async def my_route(
         .limit(50)
     )
     if not p.is_manager:
-        q = q.where(col == p.staff.id)
+        # "Mera kaam" ka matlab sirf explicitly assigned nahi hai.
+        #
+        # Zyadातर bill kisi ko assign kiye bina bante hain (counter par
+        # manager banata hai, ya delivery boy khud). Aise order par
+        # assigned_delivery_id NULL rehta hai — par work order phir bhi
+        # dukaan ke delivery wale ko hi jaata hai (work_orders.resolve_worker
+        # ka fallback). Panel purane filter se un orders ko chhupa deta tha:
+        # WhatsApp par "pickup karo" aata tha aur app mein kuch nahi dikhta
+        # tha. Ab: mere naam wale + jo kisi ke naam nahi hain, jab ye aadmi
+        # hi dukaan ka delivery/washer wala hai.
+        default_staff = await _shop_default_for(db, "DELIVERY" if is_delivery else "WASHER")
+        if default_staff is not None and default_staff.id == p.staff.id:
+            q = q.where(or_(col == p.staff.id, col.is_(None)))
+        else:
+            q = q.where(col == p.staff.id)
     rows = (await db.execute(q)).scalars().all()
 
     stops = []

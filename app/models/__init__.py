@@ -34,6 +34,7 @@ from app.models.rate import Rate
 from app.models.staff import Staff
 from app.models.staff_session import StaffSession
 from app.models.task import TASK_CANCELLED, TASK_DONE, TASK_OPEN, Task
+from app.models.task import TaskMessage
 from app.models.tenant import (
     ROLE_ACCOUNTANT,
     ROLE_MANAGER,
@@ -96,6 +97,7 @@ __all__ = [
     "TASK_DONE",
     "TASK_OPEN",
     "Task",
+    "TaskMessage",
     "Tenant",
     "User",
     "LoginSession",
