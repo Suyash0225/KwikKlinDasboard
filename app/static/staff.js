@@ -83,6 +83,7 @@ $("lg-go").onclick = async () => {
   }
 };
 $("lg-pass").addEventListener("keydown", (e) => { if (e.key === "Enter") $("lg-go").click(); });
+$("lg-phone").addEventListener("keydown", (e) => { if (e.key === "Enter") $("lg-pass").focus(); });
 
 /* ----------------------------------------------------------------- boot */
 async function start() {
@@ -124,6 +125,7 @@ async function start() {
  * pichhe se battery aur data dono khaata rehta hai. Tab wapas aate hi
  * ek refresh, taaki chhupe rehne ke waqt ka farak ek baar mein poora ho. */
 let LIVE = null, LIVE_TIMER = null, LIVE_POLL = null, LIVE_SEEN = 0;
+let COUNTS = {};   // /tasks se — tab par kitna kaam bacha hai
 
 /* Stream par aakhri baar kab kuch guzra — khabar ho ya dhadkan. Server har
    20 second par dhadkan bhejta hai, isliye 60 second ki chuppi = stream
@@ -132,11 +134,16 @@ const LIVE_SILENCE_MS = 60000;
 function liveIsProven() { return LIVE_SEEN > 0 && Date.now() - LIVE_SEEN < LIVE_SILENCE_MS; }
 function liveSeen() { LIVE_SEEN = Date.now(); }
 
+/* Pichhe se aaya refresh (SSE/poll) list ko "Loading…" se NAHI badalta —
+   purani list tab tak rehti hai jab tak nayi na aa jaye. Pehle har 30
+   second par poori screen ek pal ko khaali ho jaati thi, aur aadmi jo
+   card padh raha tha wo uske haath se nikal jaata tha. */
 function refreshCurrent() {
   if (document.hidden) return;
-  if (NAV === "route") showRoute();
-  else if (NAV === "mine") loadTasks();
+  if (NAV === "route") showRoute({ quiet: true });
+  else if (NAV === "mine") loadTasks({ quiet: true });
   renderToday();
+  if (!LIVE) startLiveUpdates();   // stream toot gayi thi to dobara jodo
 }
 
 function liveSoon() {
@@ -156,6 +163,10 @@ function startPolling() {
   }, 30000);
 }
 
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) liveSoon();
+});
+
 function startLiveUpdates() {
   startPolling();
   if (!("EventSource" in window) || LIVE) return;
@@ -171,14 +182,11 @@ function startLiveUpdates() {
     // Source event se, `LIVE` se nahi — neeche wo null ho jaata hai.
     const src = e && e.target;
     if (src && src.readyState === EventSource.CLOSED) {
+      // Browser khud nahi jodega (401/5xx) — agla poll dobara koshish karega.
       LIVE_SEEN = 0;
       LIVE = null;
-      refreshCurrent();
     }
   };
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) liveSoon();
-  });
 }
 const roleLabel = (r) => ({
   WASHER: "Washerman", DELIVERY: "Delivery",
@@ -193,20 +201,30 @@ function renderTabs() {
   const tabs = ME.is_manager
     ? [["mine", "Mine"], ["pending", "All pending"], ["done", "Done"], ["cancelled", "Cancelled"]]
     : [["mine", "My work"], ["done", "Done"]];
+  // Ginti sirf pending wale tabs par — "Done" par 200 ka number kisi kaam ka nahi.
+  const cnt = (v) => (COUNTS[v] > 0 ? `<span class="cnt">${COUNTS[v]}</span>` : "");
   $("tabs").innerHTML = tabs.map(([v, label]) =>
-    `<button data-tab="${v}" class="${TAB === v ? "on" : ""}">${label}</button>`).join("");
+    `<button data-tab="${v}" class="${TAB === v ? "on" : ""}">${label}${cnt(v)}</button>`).join("");
   $("tabs").querySelectorAll("button").forEach((b) => {
     b.onclick = () => { TAB = b.dataset.tab; renderTabs(); loadTasks(); };
   });
 }
 
-async function loadTasks() {
-  $("list").innerHTML = `<div class="empty">Loading…</div>`;
+let TASKS_SEQ = 0;
+async function loadTasks(opts = {}) {
+  if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
+  const mine = ++TASKS_SEQ;
   try {
     const r = await api(`/tasks?tab=${encodeURIComponent(TAB)}`);
+    // Tab jaldi-jaldi badla to purana jawab baad mein aakar galat list na dikhaye
+    if (mine !== TASKS_SEQ || NAV !== "mine") return;
     TASKS = r.tasks;
+    COUNTS = r.counts || {};
+    renderTabs();
     renderTasks();
   } catch (e) {
+    if (mine !== TASKS_SEQ) return;
+    if (opts.quiet) return;            // pichhe ka refresh gira — list rehne do
     $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
 }
@@ -229,7 +247,7 @@ function renderTasks() {
         <b>${esc(o.number)} · ${esc(o.customer)}</b>
         <div class="kv"><span>Phone</span><span>${esc(o.phone_masked)}</span></div>
         <div class="kv"><span>Items</span><span>${esc(o.items)}</span></div>
-        ${o.delivery ? `<div class="kv"><span>Delivery</span><span>${esc(o.delivery)}</span></div>` : ""}
+        ${o.delivery ? `<div class="kv"><span>Delivery</span><span class="${dueClass(o.delivery)}">${esc(whenText(o.delivery))}</span></div>` : ""}
         <div class="kv"><span>Due</span><span>₹${o.due.toFixed(0)}</span></div>
         ${o.notes ? `<div class="kv"><span>Note</span><span>${esc(String(o.notes).slice(-120))}</span></div>` : ""}
       </div>` : ""}
@@ -248,6 +266,26 @@ function renderTasks() {
     </article>`;
   }).join("");
   $("list").querySelectorAll("[data-do]").forEach((b) => { b.onclick = () => act(b.dataset); });
+}
+
+/* "2026-09-14" ko phone par padhna padta hai — "Today", "Tomorrow", "Mon 14 Sep"
+   ek nazar mein samajh aata hai. Beeti hui date laal, taaki late order chhupe nahi. */
+function whenText(iso) {
+  if (!iso) return "";
+  const d = new Date(iso + (iso.length === 10 ? "T00:00:00" : ""));
+  if (isNaN(d)) return iso;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((d - today) / 864e5);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Tomorrow";
+  if (diff === -1) return "Yesterday";
+  const txt = d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+  return diff < 0 ? `${txt} · ${-diff}d late` : txt;
+}
+function dueClass(iso) {
+  const d = new Date(iso + (iso.length === 10 ? "T00:00:00" : ""));
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return d < today ? "late" : "";
 }
 
 function act(d) {
@@ -312,9 +350,12 @@ function askCancel(code) {
 }
 
 function askCollect(order, due) {
+  // ₹250.50 due ho to "251" bharna server par "Only ₹250 is due" deta tha —
+  // prefill exact rakho, upar ki hadd bhi wahi.
+  const dueStr = Number.isInteger(due) ? String(due) : due.toFixed(2);
   openModal(`<h3>${esc(order)} — payment collected</h3>
-    <label>Amount (due ₹${due.toFixed(0)})</label>
-    <input id="m-amt" type="number" inputmode="decimal" value="${due.toFixed(0)}" min="1" max="${due}">
+    <label>Amount (due ₹${dueStr})</label>
+    <input id="m-amt" type="number" inputmode="decimal" value="${dueStr}" min="1" max="${dueStr}" step="0.01">
     <label>How</label>
     <div class="btnrow">
       <button class="btn ghost" id="m-cash">💵 Cash</button>
@@ -325,6 +366,7 @@ function askCollect(order, due) {
   const send = (e, method) => {
     const amount = parseFloat($("m-amt").value);
     if (!(amount > 0)) { toast("Enter the amount", true); return; }
+    if (amount > due + 0.01) { toast(`Only ₹${dueStr} is due`, true); return; }
     return busy(e.currentTarget, async () => {
       const r = await api(`/orders/${encodeURIComponent(order)}/collect`, { method: "POST", body: { amount, method } });
       closeModal(); toast(`₹${amount} collected ✅ — ₹${r.due.toFixed(0)} left`);
@@ -449,6 +491,9 @@ document.querySelectorAll(".bottom button").forEach((b) => {
   };
 });
 $("btn-refresh").onclick = () => {
+  // Dabaya to kuch dikhe — ek ghoomta hua icon, taaki dobara na dabaye
+  const b = $("btn-refresh");
+  b.classList.add("spinning"); setTimeout(() => b.classList.remove("spinning"), 700);
   if (NAV === "mine") loadTasks();
   else if (NAV === "route") showRoute();
   else if (NAV === "bill") { RATES = null; showBill(); }
@@ -476,6 +521,10 @@ async function showBill() {
     catch (e) { $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   }
   const services = [...new Set(RATES.map((r) => r.service))];
+  if (!services.length) {
+    $("list").innerHTML = `<div class="empty">No rate card yet — ask the owner to add services and prices in the dashboard (Settings → Rate card). Bills need prices.</div>`;
+    return;
+  }
   $("list").innerHTML = `
     <article class="tcard">
       <h3>New bill</h3>
@@ -602,11 +651,13 @@ function wireCustomerSearch() {
     }, 250);
   };
 
-  // Bahar tap = sujhaav band
-  document.addEventListener("click", (e) => {
-    if (!e.target.closest(".ac-wrap")) box.innerHTML = "";
-  });
 }
+// Bahar tap = sujhaav band. Ek hi baar — pehle ye har "New bill" par dobara
+// judta tha, to das chakkar ke baad das listener chal rahe the.
+document.addEventListener("click", (e) => {
+  const box = $("b-ac");
+  if (box && !e.target.closest(".ac-wrap")) box.innerHTML = "";
+});
 
 function renderCart() {
   const box = $("b-cart"), card = $("b-cartcard");
@@ -692,10 +743,13 @@ async function renderToday() {
 }
 
 /* ----------------------------------------------------------- raasta */
-async function showRoute() {
-  $("list").innerHTML = `<div class="empty">Loading…</div>`;
+let ROUTE_SEQ = 0;
+async function showRoute(opts = {}) {
+  if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
+  const mine = ++ROUTE_SEQ;
   try {
     const r = await api("/route");
+    if (mine !== ROUTE_SEQ || NAV !== "route") return;
     if (!r.stops.length) {
       $("list").innerHTML = `<div class="empty">Nowhere to go today 👍</div>`;
       return;
@@ -704,7 +758,7 @@ async function showRoute() {
       <article class="tcard ${s.urgent ? "urgent" : ""}">
         <div class="row1">
           <span class="code">${i + 1}. ${esc(s.kind)} · ${esc(s.number)}</span>
-          <span class="age">${s.delivery ? esc(s.delivery) : ""}</span>
+          <span class="age ${s.delivery ? dueClass(s.delivery) : ""}">${s.delivery ? esc(whenText(s.delivery)) : ""}</span>
         </div>
         <h3>${s.urgent ? "🔴 " : ""}${esc(s.customer)}</h3>
         <div class="ord">
@@ -722,6 +776,7 @@ async function showRoute() {
       </article>`).join("");
     wireStopButtons();
   } catch (e) {
+    if (mine !== ROUTE_SEQ || opts.quiet) return;
     $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
 }

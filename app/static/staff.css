@@ -218,3 +218,8 @@ select { width: 100%; padding: 12px 14px; border: 1px solid var(--line);
 .tile.ok b { color: var(--green); }
 .tile.warn b { color: var(--orange); }
 input[type=file] { padding: 10px; background: #fff; }
+
+/* Beeti hui delivery date — laal, taaki late order list mein chhupe nahi */
+.kv .late, .age.late { color: var(--red); font-weight: 700; }
+/* Refresh dabane par ek chakkar — "click laga" ka saboot */
+.icobtn.spinning { animation: kkspin .7s linear; }

@@ -51,6 +51,8 @@ from app.services.staff_auth import (
 )
 from app.services.work_orders import items_summary
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
 router = APIRouter(prefix="/staff/api", tags=["staff-panel"])
 log = structlog.get_logger()
 
@@ -881,7 +883,11 @@ async def today_summary(
     """Aaj ka apna hisaab — kitna kaam, kitna nipta, kitna paisa liya."""
     from app.models import Payment
 
-    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # "Aaj" dukaan ka aaj hai, UTC ka nahi. UTC ki aadhi raat IST mein subah
+    # 5:30 hai — pehle 5:30 baje ye counter khud reset ho jaata tha, aur raat
+    # 12 se 5:30 ke beech ka kaam pichhle din mein gina jaata tha. Baaki app
+    # (scheduler, agent_tools) pehle se IST par hai; ye ek jagah chhoot gayi thi.
+    start = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
 
     async def _count(*where):
         return (
