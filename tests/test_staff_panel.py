@@ -1137,3 +1137,54 @@ async def test_receipt_gives_bill_text_only_for_your_own_order(
             )
         ).scalar_one()
     assert n >= 1, "bill share bhi number dikhata hai — audit zaroori"
+
+
+async def test_a_bill_i_made_shows_up_and_i_can_share_it(client, two_shops, sent) -> None:
+    """Bill banane ke baad wo kahin dikhta hi nahi tha (task washer ko jaata
+    hai, Route sirf pickup/delivery). Ab: apne bill /bills mein, aur unpar
+    receipt/share chalta hai bina assign hue. Doosre ka bill nahi dikhta."""
+    from decimal import Decimal
+
+    from app.models import Rate
+    from app.services import tenant_context
+
+    token = tenant_context.current_tenant_id.set(two_shops["a"])
+    try:
+        async with async_session_factory() as db:
+            db.add(Rate(service="MySvc", garment="Saree", unit="pc", rate=Decimal("50")))
+            await db.commit()
+    finally:
+        tenant_context.current_tenant_id.reset(token)
+
+    # kisi aur (manager) ka bill — washer ko nahi dikhna chahiye
+    someone_elses = await _order_for(two_shops["a"], two_shops["a_mgr"], CUST_A)
+
+    await _login(client, A_PHONE)
+    try:
+        r = await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Saree Wali",
+            "items": [{"service": "MySvc", "garment": "Saree", "qty": 2}],
+        })
+        assert r.status_code == 201, r.text
+        mine = r.json()["order_number"]
+
+        bills = (await client.get("/staff/api/bills")).json()
+        numbers = [b["number"] for b in bills]
+        assert mine in numbers, "apna banaya bill dikhna chahiye"
+        assert someone_elses not in numbers, "doosre ka bill washer ko nahi"
+        b = next(x for x in bills if x["number"] == mine)
+        assert b["total"] == 100.0 and b["due"] == 100.0
+
+        # assign nahi hua, phir bhi mera hai — receipt milna chahiye
+        rc = await client.get(f"/staff/api/orders/{mine}/receipt")
+        assert rc.status_code == 200, rc.text
+        assert rc.json()["phone"] == CUST_A
+
+        # manager ko dukaan ke sab bill
+        await _login(client, A_MGR_PHONE)
+        all_bills = [x["number"] for x in (await client.get("/staff/api/bills")).json()]
+        assert mine in all_bills and someone_elses in all_bills
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(sqltext("DELETE FROM rate_card WHERE service = 'MySvc'"))
+            await db.commit()

@@ -715,6 +715,54 @@ async def create_bill(
     }
 
 
+@router.get("/bills", dependencies=[Depends(require_staff_feature("billing"))])
+async def my_bills(
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Jo bill maine banaye — taaki bana kar share/collect kar sakoon.
+
+    Pehle bill banane ke baad wo kahin dikhta hi nahi tha: task washer ko
+    jaata hai, aur delivery ka Route sirf pickup/delivery stage dikhata hai.
+    Banaya kisne ye order_status_history (RECEIVED row ka changed_by) mein
+    pehle se likha hai — bas usi se apne bill nikaalte hain. Manager ko
+    dukaan ke saare haal ke bill.
+    """
+    from app.models.order import OrderStatusHistory
+
+    since = datetime.now(timezone.utc) - timedelta(days=14)
+    q = select(Order).where(Order.created_at >= since).order_by(Order.created_at.desc()).limit(50)
+    if not p.is_manager:
+        mine = (
+            select(OrderStatusHistory.order_id)
+            .where(
+                OrderStatusHistory.old_status.is_(None),
+                OrderStatusHistory.changed_by == p.staff.name,
+            )
+        )
+        q = q.where(Order.id.in_(mine))
+    rows = (await db.execute(q)).scalars().all()
+    out = []
+    for o in rows:
+        cust = await db.get(Customer, o.customer_id)
+        total = float(o.total_amount or 0)
+        paid = float(o.amount_paid or 0)
+        out.append(
+            {
+                "number": o.order_number,
+                "customer": (cust.name or "Customer") if cust else "?",
+                "phone_masked": mask_phone(cust.phone if cust else ""),
+                "items": items_summary(o),
+                "status": o.status.name,
+                "total": total,
+                "due": max(0.0, total - paid),
+                "delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
+                "created": o.created_at.astimezone(IST).strftime("%d %b, %I:%M %p"),
+            }
+        )
+    return out
+
+
 # --------------------------------------------------- manager ka hissa ----
 
 
@@ -780,7 +828,22 @@ async def _my_order(db: AsyncSession, p: StaffPrincipal, number: str) -> Order:
         and order.assigned_washer_id != p.staff.id
         and order.assigned_delivery_id != p.staff.id
     ):
-        raise HTTPException(status_code=403, detail="This order is not yours")
+        # Jo bill maine khud banaya wo bhi mera hai — chahe abhi kisi ko
+        # assign na hua ho. Warna delivery wala apna banaya bill share/
+        # collect nahi kar paata tha ("not yours").
+        from app.models.order import OrderStatusHistory
+
+        made_by_me = (
+            await db.execute(
+                select(func.count()).select_from(OrderStatusHistory).where(
+                    OrderStatusHistory.order_id == order.id,
+                    OrderStatusHistory.old_status.is_(None),
+                    OrderStatusHistory.changed_by == p.staff.name,
+                )
+            )
+        ).scalar_one()
+        if not made_by_me:
+            raise HTTPException(status_code=403, detail="This order is not yours")
     return order
 
 

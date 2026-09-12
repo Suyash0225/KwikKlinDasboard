@@ -373,7 +373,9 @@ function askCollect(order, due) {
       const r = await api(`/orders/${encodeURIComponent(order)}/collect`, { method: "POST", body: { amount, method } });
       closeModal(); toast(`₹${amount} collected ✅ — ₹${r.due.toFixed(0)} left`);
       renderToday();
-      if (NAV === "route") showRoute(); else loadTasks();
+      if (NAV === "route") showRoute();
+      else if (NAV === "bill") loadRecentBills();
+      else loadTasks();
     });
   };
   $("m-cash").onclick = (e) => send(e, "cash");
@@ -565,7 +567,8 @@ async function showBill() {
       <label for="b-adv">Advance received (₹)</label>
       <input id="b-adv" type="number" inputmode="decimal" value="0" min="0">
       <button class="btn wide" id="b-save">Create bill</button>
-    </article>`;
+    </article>
+    <div id="b-recent"></div>`;
   const fillItems = () => {
     const svc = $("b-svc").value;
     $("b-item").innerHTML = RATES.filter((r) => r.service === svc)
@@ -587,6 +590,43 @@ async function showBill() {
   $("b-save").onclick = (e) => saveBill(e.currentTarget);
   wireCustomerSearch();
   renderCart();
+  loadRecentBills();
+}
+
+/* Mere banaye bill — banate hi yahin neeche, Share aur Collect ke saath.
+   Pehle bill banane ke baad wo kahin dikhta hi nahi tha (task washer ko
+   jaata hai, Route sirf pickup/delivery dikhata hai). */
+async function loadRecentBills() {
+  const box = $("b-recent");
+  if (!box) return;
+  let rows = [];
+  try { rows = await api("/bills"); } catch (e) { return; }
+  if (!$("b-recent")) return;          // tab badal gaya
+  if (!rows.length) return;
+  $("b-recent").innerHTML = `<article class="tcard"><h3>${ME.is_manager ? "Recent bills" : "Your bills"} <small class="hint" style="margin:0;font-weight:400">last 14 days</small></h3></article>`
+    + rows.map((b) => `
+    <article class="tcard">
+      <div class="row1">
+        <span class="code">${esc(b.number)}</span>
+        <span class="age">${esc(b.created)}</span>
+      </div>
+      <h3>${esc(b.customer)}</h3>
+      <div class="ord">
+        <div class="kv"><span>Items</span><span>${esc(b.items)}</span></div>
+        <div class="kv"><span>Total</span><span>₹${b.total.toFixed(0)}</span></div>
+        <div class="kv"><span>Due</span><span>${b.due > 0 ? "₹" + b.due.toFixed(0) : "Paid ✅"}</span></div>
+        ${b.delivery ? `<div class="kv"><span>Delivery</span><span class="${dueClass(b.delivery)}">${esc(whenText(b.delivery))}</span></div>` : ""}
+      </div>
+      <div class="acts">
+        <button class="btn ghost" data-share="${esc(b.number)}">🧾 Share bill</button>
+        ${ME.features.includes("cod_collection") && b.due > 0
+          ? `<button class="btn amber" data-pay="${esc(b.number)}" data-due="${b.due}">💰 Collect</button>` : ""}
+      </div>
+    </article>`).join("");
+  $("b-recent").querySelectorAll("[data-share]").forEach((x) => { x.onclick = () => shareBill(x.dataset.share); });
+  $("b-recent").querySelectorAll("[data-pay]").forEach((x) => {
+    x.onclick = () => askCollect(x.dataset.pay, parseFloat(x.dataset.due));
+  });
 }
 
 /* Naam likhte hi purana customer.
@@ -699,6 +739,8 @@ async function saveBill(btn) {
     PICKED_REF = "";
     toast(`✅ ${r.order_number} created — ₹${r.total.toFixed(0)}, due ₹${r.due.toFixed(0)}`, false, 6000);
     showBill();
+    // Bill bana — ab seedha share ka modal, customer saamne khada hai
+    shareBill(r.order_number);
   });
 }
 
