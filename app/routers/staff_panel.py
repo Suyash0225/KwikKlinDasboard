@@ -12,7 +12,7 @@ call button alag endpoint se chalta hai, aur wo bhi audit hota hai.
 import asyncio
 import re
 import uuid as uuid_module
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import structlog
 from fastapi import (
@@ -1590,12 +1590,63 @@ async def today_summary(
         ),
         "can_collect": p.has("cod_collection"),
     }
+    # Late kaam ki GINTI server se, list se nahi. Panel ke paas sirf pehla
+    # page hota hai (30 rows), to wahan gin kar banner banate to badi dukaan
+    # par wo jhooth bolta: "2 late" jabki asli mein bees. Ginti WAHI query
+    # se aati hai jo list banati hai (_route_query), isliye banner par tap
+    # karke jo dikhe wo ginti se mel khaye.
+    route_q, _ = await _route_query(db, p)
+    out["late"] = (
+        await db.execute(
+            select(func.count()).select_from(
+                route_q.where(Order.expected_delivery < date.today()).subquery()
+            )
+        )
+    ).scalar_one()
     if p.is_manager:
         out["shop_pending"] = await _count(Task.status == TASK_OPEN)
         out["shop_done_today"] = await _count(
             Task.status == TASK_DONE, Task.completed_at >= start
         )
     return out
+
+
+async def _route_query(db: AsyncSession, p: StaffPrincipal):
+    """Is aadmi ka kaam kaunsa hai — ek hi jagah.
+
+    Ye pehle `my_route` ke andar likha tha. Ab do jagah chahiye (list aur
+    late ki ginti), aur do copy rakhna sabse bura vikalp hai: banner "2
+    late" kahe aur list teen dikhaye, to aadmi dono par bharosa chhod
+    deta hai.
+    """
+    is_delivery = p.staff.role is StaffRole.DELIVERY
+    stages = (
+        (OrderStatus.PICKUP_ASSIGNED, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)
+        if is_delivery
+        else (
+            OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
+            OrderStatus.IN_DRY, OrderStatus.IN_IRON,
+        )
+    )
+    col = Order.assigned_delivery_id if is_delivery else Order.assigned_washer_id
+    q = select(Order).where(Order.status.in_(stages))
+    if not p.is_manager:
+        # "Mera kaam" ka matlab sirf explicitly assigned nahi hai.
+        #
+        # Zyadatar bill kisi ko assign kiye bina bante hain (counter par
+        # manager banata hai, ya delivery boy khud). Aise order par
+        # assigned_delivery_id NULL rehta hai — par work order phir bhi
+        # dukaan ke delivery wale ko hi jaata hai (work_orders.resolve_worker
+        # ka fallback). Panel purane filter se un orders ko chhupa deta tha:
+        # WhatsApp par "pickup karo" aata tha aur app mein kuch nahi dikhta
+        # tha. Ab: mere naam wale + jo kisi ke naam nahi hain, jab ye aadmi
+        # hi dukaan ka delivery/washer wala hai.
+        default_staff = await _shop_default_for(db, "DELIVERY" if is_delivery else "WASHER")
+        if default_staff is not None and default_staff.id == p.staff.id:
+            q = q.where(or_(col == p.staff.id, col.is_(None)))
+        else:
+            q = q.where(col == p.staff.id)
+    return q, is_delivery
 
 
 @router.get("/route")
@@ -1611,41 +1662,12 @@ async def my_route(
     ki kataar. Sabse pehle urgent, phir jiski delivery date sabse paas
     hai — taaki koi order neeche daba na rah jaye.
     """
-    is_delivery = p.staff.role is StaffRole.DELIVERY
-    stages = (
-        (OrderStatus.PICKUP_ASSIGNED, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)
-        if is_delivery
-        else (
-            OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
-            OrderStatus.IN_DRY, OrderStatus.IN_IRON,
-        )
+    base, is_delivery = await _route_query(db, p)
+    q = base.order_by(
+        Order.priority.desc(),
+        Order.expected_delivery.asc().nullslast(),
+        Order.created_at,
     )
-    col = Order.assigned_delivery_id if is_delivery else Order.assigned_washer_id
-    q = (
-        select(Order)
-        .where(Order.status.in_(stages))
-        .order_by(
-            Order.priority.desc(),
-            Order.expected_delivery.asc().nullslast(),
-            Order.created_at,
-        )
-    )
-    if not p.is_manager:
-        # "Mera kaam" ka matlab sirf explicitly assigned nahi hai.
-        #
-        # Zyadातर bill kisi ko assign kiye bina bante hain (counter par
-        # manager banata hai, ya delivery boy khud). Aise order par
-        # assigned_delivery_id NULL rehta hai — par work order phir bhi
-        # dukaan ke delivery wale ko hi jaata hai (work_orders.resolve_worker
-        # ka fallback). Panel purane filter se un orders ko chhupa deta tha:
-        # WhatsApp par "pickup karo" aata tha aur app mein kuch nahi dikhta
-        # tha. Ab: mere naam wale + jo kisi ke naam nahi hain, jab ye aadmi
-        # hi dukaan ka delivery/washer wala hai.
-        default_staff = await _shop_default_for(db, "DELIVERY" if is_delivery else "WASHER")
-        if default_staff is not None and default_staff.id == p.staff.id:
-            q = q.where(or_(col == p.staff.id, col.is_(None)))
-        else:
-            q = q.where(col == p.staff.id)
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
     rows = (
         await db.execute(

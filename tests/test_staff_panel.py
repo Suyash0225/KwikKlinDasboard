@@ -1642,3 +1642,46 @@ async def test_reminder_respects_opt_out_and_a_paid_bill(
         assert r.status_code == 400, r.text
     finally:
         await _drop_rate()
+
+
+async def test_today_counts_late_work_the_same_way_the_list_does(
+    client, two_shops, sent
+) -> None:
+    """Banner ki ginti aur list ek hi query se aati hain.
+
+    Ye ginti server se isliye aati hai ki panel ke paas sirf pehla page
+    hota hai — bees late par bhi wo "2" keh deta. Aur dono ek hi helper
+    (_route_query) se bante hain, warna banner "2" kahe aur chhaant lagane
+    par teen dikhein, jiske baad aadmi dono par bharosa chhod deta hai.
+    """
+    from datetime import date, timedelta
+
+    from app.models import OrderStatus
+    from app.services import tenant_context
+
+    await _login(client, A_DEL_PHONE)
+    before = (await client.get("/staff/api/today")).json()["late"]
+
+    # Delivery wale ke stage mein do order: ek beeta hua, ek aage ka
+    token = tenant_context.current_tenant_id.set(two_shops["a"])
+    try:
+        async with async_session_factory() as db:
+            for days, status in ((-3, OrderStatus.READY), (+3, OrderStatus.READY)):
+                o = await create_order(
+                    db, customer_phone=CUST_A, customer_name="Late Grahak",
+                    items=[{"type": "Shirt", "qty": 1}],
+                    expected_delivery=date.today() + timedelta(days=days),
+                )
+                o.status = status
+                db.add(o)
+            await db.commit()
+    finally:
+        tenant_context.current_tenant_id.reset(token)
+
+    after = (await client.get("/staff/api/today")).json()["late"]
+    assert after == before + 1, "sirf beeta hua order late hai, aane wala nahi"
+
+    # Aur wahi order list mein bhi late dikhe — dono ek hi sach bolein
+    stops = (await client.get("/staff/api/route?limit=100")).json()["stops"]
+    overdue = [s for s in stops if s["delivery"] and s["delivery"] < date.today().isoformat()]
+    assert len(overdue) == after, "banner aur list ki ginti alag nahi honi chahiye"

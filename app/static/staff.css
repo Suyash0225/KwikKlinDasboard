@@ -461,3 +461,25 @@ input[type=file] { padding: 9px; }
 }
 .pickbtn.on { background: var(--ink); border-color: var(--ink); color: #fff; }
 h3.mt-lg { margin-top: 20px; }
+
+/* ─── late ka banner ─────────────────────────────────────────────────
+   Late order list mein pehle se upar aata hai aur uski date laal hoti
+   hai — par wo tabhi dikhta hai jab aadmi neeche padhe. Ye patti khulte
+   hi aankh mein chubhti hai, aur ek tap mein sirf late kaam dikha deti
+   hai. Poori chaudai ka button hai, dhoop mein ek angoothe se dabne
+   laayak.
+
+   Rang late wala hi (--late), brand orange nahi: orange is app mein
+   "ye dabao" ka matlab rakhta hai, aur ye khabar hai, kaam nahi. */
+.latebar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; border: 0; border-bottom: 1px solid var(--rule);
+  padding: 11px clamp(14px, 4vw, 22px); min-height: var(--tap);
+  background: var(--late-bg); color: var(--late);
+  font: inherit; font-size: 13.5px; font-weight: 650; text-align: left; cursor: pointer;
+}
+.latebar b { font-weight: 700; text-decoration: underline; white-space: nowrap; }
+.latebar:active { background: #ffe4e6; }
+/* Chhaant lagi hui ho to patti ulat jaati hai — ab ye "wapas jaao" hai,
+   aur khabar dobara chillane ki zaroorat nahi. */
+.latebar.on { background: var(--ink); color: #fff; border-bottom-color: var(--ink); }

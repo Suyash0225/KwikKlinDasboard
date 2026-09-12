@@ -202,6 +202,7 @@ function go(nav) {
   $("searchrow").hidden = nav !== "bills";
   // Hisaab kaam ke baare mein hai — form aur profile par sirf jagah khata hai
   $("today").hidden = !(nav === "work" || nav === "bills");
+  $("latebar").hidden = true;        // paintLate() isse wapas laayega
   $("nav").querySelectorAll("[data-nav]").forEach((b) => b.classList.toggle("on", b.dataset.nav === nav));
   if (nav === "work") loadWork();
   else if (nav === "bills") loadBills();
@@ -237,10 +238,43 @@ async function loadToday() {
       (t.can_collect ? cell("collected", money(t.collected_today), "cash") : "") +
       (t.shop_pending !== undefined ? cell("shop total", t.shop_pending) : "");
     $("today").hidden = !(NAV === "work" || NAV === "bills");
+    LATE_N = t.late || 0;
+    paintLate();
   } catch (e) {
     $("today").hidden = true;   // hisaab na mile to chup — kaam chalta rahe
+    $("latebar").hidden = true;
   }
 }
+
+/* Beeta hua kaam khud bolna chahiye.
+ *
+ * Late order list mein pehle se upar aata hai aur uski date laal hoti hai,
+ * par wo tabhi dikhta hai jab aadmi app KHOLE aur neeche padhe. Aur "Late"
+ * chip baaki chips jaisa hi lagta hai — usme chubhan nahi hai.
+ *
+ * Ginti server se aati hai, WORK se nahi: panel ke paas sirf pehla page
+ * hota hai, to bees late par bhi banner "2" kehta.
+ */
+let LATE_N = 0;
+
+function paintLate() {
+  const bar = $("latebar");
+  // Sirf Kaam wale screen par. Bill banate waqt ye dhyan todta hai, aur
+  // filter bhi usi screen ka hai jispar ye le jaata hai.
+  if (NAV !== "work" || LATE_N < 1) { bar.hidden = true; return; }
+  bar.hidden = false;
+  bar.classList.toggle("on", FILTER === "late");
+  bar.innerHTML = FILTER === "late"
+    ? `<span>⏰ ${LATE_N} late — sab dikha rahe hain</span><b>Wapas</b>`
+    : `<span>⏰ ${LATE_N} kaam late ${LATE_N === 1 ? "hai" : "hain"}</span><b>Dekhein</b>`;
+}
+
+$("latebar").onclick = () => {
+  FILTER = FILTER === "late" ? "all" : "late";
+  $("chips").innerHTML = workChips();
+  paintLate();
+  renderWork();
+};
 
 /* ─── notifications ─────────────────────────────────────────────────── */
 /* Sirf ek cheez abhi: owner ke wo jawab jo maine nahi padhe. Badge tabhi
@@ -379,6 +413,7 @@ async function loadWork(opts = {}) {
   MORE_LEFT = (route.stops.length >= PAGE) || (tasks.tasks.length >= PAGE);
   WORK.sort((a, b) => (b.late - a.late) || (b.urgent - a.urgent));
   $("chips").innerHTML = workChips();
+  paintLate();
   renderWork();
 }
 
@@ -398,6 +433,7 @@ $("chips").addEventListener("click", (e) => {
   FILTER = b.dataset.chip;
   if (NAV === "bills") { loadBills(); return; }
   $("chips").innerHTML = workChips();
+  paintLate();
   renderWork();
 });
 
