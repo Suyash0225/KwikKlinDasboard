@@ -608,7 +608,16 @@ async def _post_with_retry(
         if r.status_code < 400:
             return r.json()
 
-        err = r.json().get("error", {})
+        # Meta JSON mein galti bhejta hai — par beech ka proxy, Cloudflare ka
+        # 5xx page ya office ka firewall HTML bhejta hai. Pehle yahan r.json()
+        # seedha phat jaata tha (JSONDecodeError), jo SendError nahi hai —
+        # to notification wala raasta to chup rehta tha, par Inbox/"Send
+        # bill" wala raasta owner ko 500 dikhata tha. Ab har jawab SendError
+        # banta hai, chahe body kuch bhi ho.
+        try:
+            err = r.json().get("error", {}) or {}
+        except (ValueError, AttributeError):
+            err = {"message": (r.text or "")[:200].strip() or "non-JSON response"}
         last_error = f"{r.status_code} code={err.get('code')} {err.get('message')}"
         if r.status_code == 429:
             transient = True

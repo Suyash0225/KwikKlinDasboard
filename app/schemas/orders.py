@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models import OrderStatus, PaymentMethod
 
@@ -14,7 +14,15 @@ class OrderItemIn(BaseModel):
     model_config = {"extra": "allow"}
 
     type: str = Field(min_length=1, max_length=60)
-    qty: int = Field(default=1, ge=1, le=500)
+    # int | float: dashboard "Qty / kg" 2.5 bhejta hai (step 0.1) aur pehle
+    # yahan sirf int tha — 2.5 kg ka bill 422 par gir jaata tha. Union smart
+    # mode 2 ko int hi rakhta hai (JSON/receipt mein "2", "2.0" nahi).
+    qty: int | float = Field(default=1, gt=0, le=500)
+
+    @field_validator("qty")
+    @classmethod
+    def _whole_qty_as_int(cls, v):
+        return int(v) if isinstance(v, float) and v.is_integer() else v
     service: str | None = Field(default=None, max_length=60)
 
 
