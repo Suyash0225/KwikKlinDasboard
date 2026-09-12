@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     # --- Internal admin API ---
     # Sent as the X-API-Key header on /admin and /orders endpoints.
     ADMIN_API_KEY: str
+    # Fernet key — tenants.wa_token (har dukaan ka WhatsApp token) isi se
+    # DB mein encrypted rehta hai. Khali = plaintext (purana single-shop
+    # deploy chalta rahe), par startup par WARNING. Banane ke liye:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    TOKEN_ENCRYPTION_KEY: str = ""
 
     # --- Shop / locale ---
     SHOP_NAME: str

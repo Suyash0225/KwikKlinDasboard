@@ -31,6 +31,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.services.secrets import EncryptedText
 
 # --- tenant lifecycle -------------------------------------------------------
 # trial      : paid nothing yet, FULL access until trial_ends_at (7 din)
@@ -106,7 +107,9 @@ class Tenant(Base):
         String(30), unique=True, index=True
     )
     wa_waba_id: Mapped[str | None] = mapped_column(String(30))
-    wa_token: Mapped[str | None] = mapped_column(Text)
+    # DB mein encrypted (app/services/secrets.py) — Python mein plain.
+    # Kabhi API response mein poora mat bhejo; sirf mask (••••1234).
+    wa_token: Mapped[str | None] = mapped_column(EncryptedText)
 
     # what WE still owe them before they are live (WhatsApp connect etc.)
     onboarding_done: Mapped[bool] = mapped_column(
