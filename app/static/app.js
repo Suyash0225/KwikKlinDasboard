@@ -579,8 +579,13 @@ const kpi = (lbl, val, sub, click, icon = "📊", tint = "blue") =>
 
 function renderChips() {
   const by = DASH.counts.by_status || {};
-  const chips = [["", `All active <b>${DASH.counts.active_total}</b>`]]
-    .concat(STATUS_SEQ.filter((s) => s !== "DELIVERED").map((s) => [s, `${statusName(s)} <b>${by[s] || 0}</b>`]));
+  // Ginti .cnt pill mein — <b> ke saath koi jagah nahi banti aur "Washing0"
+  // ek shabd jaisa padha jaata hai. .cnt ka CSS pehle se maujood tha (uske
+  // upar likha comment bhi), sirf yahan lagaya nahi gaya tha.
+  const cnt = (n) => `<span class="cnt">${n}</span>`;
+  const chips = [["", `All active${cnt(DASH.counts.active_total)}`]]
+    .concat(STATUS_SEQ.filter((s) => s !== "DELIVERED")
+      .map((s) => [s, `${statusName(s)}${cnt(by[s] || 0)}`]));
   $("dash-chips").innerHTML = chips
     .map(([v, h]) => `<span class="chip ${dashFilter.status === v ? "on" : ""}" onclick="dashFilter.status='${v}';dashFilter.page=1;renderChips();renderOrders()">${h}</span>`)
     .join("");
@@ -812,7 +817,7 @@ function renderLines() {
           onchange="LINES[${i}].rate=parseFloat(this.value)||0;calcBill()"></div>
       <div class="lf lf-amt"><span class="ll">Amount</span>
         <div class="money" id="nb-amt-${i}">${money(l.amount)}</div></div>
-      <button class="btn sm danger del" aria-label="Remove item" title="Remove item" onclick="delLine(${i})">✕</button>
+      <button class="btn sm ghost danger-ic del" aria-label="Remove item" title="Remove item" onclick="delLine(${i})">✕</button>
     </div>`).join("");
   calcBill();
 }
