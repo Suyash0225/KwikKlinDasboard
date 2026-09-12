@@ -45,6 +45,7 @@ from app.services.order_service import (
     InvalidTransitionError,
     OrderError,
     OrderNotFoundError,
+    PlanLimitError,
 )
 from app.utils.phone import normalize_phone
 
@@ -475,6 +476,9 @@ async def create_order(body: OrderCreateIn, db: AsyncSession = Depends(get_db)) 
                 amount=body.advance_amount,
                 method=body.advance_method or PM.CASH,
             )
+    except PlanLimitError as exc:
+        # Limit khatam = 402, taaki dashboard Upgrade prompt dikhaye
+        raise HTTPException(status_code=402, detail=str(exc))
     except (OrderError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     # instant work order to staff — UI-created bills behave like chat bills
@@ -679,6 +683,8 @@ async def record_payment(
         await order_service.record_payment(db, order, amount=body.amount, method=body.method)
     except OrderNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except PlanLimitError as exc:
+        raise HTTPException(status_code=402, detail=str(exc))
     except OrderError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return await _order_out(db, order)

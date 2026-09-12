@@ -67,6 +67,16 @@ class OrderError(Exception):
     """Base class for order business-rule violations."""
 
 
+class PlanLimitError(OrderError):
+    """Plan ki limit khatam — galat request nahi, paisa ka mamla.
+
+    Isliye ye alag exception hai: router ise 402 banata hai, 400 nahi.
+    Feature gates pehle se 402 dete hain aur dashboard 402 par hi Upgrade
+    prompt dikhata hai — order cap par 400 bhejne se owner ko sirf ek laal
+    error dikhta tha, theek us waqt jab use upgrade ka rasta dikhna chahiye.
+    """
+
+
 class InvalidTransitionError(OrderError):
     """Status change not allowed by the state machine."""
 
@@ -145,7 +155,7 @@ async def create_order(
             if _used >= _limits["max_orders_month"]:
                 nxt = _plans.next_plan_after(_plan.code)
                 hint = f" {_plans.get(nxt).name} plan mein unlimited." if nxt else ""
-                raise OrderError(
+                raise PlanLimitError(
                     f"Is mahine ki order limit ({_limits['max_orders_month']}) "
                     f"khatam — Upgrade karein.{hint}"
                 )

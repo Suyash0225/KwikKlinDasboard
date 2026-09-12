@@ -234,7 +234,9 @@ async def test_order_monthly_limit_enforced(client) -> None:
             "customer_phone": "+919999900054",
             "items": [{"type": "shirt", "qty": 1}],
         })
-        assert r.status_code == 400 and "Upgrade" in r.json()["detail"]
+        # 402, 400 nahi: limit khatam hona "galat request" nahi, paisa ka
+        # mamla hai — dashboard 402 par hi Upgrade prompt dikhata hai.
+        assert r.status_code == 402 and "Upgrade" in r.json()["detail"]
     finally:
         plans.PLANS["growth"] = orig
     async with async_session_factory() as db:

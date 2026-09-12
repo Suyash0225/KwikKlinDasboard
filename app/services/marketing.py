@@ -258,11 +258,10 @@ async def send_campaign(campaign_id) -> None:
         _tid = _tc.current_tenant_id.get() or _tc.cached_home_tenant_id()
         if _tid is not None:
             _t = await db.get(_T, _tid)
-            _cap = _plans.get(_t.plan if _t else _plans.DEFAULT_PLAN).max_campaign_msgs_month
-            # override bhi chalta hai: -1 = unlimited
-            _ov = (getattr(_t, "limit_overrides", None) or {}).get("max_campaign_msgs_month")
-            if _ov is not None:
-                _cap = None if _ov == -1 else int(_ov)
+            # effective_limits = plan + vendor override, ek hi jagah. Pehle
+            # yahan override ka logic dobara likha tha — do jagah ka hisaab
+            # kabhi na kabhi alag ho jaata hai.
+            _cap = _plans.effective_limits(_t)["max_campaign_msgs_month"]
             if _cap is not None:
                 budget = min(budget, _cap)
         # The month's spend is counted ONCE and then tracked locally. It used
