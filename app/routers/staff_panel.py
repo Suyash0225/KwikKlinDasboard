@@ -918,6 +918,28 @@ async def team_view(
 # ------------------------------------------------- rozmarra ke 4 kaam ----
 
 
+async def _shop_default_for(db: AsyncSession, role: str) -> Staff | None:
+    """Dukaan ka default delivery/washer aadmi — wahi jise work order jaata
+    hai jab order kisi ke naam par nahi hai (work_orders.resolve_worker)."""
+    from app.services import team
+
+    try:
+        if role == "DELIVERY":
+            return await team.delivery_staff(db)
+        from app.services import app_settings
+
+        phone = (await app_settings.get(db, "default_washer_phone") or "").strip()
+        if phone:
+            return (
+                await db.execute(select(Staff).where(Staff.phone == phone))
+            ).scalar_one_or_none()
+        washers = [s for s in await team.active_staff(db) if s.role is StaffRole.WASHER]
+        return washers[0] if len(washers) == 1 else None
+    except Exception:
+        log.exception("shop_default_lookup_failed", role=role)
+        return None
+
+
 async def _my_order(db: AsyncSession, p: StaffPrincipal, number: str) -> Order:
     """Order — par sirf wahi jo is aadmi ka hai (manager ko sab)."""
     order = (
@@ -953,9 +975,25 @@ async def _my_order(db: AsyncSession, p: StaffPrincipal, number: str) -> Order:
                 )
             )
         ).scalar_one()
-        if not made_by_me:
+        # ...aur jo order kisi ke naam par hai hi nahi, wo dukaan ke us
+        # role wale aadmi ka hai — bilkul wahi shart jo /route lagata hai.
+        # Dono jagah ek hi niyam hona ZAROORI hai: warna panel stop dikhata
+        # hai par uspar Call/Collect/Share 403 dete hain, jo dikhne se bhi
+        # bura hai. (Ye live test mein isi tarah pakda gaya.)
+        if not made_by_me and not await _unclaimed_and_mine(db, p, order):
             raise HTTPException(status_code=403, detail="This order is not yours")
     return order
+
+
+async def _unclaimed_and_mine(db: AsyncSession, p: StaffPrincipal, order: Order) -> bool:
+    """Kya ye order kisi ke naam par nahi hai AUR is aadmi ke role ka kaam
+    hai? Tabhi TRUE jab ye dukaan ka default delivery/washer wala hai."""
+    is_delivery = p.staff.role is StaffRole.DELIVERY
+    col_value = order.assigned_delivery_id if is_delivery else order.assigned_washer_id
+    if col_value is not None:
+        return False
+    default_staff = await _shop_default_for(db, "DELIVERY" if is_delivery else "WASHER")
+    return default_staff is not None and default_staff.id == p.staff.id
 
 
 @router.get("/orders/{number}/call")
@@ -1168,28 +1206,6 @@ async def today_summary(
             Task.status == TASK_DONE, Task.completed_at >= start
         )
     return out
-
-
-async def _shop_default_for(db: AsyncSession, role: str) -> Staff | None:
-    """Dukaan ka default delivery/washer aadmi — wahi jise work order jaata
-    hai jab order kisi ke naam par nahi hai (work_orders.resolve_worker)."""
-    from app.services import team
-
-    try:
-        if role == "DELIVERY":
-            return await team.delivery_staff(db)
-        from app.services import app_settings
-
-        phone = (await app_settings.get(db, "default_washer_phone") or "").strip()
-        if phone:
-            return (
-                await db.execute(select(Staff).where(Staff.phone == phone))
-            ).scalar_one_or_none()
-        washers = [s for s in await team.active_staff(db) if s.role is StaffRole.WASHER]
-        return washers[0] if len(washers) == 1 else None
-    except Exception:
-        log.exception("shop_default_lookup_failed", role=role)
-        return None
 
 
 @router.get("/route")

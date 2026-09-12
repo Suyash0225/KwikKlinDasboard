@@ -836,6 +836,8 @@ async def test_action_buttons_wrap_instead_of_cutting_their_text(client) -> None
     Ye test un jagahon ko pakadta hai jahan sabse zyada button ek saath
     aate hain — task ka detail sheet, task card, aur staff panel.
     """
+    import re as _re
+
     admin_css = (await client.get("/admin/static/app.css")).text
     staff_css = (await client.get("/admin/static/staff.css")).text
 
@@ -848,15 +850,26 @@ async def test_action_buttons_wrap_instead_of_cutting_their_text(client) -> None
         i = css.find(sel)
         assert i != -1, f"{sel} gayab ho gaya"
         block = css[i : css.find("}", i)]
-        assert "flex: 1 1 auto" in block or "flex:1 1 auto" in block, \
-            f"{sel}: flex-basis 0 wapas aa gaya — text button ke bahar niklega"
+        # Shart INTENT hai, ek khaas value nahi: flex-basis `auto` ho (0
+        # nahi) aur min-width `auto`. `1 1 auto` aur `0 1 auto` dono theek
+        # hain — dono mein button apne text se chhota nahi ho sakta; farak
+        # sirf itna ki wo bachi jagah bharta hai ya nahi, jo design ka
+        # faisla hai, safety ka nahi. Pehle test sirf "1 1 auto" maanta
+        # tha, to layout badalte hi jhootha laal ho jaata tha.
+        flex = _re.search(r"flex:\s*(\d+)\s+(\d+)\s+(\w+)", block)
+        assert flex is not None, f"{sel}: flex shorthand hi nahi mila"
+        assert flex.group(3) == "auto", \
+            f"{sel}: flex-basis {flex.group(3)} hai — 0 hote hi text button ke bahar niklega"
         assert "min-width: auto" in block or "min-width:auto" in block, \
             f"{sel}: min-width auto hataya to button apne text se chhota ho jayega"
 
-    # jahan button toot sakein, wahan wrap zaroori hai
-    for css, sel in ((admin_css, ".modal .btnrow {"), (staff_css, ".btnrow{")):
-        i = css.find(sel)
-        assert i != -1 and "wrap" in css[i : css.find("}", i)], \
+    # jahan button toot sakein, wahan wrap zaroori hai.
+    # Selector regex se dhoonda jaata hai — pehle exact ".btnrow{" khoja
+    # jaata tha, to CSS mein ek space daalte hi test jhootha pass ho jaata.
+    for css, sel in ((admin_css, r"\.modal \.btnrow"), (staff_css, r"\.btnrow")):
+        m = _re.search(sel + r"\s*\{([^}]*)\}", css)
+        assert m is not None, f"{sel} gayab ho gaya"
+        assert "wrap" in m.group(1), \
             f"{sel} par flex-wrap chahiye, warna line toot nahi paegi"
 
 
