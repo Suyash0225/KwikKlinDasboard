@@ -239,9 +239,12 @@ async def test_order_monthly_limit_enforced(client) -> None:
         assert r.status_code == 402 and "Upgrade" in r.json()["detail"]
     finally:
         plans.PLANS["growth"] = orig
-    async with async_session_factory() as db:
-        await db.execute(sqltext("DELETE FROM customers WHERE phone='+919999900054'"))
-        await db.commit()
+    # purge_phones FK ka sahi kram jaanta hai (orders, payments, tasks...
+    # phir customer). Seedha "DELETE FROM customers" tab girta hai jab is
+    # number par koi order pada ho — aur wajah agle test mein dikhti hai.
+    from tests.conftest import purge_phones
+
+    await purge_phones("+919999900054")
 
 
 async def test_tenant_list_shows_usage_vs_limit(client) -> None:

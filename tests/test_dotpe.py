@@ -57,6 +57,15 @@ def dotpe_inbound(body_text: str, ts: int = 1700000001) -> bytes:
 
 AUTH = {"Dotpe-Webhook-Token": settings.DOTPE_WEBHOOK_TOKEN}
 
+# DotPe optional BSP hai (Meta Cloud API default). Token set na ho to
+# webhook jaan-boojh kar 403 deta hai — us haalat mein ye tests fail nahi,
+# SKIP hone chahiye. Warna suite hamesha laal rehti hai aur log padhna
+# band ho jaata hai; asli fail bhi usi laal mein chhup jaata hai.
+needs_dotpe = pytest.mark.skipif(
+    not settings.DOTPE_WEBHOOK_TOKEN,
+    reason="DOTPE_WEBHOOK_TOKEN not set — DotPe BSP disabled in this environment",
+)
+
 
 # --- webhook auth ---
 
@@ -73,6 +82,7 @@ async def test_dotpe_webhook_requires_token(client, sent) -> None:
 
 # --- inbound handling ---
 
+@needs_dotpe
 async def test_dotpe_inbound_stored_and_deduped(client, sent) -> None:
     body = dotpe_inbound("mera order kahan hai", ts=1700000123)
     r1 = await client.post("/webhook/dotpe", content=body, headers=AUTH)
@@ -95,6 +105,7 @@ async def test_dotpe_inbound_stored_and_deduped(client, sent) -> None:
     assert len(sent) == 1
 
 
+@needs_dotpe
 async def test_dotpe_button_reply_preserves_payload(client, sent) -> None:
     body = json.dumps(
         {

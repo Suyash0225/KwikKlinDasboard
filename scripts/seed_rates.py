@@ -44,6 +44,11 @@ DEFAULT_RATES: list[tuple[str, str, str, str]] = [
 
 
 async def seed() -> None:
+    # Pehle home tenant ka cache — warna naye rows tenant_id=NULL ke saath
+    # jaate hain aur RLS ke andar dukaan ko dikhte hi nahi (scripts/_bootstrap.py).
+    from scripts._bootstrap import prime
+
+    await prime()
     async with async_session_factory() as s:
         existing = {
             (r.service, r.garment)
