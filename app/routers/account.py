@@ -425,13 +425,27 @@ async def me(
                 select(func.count()).select_from(User).where(User.tenant_id == p.user.tenant_id)
             )
         ).scalar_one()
+    is_home = await auth.is_home_user(db, p.user)
+    # Kya is dukaan se WhatsApp bhej sakte hain? Tenant ke apne creds, ya
+    # home dukaan ke liye .env wale (whatsapp.resolve_creds ka wahi order).
+    # Sirf haan/na jaata hai — token kabhi nahi. Dashboard isi se tay karta
+    # hai ki "Customer notified" sach bole ya "Share on WhatsApp" dikhaye.
+    wa_connected = False
+    if p.tenant is not None:
+        wa_connected = bool(p.tenant.wa_token and p.tenant.wa_phone_number_id) or (
+            is_home
+            and bool(settings.WHATSAPP_TOKEN and settings.WHATSAPP_PHONE_NUMBER_ID)
+        )
+    tenant_out = _tenant_out(p.tenant) if p.tenant else None
+    if tenant_out is not None:
+        tenant_out["wa_connected"] = wa_connected
     return {
         "user": {"name": p.user.name, "email": p.user.email, "role": p.user.role},
-        "tenant": _tenant_out(p.tenant) if p.tenant else None,
+        "tenant": tenant_out,
         "can_write": p.can_write,
         # Kya ye user ISI deployment ki dukaan ka hai? Sirf tabhi use /admin
         # dashboard dikhaya jaata hai — warna wo kisi aur ka data hoga.
-        "is_home": await auth.is_home_user(db, p.user),
+        "is_home": is_home,
         "usage": {
             "orders_this_month": used,
             "ai_calls_this_month": ai_used,

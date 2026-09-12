@@ -290,6 +290,13 @@ async function ensureSignedIn() {
   return false;
 }
 let SIGNED_IN_AS = null;
+/* Kya dukaan se WhatsApp bhej sakte hain? /api/me → tenant.wa_connected.
+ * Pata na ho (purani admin-key login, session nahi) to haan maan lo —
+ * tab bhejne ki koshish hoti hai aur fail par share modal khul jaata hai. */
+function waConnected() {
+  const t = SIGNED_IN_AS && SIGNED_IN_AS.tenant;
+  return !t || t.wa_connected !== false;
+}
 
 /* Feature gating — /api/me ke `features` array se. Jo tab plan mein nahi
    hai wo 🔒 ke saath dikhta hai; click par Upgrade prompt. Naya gated tab
@@ -753,6 +760,7 @@ async function initNewBill() {
     [RATES, SETTINGS_CACHE] = await Promise.all([api("/admin/api/rates"), api("/admin/api/settings")]);
   } catch (e) { toast(e.message, true); }
   if (!CUSTOMERS_CACHE) loadCustomers(true);
+  if ($("nb-wa-notice")) $("nb-wa-notice").style.display = waConnected() ? "none" : "";
   if (!LINES.length) addLine();
   renderLines();
   const days = parseInt(SETTINGS_CACHE.turnaround_days) || 2;
@@ -958,13 +966,19 @@ async function saveBill(btn) {
   });
 }
 function showBillSuccess(o) {
+  const j = esc(JSON.stringify(o)).replace(/"/g, "&quot;");
+  const wa = waConnected();
+  // Jhooth mat bolo: API juda nahi to customer ko kuch nahi gaya.
+  const line = wa
+    ? "Customer notified on WhatsApp; staff got the work order."
+    : "WhatsApp not connected — customer has <b>not</b> been messaged. Share the bill from your phone:";
   openModal(`<h3>✅ ${o.order_number} created</h3>
-    <p class="muted">Total ${o.total_amount ? money(o.total_amount) : "—"} · ${esc(o.customer_name || o.customer_phone)}. Customer notified on WhatsApp; staff got the work order.</p>
+    <p class="muted">Total ${o.total_amount ? money(o.total_amount) : "—"} · ${esc(o.customer_name || o.customer_phone)}. ${line}</p>
     <div class="btnrow" style="margin-top:12px">
-      <button class="btn ghost" onclick="printReceipt(${esc(JSON.stringify(o)).replace(/"/g, "&quot;")})">🖨 Print receipt</button>
-      <button class="btn ghost" onclick="waBill(${esc(JSON.stringify(o)).replace(/"/g, "&quot;")})">📲 Send from shop number</button>
-      <button class="btn ghost" onclick="closeModal();shareBillModal(${esc(JSON.stringify(o)).replace(/"/g, "&quot;")})">💬 Share on WhatsApp</button>
-      <button class="btn" onclick="closeModal()">Done</button>
+      <button class="btn ghost" onclick="printReceipt(${j})">🖨 Print receipt</button>
+      ${wa ? `<button class="btn ghost" onclick="waBill(${j})">📲 Send from shop number</button>` : ""}
+      <button class="btn ${wa ? "ghost" : ""}" onclick="closeModal();shareBillModal(${j})">💬 Share on WhatsApp</button>
+      <button class="btn ${wa ? "" : "ghost"}" onclick="closeModal()">Done</button>
     </div>`);
 }
 function receiptText(o) {
@@ -1044,6 +1058,7 @@ async function shareBillFromOrder(number) {
 }
 
 async function waBill(o) {
+  if (!waConnected()) { shareBillModal(o); return; }   // API hai hi nahi — seedha share
   try {
     await api("/admin/api/inbox/send", { method: "POST", body: { phone: o.customer_phone, text: receiptText(o) } });
     toast(T.sent);
