@@ -17,9 +17,10 @@ to the owner when unsure. The owner runs the business from a **web dashboard**
 
 It is also being productised as a small SaaS: a public **pricing/signup page**
 (`/join`), per-client onboarding, and an internal **control panel** for the
-operator (plans, clients, revenue). Deployment model is
-**instance-per-tenant** — each laundry gets its own process + database
-(see ARCHITECTURE.md §5).
+operator (plans, clients, revenue). Deployment model is **shared
+multi-tenant**: one instance, one Postgres, every row carries `tenant_id`,
+isolated by request context + ORM auto-filter + Postgres Row-Level
+Security (see ARCHITECTURE.md §5).
 
 ## 2. Tech stack
 
@@ -437,15 +438,21 @@ key gets 429 for that window. If you don't know that's intended, you'd file it
 as a bug; knowing the spec, the test asserts it. That's why QA must own the
 spec, not just click around.
 
-### Q16. How would you test the multi-tenant part when it goes to 10–15 laundries?
+### Q16. How would you test the multi-tenant part when it goes to 50–60 laundries?
 
-**A.** The deployment model is instance-per-tenant (separate process + DB per
-laundry), so cross-tenant data leakage is structurally impossible — but I'd
-still verify the *shared* surfaces: the signup/login flow (`test_account.py`),
-session isolation (`test_tenant_isolation.py` exists for exactly this), the
-operator control panel showing correct per-client billing, and an onboarding
-checklist test: fresh DB + `alembic upgrade head` + seed → smoke suite passes.
-Config, not code, differs per client — so config validation is a test target.
+**A.** It is a shared database, so isolation is something I have to *prove*,
+not assume. Three layers (request context → ORM auto-filter → Postgres RLS
+with FORCE) and a test per layer: `test_tenant_isolation.py` and
+`test_data_isolation.py` (a user of shop A literally cannot read or write
+shop B's rows, even with a crafted query), `test_rls_billing.py` (the DB
+itself rejects a cross-tenant insert), `test_whatsapp_multitenant.py`
+(inbound routing by `phone_number_id`, outbound uses the shop's own creds,
+an unconnected shop never borrows the .env number), and
+`test_scheduler_per_tenant.py` (background jobs run once per shop in that
+shop's context; idempotency keys don't collide; a locked shop gets no
+messages). The sharp edges are the places that *must* run cross-tenant —
+control panel, Razorpay webhook, scheduler's platform half — so those are
+tested for seeing everything while shop sessions see one thing.
 
 ---
 

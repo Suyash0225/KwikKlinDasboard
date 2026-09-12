@@ -3,7 +3,7 @@
 Ye document 3 sawaalon ka jawab hai:
 1. **10,000 customers** tak ye system kaise handle karega?
 2. **Order/message kabhi lost kyon nahi hoga** (crash-safety guarantees)?
-3. **10–15 laundry businesses ko bechna ho** to deployment model kya hai?
+3. **50–60 laundry businesses** ek instance par kaise alag-alag aur safe rehte hain?
 
 ---
 
@@ -75,34 +75,86 @@ Agla kadam jab load real ho (abhi zaroorat NAHI):
 2. Uvicorn workers 2–4 (multi-process) — abhi single process kaafi hai.
 3. `webhook_events`/`conversations` partitioning — 10M+ rows ke baad hi sochna.
 
-## 5. 10–15 laundry businesses ko bechna — deployment model
+## 5. Multi-tenant — ek instance, 50–60 laundry businesses
 
-**Recommendation: instance-per-tenant** (har laundry ka apna deployment).
-Shared multi-tenant DB abhi galat trade-off hai — wajah:
+> **Purana plan (instance-per-tenant) ab code mein nahi hai.** Ye section
+> aaj ke code ka sach hai (Sep 2026). Pehle yahan likha tha "har dukaan ka
+> alag deployment, shared DB galat trade-off" — wo self-serve signup se
+> pehle ki baat thi. Ab ek instance, ek Postgres, `tenants` table, aur har
+> dukaan ka data usi DB mein `tenant_id` se alag.
 
-- Har laundry ka **apna WhatsApp number + WABA + Meta app** hoga hi
-  (WhatsApp policy) — sabse bada "tenant isolation" Meta khud force karta hai.
-- Data isolation free milta hai: ek client ka data doosre ko dikh hi nahi
-  sakta, koi `tenant_id` bug leak nahi kar sakta. High-security requirement
-  ke liye ye सबसे strong model hai.
-- Ek client ka crash/upgrade doosron ko nahi girata; per-client backup/restore.
-- 10–15 clients ke liye ops bilkul manageable hai (ek VM par 3–4 instances
-  bhi chal sakte hain — alag port, alag DB, alag `.env`).
+### Isolation — teen layers, koi ek gire to doosri pakadti hai
 
-**Naya client onboard karne ka checklist** (~1 ghanta):
-1. Naya Postgres DB + user banao (`CREATE DATABASE laundry_<client>`).
-2. Repo clone → `.env` bharo: us client ka `WHATSAPP_TOKEN`, `PHONE_NUMBER_ID`,
-   `WABA`, `APP_SECRET`, naya random `ADMIN_API_KEY`, `DATABASE_URL`, `SHOP_NAME`.
-3. `alembic upgrade head` → uvicorn (alag port) → webhook URL Meta mein set.
-4. Settings UI se rate card, review links, staff numbers, SLA days.
-5. Templates Meta par submit (Template Studio).
+| Layer | Kahan | Kya karta hai |
+|---|---|---|
+| 1. Request context | `app/main.py` middleware → `tenant_context.current_tenant_id` (ContextVar) | Session cookie → user ka tenant; staff cookie → staff ki dukaan; anonymous/API-key → home tenant. Owner ka phone bhi context mein (`manager_phone()`). |
+| 2. ORM | `app/database.py` events | Har SELECT par automatic `tenant_id = <ctx>` filter (`with_loader_criteria`), har naye row par automatic stamp (`before_flush`). Developer WHERE bhool bhi jaye to filter lagta hai. |
+| 3. Postgres RLS | migrations `d4c8e2f7a915` (19 tables) + `r2a8c5d3f9e7` (4 billing tables) | `ENABLE + FORCE ROW LEVEL SECURITY`, policy `tenant_isolation` — GUC `app.tenant_id` set ho to sirf usi tenant ki rows (read **aur** write); unset = system context, sab rows. Table owner bhi bypass nahi kar sakta. |
 
-Branding/config sab `settings_kv` + `.env` mein hai — code fork karne ki
-zaroorat nahi, ek hi repo sab clients ke liye.
+**Kaun sa table kahan** — 23 tables tenant-scoped (customers, orders, payments,
+staff, tasks, conversations, campaigns, coupons, rate_card, settings_kv,
+audit_log, llm_usage, leads, escalations, faq/corrections/doc_chunks,
+invoices, billing_events, credit_ledger, recharge_requests, ...). RLS ke
+**bahar** jaan-boojh kar: `tenants`, `users`, `invites`, `login_sessions`
+(login ke waqt tenant pata hi nahi hota — email se lookup cross-tenant hai),
+`sent_events` (global idempotency; scheduler tenant prefix lagata hai),
+`kpi_snapshots` (platform KPI), `webhook_events`/`outbound_queue`
+(durability — apna tenant_id carry karte hain).
 
-**Shared multi-tenant kab sochna**: 50+ clients ya self-serve signup chahiye
-tab. Tab plan hai: `tenants` table + har core table par `tenant_id` +
-row-level security — lekin wo ek alag project hai, abhi ka nahi.
+**System context** (ContextVar = None, GUC unset, RLS pass-through) sirf in
+raaston par: `/control/*` (vendor panel), `/webhooks/razorpay`, alembic,
+pg_dump/backup, aur scheduler ka platform-level hissa. Scheduler ka
+dukaan-level kaam (standup, reminders, summary, nudges, segments)
+`_for_each_tenant()` se har chalu dukaan ke liye alag `as_tenant()` block
+mein chalta hai — apna data, apna WhatsApp number, apna malik.
+
+### Per-tenant cheezein
+
+- **WhatsApp**: har dukaan ka apna `wa_phone_number_id` + `wa_token`
+  (`/api/whatsapp/connect`, Graph-validated). Inbound webhook
+  `metadata.phone_number_id` se tenant tay karta hai. Token DB mein
+  **encrypted** (`app/services/secrets.py`, Fernet, key `TOKEN_ENCRYPTION_KEY`).
+  `.env` wale creds **sirf home tenant** ke — doosri dukaan bina connect ke
+  bheje to `SendError("not connected")`, chupke se home ke number se nahi.
+- **Plans/limits/credits**: `services/plans.py`, `tenants.limit_overrides`,
+  `credit_ledger`; control panel se badalte hain. Per-tenant rate limit
+  middleware mein (`RATE_LIMIT_PER_MIN`).
+- **Staff**: `staff.phone` per-tenant unique — wahi number do dukaanon mein
+  alag aadmi ho sakta hai. Staff panel ka tenant sirf `kk_staff` cookie se.
+- **Owner ka number**: `tenants.owner_phone` → `tenant_context.manager_phone()`.
+  `settings.MANAGER_PHONE` ab sirf fallback hai (home / system context).
+
+### Keys — do alag
+
+- `ADMIN_API_KEY` — **dukaan** ka: home tenant ka dashboard/API tooling.
+- `VENDOR_API_KEY` — **platform** ka: `/control`, vendor session cookie ka
+  HMAC. Set ho to `ADMIN_API_KEY` control par nahi chalta aur ulta bhi.
+  Per-admin keys (`admin_keys` table, read < write < danger) bhi hain.
+- Startup par `_multi_tenant_hardening_check()`: 2+ active tenant aur
+  encryption key / vendor key / placeholder key ki kami ho to ERROR log,
+  har restart par.
+
+### "Home tenant" — kya bacha hai aur kyun
+
+Home = is deployment ki apni dukaan (`settings_kv.home_tenant_slug`, warna
+sabse purana tenant). Sirf teen jagah matlab rakhta hai: `.env` WhatsApp
+creds ka fallback, anonymous/`ADMIN_API_KEY` request ka context, Meta
+block watcher. Ye single-shop deploy ki backward-compat hai — 60 dukaanon
+mein home bhi bas ek tenant hai, koi special access nahi.
+
+### Naya vendor onboard — ab 2 minute, code/deploy nahi
+
+Self-serve signup (`/welcome`) ya control panel se tenant banao → owner
+invite → `/welcome` par WhatsApp connect (apna WABA/number/token) → rate
+card → plan control se. Koi naya process, DB ya `.env` nahi.
+
+### Abhi bhi karne wala (50+ par)
+
+- 2–4 uvicorn workers + pool sizing (ek process, noisy neighbour).
+- Per-tenant export/delete (data portability; churn par maangenge).
+- `users`/`invites` par app-level filter hi hai — RLS nahi lag sakta.
+- Purani single-shop scripts (`seed_staff`, `bootstrap_home_tenant`) home
+  par hi likhti hain.
 
 ## 6. Monitoring / ops
 
