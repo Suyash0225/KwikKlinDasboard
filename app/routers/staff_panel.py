@@ -809,6 +809,79 @@ async def call_customer(
     return {"phone": cust.phone, "name": cust.name or "Customer"}
 
 
+@router.get("/orders/{number}/receipt")
+async def order_receipt(
+    number: str,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Bill ka text + customer ka poora number — WhatsApp par share ke liye.
+
+    Delivery wala darwaze par khada hai, customer bill maang raha hai, aur
+    dukaan ka WhatsApp API juda nahi (ya 24h window band). Tab uske apne
+    phone se wa.me link hi rasta hai. Text yahin banta hai taaki dashboard
+    ke print/share wale bill se ek akshar alag na ho — settings (pata,
+    GSTIN, UPI, footer) wahi ek jagah se aati hain.
+
+    Number sirf apne order ka, aur /call ki tarah har baar audit — kyunki
+    ye bhi poora number dikhane wala raasta hai.
+    """
+    from app.models.tenant import Tenant
+    from app.services import app_settings
+
+    order = await _my_order(db, p, number)
+    cust = await db.get(Customer, order.customer_id)
+    if cust is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    s = await app_settings.all_settings(db)
+    tenant = await db.get(Tenant, p.staff.tenant_id)
+    shop = (tenant.shop_name if tenant and tenant.shop_name else "Kwik Klin").strip()
+
+    total = float(order.total_amount or 0)
+    paid = float(order.amount_paid or 0)
+    money = lambda v: f"₹{v:,.0f}" if float(v).is_integer() else f"₹{v:,.2f}"  # noqa: E731
+    lines = [shop]
+    if s.get("shop_address"):
+        lines.append(str(s["shop_address"]))
+    if s.get("shop_contact_phone"):
+        lines.append(f"Ph: {s['shop_contact_phone']}")
+    if s.get("shop_gstin"):
+        lines.append(f"GSTIN: {s['shop_gstin']}")
+    lines += [
+        "-" * 30,
+        f"Bill: {order.order_number}",
+        f"Customer: {cust.name or cust.phone}",
+        f"Date: {order.created_at.astimezone(IST).strftime('%d %b %Y')}",
+        "-" * 30,
+    ]
+    for it in order.items or []:
+        qty = it.get("qty", 1)
+        qty = int(qty) if float(qty).is_integer() else qty
+        name = it.get("type") or it.get("garment") or it.get("service") or "?"
+        amt = it.get("amount")
+        lines.append(f" {qty} x {name}  {money(amt) if amt is not None else ''}".rstrip())
+    lines += [
+        "-" * 30,
+        f"Total: {money(total) if total else '—'}",
+        f"Paid: {money(paid)}",
+        f"Due: {money(total - paid) if total else '—'}",
+    ]
+    if order.expected_delivery:
+        lines.append(f"Delivery: {order.expected_delivery.strftime('%d %b %Y')}")
+    lines.append("-" * 30)
+    if s.get("upi_vpa"):
+        payee = f" ({s['upi_payee']})" if s.get("upi_payee") else ""
+        lines.append(f"Pay via UPI: {s['upi_vpa']}{payee}")
+    lines.append(str(s.get("invoice_footer") or "Thank you! 🙏"))
+
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="customer_number_viewed",
+        args={"order": order.order_number}, result="share_bill", tenant_id=p.staff.tenant_id,
+    )
+    log.info("staff_shared_bill", staff=p.staff.name, order=order.order_number)
+    return {"phone": cust.phone, "name": cust.name or "Customer", "text": "\n".join(lines)}
+
+
 @router.post("/orders/{number}/photo", status_code=201)
 async def attach_photo(
     number: str,

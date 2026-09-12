@@ -1106,3 +1106,34 @@ async def test_panel_bill_is_a_whole_bill_not_half_of_one(client, two_shops, sen
                 {"t": str(two_shops["a"])},
             )
             await db.commit()
+
+
+async def test_receipt_gives_bill_text_only_for_your_own_order(
+    client, two_shops, sent
+) -> None:
+    """Delivery wala apne phone se bill WhatsApp kar sake — text + poora
+    number, par sirf apne order ka, aur /call ki tarah audit ke saath."""
+    mine = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A)
+    theirs = await _order_for(two_shops["b"], two_shops["b_wash"], CUST_B)
+
+    await _login(client, A_PHONE)
+    r = await client.get(f"/staff/api/orders/{mine}/receipt")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["phone"] == CUST_A
+    assert f"Bill: {mine}" in body["text"]
+    assert "Total:" in body["text"] and "Due:" in body["text"]
+
+    same = await client.get(f"/staff/api/orders/{theirs}/receipt")
+    assert same.status_code in (403, 404) or same.json()["phone"] != CUST_B
+
+    async with async_session_factory() as db:
+        n = (
+            await db.execute(
+                sqltext(
+                    "SELECT count(*) FROM audit_log WHERE action = 'customer_number_viewed'"
+                    " AND result = 'share_bill' AND at > now() - interval '2 minutes'"
+                )
+            )
+        ).scalar_one()
+    assert n >= 1, "bill share bhi number dikhata hai — audit zaroori"

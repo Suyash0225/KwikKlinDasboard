@@ -260,6 +260,7 @@ function renderTasks() {
           ? `<button class="btn ghost" data-do="cancel" data-code="${esc(t.code)}">🛑 Cancel</button>` : ""}
         ${o && ME.features.includes("cod_collection") && o.due > 0
           ? `<button class="btn amber" data-do="collect" data-code="${esc(t.code)}" data-order="${esc(o.number)}" data-due="${o.due}">💰 Collect</button>` : ""}
+        ${o ? `<button class="btn ghost" data-do="share" data-order="${esc(o.number)}">🧾 Share bill</button>` : ""}
         ${ME.is_manager && t.cancel_requested
           ? `<button class="btn danger" data-do="decide" data-code="${esc(t.code)}">Decide cancel</button>` : ""}
       </div>` : ""}
@@ -293,6 +294,7 @@ function act(d) {
   if (d.do === "ask") return askQuestion(d.code);
   if (d.do === "cancel") return askCancel(d.code);
   if (d.do === "collect") return askCollect(d.order, parseFloat(d.due));
+  if (d.do === "share") return shareBill(d.order);
   if (d.do === "decide") return decideCancel(d.code);
 }
 
@@ -770,6 +772,7 @@ async function showRoute(opts = {}) {
           <button class="btn ghost" data-call="${esc(s.number)}">📞 Call</button>
           ${s.address ? `<button class="btn ghost" data-map="${esc(s.address)}">🗺️ Route</button>` : ""}
           <button class="btn ghost" data-photo="${esc(s.number)}">📷 Photo</button>
+          <button class="btn ghost" data-share="${esc(s.number)}">🧾 Share bill</button>
           ${ME.features.includes("cod_collection") && s.due > 0
             ? `<button class="btn amber" data-pay="${esc(s.number)}" data-due="${s.due}">💰 Collect</button>` : ""}
         </div>
@@ -796,6 +799,47 @@ function wireStopButtons() {
   $("list").querySelectorAll("[data-pay]").forEach((b) => {
     b.onclick = () => askCollect(b.dataset.pay, parseFloat(b.dataset.due));
   });
+  $("list").querySelectorAll("[data-share]").forEach((b) => {
+    b.onclick = () => shareBill(b.dataset.share);
+  });
+}
+
+/* ------------------------------------------------- bill WhatsApp par */
+/* Delivery wala darwaze par hai, customer bill maang raha hai. Dukaan ka
+ * WhatsApp API ho na ho — uske apne phone ka WhatsApp to hai. wa.me link
+ * mein number aur bill dono pehle se bhare hote hain; bas Send dabana hai.
+ *
+ * Text server se aata hai (/receipt), dashboard wale bill ke barabar. Poora
+ * number bhi wahi se — /call ki tarah har baar audit hota hai.
+ *
+ * Link modal mein asli <a> hai, window.open nahi: await ke baad window.open
+ * ko popup blocker rok deta hai, <a> par tap khud user ka gesture hai. */
+function waShareUrl(phone, text) {
+  let d = String(phone || "").replace(/\D/g, "").replace(/^0+/, "");
+  if (d.length === 10) d = "91" + d;
+  return `https://wa.me/${d}?text=${encodeURIComponent(text)}`;
+}
+let SHARE_TEXT = "";
+async function shareBill(number) {
+  let r;
+  try { r = await api(`/orders/${encodeURIComponent(number)}/receipt`); }
+  catch (e) { toast(e.message, true); return; }
+  SHARE_TEXT = r.text;
+  openModal(`<h3>${esc(number)} — share bill</h3>
+    <p style="color:#6b7280;font-size:13px;margin:0 0 8px">
+      WhatsApp khulega, bill likha hua — bas Send dabana hai. To: ${esc(r.name)}</p>
+    <pre class="sharetext">${esc(r.text)}</pre>
+    <div class="btnrow">
+      <a class="btn" id="m-wa" href="${esc(waShareUrl(r.phone, r.text))}" target="_blank" rel="noopener">📲 Open WhatsApp</a>
+      <button class="btn ghost" id="m-copy">📋 Copy</button>
+    </div>
+    <div class="btnrow"><button class="btn ghost" id="m-x">Close</button></div>`);
+  $("m-x").onclick = closeModal;
+  $("m-wa").onclick = closeModal;
+  $("m-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied — paste it in WhatsApp"); }
+    catch (e) { toast("Could not copy — select the text and copy", true); }
+  };
 }
 
 /* Poora number maangne par hi milta hai (aur server uska record rakhta

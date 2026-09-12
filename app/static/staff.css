@@ -223,3 +223,9 @@ input[type=file] { padding: 10px; background: #fff; }
 .kv .late, .age.late { color: var(--red); font-weight: 700; }
 /* Refresh dabane par ek chakkar — "click laga" ka saboot */
 .icobtn.spinning { animation: kkspin .7s linear; }
+/* Bill share ka preview — wahi text jo WhatsApp par jayega */
+.sharetext { margin: 0; max-height: 40dvh; overflow: auto; background: #f9fafb;
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;
+  line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
