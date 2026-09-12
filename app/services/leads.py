@@ -154,7 +154,6 @@ _HOT_WORDS = {  # intent keywords -> heat points
 
 async def run_hot_lead_digest() -> int:
     """09:00: owner gets the 5 hottest open leads — a human call converts."""
-    from app.config import settings
     from app.models import Conversation, Direction
 
     async with async_session_factory() as db:
@@ -213,7 +212,6 @@ async def run_hot_lead_digest() -> int:
 
 async def check_stop_throttle() -> None:
     """STOP badh rahe = messages zyada — cap khud 1 pe girao, owner ko batao."""
-    from app.config import settings as cfg
     from app.models import AuditLog
     from app.services import app_settings
 

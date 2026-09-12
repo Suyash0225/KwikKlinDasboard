@@ -14,7 +14,6 @@ from decimal import Decimal
 import structlog
 from sqlalchemy import case, func, select
 
-from app.config import settings
 from app.database import async_session_factory
 from app.models import Campaign, CampaignRecipient, Coupon, CouponRedemption, Order
 from app.services import app_settings, audit, llm_client

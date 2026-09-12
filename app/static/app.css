@@ -21,11 +21,7 @@
   /* --info tokens.css se. */ --info-50: var(--info-soft);
   --purple: #8b5cf6; --teal: #14b8a6; --pink: #ec4899;
   --g-orange: linear-gradient(135deg, var(--brand), var(--brand-strong));
-  --g-green: var(--success);
   --g-blue: var(--info);
-  --g-purple: #7c3aed;
-  --g-pink: #db2777;
-  --g-teal: var(--busy);
   /* neutrals */
   --n0: var(--surface); --n50: var(--bg); --n100: #edf0f7; --n200: #e2e6f0;
   --n300: #cbd2de; --n400: #98a2b3; --n500: #667085; --n600: #475467;
@@ -219,7 +215,12 @@ a { color: var(--brand-600); text-decoration: none; }
   background: var(--n100); color: var(--n600);
   font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
 }
-.chip.on .cnt { background: rgba(255,255,255,.28); color: #fff; }
+/* Count chip ke APNE rang se banti hai, kisi tay rang se nahi.
+   Pehle yahan color:#fff tha, jo maanta tha ki active chip hamesha gehra
+   hoga. Dashboard uska rule alag rakhta hai (line neeche, .brand-50 wala
+   halka background) — wahan safed count safed par gayab ho jaati thi.
+   currentColor se dono jagah sahi: gehre chip par safed, halke par narangi. */
+.chip.on .cnt { background: rgba(0, 0, 0, .10); color: inherit; }
 
 /* ---------- task cards ----------
    Ek kaam = ek card. Poora card khulta hai (click/Enter) aur detail modal

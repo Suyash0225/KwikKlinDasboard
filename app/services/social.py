@@ -21,7 +21,6 @@ import httpx
 import structlog
 from PIL import Image, ImageDraw, ImageFont
 
-from app.config import settings
 from app.database import async_session_factory
 from app.services import app_settings, audit
 from app.services.llm_client import LLMError

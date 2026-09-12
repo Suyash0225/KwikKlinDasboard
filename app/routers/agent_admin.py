@@ -18,7 +18,6 @@ from app.database import get_db
 from app.models import (
     AuditLog,
     Campaign,
-    CampaignRecipient,
     Correction,
     Coupon,
     Customer,

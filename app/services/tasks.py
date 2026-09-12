@@ -17,7 +17,7 @@ from app.config import settings
 from app.database import async_session_factory
 from app.models import TASK_CANCELLED, TASK_DONE, TASK_OPEN, Order, Staff, Task
 from app.services import audit
-from app.services.whatsapp import Button, SendError, WindowClosedError, send_message
+from app.services.whatsapp import SendError, WindowClosedError, send_message
 from app.services.tenant_context import manager_phone
 
 log = structlog.get_logger()

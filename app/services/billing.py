@@ -29,7 +29,6 @@ from app.config import settings
 from app.models import (
     TENANT_ACTIVE,
     TENANT_PAST_DUE,
-    TENANT_LOCKED,
     BillingEvent,
     Tenant,
 )

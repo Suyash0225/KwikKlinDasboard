@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.models import OrderStatus, PaymentMethod
+from app.models import PaymentMethod
 
 
 class OrderItemIn(BaseModel):

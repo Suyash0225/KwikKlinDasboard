@@ -31,9 +31,7 @@ from app.database import get_db
 from app.models import (
     ROLE_OWNER,
     ROLES,
-    TENANT_ACTIVE,
     TENANT_TRIAL,
-    LoginSession,
     RechargeRequest,
     Tenant,
     User,

@@ -43,7 +43,6 @@ from app.models import (
     Conversation,
     CouponRedemption,
     Customer,
-    Direction,
     Escalation,
     Expense,
     OpenQuestion,
@@ -2000,7 +1999,6 @@ async def dashboard_page(
     v = int(max(
         (static_dir / "app.js").stat().st_mtime,
         (static_dir / "app.css").stat().st_mtime,
-        (static_dir / "mobile.css").stat().st_mtime,
         # tokens.css teenon surface ka source of truth hai. Isko version
         # mein na ginne par ek brand-rang badalne par bhi browser purani
         # file pakde rehta — aur dikkat "kabhi-kabhi purana orange" jaisi
@@ -2009,7 +2007,7 @@ async def dashboard_page(
     ))
     import re as _re
 
-    html = _re.sub(r"((?:app|mobile|tokens)\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
+    html = _re.sub(r"((?:app|tokens)\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
     return Response(
         content=html, media_type="text/html",
         headers={"Cache-Control": "no-cache"},
