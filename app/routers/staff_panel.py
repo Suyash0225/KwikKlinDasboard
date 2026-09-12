@@ -187,6 +187,23 @@ async def change_own_password(
 # --------------------------------------------------------------- tasks ----
 
 
+def _tasks_query(p: StaffPrincipal, tab: str):
+    """Tab ke hisaab se query — count aur page dono isi se bante hain,
+    taaki 'Page 3 of 9' aur list kabhi alag baat na kahein."""
+    q = select(Task)
+    if not p.is_manager:
+        q = q.where(Task.assigned_staff_id == p.staff.id)
+    if tab == "pending":
+        q = q.where(Task.status == TASK_OPEN)
+    elif tab == "mine":
+        q = q.where(Task.assigned_staff_id == p.staff.id, Task.status == TASK_OPEN)
+    elif tab == "done":
+        q = q.where(Task.status == TASK_DONE)
+    elif tab == "cancelled":
+        q = q.where(Task.status == TASK_CANCELLED)
+    return q
+
+
 async def _visible_tasks(db: AsyncSession, p: StaffPrincipal, tab: str) -> list[Task]:
     """Ye aadmi kaunse kaam dekh sakta hai.
 
@@ -207,8 +224,37 @@ async def _visible_tasks(db: AsyncSession, p: StaffPrincipal, tab: str) -> list[
     return list((await db.execute(q)).scalars().all())
 
 
-async def _task_card(db: AsyncSession, t: Task, p: StaffPrincipal) -> dict:
-    order = await db.get(Order, t.order_id) if t.order_id else None
+async def _prefetch(db: AsyncSession, tasks: list[Task], p: StaffPrincipal) -> dict:
+    """Ek baar mein sab orders, customers aur staff — na ki har task par.
+
+    Pehle _task_card har task ke liye alag se order, uska customer aur
+    assignee maangta tha: 200 task = 386 SQL queries aur ~300ms. Ek dukaan
+    ke liye chalta tha; 200 khule kaam wali dukaan par panel ka har refresh
+    DB par 386 baar jaata tha. Ab teen query, chahe kitne bhi task hon.
+    """
+    order_ids = {t.order_id for t in tasks if t.order_id}
+    orders = {}
+    customers = {}
+    staff = {}
+    if order_ids:
+        rows = (await db.execute(select(Order).where(Order.id.in_(order_ids)))).scalars().all()
+        orders = {o.id: o for o in rows}
+        cust_ids = {o.customer_id for o in rows if o.customer_id}
+        if cust_ids:
+            crows = (
+                await db.execute(select(Customer).where(Customer.id.in_(cust_ids)))
+            ).scalars().all()
+            customers = {c.id: c for c in crows}
+    if p.is_manager:
+        sids = {t.assigned_staff_id for t in tasks if t.assigned_staff_id}
+        if sids:
+            srows = (await db.execute(select(Staff).where(Staff.id.in_(sids)))).scalars().all()
+            staff = {st.id: st for st in srows}
+    return {"orders": orders, "customers": customers, "staff": staff}
+
+
+def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
+    order = pre["orders"].get(t.order_id) if t.order_id else None
     card: dict = {
         "code": t.code,
         "title": t.title,
@@ -222,10 +268,10 @@ async def _task_card(db: AsyncSession, t: Task, p: StaffPrincipal) -> dict:
         "assignee": None,
     }
     if p.is_manager and t.assigned_staff_id:
-        st = await db.get(Staff, t.assigned_staff_id)
+        st = pre["staff"].get(t.assigned_staff_id)
         card["assignee"] = st.name if st else None
     if order is not None:
-        cust = await db.get(Customer, order.customer_id)
+        cust = pre["customers"].get(order.customer_id)
         card["order"] = {
             "number": order.order_number,
             "customer": (cust.name or "Customer") if cust else "?",
@@ -244,11 +290,32 @@ async def _task_card(db: AsyncSession, t: Task, p: StaffPrincipal) -> dict:
 @router.get("/tasks")
 async def my_tasks(
     tab: str = "mine",
+    limit: int = 40,
+    offset: int = 0,
     p: StaffPrincipal = Depends(current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    rows = await _visible_tasks(db, p, tab if tab in ("pending", "mine", "done", "cancelled") else "mine")
-    cards = [await _task_card(db, t, p) for t in rows]
+    """Ek page bhar kaam.
+
+    Pehle 200 tak sab ek saath jaate the — 79 KB, jo 3G par do second sirf
+    utarne mein lagta hai, aur panel ye har 30 second par maangta hai. Ab
+    ek page (40) aata hai aur `total` alag se, taaki "aur dikhayein" sach
+    bole.
+    """
+    tab = tab if tab in ("pending", "mine", "done", "cancelled") else "mine"
+    limit = max(1, min(limit, 100))
+    base = _tasks_query(p, tab)
+    total = (
+        await db.execute(select(func.count()).select_from(base.subquery()))
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            base.order_by(Task.urgent.desc(), Task.created_at.desc())
+            .limit(limit).offset(max(0, offset))
+        )
+    ).scalars().all()
+    pre = await _prefetch(db, rows, p)
+    cards = [_task_card(t, p, pre) for t in rows]
     counts = {
         "mine": (
             await db.execute(
@@ -264,7 +331,10 @@ async def my_tasks(
                 select(func.count()).select_from(Task).where(Task.status == TASK_OPEN)
             )
         ).scalar_one()
-    return {"tasks": cards, "counts": counts, "is_manager": p.is_manager}
+    return {
+        "tasks": cards, "counts": counts, "is_manager": p.is_manager,
+        "total": total, "offset": max(0, offset), "limit": limit,
+    }
 
 
 async def _my_task(db: AsyncSession, p: StaffPrincipal, code: str) -> Task:
@@ -816,9 +886,11 @@ async def my_bills(
     pay: str = "",
     days: int = 14,
     mine: int = 0,
+    limit: int = 30,
+    offset: int = 0,
     p: StaffPrincipal = Depends(current_staff),
     db: AsyncSession = Depends(get_db),
-) -> list[dict]:
+) -> dict:
     """Jo bill maine banaye — taaki bana kar share/collect kar sakoon.
 
     Pehle bill banane ke baad wo kahin dikhta hi nahi tha: task washer ko
@@ -830,7 +902,7 @@ async def my_bills(
     from app.models.order import OrderStatusHistory
 
     since = datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 90)))
-    sel = select(Order).where(Order.created_at >= since).order_by(Order.created_at.desc()).limit(60)
+    sel = select(Order).where(Order.created_at >= since).order_by(Order.created_at.desc())
     # Worker ko sirf apne banaye bill. Manager ko poori dukaan ke — wahi
     # to dekh-rekh karta hai — aur mine=1 se wo bhi apne tak simat sakta hai.
     if not p.is_manager or mine:
@@ -852,10 +924,24 @@ async def my_bills(
         sel = sel.where(
             or_(Order.order_number.ilike(f"%{term}%"), Order.customer_id.in_(cust_ids))
         )
-    rows = (await db.execute(sel)).scalars().all()
+    # `n_total` — `total` naam neeche har bill ki rakam ke liye use hota hai;
+    # ek hi naam rakhne par aakhri bill ki rakam page-count ban kar jaati hai
+    # (response mein "total": 510.0 aa raha tha, 510 bills ke bajaye).
+    n_total = (await db.execute(select(func.count()).select_from(sel.subquery()))).scalar_one()
+    rows = (
+        await db.execute(sel.limit(max(1, min(limit, 100))).offset(max(0, offset)))
+    ).scalars().all()
+    cust_ids = {o.customer_id for o in rows if o.customer_id}
+    customers = {}
+    if cust_ids:
+        customers = {
+            c.id: c for c in (
+                await db.execute(select(Customer).where(Customer.id.in_(cust_ids)))
+            ).scalars().all()
+        }
     out = []
     for o in rows:
-        cust = await db.get(Customer, o.customer_id)
+        cust = customers.get(o.customer_id)
         total = float(o.total_amount or 0)
         paid = float(o.amount_paid or 0)
         out.append(
@@ -871,7 +957,7 @@ async def my_bills(
                 "created": o.created_at.astimezone(IST).strftime("%d %b, %I:%M %p"),
             }
         )
-    return out
+    return {"bills": out, "total": n_total, "offset": max(0, offset), "limit": limit}
 
 
 # --------------------------------------------------- manager ka hissa ----
@@ -1210,7 +1296,10 @@ async def today_summary(
 
 @router.get("/route")
 async def my_route(
-    p: StaffPrincipal = Depends(current_staff), db: AsyncSession = Depends(get_db)
+    limit: int = 40,
+    offset: int = 0,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Aaj kahan-kahan jaana hai — ek hi list mein, kaam ke kram se.
 
@@ -1236,7 +1325,6 @@ async def my_route(
             Order.expected_delivery.asc().nullslast(),
             Order.created_at,
         )
-        .limit(50)
     )
     if not p.is_manager:
         # "Mera kaam" ka matlab sirf explicitly assigned nahi hai.
@@ -1254,11 +1342,25 @@ async def my_route(
             q = q.where(or_(col == p.staff.id, col.is_(None)))
         else:
             q = q.where(col == p.staff.id)
-    rows = (await db.execute(q)).scalars().all()
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
+    rows = (
+        await db.execute(
+            q.limit(max(1, min(limit, 100))).offset(max(0, offset))
+        )
+    ).scalars().all()
+    # Customers ek hi query mein — pehle har stop par alag get() tha
+    cust_ids = {o.customer_id for o in rows if o.customer_id}
+    customers = {}
+    if cust_ids:
+        customers = {
+            c.id: c for c in (
+                await db.execute(select(Customer).where(Customer.id.in_(cust_ids)))
+            ).scalars().all()
+        }
 
     stops = []
     for o in rows:
-        cust = await db.get(Customer, o.customer_id)
+        cust = customers.get(o.customer_id)
         kind = (
             "Pickup"
             if o.status is OrderStatus.PICKUP_ASSIGNED
@@ -1278,4 +1380,7 @@ async def my_route(
                 "delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
             }
         )
-    return {"stops": stops, "kind": "delivery" if is_delivery else "wash"}
+    return {
+        "stops": stops, "kind": "delivery" if is_delivery else "wash",
+        "total": total, "offset": max(0, offset), "limit": limit,
+    }

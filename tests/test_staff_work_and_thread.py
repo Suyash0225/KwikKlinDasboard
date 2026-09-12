@@ -180,18 +180,111 @@ async def test_bills_can_be_searched_and_filtered(client, two_shops, sent) -> No
         num = r.json()["order_number"]
 
         # naam se
-        got = [b["number"] for b in (await client.get("/staff/api/bills?q=Filter")).json()]
+        got = [b["number"] for b in (await client.get("/staff/api/bills?q=Filter")).json()["bills"]]
         assert num in got
         # number se
-        got = [b["number"] for b in (await client.get(f"/staff/api/bills?q={num}")).json()]
+        got = [b["number"] for b in (await client.get(f"/staff/api/bills?q={num}")).json()["bills"]]
         assert num in got
         # na milne wala kuch
-        assert (await client.get("/staff/api/bills?q=zzzznotathing")).json() == []
+        assert (await client.get("/staff/api/bills?q=zzzznotathing")).json()["bills"] == []
         # udhaar wale (abhi kuch nahi diya, to due list mein hona chahiye)
-        got = [b["number"] for b in (await client.get("/staff/api/bills?pay=due")).json()]
+        got = [b["number"] for b in (await client.get("/staff/api/bills?pay=due")).json()["bills"]]
         assert num in got
-        assert num not in [b["number"] for b in (await client.get("/staff/api/bills?pay=paid")).json()]
+        assert num not in [b["number"] for b in (await client.get("/staff/api/bills?pay=paid")).json()["bills"]]
     finally:
         async with async_session_factory() as db:
             await db.execute(sqltext("DELETE FROM rate_card WHERE service = 'FiltSvc'"))
+            await db.commit()
+
+
+async def test_lists_are_paginated_and_do_not_ship_the_whole_shop(
+    client, two_shops, sent  # noqa: F811
+) -> None:
+    """Badi dukaan par panel ka har refresh poori list nahi utaarta.
+
+    800 order wali dukaan par /tasks 200 kaam ek saath bhejta tha: 79 KB,
+    jo 3G par do second sirf download hai — aur panel ye har 30 second par
+    maangta hai. Ab page aata hai aur `total` alag se.
+    """
+    from app.models import Task
+    from app.services import tasks as task_service
+
+    tok = tenant_context.current_tenant_id.set(two_shops["a"])
+    try:
+        async with async_session_factory() as db:
+            st = await db.get(Staff, two_shops["a_wash"])
+            made = []
+            for i in range(45):
+                t = await task_service.create_task(
+                    db, title=f"Bulk kaam {i}", staff=st, order=None, notify=False
+                )
+                made.append(t.code)
+    finally:
+        tenant_context.current_tenant_id.reset(tok)
+
+    await _login(client, A_PHONE)
+    try:
+        r = (await client.get("/staff/api/tasks?tab=mine")).json()
+        assert r["total"] >= 45
+        assert len(r["tasks"]) == 40, "default page 40 hona chahiye"
+        assert r["offset"] == 0 and r["limit"] == 40
+
+        page2 = (await client.get("/staff/api/tasks?tab=mine&limit=40&offset=40")).json()
+        assert len(page2["tasks"]) >= 5
+        first_page_codes = {t["code"] for t in r["tasks"]}
+        assert not (first_page_codes & {t["code"] for t in page2["tasks"]}), \
+            "page 2 par wahi kaam dobara nahi aane chahiye"
+
+        # limit ki upar ki hadd — koi ?limit=100000 se poora DB nahi kheench sakta
+        big = (await client.get("/staff/api/tasks?tab=mine&limit=100000")).json()
+        assert len(big["tasks"]) <= 100
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(
+                sqltext("DELETE FROM tasks WHERE code = ANY(:c)"), {"c": made}
+            )
+            await db.commit()
+
+
+async def test_task_list_does_not_query_per_task(client, two_shops, sent) -> None:  # noqa: F811
+    """N+1 wapas na aa jaye: 40 task ka page thodi si query mein bane.
+
+    Pehle har task par uska order, us order ka customer aur assignee alag
+    se maange jaate the — 200 task = 386 queries. Ab batch.
+    """
+    from sqlalchemy import event
+
+    from app.database import engine
+    from app.services import tasks as task_service
+
+    tok = tenant_context.current_tenant_id.set(two_shops["a"])
+    try:
+        async with async_session_factory() as db:
+            st = await db.get(Staff, two_shops["a_wash"])
+            made = [
+                (await task_service.create_task(
+                    db, title=f"Count kaam {i}", staff=st, order=None, notify=False)).code
+                for i in range(12)
+            ]
+    finally:
+        tenant_context.current_tenant_id.reset(tok)
+
+    n = {"q": 0}
+
+    def count(conn, cur, stmt, params, ctx, many):
+        n["q"] += 1
+
+    await _login(client, A_PHONE)
+    event.listen(engine.sync_engine, "before_cursor_execute", count)
+    try:
+        r = await client.get("/staff/api/tasks?tab=mine")
+        assert r.status_code == 200
+        assert len(r.json()["tasks"]) >= 12
+        # count + page + prefetch + auth/tenant ka thoda kaam. 12 task par
+        # 30 se zyada matlab phir se per-task query lag gayi.
+        assert n["q"] < 30, f"{n['q']} queries — N+1 wapas aa gaya"
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", count)
+        async with async_session_factory() as db:
+            await db.execute(sqltext("DELETE FROM tasks WHERE code = ANY(:c)"), {"c": made})
             await db.commit()

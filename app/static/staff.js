@@ -65,6 +65,29 @@ async function busy(btn, fn) {
   finally { btn.disabled = false; btn.innerHTML = old; }
 }
 
+/* Ek delegated listener — har button par alag handler jodna padta tha,
+ * aur modal ka HTML badalte hi wo wiring dobara karni padti thi.
+ *
+ * Inline onclick="..." yahan chal hi nahi sakta: page ki CSP
+ * `script-src 'self'` hai, aur browser inline handler ko chup-chaap gira
+ * deta hai — button dikhta hai, dabta hai, aur kuch nahi hota. (Show more
+ * isi wajah se mara pada tha; browser mein chala kar hi pata chala.) */
+const ACTIONS = {
+  close: () => closeModal(),
+  share: (n) => { closeModal(); shareBill(n); },
+  thread: (c) => { closeModal(); openThread(c); },
+  decide: (c) => { closeModal(); decideCancel(c); },
+  photo: (n) => { closeModal(); askPhoto(n); },
+  cancel: (c) => { closeModal(); askCancel(c); },
+  more: (fn) => (fn === "loadWork" ? loadWork({ more: true }) : loadBills({ more: true })),
+};
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-act]");
+  if (!el) return;
+  const fn = ACTIONS[el.dataset.act];
+  if (fn) fn(el.dataset.arg);
+});
+
 function openModal(html) { $("modal-body").innerHTML = html; $("modal-ov").classList.add("open"); }
 function closeModal() { $("modal-ov").classList.remove("open"); }
 $("modal-ov").addEventListener("click", (e) => { if (e.target.id === "modal-ov") closeModal(); });
@@ -87,10 +110,10 @@ function whenParts(iso) {
 }
 
 const ROLE = {
-  WASHER: "Dhobi", DELIVERY: "Delivery",
-  // Senior aadmi — kaam bhi karta hai aur dekh-rekh bhi. Use sirf "Dhobi"
+  WASHER: "Washerman", DELIVERY: "Delivery",
+  // Senior aadmi — kaam bhi karta hai aur dekh-rekh bhi. Use sirf "Washerman"
   // likhna uske kaam ko chhota dikhata hai.
-  SUPERVISOR: "Dhobi / Manager", MANAGER: "Manager", ADMIN: "Owner",
+  SUPERVISOR: "Washerman / Manager", MANAGER: "Manager", ADMIN: "Owner",
 };
 const roleLabel = (r) => ROLE[r] || r;
 
@@ -105,8 +128,8 @@ $("lg-go").onclick = async () => {
   const phone = $("lg-phone").value.trim();
   const password = $("lg-pass").value;
   $("lg-err").textContent = "";
-  if (phone.replace(/\D/g, "").length < 10) { $("lg-err").textContent = "Poora mobile number likhein."; return; }
-  if (!password) { $("lg-err").textContent = "Password likhein."; return; }
+  if (phone.replace(/\D/g, "").length < 10) { $("lg-err").textContent = "Enter the full mobile number."; return; }
+  if (!password) { $("lg-err").textContent = "Enter your password."; return; }
   $("lg-go").disabled = true;
   try {
     await api("/login", { method: "POST", body: { phone, password } });
@@ -131,7 +154,7 @@ async function start() {
     $("boot").hidden = true;
     $("login").hidden = false; $("app").hidden = true;
     if (e.status === 402) $("lg-err").textContent = e.message;
-    else if (!e.status) $("lg-err").textContent = "Network problem — signal dekh kar dobara login karein.";
+    else if (!e.status) $("lg-err").textContent = "Network problem — check your signal, then log in.";
     return;
   }
   $("boot").hidden = true;
@@ -151,12 +174,12 @@ async function start() {
    hai — par sabke liye "Kaam" hi ghar hai. Bill alag jagah hai (pehle wo
    New-bill screen ke neeche chipka tha aur kisi ko milta hi nahi tha). */
 function navItems() {
-  const out = [["work", "🧺", "Kaam"]];
+  const out = [["work", "🧺", "Work"]];
   if (ME.features.includes("billing")) {
-    out.push(["bills", "🧾", "Bill"], ["new", "＋", "Naya"]);
+    out.push(["bills", "🧾", "Bills"], ["new", "＋", "New"]);
   }
   if (ME.is_manager && ME.features.includes("staff_reports")) out.push(["team", "👥", "Team"]);
-  out.push(["me", "👤", "Main"]);
+  out.push(["me", "👤", "You"]);
   return out;
 }
 
@@ -203,10 +226,10 @@ async function loadToday() {
     const t = await api("/today");
     const cell = (label, value, cls = "") => `<div class="${cls}"><b>${value}</b>${label}</div>`;
     $("today").innerHTML =
-      cell("baaki hai", t.pending, "left") +
-      cell("aaj nipta", t.done_today) +
-      (t.can_collect ? cell("aaj liya", money(t.collected_today), "cash") : "") +
-      (t.shop_pending !== undefined ? cell("poori dukaan", t.shop_pending) : "");
+      cell("to do", t.pending, "left") +
+      cell("done today", t.done_today) +
+      (t.can_collect ? cell("collected", money(t.collected_today), "cash") : "") +
+      (t.shop_pending !== undefined ? cell("shop total", t.shop_pending) : "");
     $("today").hidden = !(NAV === "work" || NAV === "bills");
   } catch (e) {
     $("today").hidden = true;   // hisaab na mile to chup — kaam chalta rahe
@@ -232,20 +255,20 @@ async function showBell() {
   try { n = await api("/notifications"); }
   catch (e) { toast(e.message, true); return; }
   if (!n.items.length) {
-    openModal(`<h3>Kuch naya nahi</h3>
-      <p class="said">Owner ka jawab aane par yahan dikhega, aur ghanti par ginti.</p>
-      <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Theek hai</button></div>`);
+    openModal(`<h3>Nothing new</h3>
+      <p class="said">Replies from the owner show up here.</p>
+      <div class="btnrow"><button class="btn ghost" data-act="close">Got it</button></div>`);
     return;
   }
-  openModal(`<h3>Owner ka jawab</h3>
-    <p class="said">${n.items.length} nayi baat</p>
+  openModal(`<h3>Replies</h3>
+    <p class="said">${n.items.length} new</p>
     ${n.items.map((i) => `
       <div class="card inset">
         <div class="line1"><b>${esc(i.title)}</b><span class="sub">${esc(i.at)}</span></div>
         <div class="sub">${esc(i.text)}</div>
-        <button class="btn ghost sm" onclick="closeModal();openThread('${esc(i.code)}')">Poori baat dekhein</button>
+        <button class="btn ghost sm" data-act="thread" data-arg="${esc(i.code)}">Open</button>
       </div>`).join("")}
-    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Band karein</button></div>`);
+    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
 }
 
 /* ─── Kaam: ek list, chips se chhanti ───────────────────────────────── */
@@ -261,19 +284,19 @@ async function showBell() {
  */
 
 const KIND = {
-  Pickup:   { chip: "pickup",  spine: "pickup",  label: "Lena hai" },
-  Delivery: { chip: "deliver", spine: "deliver", label: "Dena hai" },
-  Dhulai:   { chip: "wash",    spine: "wash",    label: "Dhulai" },
+  Pickup:   { chip: "pickup",  spine: "pickup",  label: "Collect" },
+  Delivery: { chip: "deliver", spine: "deliver", label: "Deliver" },
+  Dhulai:   { chip: "wash",    spine: "wash",    label: "Washing" },
 };
 
 function workChips() {
   const n = (f) => WORK.filter((w) => f === "all" || w.chip === f).length;
-  const out = [["all", "Sab"]];
+  const out = [["all", "All"]];
   const kinds = [...new Set(WORK.map((w) => w.chip))];
-  if (kinds.includes("pickup")) out.push(["pickup", "Lena hai"]);
-  if (kinds.includes("wash")) out.push(["wash", "Dhulai"]);
-  if (kinds.includes("deliver")) out.push(["deliver", "Dena hai"]);
-  if (kinds.includes("task")) out.push(["task", "Kaam"]);
+  if (kinds.includes("pickup")) out.push(["pickup", "Collect"]);
+  if (kinds.includes("wash")) out.push(["wash", "Washing"]);
+  if (kinds.includes("deliver")) out.push(["deliver", "Deliver"]);
+  if (kinds.includes("task")) out.push(["task", "Work"]);
   if (WORK.some((w) => w.late)) out.push(["late", "Late"]);
   return out.map(([v, label]) => {
     const c = v === "late" ? WORK.filter((w) => w.late).length : n(v);
@@ -281,15 +304,16 @@ function workChips() {
   }).join("");
 }
 
-let WORK_SEQ = 0;
+let WORK_SEQ = 0, MORE_LEFT = false;
 async function loadWork(opts = {}) {
-  if (!opts.quiet) $("list").innerHTML = `<div class="empty">Laa rahe hain…</div>`;
+  if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
   const mine = ++WORK_SEQ;
-  let route = { stops: [] }, tasks = { tasks: [] };
+  const skip = opts.more ? WORK.length : 0;
+  let route = { stops: [], total: 0 }, tasks = { tasks: [], total: 0 };
   try {
     [route, tasks] = await Promise.all([
-      api("/route").catch(() => ({ stops: [] })),
-      api("/tasks?tab=mine").catch(() => ({ tasks: [] })),
+      api(`/route?limit=${PAGE}&offset=${skip}`).catch(() => ({ stops: [], total: 0 })),
+      api(`/tasks?tab=mine&limit=${PAGE}&offset=${skip}`).catch(() => ({ tasks: [], total: 0 })),
     ]);
   } catch (e) {
     if (mine !== WORK_SEQ || opts.quiet) return;
@@ -301,8 +325,11 @@ async function loadWork(opts = {}) {
   // Ek order do jagah se aa sakta hai (uska stop bhi hai, uspar task bhi).
   // Stop zyada kaam ka hai (usme address, due, phone sab hai), isliye task
   // usi row par nishaan ban kar chipak jaata hai — do rows nahi banti.
+  // Is page ke rows alag banao, phir purane ke saath jodo. Pehle maine
+  // ise ek hi array par likhne ki koshish ki thi aur logic samajh se
+  // bahar chala gaya — do saaf hisse behtar hain.
+  const page = [];
   const byOrder = new Map();
-  WORK = [];
   for (const s of route.stops) {
     const k = KIND[s.kind] || { chip: "task", spine: "", label: s.kind };
     const w = whenParts(s.delivery);
@@ -312,17 +339,17 @@ async function loadWork(opts = {}) {
       address: s.address, urgent: s.urgent, when: w, late: w.late, tasks: [],
     };
     byOrder.set(s.number, item);
-    WORK.push(item);
+    page.push(item);
   }
   for (const t of tasks.tasks) {
     if (t.status !== "OPEN") continue;
     const onOrder = t.order && byOrder.get(t.order.number);
     if (onOrder) { onOrder.tasks.push(t); continue; }
     const w = t.order ? whenParts(t.order.delivery)
-      : t.age_hours < 1 ? { top: "Abhi", sub: "", late: false }
-      : { top: `${t.age_hours}h`, sub: "se ruka", late: t.age_hours > 24 };
-    WORK.push({
-      type: "task", chip: "task", spine: t.urgent || w.late ? "late" : "", kindLabel: "Kaam",
+      : t.age_hours < 1 ? { top: "Now", sub: "", late: false }
+      : { top: `${t.age_hours}h`, sub: "waiting", late: t.age_hours > 24 };
+    page.push({
+      type: "task", chip: "task", spine: t.urgent || w.late ? "late" : "", kindLabel: "Job",
       number: t.order ? t.order.number : t.code, who: t.order ? t.order.customer : t.title,
       items: t.order ? t.order.items : "", due: t.order ? t.order.due : 0,
       // Bina order wale kaam par paisa hota hi nahi — na rakam dikhani hai
@@ -334,6 +361,16 @@ async function loadWork(opts = {}) {
       title: t.order ? t.title : "",
     });
   }
+  // "Show more" jodta hai, badalta nahi. Ek hi number do baar na aaye —
+  // page ke kinare par wahi order dono taraf ho sakta hai.
+  const merged = opts.more ? WORK.concat(page) : page;
+  const seen = new Set();
+  WORK = merged.filter((w) => (seen.has(w.number) ? false : seen.add(w.number)));
+  // Kaam ki list do jagah se banti hai (stops + tasks) aur ek hi order
+  // dono mein ho sakta hai — isliye dono ke total jodna jhooth hai
+  // ("60 of 539" jabki asli rows 300 hain). Yahan sirf itna jaanna hai ki
+  // aur bacha hai ya nahi: dono mein se koi bhi poora nahi aaya to haan.
+  MORE_LEFT = (route.stops.length >= PAGE) || (tasks.tasks.length >= PAGE);
   WORK.sort((a, b) => (b.late - a.late) || (b.urgent - a.urgent));
   $("chips").innerHTML = workChips();
   $("chips").querySelectorAll("[data-chip]").forEach((b) => {
@@ -349,12 +386,32 @@ function renderWork() {
     FILTER === "all" ? true : FILTER === "late" ? w.late : w.chip === FILTER);
   if (!rows.length) {
     $("list").innerHTML = WORK.length
-      ? `<div class="empty"><b>Is chhaant mein kuch nahi</b>Doosri chip dekhein.</div>`
-      : `<div class="empty"><b>Sab nipta diya 👏</b>Naya kaam aate hi yahan dikhega.</div>`;
+      ? `<div class="empty"><b>Nothing in this filter</b>Try another one.</div>`
+      : `<div class="empty"><b>All clear 👏</b>New work shows up here.</div>`;
     return;
   }
-  $("list").innerHTML = `<div class="reg">${rows.map(workRow).join("")}</div>`;
+  // "Show more" sirf tab jab chhaant lagi hi na ho — chip ke andar aadhi
+  // list dikhana aur "aur hai" kehna jhooth hai.
+  $("list").innerHTML = `<div class="reg">${rows.map(workRow).join("")}</div>`
+    + (FILTER === "all" && MORE_LEFT
+        ? `<div class="morebar"><span>${WORK.length} shown</span>
+             <button class="btn ghost sm" data-act="more" data-arg="loadWork">Show more</button></div>`
+        : "");
   wireRows();
+}
+
+/* Bill list ka "Show more". Ginti hamesha dikhti hai (30 of 108), taaki
+   aadmi jaane ki aur kitna baaki hai — aur scroll karne ke bajaye search
+   karna behtar hai ya nahi. */
+function moreBar(shown, total, fn) {
+  if (!total || shown >= total) {
+    return total > PAGE
+      ? `<div class="morebar"><span>All ${total} shown</span></div>` : "";
+  }
+  return `<div class="morebar">
+    <span>${shown} of ${total}</span>
+    <button class="btn ghost sm" data-act="more" data-arg="${fn}">Show more</button>
+  </div>`;
 }
 
 function workRow(w) {
@@ -378,11 +435,11 @@ function workRow(w) {
       ${w.address ? `<div class="sub mt-xs">📍 ${esc(w.address)}</div>` : ""}
       <div class="acts">
         ${w.type === "stop" ? `<button class="btn ghost sm" data-do="call">Call</button>` : ""}
-        ${w.address ? `<button class="btn ghost sm" data-do="map" data-addr="${esc(w.address)}">Raasta</button>` : ""}
-        ${t ? `<button class="btn go sm" data-do="done" data-code="${esc(t.code)}">Ho gaya</button>` : ""}
-        ${t ? `<button class="btn ghost sm" data-do="ask" data-code="${esc(t.code)}">Poochein</button>` : ""}
+        ${w.address ? `<button class="btn ghost sm" data-do="map" data-addr="${esc(w.address)}">Route</button>` : ""}
+        ${t ? `<button class="btn go sm" data-do="done" data-code="${esc(t.code)}">Done</button>` : ""}
+        ${t ? `<button class="btn ghost sm" data-do="ask" data-code="${esc(t.code)}">Ask</button>` : ""}
         ${ME.features.includes("cod_collection") && w.due > 0
-          ? `<button class="btn money sm" data-do="pay" data-due="${w.due}">${money(w.due)} lein</button>` : ""}
+          ? `<button class="btn money sm" data-do="pay" data-due="${w.due}">${money(w.due)} collect</button>` : ""}
         <button class="btn ghost sm" data-do="more">⋯</button>
       </div>
     </div>
@@ -412,29 +469,29 @@ function moreMenu(number) {
   openModal(`<h3>${esc(number)}</h3>
     <p class="said">${esc(w.who || "")}</p>
     <div class="btnrow stack">
-      <button class="btn ghost" onclick="closeModal();shareBill('${esc(number)}')">🧾 Bill WhatsApp par bhejein</button>
-      <button class="btn ghost" onclick="closeModal();askPhoto('${esc(number)}')">📷 Photo lagayein</button>
+      <button class="btn ghost" data-act="share" data-arg="${esc(number)}">🧾 Send bill on WhatsApp</button>
+      <button class="btn ghost" data-act="photo" data-arg="${esc(number)}">📷 Add a photo</button>
       ${t && ME.features.includes("cancel_approval") && !t.cancel_requested
-        ? `<button class="btn ghost" onclick="closeModal();askCancel('${esc(t.code)}')">🛑 Cancel maangein</button>` : ""}
+        ? `<button class="btn ghost" data-act="cancel" data-arg="${esc(t.code)}">🛑 Request cancel</button>` : ""}
       ${t && ME.is_manager && t.cancel_requested
-        ? `<button class="btn danger" onclick="closeModal();decideCancel('${esc(t.code)}')">Cancel par faisla</button>` : ""}
+        ? `<button class="btn danger" data-act="decide" data-arg="${esc(t.code)}">Decide on cancel</button>` : ""}
     </div>
-    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Band karein</button></div>`);
+    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
 }
 
 /* ─── kaam par actions ──────────────────────────────────────────────── */
 
 function askDone(code) {
-  openModal(`<h3>${esc(code)} — ho gaya?</h3>
-    <p class="said">Kuch batana ho to likh dein, warna seedha haan dabayein.</p>
-    <textarea id="m-note" placeholder="Kuch kehna hai? (zaroori nahi)"></textarea>
+  openModal(`<h3>${esc(code)} — done?</h3>
+    <p class="said">Add a note if you need to, otherwise just confirm.</p>
+    <textarea id="m-note" placeholder="Note (optional)"></textarea>
     <div class="btnrow">
-      <button class="btn ghost" onclick="closeModal()">Abhi nahi</button>
-      <button class="btn go" id="m-ok">Haan, ho gaya</button>
+      <button class="btn ghost" data-act="close">Not now</button>
+      <button class="btn go" id="m-ok">Yes, done</button>
     </div>`);
   $("m-ok").onclick = (e) => busy(e.currentTarget, async () => {
     await api(`/tasks/${encodeURIComponent(code)}/done`, { method: "POST", body: { note: $("m-note").value.trim() } });
-    closeModal(); toast(`${code} band ✅`); loadWork(); loadToday();
+    closeModal(); toast(`${code} closed ✅`); loadWork(); loadToday();
   });
 }
 
@@ -448,41 +505,41 @@ async function openThread(code) {
   const msgs = th.messages.length
     ? `<div class="thread">${th.messages.map((m) => `
         <div class="msg ${m.who}">${esc(m.text)}<span class="at">${esc(m.who === "staff" ? "Aapne" : m.name)} · ${esc(m.at)}</span></div>`).join("")}</div>`
-    : `<p class="said">Abhi tak koi baat nahi hui.</p>`;
+    : `<p class="said">No messages yet.</p>`;
   openModal(`<h3>${esc(th.title)}</h3>
     <p class="said">${esc(code)}</p>
     ${msgs}
-    <label for="m-q">Owner se poochein</label>
-    <textarea id="m-q" placeholder="jaise: address sahi hai? kitne kapde the?"></textarea>
+    <label for="m-q">Ask the owner</label>
+    <textarea id="m-q" placeholder="e.g. is the address right? how many items?"></textarea>
     <div class="btnrow">
-      <button class="btn ghost" onclick="closeModal()">Band karein</button>
-      <button class="btn go" id="m-send">Bhejein</button>
+      <button class="btn ghost" data-act="close">Close</button>
+      <button class="btn go" id="m-send">Send</button>
     </div>`);
   $("m-send").onclick = (e) => {
     const text = $("m-q").value.trim();
-    if (text.length < 2) { toast("Pehle sawaal likhein", true); return; }
+    if (text.length < 2) { toast("Write your question first", true); return; }
     return busy(e.currentTarget, async () => {
       await api(`/tasks/${encodeURIComponent(code)}/ask`, { method: "POST", body: { text } });
-      toast("Owner tak pahunch gaya 🙏");
+      toast("Sent to the owner 🙏");
       openThread(code);
     });
   };
 }
 
 function askCancel(code) {
-  openModal(`<h3>${esc(code)} — cancel maangein?</h3>
-    <p class="said">Aap khud cancel nahi kar sakte. Wajah likhein, manager faisla karega.</p>
-    <textarea id="m-r" placeholder="jaise: grahak ne mana kar diya"></textarea>
+  openModal(`<h3>${esc(code)} — request a cancel?</h3>
+    <p class="said">You cannot cancel this yourself. Write the reason and your manager will decide.</p>
+    <textarea id="m-r" placeholder="e.g. customer refused"></textarea>
     <div class="btnrow">
-      <button class="btn ghost" onclick="closeModal()">Abhi nahi</button>
-      <button class="btn danger" id="m-ok">Bhejein</button>
+      <button class="btn ghost" data-act="close">Not now</button>
+      <button class="btn danger" id="m-ok">Send</button>
     </div>`);
   $("m-ok").onclick = (e) => {
     const reason = $("m-r").value.trim();
-    if (reason.length < 3) { toast("Pehle wajah likhein", true); return; }
+    if (reason.length < 3) { toast("Write the reason first", true); return; }
     return busy(e.currentTarget, async () => {
       await api(`/tasks/${encodeURIComponent(code)}/cancel-request`, { method: "POST", body: { reason } });
-      closeModal(); toast("Manager ko bhej diya"); loadWork();
+      closeModal(); toast("Sent to your manager"); loadWork();
     });
   };
 }
@@ -490,15 +547,15 @@ function askCancel(code) {
 function decideCancel(code) {
   const w = WORK.find((x) => (x.tasks || []).some((t) => t.code === code));
   const t = w && w.tasks.find((x) => x.code === code);
-  openModal(`<h3>${esc(code)} — cancel ki maang</h3>
+  openModal(`<h3>${esc(code)} — cancel request</h3>
     <p class="said">${esc((t && t.cancel_reason) || "")}</p>
     <div class="btnrow">
-      <button class="btn ghost" id="m-no">Nahi, rehne dein</button>
-      <button class="btn danger" id="m-yes">Haan, cancel</button>
+      <button class="btn ghost" id="m-no">No, keep it</button>
+      <button class="btn danger" id="m-yes">Yes, cancel</button>
     </div>`);
   const send = (e, approve) => busy(e.currentTarget, async () => {
     await api(`/tasks/${encodeURIComponent(code)}/cancel-decide`, { method: "POST", body: { approve } });
-    closeModal(); toast(approve ? "Cancel ho gaya" : "Cancel mana kar diya"); loadWork();
+    closeModal(); toast(approve ? "Cancelled" : "Cancel refused"); loadWork();
   });
   $("m-yes").onclick = (e) => send(e, true);
   $("m-no").onclick = (e) => send(e, false);
@@ -507,22 +564,22 @@ function decideCancel(code) {
 function askCollect(order, due) {
   // ₹250.50 due par "251" bharna server se "Only ₹250 is due" laata tha
   const dueStr = Number.isInteger(due) ? String(due) : due.toFixed(2);
-  openModal(`<h3>${esc(order)} — paisa mila</h3>
-    <p class="said">Baaki ${money(due)}</p>
-    <label for="m-amt">Kitna mila</label>
+  openModal(`<h3>${esc(order)} — payment received</h3>
+    <p class="said">${money(due)} due</p>
+    <label for="m-amt">Amount</label>
     <input id="m-amt" type="number" inputmode="decimal" value="${dueStr}" min="1" max="${dueStr}" step="0.01">
     <div class="btnrow">
       <button class="btn ghost" id="m-cash">💵 Cash</button>
       <button class="btn go" id="m-upi">📱 UPI</button>
     </div>
-    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Abhi nahi</button></div>`);
+    <div class="btnrow"><button class="btn ghost" data-act="close">Not now</button></div>`);
   const send = (e, method) => {
     const amount = parseFloat($("m-amt").value);
-    if (!(amount > 0)) { toast("Rakam likhein", true); return; }
-    if (amount > due + 0.01) { toast(`Sirf ${money(due)} baaki hai`, true); return; }
+    if (!(amount > 0)) { toast("Enter the amount", true); return; }
+    if (amount > due + 0.01) { toast(`Only ${money(due)} is due`, true); return; }
     return busy(e.currentTarget, async () => {
       const r = await api(`/orders/${encodeURIComponent(order)}/collect`, { method: "POST", body: { amount, method } });
-      closeModal(); toast(`${money(amount)} mila ✅ — ${money(r.due)} baaki`);
+      closeModal(); toast(`${money(amount)} received ✅ — ${money(r.due)} left`);
       loadToday(); refreshCurrent({ quiet: true });
     });
   };
@@ -544,7 +601,11 @@ async function callCustomer(number) {
    banane aaya wahi use dekh paata tha, aur dhoondhne ka koi rasta nahi
    tha. Ab alag tab: search + due/paid chips. */
 
-let BILLS = [], BILL_SEQ = 0, Q_TIMER = null;
+let BILLS = [], BILLS_TOTAL = 0, BILL_SEQ = 0, Q_TIMER = null;
+// Ek page mein kitne. Chhota isliye ki 3G par pehli screen jaldi aaye;
+// baaki "Show more" par. 800 order wali dukaan par poori list bhejna
+// 79 KB ka payload tha jo har 30 second par dobara utarta tha.
+const PAGE = 30;
 
 $("q").addEventListener("input", () => {
   clearTimeout(Q_TIMER);
@@ -553,15 +614,20 @@ $("q").addEventListener("input", () => {
 });
 
 async function loadBills(opts = {}) {
-  if (!opts.quiet) $("list").innerHTML = `<div class="empty">Laa rahe hain…</div>`;
+  if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
   const mine = ++BILL_SEQ;
   const p = new URLSearchParams();
   const q = $("q").value.trim();
   if (q) p.set("q", q);
   if (FILTER === "due" || FILTER === "paid") p.set("pay", FILTER);
   if (FILTER === "mine") p.set("mine", "1");
+  p.set("limit", String(PAGE));
+  p.set("offset", String(opts.more ? BILLS.length : 0));
   try {
-    BILLS = await api("/bills?" + p.toString());
+    const r = await api("/bills?" + p.toString());
+    // "aur dikhayein" purani list ke aage jodta hai, badalta nahi
+    BILLS = opts.more ? BILLS.concat(r.bills) : r.bills;
+    BILLS_TOTAL = r.total;
   } catch (e) {
     if (mine !== BILL_SEQ || opts.quiet) return;
     $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
@@ -569,8 +635,8 @@ async function loadBills(opts = {}) {
   }
   if (mine !== BILL_SEQ || NAV !== "bills") return;
 
-  const chips = [["all", "Sab"], ["due", "Udhaar"], ["paid", "Chukta"]];
-  if (ME.is_manager) chips.push(["mine", "Mere banaye"]);
+  const chips = [["all", "All"], ["due", "Unpaid"], ["paid", "Paid"]];
+  if (ME.is_manager) chips.push(["mine", "Mine"]);
   $("chips").innerHTML = chips.map(([v, l]) =>
     `<button data-chip="${v}" class="${FILTER === v ? "on" : ""}">${l}</button>`).join("");
   $("chips").querySelectorAll("[data-chip]").forEach((b) => {
@@ -579,13 +645,14 @@ async function loadBills(opts = {}) {
 
   if (!BILLS.length) {
     $("list").innerHTML = q
-      ? `<div class="empty"><b>Kuch nahi mila</b>“${esc(q)}” se koi bill nahi. Number ya naam se dhoondein.</div>`
-      : `<div class="empty"><b>Abhi koi bill nahi</b>${ME.is_manager
-          ? "Dukaan ka koi bill pichhle 14 din mein nahi bana."
-          : "Aapke banaye bill yahan aate hain. Naya banate hi dikh jayega."}</div>`;
+      ? `<div class="empty"><b>No match</b>Nothing found for “${esc(q)}”. Try a bill number or a name.</div>`
+      : `<div class="empty"><b>No bills yet</b>${ME.is_manager
+          ? "No bills in the shop in the last 14 days."
+          : "Bills you make show up here."}</div>`;
     return;
   }
-  $("list").innerHTML = `<div class="reg">${BILLS.map(billRow).join("")}</div>`;
+  $("list").innerHTML = `<div class="reg">${BILLS.map(billRow).join("")}</div>`
+    + moreBar(BILLS.length, BILLS_TOTAL, "loadBills");
   $("list").querySelectorAll("[data-bill]").forEach((b) => {
     b.onclick = () => {
       const num = b.closest("[data-num]").dataset.num;
@@ -606,13 +673,13 @@ function billRow(b) {
     <div class="body">
       <div class="line1">
         <b>${esc(b.customer)}</b>
-        <span class="amt ${paid ? "" : "due"}">${paid ? money(b.total) : money(b.due) + " baaki"}</span>
+        <span class="amt ${paid ? "" : "due"}">${paid ? money(b.total) : money(b.due) + " due"}</span>
       </div>
       <div class="sub">${esc(b.number)} · ${esc(b.created)}${b.items ? " · " + esc(b.items) : ""}</div>
       <div class="acts">
-        <button class="btn ghost sm" data-bill="share">🧾 Bhejein</button>
+        <button class="btn ghost sm" data-bill="share">🧾 Send</button>
         ${ME.features.includes("cod_collection") && b.due > 0
-          ? `<button class="btn money sm" data-bill="pay" data-due="${b.due}">Paisa lein</button>` : ""}
+          ? `<button class="btn money sm" data-bill="pay" data-due="${b.due}">Collect</button>` : ""}
       </div>
     </div>
   </article>`;
@@ -636,17 +703,17 @@ async function shareBill(number) {
   try { r = await api(`/orders/${encodeURIComponent(number)}/receipt`); }
   catch (e) { toast(e.message, true); return; }
   SHARE_TEXT = r.text;
-  openModal(`<h3>Bill bhejein</h3>
-    <p class="said">WhatsApp khulega, bill likha hua — bas Send dabana hai. ${esc(r.name)} ko.</p>
+  openModal(`<h3>Send the bill</h3>
+    <p class="said">WhatsApp opens with the bill already written — just press send. To ${esc(r.name)}.</p>
     <pre class="sharetext">${esc(r.text)}</pre>
     <div class="btnrow">
-      <a class="btn go" href="${esc(waUrl(r.phone, r.text))}" target="_blank" rel="noopener" onclick="closeModal()">📲 WhatsApp kholein</a>
+      <a class="btn go" href="${esc(waUrl(r.phone, r.text))}" target="_blank" rel="noopener" data-act="close">📲 Open WhatsApp</a>
       <button class="btn ghost" id="m-copy">Copy</button>
     </div>
-    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Band karein</button></div>`);
+    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
   $("m-copy").onclick = async () => {
-    try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copy ho gaya"); }
-    catch (e) { toast("Copy nahi hua — upar se select karke copy karein", true); }
+    try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied"); }
+    catch (e) { toast("Could not copy — select the text above", true); }
   };
 }
 
@@ -659,60 +726,60 @@ let RATES = null, CART = [], PICKED = "";
 async function showNewBill() {
   $("chips").innerHTML = "";
   if (!ME.features.includes("billing")) {
-    $("list").innerHTML = `<div class="empty"><b>Is plan mein bill nahi</b>Owner se plan upgrade karne ko kahein.</div>`;
+    $("list").innerHTML = `<div class="empty"><b>Billing is not in this plan</b>Ask the owner to upgrade.</div>`;
     return;
   }
   if (RATES === null) {
-    $("list").innerHTML = `<div class="empty">Rate card laa rahe hain…</div>`;
+    $("list").innerHTML = `<div class="empty">Loading the rate card…</div>`;
     try { RATES = await api("/rates"); }
     catch (e) { $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   }
   const services = [...new Set(RATES.map((r) => r.service))];
   if (!services.length) {
-    $("list").innerHTML = `<div class="empty"><b>Rate card khali hai</b>
-      Owner ko dashboard mein Settings → Rate card se daam daalne hain. Bina daam ke bill nahi banta.</div>`;
+    $("list").innerHTML = `<div class="empty"><b>The rate card is empty</b>
+      The owner adds prices in Settings → Rate card. Bills need prices.</div>`;
     return;
   }
   $("list").innerHTML = `
     <div class="card">
-      <h3>Grahak</h3>
-      <label for="b-name">Naam</label>
+      <h3>Customer</h3>
+      <label for="b-name">Name</label>
       <div class="ac-wrap">
-        <input id="b-name" type="text" placeholder="Naam likhein" maxlength="60" autocomplete="off">
+        <input id="b-name" type="text" placeholder="Start typing a name" maxlength="60" autocomplete="off">
         <div class="acp" id="b-ac"></div>
       </div>
       <div id="b-picked" class="picked" hidden></div>
-      <label for="b-phone">Number</label>
+      <label for="b-phone">Mobile number</label>
       <input id="b-phone" type="tel" inputmode="numeric" placeholder="98xxxxxxxx" maxlength="15">
     </div>
 
     <div class="card">
-      <h3>Kapde</h3>
+      <h3>Items</h3>
       <div class="frow">
         <div>
           <label for="b-svc">Service</label>
           <select id="b-svc">${services.map((s) => `<option>${esc(s)}</option>`).join("")}</select>
         </div>
         <div>
-          <label for="b-item">Kapda</label>
+          <label for="b-item">Item</label>
           <select id="b-item"></select>
         </div>
       </div>
       <div class="addrow">
         <div class="qty">
-          <label for="b-qty">Kitne</label>
+          <label for="b-qty">Qty</label>
           <input id="b-qty" type="number" inputmode="decimal" value="1" min="0.1" step="0.5">
         </div>
-        <button class="btn ghost" id="b-add">Jodein</button>
+        <button class="btn ghost" id="b-add">Add</button>
       </div>
       <div id="b-cart"></div>
     </div>
 
     <div class="card" id="b-pay" hidden>
-      <h3>Paisa</h3>
-      <label for="b-adv">Abhi mila (₹)</label>
+      <h3>Payment</h3>
+      <label for="b-adv">Received now (₹)</label>
       <input id="b-adv" type="number" inputmode="decimal" value="0" min="0">
-      <button class="btn go wide" id="b-save">Bill banayein</button>
+      <button class="btn go wide" id="b-save">Create bill</button>
     </div>`;
 
   const fillItems = () => {
@@ -726,7 +793,7 @@ async function showNewBill() {
   $("b-add").onclick = () => {
     const svc = $("b-svc").value, item = $("b-item").value;
     const qty = parseFloat($("b-qty").value);
-    if (!(qty > 0)) return toast("Kitne kapde, likhein", true);
+    if (!(qty > 0)) return toast("Enter how many", true);
     const rate = (RATES.find((r) => r.service === svc && r.garment === item) || {}).rate || 0;
     const same = CART.find((x) => x.service === svc && x.garment === item);
     if (same) same.qty += qty; else CART.push({ service: svc, garment: item, qty, rate });
@@ -748,9 +815,9 @@ function renderCart() {
     <div class="cartrow">
       <span>${esc(i.garment)} <small>${esc(i.service)}</small> × ${i.qty}</span>
       <b>${money(i.qty * i.rate)}
-        <button class="rm" data-rm="${n}" aria-label="Hatayein">✕</button></b>
+        <button class="rm" data-rm="${n}" aria-label="Remove">✕</button></b>
     </div>`).join("")}
-    <div class="total"><span>Kul</span><span>${money(total)}</span></div></div>`;
+    <div class="total"><span>Total</span><span>${money(total)}</span></div></div>`;
   box.querySelectorAll("[data-rm]").forEach((b) => {
     b.onclick = () => { CART.splice(parseInt(b.dataset.rm), 1); renderCart(); };
   });
@@ -778,8 +845,8 @@ function wireCustomerSearch() {
       if (mine !== AC_SEQ) return;                // dheema jawab purani list na dikhaye
       AC_HITS = hits;
       box.innerHTML = hits.length
-        ? hits.map((c, i) => `<div data-pick="${i}">${esc(c.name || "Bina naam")} · ${esc(c.phone_masked)}</div>`).join("")
-        : `<div class="none">Naya grahak — neeche number likhein</div>`;
+        ? hits.map((c, i) => `<div data-pick="${i}">${esc(c.name || "No name")} · ${esc(c.phone_masked)}</div>`).join("")
+        : `<div class="none">New customer — enter the number below</div>`;
       box.querySelectorAll("[data-pick]").forEach((row) => {
         row.onclick = () => {
           const c = AC_HITS[parseInt(row.dataset.pick, 10)];
@@ -789,7 +856,7 @@ function wireCustomerSearch() {
           box.innerHTML = "";
           $("b-phone").value = ""; $("b-phone").disabled = true;
           $("b-picked").hidden = false;
-          $("b-picked").textContent = `✓ ${c.name || "Grahak"} · ${c.phone_masked}`;
+          $("b-picked").textContent = `✓ ${c.name || "Customer"} · ${c.phone_masked}`;
         };
       });
     }, 250);
@@ -804,8 +871,8 @@ document.addEventListener("click", (e) => {
 
 async function saveBill(btn) {
   const phone = $("b-phone").value.trim();
-  if (!PICKED && phone.replace(/\D/g, "").length < 10) return toast("Poora number likhein", true);
-  if (!CART.length) return toast("Pehle kapde jodein", true);
+  if (!PICKED && phone.replace(/\D/g, "").length < 10) return toast("Enter the full number", true);
+  if (!CART.length) return toast("Add items first", true);
   await busy(btn, async () => {
     const r = await api("/bills", {
       method: "POST",
@@ -818,7 +885,7 @@ async function saveBill(btn) {
       },
     });
     CART = []; PICKED = "";
-    toast(`${r.order_number} ban gaya — ${money(r.total)}`, false, 5000);
+    toast(`${r.order_number} created — ${money(r.total)}`, false, 5000);
     showNewBill();
     loadToday();
     // Grahak saamne khada hai — bill turant bhej dein
@@ -830,19 +897,19 @@ async function saveBill(btn) {
 
 async function showTeam(opts = {}) {
   $("chips").innerHTML = "";
-  if (!opts.quiet) $("list").innerHTML = `<div class="empty">Laa rahe hain…</div>`;
+  if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
   let rows;
   try { rows = await api("/team"); }
   catch (e) { $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   if (NAV !== "team") return;
-  if (!rows.length) { $("list").innerHTML = `<div class="empty"><b>Abhi koi staff nahi</b>Owner dashboard se jodta hai.</div>`; return; }
+  if (!rows.length) { $("list").innerHTML = `<div class="empty"><b>No staff yet</b>The owner adds them from the dashboard.</div>`; return; }
   $("list").innerHTML = `<div class="reg">${rows.map((s) => `
     <article class="row">
       <div class="spine ${s.open ? "deliver" : "ready"}"></div>
-      <div class="when"><b>${s.open}</b><span>baaki</span></div>
+      <div class="when"><b>${s.open}</b><span>open</span></div>
       <div class="body">
-        <div class="line1"><b>${esc(s.name)}</b><span class="amt">${s.done_24h} nipte</span></div>
-        <div class="sub">${esc(roleLabel(s.role))} · ${esc(s.phone_masked)}${s.has_login ? "" : " · panel login nahi"}</div>
+        <div class="line1"><b>${esc(s.name)}</b><span class="amt">${s.done_24h} done</span></div>
+        <div class="sub">${esc(roleLabel(s.role))} · ${esc(s.phone_masked)}${s.has_login ? "" : " · no panel login"}</div>
       </div>
     </article>`).join("")}</div>`;
 }
@@ -854,14 +921,14 @@ function showMe() {
   $("list").innerHTML = `
     <div class="card">
       <h3>${esc(ME.name)}</h3>
-      <div class="kv"><span>Kaam</span><b>${esc(roleLabel(ME.role))}</b></div>
-      <div class="kv"><span>Number</span><b>${esc(ME.phone)}</b></div>
-      <div class="kv"><span>Dukaan</span><b>${esc(ME.shop || "—")}</b></div>
+      <div class="kv"><span>Role</span><b>${esc(roleLabel(ME.role))}</b></div>
+      <div class="kv"><span>Mobile</span><b>${esc(ME.phone)}</b></div>
+      <div class="kv"><span>Shop</span><b>${esc(ME.shop || "—")}</b></div>
       <div class="kv"><span>Plan</span><b>${esc(ME.plan)}</b></div>
-      <p class="hint">Aapka kaam aur access owner tay karta hai — yahan se nahi badalta.</p>
+      <p class="hint">Your role and access are set by the owner.</p>
     </div>
     <div class="card">
-      <button class="btn ghost wide mt0" id="p-pw">Password badlein</button>
+      <button class="btn ghost wide mt0" id="p-pw">Change password</button>
       <button class="btn danger wide" id="p-out">Logout</button>
     </div>`;
   $("p-pw").onclick = changePw;
@@ -872,20 +939,20 @@ function showMe() {
 }
 
 function changePw() {
-  openModal(`<h3>Password badlein</h3>
-    <label for="p-old">Abhi wala</label>
+  openModal(`<h3>Change password</h3>
+    <label for="p-old">Current password</label>
     <div class="pwrap">
       <input id="p-old" type="password" autocomplete="current-password">
-      <button type="button" class="eye" data-eye="p-old" aria-label="Dikhayein">👁</button>
+      <button type="button" class="eye" data-eye="p-old" aria-label="Show password">👁</button>
     </div>
-    <label for="p-new">Naya (kam se kam 6)</label>
+    <label for="p-new">New password (at least 6)</label>
     <div class="pwrap">
       <input id="p-new" type="password" autocomplete="new-password">
-      <button type="button" class="eye" data-eye="p-new" aria-label="Dikhayein">👁</button>
+      <button type="button" class="eye" data-eye="p-new" aria-label="Show password">👁</button>
     </div>
     <div class="err" id="p-err"></div>
     <div class="btnrow">
-      <button class="btn ghost" onclick="closeModal()">Abhi nahi</button>
+      <button class="btn ghost" data-act="close">Not now</button>
       <button class="btn go" id="m-ok">Save</button>
     </div>`);
   document.querySelectorAll("[data-eye]").forEach((b) => {
@@ -897,10 +964,10 @@ function changePw() {
   });
   $("m-ok").onclick = async () => {
     const oldp = $("p-old").value, newp = $("p-new").value;
-    if (newp.length < 6) { $("p-err").textContent = "Naya password bahut chhota hai."; return; }
+    if (newp.length < 6) { $("p-err").textContent = "That new password is too short."; return; }
     try {
       await api("/password", { method: "POST", body: { old_password: oldp, new_password: newp } });
-      closeModal(); toast("Password badal gaya ✅");
+      closeModal(); toast("Password changed ✅");
       ME.must_change_password = false; $("pwbanner").hidden = true;
     } catch (e) { $("p-err").textContent = e.message; }
   };
@@ -963,9 +1030,9 @@ function uploadWithProgress(url, form, onProgress) {
       if (xhr.status >= 200 && xhr.status < 300) resolve(data);
       else reject(new Error((data && data.detail) || `Error ${xhr.status}`));
     };
-    xhr.onerror = () => reject(new Error("Network problem — signal dekhein"));
-    xhr.ontimeout = () => reject(new Error("Bahut samay laga — better signal par dobara"));
-    xhr.onabort = () => reject(new Error("Upload ruk gaya"));
+    xhr.onerror = () => reject(new Error("Network problem — check your signal"));
+    xhr.ontimeout = () => reject(new Error("Took too long — try again on better signal"));
+    xhr.onabort = () => reject(new Error("Upload cancelled"));
     xhr.send(form);
   });
 }
@@ -973,18 +1040,18 @@ function uploadWithProgress(url, form, onProgress) {
 const kb = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB");
 
 function askPhoto(number) {
-  openModal(`<h3>${esc(number)} — photo lagayein</h3>
-    <p class="said">Kapde ki haalat ka saboot: daag, phata hua, ya kitne peace.
-      Baad mein koi kahe "aisa nahi tha", to jawab yahi hai.</p>
+  openModal(`<h3>${esc(number)} — add a photo</h3>
+    <p class="said">Proof of the item\u2019s condition — a stain, a tear, or how many pieces.
+      If anyone later says it was not like that, this is the answer.</p>
     <input id="ph-file" type="file" accept="image/*" capture="environment">
     <div id="ph-prev" hidden></div>
-    <label for="ph-note">Kuch likhna hai? (zaroori nahi)</label>
-    <input id="ph-note" type="text" maxlength="150" placeholder="jaise: collar par daag">
+    <label for="ph-note">Note (optional)</label>
+    <input id="ph-note" type="text" maxlength="150" placeholder="e.g. stain on the collar">
     <div id="ph-bar" class="bar" hidden><i></i></div>
     <div class="err" id="ph-err"></div>
     <div class="btnrow">
-      <button class="btn ghost" onclick="closeModal()">Abhi nahi</button>
-      <button class="btn go" id="m-ok">Bhejein</button>
+      <button class="btn ghost" data-act="close">Not now</button>
+      <button class="btn go" id="m-ok">Send</button>
     </div>`);
 
   let ready = null, preparing = false;
@@ -997,17 +1064,17 @@ function askPhoto(number) {
     preparing = true;
     $("ph-err").textContent = "";
     $("ph-prev").hidden = false;
-    $("ph-prev").textContent = "Photo taiyar kar rahe hain…";
+    $("ph-prev").textContent = "Getting the photo ready…";
     const small = await shrinkPhoto(f);
     ready = small; preparing = false;
     $("ph-prev").textContent = small.size < f.size
-      ? `Taiyar — ${kb(f.size)} se ${kb(small.size)}` : `Taiyar — ${kb(small.size)}`;
+      ? `Ready — ${kb(f.size)} made smaller to ${kb(small.size)}` : `Ready — ${kb(small.size)}`;
   };
 
   $("m-ok").onclick = async (e) => {
     const btn = e.currentTarget;
     const chosen = $("ph-file").files[0];
-    if (!chosen) { $("ph-err").textContent = "Pehle photo chunein."; return; }
+    if (!chosen) { $("ph-err").textContent = "Choose a photo first."; return; }
     $("ph-err").textContent = "";
     btn.disabled = true;
     const label = btn.innerHTML;
@@ -1026,13 +1093,13 @@ function askPhoto(number) {
         (p) => { fill.style.width = Math.max(2, Math.round(p * 100)) + "%"; },
       );
       closeModal();
-      toast("Photo lag gayi — owner ko pata chal gaya");
+      toast("Photo added — the owner has been told");
     } catch (err) {
       // Fail hone par kaam khatam nahi: wahi photo, ek tap par dobara.
       bar.hidden = true;
       $("ph-err").textContent = err.message;
       btn.disabled = false;
-      btn.innerHTML = "Dobara koshish";
+      btn.innerHTML = "Try again";
       return;
     }
     btn.disabled = false; btn.innerHTML = label;
@@ -1057,7 +1124,7 @@ const liveSeen = () => { LIVE_SEEN = Date.now(); };
 
 function tick() {
   if (document.hidden) return;
-  // Pichhe se aaya refresh list ko "Laa rahe hain…" se NAHI badalta —
+  // Pichhe se aaya refresh list ko "Loading…" se NAHI badalta —
   // jo card aadmi padh raha hai wo uske haath se nikal jaata tha.
   refreshCurrent({ quiet: true });
   loadToday();

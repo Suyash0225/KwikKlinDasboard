@@ -1181,7 +1181,7 @@ async def test_a_bill_i_made_shows_up_and_i_can_share_it(client, two_shops, sent
         assert r.status_code == 201, r.text
         mine = r.json()["order_number"]
 
-        bills = (await client.get("/staff/api/bills")).json()
+        bills = (await client.get("/staff/api/bills")).json()["bills"]
         numbers = [b["number"] for b in bills]
         assert mine in numbers, "apna banaya bill dikhna chahiye"
         assert someone_elses not in numbers, "doosre ka bill washer ko nahi"
@@ -1195,7 +1195,7 @@ async def test_a_bill_i_made_shows_up_and_i_can_share_it(client, two_shops, sent
 
         # manager ko dukaan ke sab bill
         await _login(client, A_MGR_PHONE)
-        all_bills = [x["number"] for x in (await client.get("/staff/api/bills")).json()]
+        all_bills = [x["number"] for x in (await client.get("/staff/api/bills")).json()["bills"]]
         assert mine in all_bills and someone_elses in all_bills
     finally:
         async with async_session_factory() as db:
