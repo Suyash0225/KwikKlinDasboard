@@ -1201,3 +1201,40 @@ async def test_a_bill_i_made_shows_up_and_i_can_share_it(client, two_shops, sent
         async with async_session_factory() as db:
             await db.execute(sqltext("DELETE FROM rate_card WHERE service = 'MySvc'"))
             await db.commit()
+
+
+async def test_no_inline_handlers_or_styles_in_the_panel(client) -> None:
+    """Page ki CSP `script-src 'self'` + `style-src 'self'` hai.
+
+    Uska matlab: `onclick="..."` aur `style="..."` browser chup-chaap gira
+    deta hai. Koi error nahi, koi 4xx nahi — button dikhta hai, dabta hai,
+    aur kuch nahi hota. Aisa hi hua tha: har modal ka Close/Cancel mar
+    gaya tha aur "Show more" bhi, aur code padh kar kuch galat nahi dikhta.
+
+    Isliye ye test served files par hi chalta hai. Naya button banate waqt
+    handler JS se jodo (addEventListener / delegated data-act), aur styling
+    class se.
+    """
+    import re
+
+    csp = (await client.get("/staff")).headers.get("content-security-policy", "")
+    assert "script-src 'self'" in csp and "style-src 'self'" in csp, \
+        "CSP dheeli pad gayi — ye test isi sakhti ki wajah se hai"
+
+    for path in ("/staff", "/admin/static/staff.js"):
+        body = (await client.get(path)).text
+        # comment ki lines chhod do — sirf woh jo sach mein HTML mein jaata hai
+        code = "\n".join(
+            ln for ln in body.split("\n")
+            if not ln.lstrip().startswith(("*", "//", "/*", "#"))
+        )
+        bad_click = re.findall(r'\bon(?:click|change|input|submit)\s*=\s*"', code)
+        assert not bad_click, (
+            f"{path}: {len(bad_click)} inline handler — CSP inhe gira degi, "
+            "button bekaar ho jayega. data-act + delegated listener use karein."
+        )
+        bad_style = re.findall(r'\bstyle\s*=\s*"', code)
+        assert not bad_style, (
+            f"{path}: {len(bad_style)} inline style — CSP inhe gira degi. "
+            "CSS mein class banayein."
+        )
