@@ -19,6 +19,7 @@ from tests.conftest import purge_phones
 
 A_PHONE = "+919999900201"     # dukaan A ka washerman
 A_MGR_PHONE = "+919999900202"  # dukaan A ka manager
+A_DEL_PHONE = "+919999900204"  # dukaan A ka delivery boy — bill YE banata hai
 B_PHONE = "+919999900203"     # dukaan B ka washerman — WAHI number chalta hai
 CUST_A = "+919999900204"
 CUST_B = "+919999900205"
@@ -100,18 +101,19 @@ async def _staff(tenant_id, phone: str, name: str, role: StaffRole) -> uuid.UUID
 @pytest.fixture
 async def two_shops():
     """Do alag laundry, dono active — A Premium par, B Basic par."""
-    await _purge_staff(A_PHONE, A_MGR_PHONE, B_PHONE)
+    await _purge_staff(A_PHONE, A_MGR_PHONE, A_DEL_PHONE, B_PHONE)
     a = await _tenant("panel-a", "pro")
     b = await _tenant("panel-b", "starter")
     ids = {
         "a": a, "b": b,
         "a_wash": await _staff(a, A_PHONE, "Awash", StaffRole.WASHER),
         "a_mgr": await _staff(a, A_MGR_PHONE, "Amgr", StaffRole.MANAGER),
+        "a_del": await _staff(a, A_DEL_PHONE, "Adel", StaffRole.DELIVERY),
         "b_wash": await _staff(b, B_PHONE, "Bwash", StaffRole.WASHER),
     }
     yield ids
     async with async_session_factory() as db:
-        for phone in (A_PHONE, A_MGR_PHONE, B_PHONE):
+        for phone in (A_PHONE, A_MGR_PHONE, A_DEL_PHONE, B_PHONE):
             await db.execute(
                 sqltext(
                     "DELETE FROM staff_sessions WHERE staff_id IN"
@@ -608,7 +610,7 @@ async def test_staff_can_bill_from_the_panel_at_rate_card_prices(client, two_sho
     finally:
         tenant_context.current_tenant_id.reset(token)
 
-    await _login(client, A_PHONE)
+    await _login(client, A_DEL_PHONE)
     try:
         rates = (await client.get("/staff/api/rates")).json()
         assert any(r["service"] == "PanelSvc" for r in rates)
@@ -714,7 +716,7 @@ async def test_customer_search_finds_by_name_and_never_leaks_the_number(
     dhaka hua number jaata hai — aur chunne ke liye ek `ref`.
     """
     await _task_for(two_shops["a"], two_shops["a_wash"], CUST_A, "Kaam")
-    await _login(client, A_PHONE)
+    await _login(client, A_DEL_PHONE)
 
     r = await client.get("/staff/api/customers/search?q=Grah")
     assert r.status_code == 200, r.text
@@ -742,7 +744,7 @@ async def test_search_cannot_reach_into_another_shop(client, two_shops, sent) ->
             )
         ).scalar_one()
 
-    await _login(client, A_PHONE)              # dukaan A ka aadmi
+    await _login(client, A_DEL_PHONE)              # dukaan A ka aadmi
     assert (await client.get("/staff/api/customers/search?q=Grah")).json() == [] or all(
         h["ref"] != str(b_ref)
         for h in (await client.get("/staff/api/customers/search?q=Grah")).json()
@@ -781,7 +783,7 @@ async def test_bill_from_a_picked_customer_needs_no_typed_number(
         tenant_context.current_tenant_id.reset(token)
 
     try:
-        await _login(client, A_PHONE)
+        await _login(client, A_DEL_PHONE)
         ref = (await client.get("/staff/api/customers/search?q=Grah")).json()[0]["ref"]
 
         r = await client.post(
@@ -815,7 +817,7 @@ async def test_a_bill_still_needs_a_number_when_nobody_was_picked(
 ) -> None:
     """Naya customer ho to number lazmi — chup-chaap bina number bill nahi."""
     await _task_for(two_shops["a"], two_shops["a_wash"], CUST_A, "Kaam")
-    await _login(client, A_PHONE)
+    await _login(client, A_DEL_PHONE)
     r = await client.post(
         "/staff/api/bills",
         json={"items": [{"service": "Wash", "garment": "Kurta", "qty": 1}]},
@@ -1172,7 +1174,7 @@ async def test_a_bill_i_made_shows_up_and_i_can_share_it(client, two_shops, sent
     # kisi aur (manager) ka bill — washer ko nahi dikhna chahiye
     someone_elses = await _order_for(two_shops["a"], two_shops["a_mgr"], CUST_A)
 
-    await _login(client, A_PHONE)
+    await _login(client, A_DEL_PHONE)
     try:
         r = await client.post("/staff/api/bills", json={
             "customer_phone": CUST_A, "customer_name": "Saree Wali",
@@ -1238,3 +1240,294 @@ async def test_no_inline_handlers_or_styles_in_the_panel(client) -> None:
             f"{path}: {len(bad_style)} inline style — CSP inhe gira degi. "
             "CSS mein class banayein."
         )
+
+
+# ---------------------------------------------------- bill banane ka haq ----
+
+
+async def test_washerman_cannot_bill_even_on_a_billing_plan(client, two_shops, sent) -> None:
+    """Plan `billing` khol deta hai ki DUKAAN bill bana sakti hai. Kaun bana
+    sakta hai ye role tay karta hai — aur washerman nahi bana sakta.
+
+    Ab jab rate bhi badla ja sakta hai, ye do pehre alag hone chahiye: jo
+    haath rate badal sakta hai wo dukaan ka paisa badal sakta hai.
+    """
+    await _login(client, A_PHONE)              # dukaan A ka washerman
+
+    me = (await client.get("/staff/api/me")).json()
+    assert "billing" in me["features"], "plan par billing hai — sawal role ka hai"
+    assert me["can_bill"] is False, "panel ko pata hona chahiye ki tab dikhana nahi hai"
+
+    # Aur sirf panel chhupa dena kaafi nahi — API khud mana kare
+    for path in ("/staff/api/rates", "/staff/api/customers/search?q=Grah", "/staff/api/bills"):
+        r = await client.get(path)
+        assert r.status_code == 403, f"{path} -> {r.status_code}"
+
+    r = await client.post("/staff/api/bills", json={
+        "customer_phone": CUST_A,
+        "items": [{"service": "Wash", "garment": "Kurta", "qty": 1}],
+    })
+    assert r.status_code == 403, r.text
+
+
+async def test_delivery_boy_and_manager_can_bill(client, two_shops, sent) -> None:
+    """Delivery wala aur manager — dono counter sambhalte hain."""
+    for phone in (A_DEL_PHONE, A_MGR_PHONE):
+        await _login(client, phone)
+        me = (await client.get("/staff/api/me")).json()
+        assert me["can_bill"] is True, f"{phone} bill bana sakna chahiye"
+        assert (await client.get("/staff/api/rates")).status_code == 200
+
+
+# --------------------------------------------------------- daam aur chhoot ----
+
+
+async def _panel_rate(tenant_id, service="DiscSvc", garment="Kurta", rate="40"):
+    from decimal import Decimal
+
+    from app.models import Rate
+    from app.services import tenant_context
+
+    token = tenant_context.current_tenant_id.set(tenant_id)
+    try:
+        async with async_session_factory() as db:
+            db.add(Rate(service=service, garment=garment, unit="pc", rate=Decimal(rate)))
+            await db.commit()
+    finally:
+        tenant_context.current_tenant_id.reset(token)
+
+
+async def _drop_rate(service="DiscSvc"):
+    async with async_session_factory() as db:
+        await db.execute(sqltext("DELETE FROM rate_card WHERE service = :s"), {"s": service})
+        await db.commit()
+
+
+async def test_discount_by_amount_and_by_percent(client, two_shops, sent) -> None:
+    """Chhoot dono tarah se — aur total hamesha chhoot ke BAAD ka.
+
+    total_amount ko net rakhna zaroori hai: dashboard ka coupon rasta bhi
+    yahi karta hai, aur do jagah do matlab rakhne par har report do jawab
+    dene lagti hai.
+    """
+    await _panel_rate(two_shops["a"])
+    await _login(client, A_DEL_PHONE)
+    try:
+        r = await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Chhoot Grahak",
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 5}],   # 200
+            "discount_amount": 30,
+        })
+        assert r.status_code == 201, r.text
+        assert r.json()["gross"] == 200.0
+        assert r.json()["discount"] == 30.0
+        assert r.json()["total"] == 170.0
+
+        r = await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A,
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 5}],   # 200
+            "discount_percent": 10,
+        })
+        assert r.status_code == 201, r.text
+        assert r.json()["discount"] == 20.0 and r.json()["total"] == 180.0
+
+        # Bill se zyada chhoot = 400. Warna total rinaatmak, aur "due" ulta
+        # paisa dikhane lagta hai.
+        bad = await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A,
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 1}],   # 40
+            "discount_amount": 100,
+        })
+        assert bad.status_code == 400 and "Discount" in bad.json()["detail"]
+    finally:
+        await _drop_rate()
+
+
+async def test_rate_override_prices_the_line_and_leaves_an_audit_trail(
+    client, two_shops, sent
+) -> None:
+    """Ek line ka daam badla ja sakta hai — par chupke se nahi.
+
+    Rate card khud nahi badalta (agla bill phir card se banta hai), bill par
+    card ka daam likha rehta hai, aur audit mein poora "kitne se kitna".
+    """
+    await _panel_rate(two_shops["a"])
+    await _login(client, A_DEL_PHONE)
+    try:
+        r = await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Mol Bhav",
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 2, "rate": 25}],
+        })
+        assert r.status_code == 201, r.text
+        assert r.json()["total"] == 50.0, "40 nahi, 25 ka rate lagna chahiye"
+        number = r.json()["order_number"]
+
+        async with async_session_factory() as db:
+            row = (await db.execute(
+                sqltext("SELECT items, total_amount FROM orders WHERE order_number = :n"),
+                {"n": number},
+            )).one()
+            line = row[0][0]
+            assert line["rate"] == 25.0
+            assert line["card_rate"] == 40.0, "card ka daam bill par rehna chahiye"
+
+            # Rate card chhua nahi gaya
+            card = (await db.execute(
+                sqltext("SELECT rate FROM rate_card WHERE service='DiscSvc' AND garment='Kurta'")
+            )).scalar_one()
+            assert float(card) == 40.0
+
+            audited = (await db.execute(sqltext(
+                "SELECT args FROM audit_log WHERE action = 'bill_created_from_panel'"
+                " ORDER BY at DESC LIMIT 1"
+            ))).scalar_one()
+            assert audited["rate_overrides"][0] == {
+                "garment": "Kurta", "from": 40.0, "to": 25.0
+            }
+    finally:
+        await _drop_rate()
+
+
+# ------------------------------------------------------------ purana udhaar ----
+
+
+async def test_previous_dues_ride_along_but_never_join_the_new_total(
+    client, two_shops, sent
+) -> None:
+    """Grahak ko ek number, ledger ko sach.
+
+    Pichhla baaki naye bill par DIKHTA hai (grand_total), par uske
+    total_amount mein JUDTA nahi — warna wahi paisa do bill par ginta aur
+    mahine ki kamai jhooth bolne lagti.
+    """
+    await _panel_rate(two_shops["a"])
+    await _login(client, A_DEL_PHONE)
+    try:
+        first = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Udhaar Grahak",
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 2}],   # 80
+        })).json()
+        assert first["previous_due"] == 0.0, "pehla bill — pichhla kuch nahi"
+
+        second = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A,
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 1}],   # 40
+        })).json()
+        assert second["total"] == 40.0, "naye bill ka apna total sirf apna"
+        assert second["previous_due"] == 80.0
+        assert second["previous_bills"] == 1
+        assert second["grand_total"] == 120.0
+
+        async with async_session_factory() as db:
+            stored = (await db.execute(
+                sqltext("SELECT total_amount FROM orders WHERE order_number = :n"),
+                {"n": second["order_number"]},
+            )).scalar_one()
+            assert float(stored) == 40.0, "DB mein purana udhaar kabhi nahi judna chahiye"
+    finally:
+        await _drop_rate()
+
+
+async def test_collecting_the_grand_total_settles_the_oldest_bill_first(
+    client, two_shops, sent
+) -> None:
+    """Grahak ne "kul dena hai" wala poora paisa diya.
+
+    Koi bhi dukaandar naya bill chukta karke purana udhaar khula nahi
+    chhodta — isliye paisa sabse purane bill se lagta hai. Aur bina maange
+    (settle_previous ke bina) doosre order ko chhua bhi nahi jaata.
+    """
+    await _panel_rate(two_shops["a"])
+    await _login(client, A_DEL_PHONE)
+    try:
+        old = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Kul Grahak",
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 2}],   # 80
+        })).json()
+        new = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A,
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 1}],   # 40
+        })).json()
+        assert new["grand_total"] == 120.0
+
+        # Bina maange purane ko haath nahi: ceiling sirf is bill ka due
+        over = await client.post(f"/staff/api/orders/{new['order_number']}/collect",
+                                 json={"amount": 120, "method": "cash"})
+        assert over.status_code == 400, over.text
+
+        r = await client.post(f"/staff/api/orders/{new['order_number']}/collect",
+                              json={"amount": 120, "method": "cash", "settle_previous": True})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["due"] == 0.0 and body["previous_due"] == 0.0
+        assert body["settled_older"] == [{"order": old["order_number"], "amount": 80.0}]
+
+        # Dono order ka ledger sach bole — 120 ek jagah nahi, 80 + 40
+        async with async_session_factory() as db:
+            for number, paid in ((old["order_number"], 80.0), (new["order_number"], 40.0)):
+                got = (await db.execute(
+                    sqltext("SELECT amount_paid FROM orders WHERE order_number = :n"),
+                    {"n": number},
+                )).scalar_one()
+                assert float(got) == paid, f"{number} par {paid} lagna chahiye"
+    finally:
+        await _drop_rate()
+
+
+async def test_the_shared_bill_shows_discount_and_the_old_balance(
+    client, two_shops, sent
+) -> None:
+    """WhatsApp par jaane wale text par teen line: chhoot, pichhla, kul."""
+    await _panel_rate(two_shops["a"])
+    await _login(client, A_DEL_PHONE)
+    try:
+        await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Rasid Grahak",
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 2}],   # 80
+        })
+        second = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A,
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 5}],   # 200
+            "discount_percent": 10,                                            # -> 180
+        })).json()
+
+        r = await client.get(f"/staff/api/orders/{second['order_number']}/receipt")
+        assert r.status_code == 200, r.text
+        text = r.json()["text"]
+        assert "Subtotal: ₹200" in text
+        assert "Discount: -₹20" in text
+        assert "Total: ₹180" in text
+        assert "Pichhla baaki (1 bill): ₹80" in text
+        assert "KUL DENA HAI: ₹260" in text
+    finally:
+        await _drop_rate()
+
+
+async def test_dues_endpoint_answers_kitna_dena_hai(client, two_shops, sent) -> None:
+    """Darwaze par ek hi sawaal hota hai: kitna dena hai. Uska sahi jawab
+    is bill ka due nahi, dono jodkar hai."""
+    await _panel_rate(two_shops["a"])
+    await _login(client, A_DEL_PHONE)
+    try:
+        old = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Dues Grahak",
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 2}],   # 80
+        })).json()
+        new = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A,
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 1}],   # 40
+            "advance": 10,
+        })).json()
+
+        r = await client.get(f"/staff/api/orders/{new['order_number']}/dues")
+        assert r.status_code == 200, r.text
+        assert r.json() == {
+            "number": new["order_number"], "due": 30.0,
+            "previous_due": 80.0, "previous_bills": 1, "grand_total": 110.0,
+        }
+
+        # Pehla bill khud ko apne "pichhla" mein nahi ginta
+        r2 = (await client.get(f"/staff/api/orders/{old['order_number']}/dues")).json()
+        assert r2["due"] == 80.0 and r2["previous_due"] == 30.0
+    finally:
+        await _drop_rate()

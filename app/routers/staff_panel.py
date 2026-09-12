@@ -66,6 +66,76 @@ def mask_phone(phone: str | None) -> str:
     return f"{p[:6]}xxxx{p[-3:]}"
 
 
+# ------------------------------------------------------- bill banane ka haq ----
+
+# Bill kaun bana sakta hai. Plan `billing` khol deta hai ki DUKAAN bill bana
+# sakti hai; ye tay karta hai ki us dukaan ka KAUN. Washerman nahi: wo kapdon
+# ke saath hai, counter par nahi, aur ab rate bhi badla ja sakta hai — jo
+# haath rate badal sakta hai wo dukaan ka paisa badal sakta hai.
+#
+# SUPERVISOR ("Washerman / Manager") is list mein hai kyunki wo dhulai ke
+# saath counter bhi sambhalta hai — chhoti dukaan ka sabse aam sach, aur
+# wahi aadmi shaam ko akela hota hai.
+BILLING_ROLES = (StaffRole.DELIVERY, StaffRole.MANAGER, StaffRole.SUPERVISOR, StaffRole.ADMIN)
+
+
+def can_bill(p: StaffPrincipal) -> bool:
+    return p.staff.role in BILLING_ROLES
+
+
+def require_biller(feature: str = "billing"):
+    """Plan ka pehra + role ka pehra, ek hi jagah.
+
+    Dono alag jawab dete hain aur ye jaan-boojh kar hai: 402 ka matlab hai
+    "owner se plan upgrade karwao", 403 ka matlab "ye kaam tumhara nahi".
+    Ek hi code dono ke liye bhejna staff ko galat aadmi ke paas bhejta hai.
+    """
+
+    plan_gate = require_staff_feature(feature)
+
+    def _dep(p: StaffPrincipal = Depends(plan_gate)) -> StaffPrincipal:
+        if not can_bill(p):
+            raise HTTPException(
+                status_code=403,
+                detail="Bill counter par banta hai — aapke role mein ye nahi hai",
+            )
+        return p
+
+    _dep.__name__ = f"require_biller_{feature}"
+    return _dep
+
+
+# Jo status paise ke hisaab se "zinda" nahi hain. Cancelled order ka due
+# maangna galat hai; udhaar ki ginti mein wo aana hi nahi chahiye.
+DEAD_FOR_MONEY = (OrderStatus.CANCELLED,)
+
+
+async def customer_outstanding(
+    db: AsyncSession, customer_id, *, exclude_order_id=None
+) -> tuple[float, int]:
+    """Us grahak ka kul purana udhaar — (rakam, kitne bill).
+
+    Sirf isi tenant ke order ginne jaate hain: SELECT par tenant filter
+    apne aap lagta hai (database.py ka ORM event), isliye yahan alag se
+    kuch nahi likhna padta aur galti se doosri dukaan ka udhaar jud nahi
+    sakta.
+    """
+    q = select(Order).where(
+        Order.customer_id == customer_id,
+        Order.status.notin_(DEAD_FOR_MONEY),
+    )
+    if exclude_order_id is not None:
+        q = q.where(Order.id != exclude_order_id)
+    rows = (await db.execute(q)).scalars().all()
+    due, n = 0.0, 0
+    for o in rows:
+        d = float(o.total_amount or 0) - float(o.amount_paid or 0)
+        if d > 0.009:          # paisa-bhar ka rounding udhaar nahi hai
+            due += d
+            n += 1
+    return round(due, 2), n
+
+
 # ---------------------------------------------------------------- auth ----
 
 
@@ -121,6 +191,10 @@ async def me(p: StaffPrincipal = Depends(current_staff)) -> dict:
         "phone": mask_phone(p.staff.phone),
         "role": p.staff.role.name,
         "is_manager": p.is_manager,
+        # Plan bill khol sakta hai par role phir bhi mana kar sakta hai.
+        # Panel isi ek jhande se Bill/New tab dikhata hai — do jagah do
+        # hisaab rakhne par hi "dikh raha hai par chalta nahi" hota hai.
+        "can_bill": can_bill(p),
         "must_change_password": p.staff.must_change_password,
         "shop": p.tenant.shop_name if p.tenant else "",
         "plan": plans.get(p.plan).name,
@@ -629,9 +703,38 @@ async def order_detail(
     return out
 
 
+@router.get("/orders/{number}/dues")
+async def order_dues(
+    number: str,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Is order ka due + us grahak ka purana baaki.
+
+    Darwaze par khada delivery wala ek hi baar poochta hai "kitna dena
+    hai" — aur uska sahi jawab sirf is bill ka due nahi hai. Alag endpoint
+    isliye ki collect wali sheet ise maang sake bina poora order detail
+    utaare (`_my_order` wahi pehra lagata hai: apna order hi khulta hai).
+    """
+    order = await _my_order(db, p, number)
+    due = float((order.total_amount or 0) - (order.amount_paid or 0))
+    prev, bills = await customer_outstanding(db, order.customer_id, exclude_order_id=order.id)
+    return {
+        "number": order.order_number,
+        "due": max(0.0, round(due, 2)),
+        "previous_due": prev,
+        "previous_bills": bills,
+        "grand_total": round(max(0.0, due) + prev, 2),
+    }
+
+
 class CollectIn(BaseModel):
     amount: float = Field(gt=0)
     method: str = Field(pattern="^(cash|upi)$")
+    # Grahak ne "kul dena hai" wala poora paisa diya. Default False: bina
+    # maange kisi doosre order ko chhoona nahi — delivery wale ne jo bola
+    # wahi hona chahiye, aur us bill ka due jitna hi ceiling rehta hai.
+    settle_previous: bool = False
 
 
 @router.post("/orders/{number}/collect", dependencies=[Depends(require_staff_feature("cod_collection"))])
@@ -654,23 +757,69 @@ async def collect_payment(
     ).scalar_one_or_none()
     if order is None:
         raise HTTPException(status_code=404, detail=f"{number} not found")
-    due = float((order.total_amount or 0) - (order.amount_paid or 0))
-    if body.amount > due + 0.01:
-        raise HTTPException(status_code=400, detail=f"Only ₹{due:.0f} is due")
     from decimal import Decimal
 
-    await record_payment(
-        db, order, amount=Decimal(str(body.amount)),
-        method=PaymentMethod.CASH if body.method == "cash" else PaymentMethod.UPI,
-        recorded_by=p.staff.name,
-    )
+    due = float((order.total_amount or 0) - (order.amount_paid or 0))
+    prev_due, _ = await customer_outstanding(db, order.customer_id, exclude_order_id=order.id)
+    ceiling = due + (prev_due if body.settle_previous else 0.0)
+    if body.amount > ceiling + 0.01:
+        raise HTTPException(status_code=400, detail=f"Only ₹{ceiling:.0f} is due")
+
+    method = PaymentMethod.CASH if body.method == "cash" else PaymentMethod.UPI
+    left = Decimal(str(body.amount))
+    settled = []
+
+    # Sabse purana bill pehle. Ye grahak ka apna hisaab-kitaab hai: koi bhi
+    # dukaandar naya bill chukta karke purana udhaar khula nahi chhodta.
+    # Aur bina iske "kul dena hai" wala paisa is ek order par overpayment
+    # ban jaata aur purane bill month-end tak due dikhte rehte.
+    if body.settle_previous and left > Decimal(str(due)):
+        older = (
+            await db.execute(
+                select(Order)
+                .where(
+                    Order.customer_id == order.customer_id,
+                    Order.id != order.id,
+                    Order.status.notin_(DEAD_FOR_MONEY),
+                )
+                .order_by(Order.created_at)
+            )
+        ).scalars().all()
+        for o in older:
+            if left <= 0:
+                break
+            o_due = (o.total_amount or Decimal("0")) - (o.amount_paid or Decimal("0"))
+            if o_due <= Decimal("0.009"):
+                continue
+            take = min(left, o_due)
+            await record_payment(db, o, amount=take, method=method, recorded_by=p.staff.name)
+            left -= take
+            settled.append({"order": o.order_number, "amount": float(take)})
+
+    if left > 0:
+        await record_payment(db, order, amount=left, method=method, recorded_by=p.staff.name)
+
     await audit.record(
         actor_role="staff", actor=p.staff.name, action="cod_collected",
-        args={"order": order.order_number, "amount": body.amount, "method": body.method},
+        args={
+            "order": order.order_number, "amount": body.amount, "method": body.method,
+            "settled_older": settled,
+        },
         result="ok", tenant_id=p.staff.tenant_id,
     )
-    log.info("cod_collected", staff=p.staff.name, order=order.order_number, amount=body.amount)
-    return {"ok": True, "due": max(0.0, due - body.amount)}
+    log.info(
+        "cod_collected", staff=p.staff.name, order=order.order_number,
+        amount=body.amount, older=len(settled),
+    )
+    await db.refresh(order)
+    new_due = float((order.total_amount or 0) - (order.amount_paid or 0))
+    new_prev, _ = await customer_outstanding(db, order.customer_id, exclude_order_id=order.id)
+    return {
+        "ok": True,
+        "due": max(0.0, new_due),
+        "previous_due": new_prev,
+        "settled_older": settled,
+    }
 
 
 # ---------------------------------------------------------- naya bill ----
@@ -678,7 +827,7 @@ async def collect_payment(
 
 @router.get("/rates")
 async def rate_card(
-    p: StaffPrincipal = Depends(require_staff_feature("billing")),
+    p: StaffPrincipal = Depends(require_biller()),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """Dukaan ka rate card — daam yahin se aate hain, kahin aur se nahi."""
@@ -695,7 +844,7 @@ async def rate_card(
     ]
 
 
-@router.get("/customers/search", dependencies=[Depends(require_staff_feature("billing"))])
+@router.get("/customers/search", dependencies=[Depends(require_biller())])
 async def customer_search(
     q: str = Query(default="", max_length=60),
     p: StaffPrincipal = Depends(current_staff),
@@ -734,20 +883,33 @@ async def customer_search(
             .limit(8)
         )
     ).scalars().all()
-    return [
-        {
-            "ref": str(c.id),
-            "name": c.name or "",
-            "phone_masked": mask_phone(c.phone),
-        }
-        for c in rows
-    ]
+    out = []
+    for c in rows:
+        # Purana udhaar yahin bata dete hain. Counter par yahi wo pal hai
+        # jab grahak saamne khada hai aur paisa maanga ja sakta hai — bill
+        # ban jaane ke baad wo ja chuka hota hai.
+        due, bills = await customer_outstanding(db, c.id)
+        out.append(
+            {
+                "ref": str(c.id),
+                "name": c.name or "",
+                "phone_masked": mask_phone(c.phone),
+                "due": due,
+                "due_bills": bills,
+            }
+        )
+    return out
 
 
 class BillItemIn(BaseModel):
     service: str = Field(min_length=1, max_length=60)
     garment: str = Field(min_length=1, max_length=60)
     qty: float = Field(gt=0, le=999)
+    # Rate card ka daam hi default hai. Ye bharne par us EK line ka daam
+    # badalta hai — rate card chhua nahi jaata, agla bill phir se card se
+    # banta hai. Har override audit hota hai (neeche), kyunki counter par
+    # chupke se daam girana hi wo chori hai jo kisi report mein nahi dikhti.
+    rate: float | None = Field(default=None, ge=0, le=100000)
 
 
 class BillIn(BaseModel):
@@ -759,13 +921,18 @@ class BillIn(BaseModel):
     customer_ref: str = Field(default="", max_length=64)
     items: list[BillItemIn] = Field(min_length=1, max_length=30)
     advance: float = Field(default=0, ge=0)
+    # Chhoot do tareeke se maangi ja sakti hai. Dono aaye to PERCENT chalta
+    # hai aur rakam nazarandaz hoti hai — "10% ya ₹50, jo bhi zyada ho"
+    # jaisa jugaad server par nahi hona chahiye; ek bill, ek hisaab.
+    discount_percent: float = Field(default=0, ge=0, le=100)
+    discount_amount: float = Field(default=0, ge=0)
     # Kapde dukaan mein hain (grahak khud laaya) ya lene jaana hai?
     # Isi ek jawab se tay hota hai ki order delivery wale ke panel mein
     # aayega ya washer ke. Default: dukaan mein — counter par yahi aam hai.
     needs_pickup: bool = False
 
 
-@router.post("/bills", dependencies=[Depends(require_staff_feature("billing"))], status_code=201)
+@router.post("/bills", dependencies=[Depends(require_biller())], status_code=201)
 async def create_bill(
     body: BillIn,
     p: StaffPrincipal = Depends(current_staff),
@@ -814,7 +981,8 @@ async def create_bill(
 
     rows = (await db.execute(select(Rate).where(Rate.is_active))).scalars().all()
     by_key = {(r.service.strip().lower(), r.garment.strip().lower()): r for r in rows}
-    items, total = [], Decimal("0")
+    items, gross = [], Decimal("0")
+    overrides = []          # audit ke liye: kis line par card se kitna alag
     for it in body.items:
         row = by_key.get((it.service.strip().lower(), it.garment.strip().lower()))
         if row is None:
@@ -823,14 +991,33 @@ async def create_bill(
                 detail=f"{it.garment} ({it.service}) is not on the rate card",
             )
         qty = Decimal(str(it.qty))
-        amount = row.rate * qty
-        total += amount
-        items.append(
-            {
-                "type": row.garment, "service": row.service, "garment": row.garment,
-                "qty": float(qty), "rate": float(row.rate), "amount": float(amount),
-            }
-        )
+        card_rate = Decimal(str(row.rate))
+        rate = card_rate if it.rate is None else Decimal(str(it.rate))
+        amount = (rate * qty).quantize(Decimal("0.01"))
+        gross += amount
+        line = {
+            "type": row.garment, "service": row.service, "garment": row.garment,
+            "qty": float(qty), "rate": float(rate), "amount": float(amount),
+        }
+        if rate != card_rate:
+            # Bill par hamesha dikhega ki card ka daam kya tha. Baad mein
+            # "maine to poora liya tha" wali baat ka jawab yahi line hai.
+            line["card_rate"] = float(card_rate)
+            overrides.append(
+                {"garment": row.garment, "from": float(card_rate), "to": float(rate)}
+            )
+        items.append(line)
+
+    # Chhoot: percent pehle, warna rakam. Bill se zyada chhoot = 400, warna
+    # total rinaatmak ho jaata aur "due" ulta paisa dikhane lagta.
+    if body.discount_percent:
+        discount = (gross * Decimal(str(body.discount_percent)) / 100).quantize(Decimal("0.01"))
+    else:
+        discount = Decimal(str(body.discount_amount or 0)).quantize(Decimal("0.01"))
+    if discount > gross:
+        raise HTTPException(status_code=400, detail="Discount is more than the bill")
+    total = gross - discount
+
     if body.advance > float(total):
         raise HTTPException(status_code=400, detail="Advance cannot be more than the bill")
 
@@ -845,7 +1032,11 @@ async def create_bill(
         customer_phone=normalize_phone(phone),
         customer_name=name or None,
         items=items,
+        # total_amount hamesha CHHOOT KE BAAD ka hai — wahi convention jo
+        # dashboard ke coupon raste par hai. Do jagah do matlab rakhne par
+        # har report do jawab dene lagti hai.
         total_amount=total,
+        discount_amount=discount or None,
         expected_delivery=_date.today() + _td(days=max(turnaround, 1)),
         advance_hint=Decimal(str(body.advance)) if body.advance else None,
         created_by=p.staff.name,
@@ -874,18 +1065,42 @@ async def create_bill(
 
     await audit.record(
         actor_role="staff", actor=p.staff.name, action="bill_created_from_panel",
-        args={"order": order.order_number, "total": float(total)},
+        args={
+            "order": order.order_number, "total": float(total),
+            "gross": float(gross), "discount": float(discount),
+            # Khali list bhi likhi jaati hai — "is bill par koi rate nahi
+            # badla" ek jawab hai, aur uska na hona sawal.
+            "rate_overrides": overrides,
+        },
         result="ok", tenant_id=p.staff.tenant_id,
     )
+    if overrides:
+        log.info(
+            "panel_bill_rate_override", staff=p.staff.name,
+            order=order.order_number, lines=len(overrides),
+        )
     log.info("panel_bill_created", staff=p.staff.name, order=order.order_number)
+
+    # Purana udhaar: ISI order ko chhod kar. Grand total sirf batane ke liye
+    # hai — kisi order ka total_amount usse nahi badalta, warna wahi paisa
+    # do bill par ginta aur mahine ki kamai jhooth bolne lagti.
+    prev_due, prev_bills = await customer_outstanding(
+        db, order.customer_id, exclude_order_id=order.id
+    )
+    this_due = round(float(total) - body.advance, 2)
     return {
         "order_number": order.order_number,
         "total": float(total),
-        "due": float(total) - body.advance,
+        "gross": float(gross),
+        "discount": float(discount),
+        "due": this_due,
+        "previous_due": prev_due,
+        "previous_bills": prev_bills,
+        "grand_total": round(this_due + prev_due, 2),
     }
 
 
-@router.get("/bills", dependencies=[Depends(require_staff_feature("billing"))])
+@router.get("/bills", dependencies=[Depends(require_biller())])
 async def my_bills(
     q: str = "",
     pay: str = "",
@@ -1163,12 +1378,29 @@ async def order_receipt(
         name = it.get("type") or it.get("garment") or it.get("service") or "?"
         amt = it.get("amount")
         lines.append(f" {qty} x {name}  {money(amt) if amt is not None else ''}".rstrip())
+    discount = float(order.discount_amount or 0)
+    lines.append("-" * 30)
+    if discount:
+        # Chhoot dikhna zaroori hai. Sirf ghata hua total dikhane par grahak
+        # ko kabhi pata nahi chalta ki use kya mila — aur dukaan ko uska
+        # credit bhi nahi milta.
+        lines.append(f"Subtotal: {money(total + discount)}")
+        lines.append(f"Discount: -{money(discount)}")
     lines += [
-        "-" * 30,
         f"Total: {money(total) if total else '—'}",
         f"Paid: {money(paid)}",
         f"Due: {money(total - paid) if total else '—'}",
     ]
+    # Pichhle bilon ka baaki. Grahak ko ek hi number chahiye — "kitna dena
+    # hai" — isliye kul yahin jodkar likhte hain. Order ka apna total waisa
+    # ka waisa rehta hai; ye sirf padhne wali line hai.
+    prev_due, prev_bills = await customer_outstanding(db, cust.id, exclude_order_id=order.id)
+    if prev_due > 0:
+        lines += [
+            "-" * 30,
+            f"Pichhla baaki ({prev_bills} bill): {money(prev_due)}",
+            f"KUL DENA HAI: {money(total - paid + prev_due)}",
+        ]
     if order.expected_delivery:
         lines.append(f"Delivery: {order.expected_delivery.strftime('%d %b %Y')}")
     lines.append("-" * 30)
