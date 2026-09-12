@@ -13,7 +13,16 @@ python -m venv .venv
 
 :: 2. Config — copy and fill in real values (dummies boot fine in Phase 1)
 copy .env.example .env
+
+:: 3. Keys — teeno ek saath banao, output .env mein paste karo
+.venv\Scripts\python.exe -c "from cryptography.fernet import Fernet; import secrets; print('ADMIN_API_KEY=' + secrets.token_urlsafe(32)); print('VENDOR_API_KEY=' + secrets.token_urlsafe(32)); print('TOKEN_ENCRYPTION_KEY=' + Fernet.generate_key().decode())"
 ```
+
+`TOKEN_ENCRYPTION_KEY` ka backup rakho — kho gayi to DB ke encrypted
+WhatsApp tokens wapas nahi milenge (har dukaan ko number dobara connect
+karna padega). Purane deploy par key set karne ke baad ek baar
+`python -m scripts.encrypt_tokens` chalao — jo tokens plaintext padhe hain
+wo encrypt ho jaayenge.
 
 ## Database
 
