@@ -36,12 +36,23 @@ class TenantScoped:
       tenant filter, har naye row par automatic tenant stamp.
     - Postgres RLS policies (migration d4c8e2f7a915) isi column par hain.
 
-    Nullable until the API layer writes it explicitly — naye rows events se
-    stamp hote hain; purane rows migration f0a7b3c9d1e4 ne backfill kiye.
-    NOTE: settings_kv (PK=key) aur coupons (PK=code) ke natural PKs abhi
-    globally unique hain — per-tenant PK/unique API-scoping phase mein.
+    NOT NULL (migration w7f4b2c8e5a3). Pehle nullable tha, is bharose par
+    ki `before_flush` har row par tenant likh hi dega. Wo bharosa mehnga
+    hai: NULL ki kisi bhi cheez se tulna NULL deti hai, TRUE nahi, isliye
+    RLS ke tahat NULL tenant_id wali row KISI ko nahi dikhti — na error, na
+    khaali jagah, bas gayab. `scripts/_bootstrap.py` ka docstring theek isi
+    bug par likha gaya hai.
+
+    audit_log iska apwaad hai aur usne khud override kiya hai: uski kai
+    rows platform-level hain (control panel, system jobs) jinka tenant
+    hota hi nahi.
+
+    (Purana note ki settings_kv/coupons ke natural PK globally unique hain —
+    ab nahi. settings_kv par uq_settings_kv_tenant_key hai, aur coupons
+    migration u5d2f8a6c3e1 mein surrogate id + (tenant_id, code) par aa
+    gaya.)
     """
 
-    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), index=True
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), index=True, nullable=False
     )
