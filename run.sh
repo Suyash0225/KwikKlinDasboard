@@ -125,14 +125,20 @@ SERVER_PID=$!
 # ── 7. Sach mein chala? ─────────────────────────────────────────────────
 # Yahi is script ka asli kaam. /health par asli jawab aane tak intezaar,
 # warna saaf bata do ki nahi chala.
+printf "  server boot ho raha hai"
 for i in $(seq 1 40); do
-  if curl -fsS "http://127.0.0.1:${PORT}/health" >/tmp/kk-health.json 2>/dev/null; then
+  [[ $i -gt 1 ]] && printf "."
+  # --max-time zaroori hai: bina iske curl anant tak latak sakta hai agar
+  # port accept kar le par jawab na de, aur neeche ka 20-second ka bandhan
+  # kabhi lagta hi nahi — script chup-chaap tangi reh jaati hai.
+  if curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/health" >/tmp/kk-health.json 2>/dev/null; then
     break
   fi
   kill -0 "$SERVER_PID" 2>/dev/null || { echo; cat /tmp/kk-server.log; die "server boot par hi mar gaya"; }
   sleep 0.5
 done
 
+printf "\r\033[K"
 if ! grep -q '"ok"' /tmp/kk-health.json 2>/dev/null; then
   echo; tail -30 /tmp/kk-server.log
   die "server ne /health par jawab nahi diya. Poora log: /tmp/kk-server.log"
