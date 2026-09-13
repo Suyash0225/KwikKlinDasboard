@@ -21,6 +21,7 @@ karta hai, isliye API se aane wali har query hamesha scoped hai.
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 
 import structlog
@@ -263,3 +264,39 @@ def claim_prefix() -> str:
     'daysum:2026-09-12' takraye nahi, isliye tenant ka chhota hash aage."""
     tid = current_tenant_id.get()
     return f"t{tid.hex[:8]}:" if tid else ""
+
+@asynccontextmanager
+async def system_context(db):
+    """Is block mein kisi ek dukaan ka pehra nahi — poora platform.
+
+    Account lifecycle ke kuch kaam kisi dukaan ke ANDAR nahi hote:
+
+      signup        nayi dukaan BANATA hai
+      login         user milne se PEHLE pata hi nahi kis dukaan ka hai
+      google login  wahi baat, google_sub se
+      invite accept token kis dukaan ka hai ye token hi batata hai
+      impersonate   vendor kisi bhi dukaan mein ja sakta hai
+
+    Bina session ke in requests ka context HOME tenant hota hai
+    (main.py ka tenant_scope). Users/invites par RLS lagte hi ye sab
+    tootte hain — doosri dukaan ka owner apne hi account se login nahi kar
+    paata, 401, bina kisi wajah ke.
+
+    DO cheezein set karni padti hain aur dono zaroori hain:
+
+      ContextVar  -> ORM ka with_loader_criteria filter
+      SET LOCAL   -> Postgres ki RLS policy
+
+    SET LOCAL isliye ki GUC transaction ke shuru mein ContextVar se bheja
+    jaata hai (database.py ka "begin" event); beech mein ContextVar badalne
+    par wo dobara nahi bhejta. SET LOCAL commit/rollback par khud hat jaata
+    hai, isliye pooled connection par leak nahi hota.
+    """
+    from sqlalchemy import text as _text
+
+    token = current_tenant_id.set(None)
+    try:
+        await db.execute(_text("SET LOCAL app.tenant_id = ''"))
+        yield
+    finally:
+        current_tenant_id.reset(token)

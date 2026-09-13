@@ -37,7 +37,7 @@ from app.models import (
     User,
 )
 from app.models.tenant import GRACE_DAYS, TENANT_LOCKED, TENANT_PAST_DUE, WRITABLE_STATUSES
-from app.services import auth, billing, google_auth, plans
+from app.services import auth, billing, google_auth, plans, tenant_context
 from app.utils.phone import normalize_phone
 
 log = structlog.get_logger()
@@ -128,6 +128,22 @@ async def _create_shop(
         n += 1
         slug = f"{base}-{n}"[:40]
 
+    # Signup kisi dukaan ke ANDAR nahi hota — ye nayi dukaan BANATA hai.
+    # Wajah aur tareeka tenant_context.system_context mein likha hai.
+    async with tenant_context.system_context(db):
+        return await _write_shop(
+            db, slug=slug, shop_name=shop_name, owner_name=owner_name,
+            phone_n=phone_n, email=email, city=city, plan=plan,
+            password_hash=password_hash, auth_provider=auth_provider,
+            google_sub=google_sub,
+        )
+
+
+async def _write_shop(
+    db, *, slug, shop_name, owner_name, phone_n, email, city, plan,
+    password_hash, auth_provider, google_sub,
+):
+    """Tenant + uska pehla owner. Hamesha system context mein — dekho upar."""
     tenant = Tenant(
         slug=slug,
         shop_name=shop_name.strip(),
@@ -306,6 +322,15 @@ async def login(
             status_code=429, detail="Too many wrong attempts — try again in 10 minutes"
         )
     email = (body.email or "").strip().lower()
+    # Login bhi SYSTEM context ka kaam hai: jab tak user nahi mila, ye pata
+    # hi nahi ki kis dukaan ka hai. Bina session ke request ka context HOME
+    # hota hai, isliye users par RLS lagte hi doosri dukaan ka owner apne hi
+    # account se login nahi kar paata — 401, bina kisi wajah ke.
+    async with tenant_context.system_context(db):
+        return await _login_inner(body, request, response, db, email, ip)
+
+
+async def _login_inner(body, request, response, db, email, ip) -> dict:
     # Email sirf PER-TENANT unique hai — ek hi email do shops ka ho sakta
     # hai. Password hi batata hai kaun sa account: har candidate ke against
     # verify karo, jo match kare wahi user. (Pehle .first() tha — kaun sa
@@ -491,7 +516,11 @@ async def adopt_session(token: str, db: AsyncSession = Depends(get_db)):
 
     Token khud hi auth hai (30-min TTL, danger-key se bana, audit-logged).
     Galat/expired -> login page."""
-    user = await auth.user_for_token(db, token)
+    # Cookie abhi set nahi hui, isliye context HOME hai — par ye token kisi
+    # bhi dukaan ka ho sakta hai. Token khud auth hai; dukaan uske resolve
+    # hone par hi pata chalti hai.
+    async with tenant_context.system_context(db):
+        user = await auth.user_for_token(db, token)
     if user is None:
         return RedirectResponse(url="/#login", status_code=303)
     resp = RedirectResponse(url="/admin", status_code=303)
@@ -531,6 +560,14 @@ async def invite_accept(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Token + naya password -> account active + seedha login."""
+    from app.services import invites
+
+    # Kis dukaan ka invite hai ye TOKEN batata hai — usse pehle pata nahi.
+    async with tenant_context.system_context(db):
+        return await _invite_accept_inner(body, request, response, db)
+
+
+async def _invite_accept_inner(body, request, response, db) -> dict:
     from app.services import invites
 
     try:
@@ -724,12 +761,24 @@ async def google_callback(
     error: str = "",
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    """Google se wapas. Yahan teen mein se ek hota hai:
+    """Google se wapas — poora kaam system context mein.
+
+    Yahan user ko google_sub ya email se dhoondha jaata hai, aur wo kis
+    dukaan ka hai ye milne se PEHLE pata nahi. Home tenant ke context mein
+    dhoondhne par doosri dukaan ka owner apne hi Google account se andar
+    nahi aa paata.
+
+    Yahan teen mein se ek hota hai:
 
     1. is Google account ka user pehle se hai -> seedha login
     2. usi email par password wala account hai -> dono ko jod do
     3. bilkul naya -> dukaan ki baaki detail poochne ke liye signup par bhejo
     """
+    async with tenant_context.system_context(db):
+        return await _google_callback_inner(request, code, state, error, db)
+
+
+async def _google_callback_inner(request, code, state, error, db) -> Response:
     if error:
         return _fail("Google login cancel ho gaya")
     cookie_state = request.cookies.get(google_auth.STATE_COOKIE, "")
@@ -816,6 +865,15 @@ async def signup_google(
 ) -> dict:
     """Google se aaye bande ka shop banao. Email hum Google se lete hain,
     form se NAHI — warna koi bhi kisi aur ka email likh kar account bana le."""
+    # Nayi dukaan banti hai AUR uska session shuru hota hai. Dono ek
+    # hi block mein: _create_shop ke baad context wapas home ho jaata
+    # hai, aur tab start_session naye user par UPDATE karta hai jo RLS
+    # ke tahat 0 rows match karta — StaleDataError, bina wajah bataye.
+    async with tenant_context.system_context(db):
+        return await _signup_google_inner(body, request, response, db)
+
+
+async def _signup_google_inner(body, request, response, db) -> dict:
     raw = request.cookies.get(google_auth.PENDING_COOKIE, "")
     if not raw:
         raise HTTPException(

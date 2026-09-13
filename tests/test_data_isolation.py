@@ -421,3 +421,60 @@ async def test_rls_is_actually_in_force_not_just_configured(client) -> None:
             await db.execute(sqltext("SELECT name FROM customers WHERE phone LIKE '+9190%'"))
         ).scalars().all()
     assert rows == ["A ka grahak"], f"RLS ne doosri dukaan ki row nahi roki: {rows}"
+
+
+async def test_every_tenant_table_has_an_rls_policy(client) -> None:
+    """Koi tenant table policy ke bina na chhoote.
+
+    users aur invites saalon "app-level filter hi hai" par chal rahe the.
+    Ye test naye table par bhi lagta hai: TenantScoped mixin lagate hi
+    policy bhi chahiye, warna ye laal hoga.
+    """
+    async with async_session_factory() as db:
+        rows = (
+            await db.execute(sqltext("""
+                SELECT c.relname FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+                JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'tenant_id'
+                WHERE c.relkind = 'r'
+                  AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity
+                       OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid))
+                ORDER BY 1
+            """))
+        ).scalars().all()
+    assert rows == [], f"in tables par RLS adhoori hai: {rows}"
+
+
+async def test_an_owner_of_another_shop_can_still_log_in(client) -> None:
+    """RLS ke baad bhi doosri dukaan ka owner andar aa sake.
+
+    Ye us bug ka pehra hai jo users par policy lagate hi paida hota hai:
+    bina session ke request ka context HOME tenant hota hai, isliye login
+    ka lookup doosri dukaan ke user ko dekh hi nahi pata aur 401 milta —
+    bina kisi wajah ke. Login ab system context mein chalta hai.
+    """
+    from app.models import ROLE_OWNER, User
+    from app.services import auth
+
+    # Pichhle run ka session pehle hataao — warna users par DELETE
+    # login_sessions ke FK par phat jaata hai, aur wo asli constraint
+    # failure jaisa dikhta hai.
+    async with async_session_factory() as db:
+        await db.execute(sqltext(
+            "DELETE FROM login_sessions WHERE user_id IN "
+            "(SELECT id FROM users WHERE email = :e)"
+        ), {"e": "outsider@iso-login.test"})
+        await db.commit()
+    tid = await _fresh("iso-login-shop", "users")
+    email = "outsider@iso-login.test"
+    async with async_session_factory() as db:
+        db.add(User(
+            tenant_id=tid, name="Bahar Wala", email=email,
+            phone="+919812340000", password_hash=auth.hash_password("passw0rd123"),
+            role=ROLE_OWNER,
+        ))
+        await db.commit()
+
+    r = await client.post("/api/login", json={"email": email, "password": "passw0rd123"})
+    assert r.status_code == 200, r.text
+    client.cookies.delete("kk_session")
