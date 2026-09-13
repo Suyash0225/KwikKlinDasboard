@@ -32,7 +32,7 @@ echo "────────────────────────�
 # nahi.
 for f in /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/nodesource.list; do
   if [[ -f "$f" ]]; then
-    (command -v sudo >/dev/null 2>&1 && sudo rm -f "$f") || rm -f "$f"
+    (command -v sudo >/dev/null 2>&1 && sudo -n rm -f "$f") || rm -f "$f"
     ok "hataya: $f (iski key toothi hui hai)"
   fi
 done
@@ -41,7 +41,7 @@ done
 if command -v psql >/dev/null 2>&1; then
   ok "Postgres pehle se hai"
 else
-  SUDO=""; command -v sudo >/dev/null 2>&1 && SUDO=sudo
+  SUDO=""; command -v sudo >/dev/null 2>&1 && SUDO="sudo -n"
   if $SUDO apt-get update -qq >/tmp/kk-apt.log 2>&1 \
      && $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
         postgresql postgresql-contrib >>/tmp/kk-apt.log 2>&1; then

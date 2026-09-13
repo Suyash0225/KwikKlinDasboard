@@ -24,7 +24,7 @@ if pg_isready -q 2>/dev/null; then
 fi
 
 if command -v sudo >/dev/null 2>&1; then
-  sudo pg_ctlcluster "$V" main start 2>/dev/null
+  sudo -n pg_ctlcluster "$V" main start 2>/dev/null
 else
   pg_ctlcluster "$V" main start 2>/dev/null
 fi

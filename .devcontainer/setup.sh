@@ -47,13 +47,19 @@ if ! pg_isready -q 2>/dev/null; then
   exit 0        # Codespace phir bhi khulne do
 fi
 
-# Codespace mein sudo hota hai, kai dev/CI images mein sirf root. SQL stdin
-# se jaati hai, isliye uske andar ke quotes se koi jhagda nahi.
+# Postgres superuser tak pahunchne ka rasta image ke hisaab se badalta hai.
+#
+# `sudo -u postgres` yahan NAHI chalta: Codespaces ke is image mein sudoers
+# sirf root banne deta hai, kisi aur user ka nahi. Wo chupke se fail nahi
+# hota — password maang kar setup ko hamesha ke liye rok deta hai, jo saaf
+# fail hone se badtar hai.
+#
+# -n har jagah: sudo kabhi prompt na kare, seedha fail ho.
 pg_su() {
-  if command -v sudo >/dev/null 2>&1; then
-    sudo -u postgres psql -qtA "$@"
+  if [[ $(id -u) -eq 0 ]]; then
+    su postgres -c "psql -qtA"
   else
-    su postgres -c "psql -qtA $*"
+    sudo -n su postgres -c "psql -qtA"
   fi
 }
 
@@ -66,7 +72,8 @@ SQL
 then
   ok "laundry role + DB bane"
 else
-  warn "laundry role/DB nahi bane"
+  warn "laundry role/DB nahi bane — haath se:"
+  warn "  sudo su postgres -c \"psql -c \\\"CREATE ROLE laundry LOGIN SUPERUSER PASSWORD 'laundry';\\\" -c 'CREATE DATABASE laundry OWNER laundry;'\""
 fi
 
 # ── Migrations ──────────────────────────────────────────────────────────
