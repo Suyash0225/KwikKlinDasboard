@@ -1559,6 +1559,7 @@ async def test_reminder_falls_back_to_a_wa_link_when_the_api_is_down(
             raise wa_mod.SendError("no credentials")
 
         monkeypatch.setattr("app.services.whatsapp.send_message", _dead)
+        await _login(client, A_MGR_PHONE)   # reminder sirf manager
         r = await client.post(f"/staff/api/orders/{bill['order_number']}/remind")
         assert r.status_code == 200, r.text
         body = r.json()
@@ -1596,6 +1597,7 @@ async def test_reminder_carries_the_old_balance_and_keeps_the_number_hidden(
         })).json()
 
         monkeypatch.setattr("app.services.whatsapp.send_message", _ok)
+        await _login(client, A_MGR_PHONE)   # reminder sirf manager
         r = await client.post(f"/staff/api/orders/{second['order_number']}/remind")
         assert r.status_code == 200, r.text
         body = r.json()
@@ -1605,8 +1607,9 @@ async def test_reminder_carries_the_old_balance_and_keeps_the_number_hidden(
 
         assert len(sends) == 1
         text = sends[0]["text"]
-        assert "Pichhla baaki: ₹80" in text
-        assert "Kul: ₹120" in text
+        # Angrezi mein — dashboard ke reminder jaisi hi bhasha
+        assert "Previous balance: ₹80" in text
+        assert "Total due: ₹120" in text
     finally:
         await _drop_rate()
 
@@ -1625,6 +1628,7 @@ async def test_reminder_respects_opt_out_and_a_paid_bill(
             "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 1}],   # 40
             "advance": 40,
         })).json()
+        await _login(client, A_MGR_PHONE)   # reminder sirf manager
         r = await client.post(f"/staff/api/orders/{paid['order_number']}/remind")
         assert r.status_code == 400 and "chukta" in r.json()["detail"]
 
@@ -1685,3 +1689,38 @@ async def test_today_counts_late_work_the_same_way_the_list_does(
     stops = (await client.get("/staff/api/route?limit=100")).json()["stops"]
     overdue = [s for s in stops if s["delivery"] and s["delivery"] < date.today().isoformat()]
     assert len(overdue) == after, "banner aur list ki ginti alag nahi honi chahiye"
+
+
+async def test_only_a_manager_can_send_a_payment_reminder(
+    client, two_shops, sent
+) -> None:
+    """Bill delivery wala bana sakta hai, par paisa maangna manager ka kaam.
+
+    Bill banana ek lipik ka kaam hai. Paisa MAANGNA dukaan ke naam par
+    bola gaya vaakya hai — wo grahak ke saath dukaan ka rishta hai, ek
+    delivery ke aadmi ka faisla nahi. Aur ye button bina throttle ke hai.
+    """
+    await _panel_rate(two_shops["a"])
+    try:
+        await _login(client, A_DEL_PHONE)          # delivery boy — bill bana sakta hai
+        bill = (await client.post("/staff/api/bills", json={
+            "customer_phone": CUST_A, "customer_name": "Yaad Grahak",
+            "items": [{"service": "DiscSvc", "garment": "Kurta", "qty": 2}],
+        })).json()
+        assert (await client.post(
+            f"/staff/api/orders/{bill['order_number']}/remind"
+        )).status_code == 403, "delivery boy reminder nahi bhej sakta"
+
+        await _login(client, A_PHONE)              # washerman
+        assert (await client.post(
+            f"/staff/api/orders/{bill['order_number']}/remind"
+        )).status_code == 403, "washerman bhi nahi"
+
+        await _login(client, A_MGR_PHONE)          # manager
+        r = await client.post(f"/staff/api/orders/{bill['order_number']}/remind")
+        assert r.status_code == 200, r.text
+        # Aur wo message ANGREZI mein ho — dashboard ke reminder jaisa,
+        # taaki grahak ko pata na chale ki kisne yaad dilaya.
+        assert "pending" in (r.json()["text"] or "").lower(), r.json()["text"]
+    finally:
+        await _drop_rate()

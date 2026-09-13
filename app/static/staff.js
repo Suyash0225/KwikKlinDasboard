@@ -765,7 +765,7 @@ function billRow(b) {
       <div class="sub">${esc(b.number)} · ${esc(b.created)}${b.items ? " · " + esc(b.items) : ""}</div>
       <div class="acts">
         <button class="btn ghost sm" data-bill="share">🧾 Send</button>
-        ${b.due > 0 ? `<button class="btn ghost sm" data-bill="remind">🔔 Yaad dilao</button>` : ""}
+        ${b.due > 0 && ME.is_manager ? `<button class="btn ghost sm" data-bill="remind">Remind</button>` : ""}
         ${ME.features.includes("cod_collection") && b.due > 0
           ? `<button class="btn money sm" data-bill="pay" data-due="${b.due}">Collect</button>` : ""}
       </div>

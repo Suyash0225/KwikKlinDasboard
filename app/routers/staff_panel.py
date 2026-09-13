@@ -1420,10 +1420,16 @@ async def order_receipt(
 @router.post("/orders/{number}/remind")
 async def send_payment_reminder(
     number: str,
-    p: StaffPrincipal = Depends(current_staff),
+    p: StaffPrincipal = Depends(require_manager),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Us grahak ko paise ki yaad dilao — abhi, haath se.
+
+    SIRF manager/owner. Bill banana delivery wale ka kaam ho sakta hai,
+    par paisa MAANGNA dukaan ke naam par bola gaya vaakya hai — wo
+    grahak ke saath dukaan ka rishta hai, ek delivery ke aadmi ka faisla
+    nahi. Aur ye button bina throttle ke hai, isliye jitne kam haathon
+    mein ho utna achha.
 
     Scheduler khud 3 din / 15 din par yaad dilata hai, par wo dono cheezein
     maanta hai jo yahan sach nahi hoti: ki order deliver ho chuka hai, aur
@@ -1452,11 +1458,19 @@ async def send_payment_reminder(
         raise HTTPException(status_code=400, detail="Is bill ka paisa chukta hai")
     prev, prev_bills = await customer_outstanding(db, cust.id, exclude_order_id=order.id)
 
-    text = get_message("payment_reminder", order_number=order.order_number, amount=f"{due:.0f}")
+    # lang="en" — dashboard ka reminder English mein hai, aur grahak ko ye
+    # pata nahi chalna chahiye ki dono mein se kisne yaad dilaya. Catalogue
+    # chheda nahi: "en" variant pehle se maujood hai. Baaki customer
+    # messages (order confirm, ready) abhi bhi Hindi mein hain — wo alag
+    # faisla hai, DEFAULT_LANG ka.
+    text = get_message(
+        "payment_reminder", lang="en",
+        order_number=order.order_number, amount=f"{due:.0f}",
+    )
     if prev > 0:
         # Ek hi message mein poora sach — warna grahak is bill ka paisa
         # dekar samajhta hai ki hisaab saaf ho gaya.
-        text += f"\n\nPichhla baaki: ₹{prev:.0f} ({prev_bills} bill). Kul: ₹{due + prev:.0f}"
+        text += f"\n\nPrevious balance: ₹{prev:.0f} ({prev_bills} bill). Total due: ₹{due + prev:.0f}"
 
     sent = False
     try:
