@@ -41,6 +41,22 @@ def _clear_stats_cache():
     aa._wa_stats_cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def _home_env_creds(monkeypatch):
+    """Pin the home shop's .env credentials for the duration of each test.
+
+    Without this the file only passed on machines whose .env happened to
+    carry a WABA id. .env.example does not ship one, so a fresh Codespace
+    resolved no creds, the endpoint correctly called nobody, and four tests
+    that expect Graph calls failed for a reason that had nothing to do with
+    the code under test. A test that reads ambient config is a test that
+    fails on someone else's machine.
+    """
+    monkeypatch.setattr(settings, "WHATSAPP_TOKEN", "EAAhomeTokenForTests")
+    monkeypatch.setattr(settings, "WHATSAPP_WABA_ID", "waba-home-9999")
+    monkeypatch.setattr(settings, "WHATSAPP_PHONE_NUMBER_ID", "111000111000")
+
+
 @pytest.fixture
 def graph_calls(monkeypatch):
     """Record every Graph call. Default: both endpoints answer happily."""
