@@ -323,6 +323,103 @@ async def admin_events(request: Request) -> StreamingResponse:
     )
 
 
+class ReminderIn(BaseModel):
+    phone: str = Field(min_length=8, max_length=20)
+
+
+@router.post("/api/customers/reminder", dependencies=[Depends(require_admin_key)])
+async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Ek grahak ka paisa maangne wala message — banao, aur ho sake to bhejo.
+
+    Text SERVER par banta hai, browser mein nahi. Browser ke paas sirf kul
+    rakam hoti hai; kaunse bill, kis din ke, kitne ke — wo yahan hai. Aur
+    jab tak text browser mein tha, usmein dukaan ka naam hardcode tha
+    ("Kwik Klin"), yaani har doosri dukaan kisi aur ke naam se paisa maang
+    rahi thi.
+
+    WhatsApp API se ja sake to bhej dete hain; na ja sake to text wapas
+    kar dete hain taaki dashboard wa.me link khol sake. Paisa maangna wo
+    kaam hai jo Meta ka integration set na hone par rukna nahi chahiye.
+    """
+    from app.models.tenant import Tenant as _T
+    from app.services import app_settings, tenant_context
+    from app.services.whatsapp import SendError, send_message
+
+    phone = body.phone.strip()
+    cust = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if cust is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    rows = (
+        await db.execute(
+            select(Order)
+            .where(
+                Order.customer_id == cust.id,
+                Order.status != OrderStatus.CANCELLED,
+                Order.total_amount.isnot(None),
+                Order.total_amount > Order.amount_paid,
+            )
+            .order_by(Order.created_at)
+        )
+    ).scalars().all()
+    if not rows:
+        raise HTTPException(status_code=400, detail="Is grahak ka koi paisa baaki nahi")
+
+    def rupees(x: Decimal | float) -> str:
+        # "₹630.00" nahi. Dukaan ke message mein paise ka hisaab paison
+        # tak nahi hota, aur .00 machine ka likha lagta hai.
+        d = Decimal(str(x)).quantize(Decimal("0.01"))
+        return f"₹{d:,.0f}" if d == d.to_integral_value() else f"₹{d:,.2f}"
+
+    tenant = await db.get(_T, tenant_context.current_tenant_id.get())
+    shop = (tenant.shop_name if tenant and tenant.shop_name else "").strip()
+    total = sum((Decimal(str(o.total_amount)) - Decimal(str(o.amount_paid or 0))) for o in rows)
+
+    who = (cust.name or "").strip()
+    lines = [f"Namaste {who} 🙏" if who else "Namaste 🙏", ""]
+    lines.append(
+        f"{shop} se — aapke {len(rows)} bill baaki hain:" if len(rows) > 1
+        else f"{shop} se — aapka ek bill baaki hai:"
+    )
+    lines.append("")
+    # Lambi list WhatsApp par deewar ban jaati hai. Chhe dikhao, baaki gino.
+    for o in rows[:6]:
+        due = Decimal(str(o.total_amount)) - Decimal(str(o.amount_paid or 0))
+        day = o.created_at.strftime("%d %b") if o.created_at else "-"
+        lines.append(f"{o.order_number} · {day} · {rupees(due)}")
+    if len(rows) > 6:
+        lines.append(f"...aur {len(rows) - 6} bill")
+
+    lines += ["", f"Kul baaki: {rupees(total)}"]
+
+    upi = (await app_settings.get(db, "upi_vpa") or "").strip()
+    if upi:
+        # Number saamne ho to paisa aaj hi aa sakta hai. Na ho to grahak ko
+        # poochhna padta hai, aur wahin ruk jaata hai.
+        lines.append(f"UPI: {upi}")
+    lines += ["", "Jab suvidha ho, de dijiyega."]
+
+    text = "\n".join(lines)
+
+    sent = False
+    try:
+        await send_message(db, to_phone=cust.phone, text=text)
+        sent = True
+    except SendError as exc:
+        log.info("dashboard_reminder_api_failed", customer=cust.id, error=str(exc))
+
+    return {
+        "sent": sent,
+        "phone": cust.phone,
+        "name": cust.name or "",
+        "bills": len(rows),
+        "total": str(total),
+        "text": text,
+    }
+
+
 @router.get("/api/customers/search", dependencies=[Depends(require_admin_key)])
 async def customers_search(
     db: AsyncSession = Depends(get_db),

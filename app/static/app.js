@@ -1417,7 +1417,7 @@ function renderCustomers() {
       <td class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</td>
       <td class="muted">${c.last_message_at ? fmtWhen(c.last_message_at) : "—"}</td>
       <td><div class="act">
-        ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}','${c.outstanding}')">Remind</button>` : ""}
+        ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
         <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">💬</button>
         <button class="btn sm ghost" onclick="editCustomerModal('${c.phone}')">Edit</button>
         <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button>
@@ -1427,7 +1427,7 @@ function renderCustomers() {
       <div class="rowcard"><div class="r1"><b>${esc(displayName(c.name, c.phone))}</b><span class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</span></div>
       <div class="kv"><span>${c.phone}</span><span>${c.total_orders} orders</span></div>
       <div class="kv"><span>Business ${money(c.business)}</span><span>Paid ${money(c.paid)}</span></div>
-      <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}','${c.outstanding}')">Remind</button>` : ""}
+      <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
       <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">Chat</button>
       <button class="btn sm ghost" onclick="editCustomerModal('${c.phone}')">Edit</button>
       <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button></div></div>`).join("")}</div>${moreBtn}`;
@@ -1485,26 +1485,20 @@ function deleteCustomerModal(phone) {
     closeModal(); toast(`${label} deleted`); loadCustomers(); loadDashboard();
   });
 }
-async function sendReminder(phone, amt) {
-  // Dukaan ka ASLI naam. Pehle yahan "Kwik Klin" likha hua tha — ye
-  // multi-tenant app hai, yaani har doosri dukaan ke grahak ko bhi Kwik
-  // Klin ke naam se reminder jaata tha. shop_name /api/me se pehle se
-  // aa raha hai, bas istemal nahi ho raha tha.
-  const shop = (SIGNED_IN_AS && SIGNED_IN_AS.tenant && SIGNED_IN_AS.tenant.shop_name) || "your laundry";
-  const text = `Namaste! Aapka ₹${amt} baaki hai. Jab suvidha ho, de dijiyega 🙏 — ${shop}`;
-  const note = `WhatsApp khulega, message pehle se likha hua — bas Send dabana hai.`;
-
-  // Wahi do-rasta jo bill bhejne mein pehle se hai: API ho to API, warna
-  // apne phone ka WhatsApp. Reminder ko ye kabhi diya hi nahi gaya tha,
-  // isliye WhatsApp connect na hone par button sirf 502 dikha kar ruk
-  // jaata tha — jabki paisa maangna wo kaam hai jo rukna nahi chahiye.
-  if (!waConnected()) { shareTextModal(phone, text, "Payment reminder", note); return; }
+async function sendReminder(phone) {
+  // Text SERVER banata hai. Browser ke paas sirf kul rakam hoti hai —
+  // kaunse bill, kis din ke, kitne ke, aur dukaan ka asli naam, ye sab
+  // wahan hai. Yahan banane ki koshish mein hi "— Kwik Klin" har dukaan
+  // ke message mein chipak gaya tha.
+  let r;
   try {
-    await api("/admin/api/inbox/send", { method: "POST", body: { phone, text } });
-    toast(T.reminderSent);
-  } catch (e) {
-    shareTextModal(phone, text, "Payment reminder", `${e.message} — apne phone se bhej dijiye.`);
-  }
+    r = await api("/admin/api/customers/reminder", { method: "POST", body: { phone } });
+  } catch (e) { toast(e.message, true); return; }
+
+  if (r.sent) { toast(T.reminderSent); return; }
+  // API se nahi gaya — apne phone ka WhatsApp hamesha hai.
+  shareTextModal(r.phone, r.text, "Payment reminder",
+    `WhatsApp khulega, message pehle se likha hua — bas Send dabana hai.`);
 }
 
 /* Media ka URL. Login session ho to cookie hi kaafi hai; sirf purane
