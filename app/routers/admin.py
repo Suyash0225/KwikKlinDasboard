@@ -2119,5 +2119,82 @@ async def dashboard_page(
     html = _re.sub(r"((?:app|tokens)\.(?:js|css)|icons\.svg)\?v=[\w]+", rf"\1?v={v}", html)
     return Response(
         content=html, media_type="text/html",
-        headers={"Cache-Control": "no-cache"},
+        headers={
+            "Cache-Control": "no-cache",
+            # REPORT-ONLY, abhi enforce nahi. /control par yahi policy asli
+            # mein lagi hui hai (dekho main.py ka control_page) — wahan
+            # markup mein ek bhi inline handler ya style nahi hai. Yahan
+            # abhi ~264 inline handler aur ~242 style="" bache hain, to
+            # enforce karte hi dashboard ka har button mar jaata.
+            #
+            # Report-only ka faayda: browser policy tod-tod kar batata hai
+            # aur page chalta rehta hai. Handlers hatte-hatte report khali
+            # hoti jayegi; jis din khali ho, header ka naam badal kar
+            # Content-Security-Policy kar dena — aur kuch nahi badalna.
+            #
+            # style-src par 'unsafe-inline' jaan-bujh kar hai: asli XSS
+            # rasta script hai, aur 242 style attributes hatana alag kaam
+            # hai jo is header ko rok nahi sakta.
+            "Content-Security-Policy-Report-Only": (
+                "default-src 'self'; script-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
+                "base-uri 'none'; form-action 'none'; frame-ancestors 'none'; "
+                "report-uri /admin/csp-report"
+            ),
+        },
     )
+
+# Ek din ka bacha hua kaam yahan dikhta hai: jab tak ye endpoint chup na ho
+# jaye, /admin par CSP enforce nahi ho sakti.
+_CSP_SEEN: dict[tuple[str, str], int] = {}
+
+
+@router.post("/csp-report", include_in_schema=False)
+async def csp_report(request: Request) -> Response:
+    """Browser ki CSP violation reports — sirf ginti ke liye.
+
+    Bina auth ke hai kyunki browser ye report bina cookie/API-key ke bhejta
+    hai; ismein koi data padha nahi jaata, sirf likha jaata hai.
+
+    Har violation alag se log karne par ek dashboard load 260+ lines ugal
+    deta. Isliye (directive, blocked-uri) par gin kar rakhte hain aur pehli
+    baar hi log karte hain — report ka kaam "kya-kya baaki hai" batana hai,
+    "kitni baar" nahi.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return Response(status_code=204)
+    if not isinstance(body, dict):
+        return Response(status_code=204)
+    r = body.get("csp-report") or body.get("body") or body
+    if not isinstance(r, dict):
+        return Response(status_code=204)
+    key = (
+        str(r.get("effective-directive") or r.get("violated-directive") or "?")[:60],
+        str(r.get("blocked-uri") or "?")[:120],
+    )
+    first = key not in _CSP_SEEN
+    _CSP_SEEN[key] = _CSP_SEEN.get(key, 0) + 1
+    if first:
+        log.info(
+            "csp_violation",
+            directive=key[0], blocked=key[1],
+            document=str(r.get("document-uri") or "")[:200],
+            line=r.get("line-number"),
+        )
+    return Response(status_code=204)
+
+
+@router.get("/csp-report", dependencies=[Depends(require_admin_key)])
+async def csp_report_summary() -> dict:
+    """Ab tak kya-kya CSP todta hai, ginti ke saath. Khali = enforce karo."""
+    return {
+        "distinct": len(_CSP_SEEN),
+        "total": sum(_CSP_SEEN.values()),
+        "violations": sorted(
+            ({"directive": d, "blocked": b, "count": n} for (d, b), n in _CSP_SEEN.items()),
+            key=lambda x: -x["count"],
+        ),
+    }
