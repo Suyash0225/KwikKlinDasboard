@@ -5,8 +5,10 @@ Same auth as everything else: X-API-Key (require_admin_key).
 """
 
 import asyncio
+import time as _time
 import uuid as uuid_module
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -609,14 +611,75 @@ from app.config import settings as _settings
 _GRAPH = "https://graph.facebook.com/v21.0"
 
 
-async def _graph(method: str, path: str, **kw):
-    """One Graph API call — isolated so tests can fake it."""
+async def _graph(method: str, path: str, token: str | None = None, **kw):
+    """One Graph API call — isolated so tests can fake it.
+
+    `token` is the calling tenant's WhatsApp token. It defaults to the .env
+    one only because the template studio still runs on home-shop creds; any
+    new caller should pass the tenant's own token explicitly.
+    """
     async with _httpx.AsyncClient(timeout=30) as c:
         r = await c.request(
             method, f"{_GRAPH}/{path}",
-            headers={"Authorization": f"Bearer {_settings.WHATSAPP_TOKEN}"}, **kw,
+            headers={"Authorization": f"Bearer {token or _settings.WHATSAPP_TOKEN}"}, **kw,
         )
     return r.status_code, r.json()
+
+
+class _WaStatsCreds(NamedTuple):
+    token: str
+    waba_id: str
+    phone_number_id: str
+
+
+async def _wa_stats_creds(db: AsyncSession) -> _WaStatsCreds | None:
+    """Current tenant's own Graph creds, or None if WhatsApp isn't connected.
+
+    Mirrors whatsapp.resolve_creds, including the rule that .env creds belong
+    to the HOME shop alone: reading another shop's dashboard must never fall
+    back to them, or shop B ends up looking at shop A's templates and quality
+    rating. Returns None instead of raising — a dashboard with no WhatsApp is
+    a normal state, not an error.
+    """
+    from app.models.tenant import Tenant
+    from app.services import tenant_context
+
+    tid = tenant_context.current_tenant_id.get() or tenant_context.cached_home_tenant_id()
+    if tid is not None:
+        t = await db.get(Tenant, tid)
+        if t is not None and t.wa_token and t.wa_waba_id and t.wa_phone_number_id:
+            return _WaStatsCreds(t.wa_token, t.wa_waba_id, t.wa_phone_number_id)
+        if tid != tenant_context.cached_home_tenant_id():
+            return None
+    if (
+        _settings.WHATSAPP_TOKEN
+        and _settings.WHATSAPP_WABA_ID
+        and _settings.WHATSAPP_PHONE_NUMBER_ID
+    ):
+        return _WaStatsCreds(
+            _settings.WHATSAPP_TOKEN,
+            _settings.WHATSAPP_WABA_ID,
+            _settings.WHATSAPP_PHONE_NUMBER_ID,
+        )
+    return None
+
+
+# Template counts and quality rating move on Meta's timescale (hours), not
+# ours. Without this every dashboard load — every manager, every refresh —
+# was two more Graph calls.
+_WA_STATS_TTL = 60.0
+_wa_stats_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _wa_stats_cached(key: str) -> dict | None:
+    hit = _wa_stats_cache.get(key)
+    if hit is None:
+        return None
+    at, payload = hit
+    if _time.monotonic() - at > _WA_STATS_TTL:
+        _wa_stats_cache.pop(key, None)
+        return None
+    return payload
 
 
 @router.get("/usage", dependencies=[Depends(require_feature("reports"))])
@@ -1349,31 +1412,57 @@ async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
     ).scalar_one()
 
     tpl = {"approved": 0, "pending": 0, "rejected": 0}
-    quality, meta_ok = None, False
-    try:
-        status, data = await _graph(
-            "GET", f"{_settings.WHATSAPP_WABA_ID}/message_templates",
-            params={"fields": "name,status", "limit": 100},
-        )
-        if status == 200:
-            meta_ok = True
-            for t in data.get("data", []):
-                k = (t.get("status") or "").lower()
-                if k in tpl:
-                    tpl[k] += 1
-        s2, d2 = await _graph(
-            "GET", f"{_settings.WHATSAPP_PHONE_NUMBER_ID}",
-            params={"fields": "quality_rating"},
-        )
-        if s2 == 200:
-            quality = d2.get("quality_rating")
-    except Exception:
-        log.exception("wa_stats_meta_failed")
+    quality, meta_ok, meta_state = None, False, "not_connected"
+
+    creds = await _wa_stats_creds(db)
+    if creds is not None:
+        cached = _wa_stats_cached(creds.waba_id)
+        if cached is not None:
+            tpl, quality = dict(cached["templates"]), cached["quality"]
+            meta_ok, meta_state = cached["meta_ok"], cached["meta_state"]
+        else:
+            try:
+                status, data = await _graph(
+                    "GET", f"{creds.waba_id}/message_templates",
+                    token=creds.token,
+                    params={"fields": "name,status", "limit": 100},
+                )
+                if status == 200:
+                    meta_ok, meta_state = True, "ok"
+                    for t in data.get("data", []):
+                        k = (t.get("status") or "").lower()
+                        if k in tpl:
+                            tpl[k] += 1
+                    # Only worth asking for quality once the token has proven
+                    # itself. Firing it after a 401 was the second wasted call.
+                    s2, d2 = await _graph(
+                        "GET", creds.phone_number_id,
+                        token=creds.token,
+                        params={"fields": "quality_rating"},
+                    )
+                    if s2 == 200:
+                        quality = d2.get("quality_rating")
+                elif status in (401, 403):
+                    meta_state = "auth_failed"
+                else:
+                    meta_state = "error"
+            except Exception:
+                meta_state = "unreachable"
+                log.exception("wa_stats_meta_failed")
+            _wa_stats_cache[creds.waba_id] = (
+                _time.monotonic(),
+                {"templates": dict(tpl), "quality": quality,
+                 "meta_ok": meta_ok, "meta_state": meta_state},
+            )
+
     return {
         "today": {"sent": sent_n, "received": recv_n, "customers_talked": talked},
         "templates": tpl,
         "quality": quality,
         "meta_ok": meta_ok,
+        # Why Meta data is missing, so the UI can stop calling a shop that
+        # never connected WhatsApp "unreachable".
+        "meta_state": meta_state,
     }
 
 
