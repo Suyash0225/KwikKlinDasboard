@@ -828,8 +828,11 @@ async def run_payment_reminders() -> int:
             try:
                 await send_message(
                     db, to_phone=cust.phone,
+                    # lang="en": teeno reminder raste ek hi bhasha bolein —
+                    # dashboard, staff panel, aur ye. Grahak ko pata nahi
+                    # chalna chahiye ki kisne yaad dilaya.
                     text=get_message(
-                        kind, order_number=o.order_number, amount=f"{due}",
+                        kind, lang="en", order_number=o.order_number, amount=f"{due}",
                     ),
                 )
                 sends += 1

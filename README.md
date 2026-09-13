@@ -4,6 +4,53 @@ WhatsApp-based order management for a laundry shop in Varanasi. Customers,
 washer, and delivery staff all interact over WhatsApp; the bot coordinates.
 Full context: [PROJECT_SPEC.md](PROJECT_SPEC.md).
 
+## Codespaces
+
+Naya Codespace khulte hi taiyar hota hai (`.devcontainer/`): dependencies,
+Postgres, migrations, `kk_app` DB role aur rate card — sab apne aap. Bas:
+
+```bash
+./run.sh
+```
+
+Purana Codespace wapas kholne ke liye: repo par **Code → Codespaces**, ya
+`github.com/codespaces`. Us par setup dobara nahi chalta — sirf `./run.sh`.
+
+## Quick start (Linux / macOS)
+
+```bash
+pip install -r requirements.txt
+./run.sh --seed        # pehli baar: rate card aur staff bhi bhar dega
+./run.sh               # uske baad
+./run.sh --stop        # band
+```
+
+`run.sh` .env banata hai (agar nahi hai), Postgres uthata hai, migrations
+chalata hai, purana server band karta hai, aur naya chalu karke `/health`
+se **asli jawab** lekar `READY` dikhata hai.
+
+Ye aakhri kadam sabse zaroori hai. Dashboard ek PWA hai: server band ho to
+uska service worker cache se purana page de deta hai — bina error, bina
+kisi ishaare ke. Browser mein app khuli dikhti rahegi jabki kuch chal hi
+nahi raha hoga. Isliye jab bhi lage "code badla par kuch nahi hua", pehle
+dekho ki `READY` likha aaya tha ya nahi.
+
+## Nakli data (dev/staging only)
+
+```bash
+python -m scripts.seed_demo_data 1000 500 1000   # home dukaan: orders, tasks, customers
+python -m scripts.seed_demo_shops 5 1000 1000 500 # 5 aur poori dukaanein (multi-tenant test)
+python -m scripts.seed_demo_data --clear          # aur
+python -m scripts.seed_demo_shops --clear         # dono saaf
+```
+
+Demo dukaanon ka login: `owner1@demo.test` … `owner5@demo.test`, password
+`demo12345`.
+
+Testing se pehle dono `--clear` chala lo. Test suite isi DB par chalti hai
+aur kai test gintiyon par assert karte hain, isliye nakli rows unhe fail
+kara dete hain.
+
 ## Setup (Windows)
 
 ```bat

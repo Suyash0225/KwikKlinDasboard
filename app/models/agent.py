@@ -16,6 +16,13 @@ class AuditLog(Base, TenantScoped):
 
     __tablename__ = "audit_log"
 
+    # Mixin NOT NULL deta hai; yahan nahi. Control panel aur system jobs ki
+    # rows kisi dukaan ki nahi hotin, aur unpar tenant thopne ka matlab
+    # hoga ki audit log jhooth bole ki kaam kisne kiya.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), index=True, nullable=True
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )

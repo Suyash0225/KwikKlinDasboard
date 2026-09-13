@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     Numeric,
     String,
@@ -30,7 +31,9 @@ class Lead(Base, TenantScoped):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    phone: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    # Per-dukaan unique (index migration mein) — ek hi aadmi do laundry
+    # mein poochh-taachh kar sakta hai.
+    phone: Mapped[str] = mapped_column(String(20), index=True)
     name: Mapped[str | None] = mapped_column(String(120))
     source: Mapped[str] = mapped_column(String(40), default="whatsapp")
     area: Mapped[str | None] = mapped_column(String(120))
@@ -103,8 +106,16 @@ class CampaignRecipient(Base):
 
 class Coupon(Base, TenantScoped):
     __tablename__ = "coupons"
+    __table_args__ = (
+        # Code PER DUKAAN unique. Pehle `code` khud primary key tha, yaani
+        # poore platform par ek hi "OFF10" — aur har dukaan OFF10 chahti hai.
+        UniqueConstraint("tenant_id", "code", name="uq_coupons_tenant_code"),
+    )
 
-    code: Mapped[str] = mapped_column(String(30), primary_key=True)  # stored UPPER
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    code: Mapped[str] = mapped_column(String(30), index=True)  # stored UPPER
     discount_type: Mapped[str] = mapped_column(String(8))  # 'percent' | 'flat'
     value: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     min_order: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
@@ -123,13 +134,24 @@ class Coupon(Base, TenantScoped):
 
 class CouponRedemption(Base):
     __tablename__ = "coupon_redemptions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "coupon_code"], ["coupons.tenant_id", "coupons.code"],
+            name="fk_coupon_redemptions_coupon",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    coupon_code: Mapped[str] = mapped_column(
-        String(30), ForeignKey("coupons.code"), index=True
+    # FK ab (tenant_id, coupon_code) -> coupons(tenant_id, code) par hai,
+    # __table_args__ mein — kyunki parent ki unique jodi bhi do column ki hai.
+    # NOT NULL: ye FK ka aadha hissa hai, aur composite FK mein ek column
+    # NULL ho to Postgres poori jodi ki jaanch chhod deta hai (MATCH SIMPLE).
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), index=True, nullable=False
     )
+    coupon_code: Mapped[str] = mapped_column(String(30), index=True)
     order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orders.id"))
     customer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("customers.id"), index=True

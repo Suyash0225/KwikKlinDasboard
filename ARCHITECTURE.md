@@ -89,7 +89,7 @@ Agla kadam jab load real ho (abhi zaroorat NAHI):
 |---|---|---|
 | 1. Request context | `app/main.py` middleware → `tenant_context.current_tenant_id` (ContextVar) | Session cookie → user ka tenant; staff cookie → staff ki dukaan; anonymous/API-key → home tenant. Owner ka phone bhi context mein (`manager_phone()`). |
 | 2. ORM | `app/database.py` events | Har SELECT par automatic `tenant_id = <ctx>` filter (`with_loader_criteria`), har naye row par automatic stamp (`before_flush`). Developer WHERE bhool bhi jaye to filter lagta hai. |
-| 3. Postgres RLS | migrations `d4c8e2f7a915` (19 tables) + `r2a8c5d3f9e7` (4 billing tables) | `ENABLE + FORCE ROW LEVEL SECURITY`, policy `tenant_isolation` — GUC `app.tenant_id` set ho to sirf usi tenant ki rows (read **aur** write); unset = system context, sab rows. Table owner bhi bypass nahi kar sakta. |
+| 3. Postgres RLS | migrations `d4c8e2f7a915` (19) + `r2a8c5d3f9e7` (4 billing) + `v6e3a9b7d4f2`/`x8a5c3d9f6b4` (coupon_redemptions, users, invites — ab HAR tenant table par) | `ENABLE + FORCE ROW LEVEL SECURITY`, policy `tenant_isolation` — GUC `app.tenant_id` set ho to sirf usi tenant ki rows (read **aur** write); unset = system context, sab rows. Table owner bhi bypass nahi kar sakta. |
 
 **Kaun sa table kahan** — 23 tables tenant-scoped (customers, orders, payments,
 staff, tasks, conversations, campaigns, coupons, rate_card, settings_kv,
@@ -100,6 +100,12 @@ invoices, billing_events, credit_ledger, recharge_requests, ...). RLS ke
 `sent_events` (global idempotency; scheduler tenant prefix lagata hai),
 `kpi_snapshots` (platform KPI), `webhook_events`/`outbound_queue`
 (durability — apna tenant_id carry karte hain).
+
+Account lifecycle ke paanch kaam (signup, login, google callback, invite
+accept, session adopt) `tenant_context.system_context()` mein chalte hain:
+unmein dukaan pata hi nahi hoti jab tak user/token resolve na ho jaye.
+Ye zaroori tha users/invites par RLS lagane se pehle — warna doosri
+dukaan ka owner apne hi account se login nahi kar pata.
 
 **System context** (ContextVar = None, GUC unset, RLS pass-through) sirf in
 raaston par: `/control/*` (vendor panel), `/webhooks/razorpay`, alembic,
@@ -152,7 +158,6 @@ card → plan control se. Koi naya process, DB ya `.env` nahi.
 
 - 2–4 uvicorn workers + pool sizing (ek process, noisy neighbour).
 - Per-tenant export/delete (data portability; churn par maangenge).
-- `users`/`invites` par app-level filter hi hai — RLS nahi lag sakta.
 - Purani single-shop scripts (`seed_staff`, `bootstrap_home_tenant`) home
   par hi likhti hain.
 

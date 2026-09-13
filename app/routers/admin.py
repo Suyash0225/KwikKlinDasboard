@@ -43,7 +43,6 @@ from app.models import (
     Conversation,
     CouponRedemption,
     Customer,
-    Direction,
     Escalation,
     Expense,
     OpenQuestion,
@@ -322,6 +321,112 @@ async def admin_events(request: Request) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class ReminderIn(BaseModel):
+    phone: str = Field(min_length=8, max_length=20)
+
+
+@router.post("/api/customers/reminder", dependencies=[Depends(require_admin_key)])
+async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Ek grahak ka paisa maangne wala message — banao, aur ho sake to bhejo.
+
+    Text SERVER par banta hai, browser mein nahi. Browser ke paas sirf kul
+    rakam hoti hai; kaunse bill, kis din ke, kitne ke — wo yahan hai. Aur
+    jab tak text browser mein tha, usmein dukaan ka naam hardcode tha
+    ("Kwik Klin"), yaani har doosri dukaan kisi aur ke naam se paisa maang
+    rahi thi.
+
+    WhatsApp API se ja sake to bhej dete hain; na ja sake to text wapas
+    kar dete hain taaki dashboard wa.me link khol sake. Paisa maangna wo
+    kaam hai jo Meta ka integration set na hone par rukna nahi chahiye.
+    """
+    from app.models.tenant import Tenant as _T
+    from app.services import app_settings, tenant_context
+    from app.services.whatsapp import SendError, send_message
+
+    phone = body.phone.strip()
+    cust = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if cust is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    rows = (
+        await db.execute(
+            select(Order)
+            .where(
+                Order.customer_id == cust.id,
+                Order.status != OrderStatus.CANCELLED,
+                Order.total_amount.isnot(None),
+                Order.total_amount > Order.amount_paid,
+            )
+            .order_by(Order.created_at)
+        )
+    ).scalars().all()
+    if not rows:
+        raise HTTPException(status_code=400, detail="Is grahak ka koi paisa baaki nahi")
+
+    def rupees(x: Decimal | float) -> str:
+        # "₹630.00" nahi. Dukaan ke message mein paise ka hisaab paison
+        # tak nahi hota, aur .00 machine ka likha lagta hai.
+        d = Decimal(str(x)).quantize(Decimal("0.01"))
+        return f"₹{d:,.0f}" if d == d.to_integral_value() else f"₹{d:,.2f}"
+
+    tenant = await db.get(_T, tenant_context.current_tenant_id.get())
+    shop = (tenant.shop_name if tenant and tenant.shop_name else "").strip()
+    total = sum((Decimal(str(o.total_amount)) - Decimal(str(o.amount_paid or 0))) for o in rows)
+
+    who = (cust.name or "").strip()
+    lines = [f"Dear {who}," if who else "Dear Customer,", ""]
+    lines.append(
+        f"Payment is pending for {len(rows)} of your bills:" if len(rows) > 1
+        else "Payment is pending for your bill:"
+    )
+    lines.append("")
+    # Lambi list WhatsApp par deewar ban jaati hai. Chhe dikhao, baaki gino.
+    for o in rows[:6]:
+        due = Decimal(str(o.total_amount)) - Decimal(str(o.amount_paid or 0))
+        day = o.created_at.strftime("%d %b %Y") if o.created_at else "-"
+        lines.append(f"{o.order_number} · {day} · {rupees(due)}")
+    if len(rows) > 6:
+        lines.append(f"...and {len(rows) - 6} more")
+
+    lines += ["", f"Total due: {rupees(total)}", ""]
+
+    # UPI Settings -> Business Profile se aata hai (upi_vpa / upi_payee) —
+    # wahi do keys jo bill ke receipt par chhapti hain. Number saamne ho to
+    # paisa aaj hi aa sakta hai; na ho to grahak ko poochhna padta hai aur
+    # wahin ruk jaata hai.
+    upi = (await app_settings.get(db, "upi_vpa") or "").strip()
+    payee = (await app_settings.get(db, "upi_payee") or "").strip()
+    if upi:
+        lines.append(f"UPI: {upi}" + (f" ({payee})" if payee else ""))
+        lines.append("Or pay at the shop.")
+    else:
+        lines.append("Payment can be made at the shop.")
+
+    # Dukaan ka naam sign-off mein. Ye owner ka chuna hua roop hai — ek
+    # business letter ki tarah, jahan naam neeche aata hai.
+    lines += ["", "Please pay as soon as possible.", "", "Thank you,", shop or "Laundry"]
+
+    text = "\n".join(lines)
+
+    sent = False
+    try:
+        await send_message(db, to_phone=cust.phone, text=text)
+        sent = True
+    except SendError as exc:
+        log.info("dashboard_reminder_api_failed", customer=cust.id, error=str(exc))
+
+    return {
+        "sent": sent,
+        "phone": cust.phone,
+        "name": cust.name or "",
+        "bills": len(rows),
+        "total": str(total),
+        "text": text,
+    }
 
 
 @router.get("/api/customers/search", dependencies=[Depends(require_admin_key)])
@@ -2000,11 +2105,18 @@ async def dashboard_page(
     v = int(max(
         (static_dir / "app.js").stat().st_mtime,
         (static_dir / "app.css").stat().st_mtime,
-        (static_dir / "mobile.css").stat().st_mtime,
+        # tokens.css teenon surface ka source of truth hai. Isko version
+        # mein na ginne par ek brand-rang badalne par bhi browser purani
+        # file pakde rehta — aur dikkat "kabhi-kabhi purana orange" jaisi
+        # dikhti, jo dhoondhne mein sabse mehngi hoti hai.
+        (static_dir / "tokens.css").stat().st_mtime,
+        # Sprite bhi: icon badla aur version na badla to browser purana
+        # sprite pakde rehta hai aur nav aadha purana aadha naya dikhta.
+        (static_dir / "icons.svg").stat().st_mtime,
     ))
     import re as _re
 
-    html = _re.sub(r"((?:app|mobile)\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
+    html = _re.sub(r"((?:app|tokens)\.(?:js|css)|icons\.svg)\?v=[\w]+", rf"\1?v={v}", html)
     return Response(
         content=html, media_type="text/html",
         headers={"Cache-Control": "no-cache"},

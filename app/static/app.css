@@ -12,37 +12,37 @@
 
 :root {
   /* brand — matched to the owner's legacy "Smart Laundry Billing" app */
-  --brand: #ff7a4d; --brand-600: #f65a2b; --brand-50: #fff1ec;
-  --ok: #12b76a; --ok-50: #ecfdf3;
-  --danger: #f43f5e; --danger-50: #fff1f2;
-  --warn: #f59e0b; --warn-50: #fffbeb;
-  --info: #3b82f6; --info-50: #eff6ff;
+  /* Brand ab tokens.css se (--brand). Yahan dobara define karna matlab
+     tokens ko chup-chaap override karna — teen alag orange isi tarah bane the. */
+  --brand-600: var(--brand-strong); --brand-50: var(--brand-soft);
+  --ok: var(--success); --ok-50: var(--success-soft);
+  --danger: var(--error); --danger-50: var(--error-soft);
+  --warn: var(--warning); --warn-50: var(--warning-soft);
+  /* --info tokens.css se. */ --info-50: var(--info-soft);
   --purple: #8b5cf6; --teal: #14b8a6; --pink: #ec4899;
-  --g-orange: linear-gradient(135deg, #ff8a5c, #f65a2b);
-  --g-green:  linear-gradient(135deg, #16c979, #0ea765);
-  --g-blue:   linear-gradient(135deg, #2563eb, #60a5fa);
-  --g-purple: linear-gradient(135deg, #7c3aed, #a78bfa);
-  --g-pink:   linear-gradient(135deg, #db2777, #f472b6);
-  --g-teal:   linear-gradient(135deg, #0d9488, #2dd4bf);
+  --g-orange: linear-gradient(135deg, var(--brand), var(--brand-strong));
+  --g-blue: var(--info);
   /* neutrals */
-  --n0: #ffffff; --n50: #f4f6fb; --n100: #edf0f7; --n200: #e2e6f0;
+  --n0: var(--surface); --n50: var(--bg); --n100: #edf0f7; --n200: #e2e6f0;
   --n300: #cbd2de; --n400: #98a2b3; --n500: #667085; --n600: #475467;
   --n700: #344054; --n800: #1d2939; --n900: #101828;
-  --sidebar-bg: #0d1526; --sidebar-bg2: #111c33;
-  --line: #e7eaf1;          /* one border colour everywhere */
-  --line-soft: #f0f2f7;
-  --radius: 20px; --radius-sm: 12px; --radius-lg: 18px;
+  --sidebar-bg: var(--ink-plate); --sidebar-bg2: #111c33;
+  --line: var(--border);    /* one border colour everywhere */
+  --line-soft: var(--border-soft);
+  /* Teen radius, teen kaam. 20px card bahut gol lagta tha. */
+  --radius: var(--r-lg); --radius-sm: var(--r-sm); --radius-lg: var(--r-lg);
   --shadow: 0 2px 4px rgba(16,24,40,.04), 0 10px 30px rgba(16,24,40,.06);
-  --shadow-pop: 0 10px 26px rgba(246,90,43,.32);
-  --shadow-green: 0 10px 26px rgba(18,183,106,.3);
+  /* Rangeen glow hata di — shadow gehrai batati hai, brand nahi. */
+  --shadow-pop: var(--shadow-md);
+  --shadow-green: var(--shadow-md);
   --sidebar-w: 244px;
   --content-max: 1400px;   /* content column cap; centred on ultra-wide screens */
   /* spacing scale — use these, not magic numbers */
   --s1: .25rem; --s2: .5rem; --s3: .875rem; --s4: 1.25rem; --s5: 1.625rem;
   --pad: 1.25rem;           /* the single spacing step cards use */
-  --tap: 2.75rem;           /* minimum touch target (44px at default zoom) */
+  /* --tap tokens.css se: 46px, geele haath ke liye 44 nahi. */
   --tabbar-h: 64px;         /* bottom tab bar clearance on phones */
-  --font: "Poppins", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* --font tokens.css se. */
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -85,7 +85,7 @@ a { color: var(--brand-600); text-decoration: none; }
 /* Sidebar: base = off-canvas drawer (phone/tablet). Desktop pins it. */
 .sidebar {
   width: var(--sidebar-w);
-  background: linear-gradient(180deg, var(--sidebar-bg), var(--sidebar-bg2));
+  background: var(--sidebar-bg);
   color: #cdd5e1;
   position: fixed; inset: 0 auto 0 0; z-index: 40; display: flex;
   flex-direction: column; transition: transform .2s ease;
@@ -96,34 +96,64 @@ a { color: var(--brand-600); text-decoration: none; }
 /* scrim behind the open drawer — tap anywhere outside to close */
 .side-ov { position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 39; display: none; }
 .side-ov.open { display: block; }
-.sidebar .logo { display: flex; align-items: center; gap: 11px; padding: 22px 18px 18px; }
+.sidebar .logo {
+  display: flex; align-items: center; gap: 11px; padding: 18px 16px 16px;
+  border-bottom: 1px solid rgba(255,255,255,.07);
+}
 .logo-badge {
   width: 42px; height: 42px; border-radius: 50%; background: var(--g-orange);
-  color: #fff; font-weight: 800; display: grid; place-items: center; font-size: 15px;
+  color: #fff; font-weight: 700; display: grid; place-items: center; font-size: 15px;
   box-shadow: var(--shadow-pop);
 }
-.logo h1 { font-size: 16px; color: #fff; letter-spacing: .6px; font-weight: 800; }
+.logo h1 { font-size: 16px; color: #fff; letter-spacing: .6px; font-weight: 700; }
 .logo small { display: block; font-size: 9.5px; color: var(--brand); font-weight: 700; letter-spacing: 2.2px; }
-.nav { flex: 1; overflow-y: auto; padding: 8px 14px 16px; }
+/* Scrollbar patli aur apne rang ki. Pehle native grey patti thi jo active
+   item ke bilkul upar baithti thi aur use kata hua dikhati thi. */
+.nav {
+  flex: 1; overflow-y: auto; overscroll-behavior: contain;
+  padding: 4px 10px 12px;
+  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.16) transparent;
+}
+.nav::-webkit-scrollbar { width: 6px; }
+.nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 3px; }
+.nav::-webkit-scrollbar-track { background: transparent; }
 .nav div {
-  display: flex; align-items: center; gap: 11px; padding: 12px 14px;
-  min-height: 46px;
-  border-radius: 14px; cursor: pointer; font-size: 13.5px; color: #aeb8c9;
-  margin-bottom: 4px; transition: background .12s, color .12s, transform .12s;
-  font-weight: 600;
+  position: relative;
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  min-height: 38px;
+  border-radius: var(--r-sm); cursor: pointer; font-size: 13.5px; color: #9aa6b8;
+  margin-bottom: 1px; transition: background .12s, color .12s;
+  font-weight: var(--fw-semi);
 }
+.nav div:hover { background: rgba(255,255,255,.05); color: #e6ebf2; }
+.nav div:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+
+/* Icon text ka hi rang leta hai (currentColor) — isliye active hone par
+   apne aap safed ho jaata hai, alag rule ki zaroorat nahi. */
+.ic { width: 17px; height: 17px; flex: 0 0 auto; }
 .nav div.on {
-  background: var(--g-orange); color: #fff; box-shadow: var(--shadow-pop);
-  font-weight: 700;
+  background: rgba(255,255,255,.07); color: #fff; font-weight: var(--fw-bold);
 }
-.nav .navsec { font-size: 9.5px; letter-spacing: 2px; color: #58657c; padding: 14px 14px 4px; cursor: default; font-weight: 700; min-height: 0; }
-.sysline { padding: 12px 18px; font-size: 11px; color: #7c8aa0; border-top: 1px solid rgba(255,255,255,.07); }
+.nav div.on::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--brand);
+}
+.nav div.on .ic { color: var(--brand); }
+.nav .navsec {
+  font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
+  color: #5d6a80; padding: 16px 12px 6px; cursor: default;
+  font-weight: var(--fw-semi); min-height: 0;
+}
+.navsec:first-child { padding-top: 4px; }
+.sysline { padding: 8px 12px 6px; font-size: 11px; color: #6f7d92; }
 .sysline .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; box-shadow: 0 0 8px var(--ok); }
+.side-foot { border-top: 1px solid rgba(255,255,255,.07); padding: 6px 10px 10px; }
 .logout {
-  display: flex; align-items: center; gap: 10px; padding: 12px 18px; cursor: pointer;
-  min-height: var(--tap);
-  color: #aeb8c9; font-size: 13px; font-weight: 600; border-top: 1px solid rgba(255,255,255,.07);
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer;
+  min-height: var(--control-h); border-radius: var(--r-sm);
+  color: #9aa6b8; font-size: 13px; font-weight: var(--fw-semi);
 }
+.logout:hover { background: rgba(255,255,255,.05); color: #e6ebf2; }
 
 /* Main column: base = full width under a sticky top bar, with clearance for
    the bottom tab bar. Safe-area insets keep content off notches. */
@@ -182,7 +212,7 @@ a { color: var(--brand-600); text-decoration: none; }
 .kpi { cursor: pointer; transition: transform .14s, box-shadow .14s; position: relative; border-radius: var(--radius-lg); padding: var(--s4); }
 .kpi .lbl { font-size: 11px; letter-spacing: .3px; color: var(--n500); font-weight: 600; padding-right: 44px; }
 .kpi .val {
-  font-size: clamp(1.375rem, 1.05rem + 1.3vw, 1.875rem); font-weight: 800; color: var(--n900);
+  font-size: clamp(1.375rem, 1.05rem + 1.3vw, 1.875rem); font-weight: 700; color: var(--n900);
   font-variant-numeric: tabular-nums; margin-top: 8px; letter-spacing: -.5px;
   overflow-wrap: anywhere;
 }
@@ -206,7 +236,7 @@ a { color: var(--brand-600); text-decoration: none; }
   font-weight: 600; transition: all .12s;
   min-height: 36px; display: inline-flex; align-items: center;
 }
-.chip.on { background: var(--g-orange); border-color: transparent; color: #fff; }
+.chip.on { background: var(--brand-strong); border-color: transparent; color: var(--on-brand); }
 .chip b { font-variant-numeric: tabular-nums; }
 .chip:focus-visible { outline: 2px solid var(--g-orange); outline-offset: 2px; }
 /* Ginti apne pill mein — "Pending1" ek shabd jaisa chipak raha tha */
@@ -215,7 +245,12 @@ a { color: var(--brand-600); text-decoration: none; }
   background: var(--n100); color: var(--n600);
   font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
 }
-.chip.on .cnt { background: rgba(255,255,255,.28); color: #fff; }
+/* Count chip ke APNE rang se banti hai, kisi tay rang se nahi.
+   Pehle yahan color:#fff tha, jo maanta tha ki active chip hamesha gehra
+   hoga. Dashboard uska rule alag rakhta hai (line neeche, .brand-50 wala
+   halka background) — wahan safed count safed par gayab ho jaati thi.
+   currentColor se dono jagah sahi: gehre chip par safed, halke par narangi. */
+.chip.on .cnt { background: rgba(0, 0, 0, .10); color: inherit; }
 
 /* ---------- task cards ----------
    Ek kaam = ek card. Poora card khulta hai (click/Enter) aur detail modal
@@ -258,17 +293,20 @@ a { color: var(--brand-600); text-decoration: none; }
    this file restores the tighter mouse sizes, so 1280px+ looks unchanged. */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  border: none; border-radius: 999px; padding: 10px 18px;
+  border: none; border-radius: var(--r-md); padding: 10px 18px;
   min-height: var(--tap); min-width: var(--tap);
   font-size: .84375rem; font-weight: 700; cursor: pointer; transition: all .14s;
-  background: var(--g-green); color: #fff; white-space: nowrap;
-  box-shadow: 0 1px 2px rgba(16,24,40,.06); font-family: var(--font);
+  /* Default = BRAND. Pehle ye --g-green tha, isliye "New bill" aur
+     "Save bill" hare the jabki nav ka active item narangi — do primary
+     rang, aur user ko pata hi nahi chalta ki brand kaunsa hai. */
+  background: var(--brand-strong); color: var(--on-brand); white-space: nowrap;
+  box-shadow: var(--shadow-sm); font-family: var(--font);
 }
 .btn:disabled { opacity: .55; cursor: not-allowed; }
 .btn.ghost { background: var(--n0); color: var(--n600); border: 1.5px solid var(--n200); box-shadow: none; }
-.btn.danger { background: linear-gradient(135deg, #fb7185, #e11d48); box-shadow: none; }
-.btn.ok { background: var(--g-green); }
-.btn.orange { background: var(--g-orange); box-shadow: var(--shadow-pop); }
+.btn.danger { background: var(--error); box-shadow: none; }
+.btn.ok { background: var(--success); }   /* sirf jahan "ho gaya" ka matlab ho */
+.btn.orange { background: var(--brand-strong); box-shadow: var(--shadow-sm); }
 .btn.sm { padding: 8px 14px; font-size: 12px; }
 .btn .spin { width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -342,7 +380,13 @@ a { color: var(--brand-600); text-decoration: none; }
 .tbl th:last-child, .tbl td:last-child {
   position: sticky; right: 0; background: var(--n0);
   box-shadow: -8px 0 8px -8px rgba(16, 24, 40, .15);
+  /* Apne content jitna hi. Bina iske table ki saari bachi chaudai isi
+     column mein chali jaati thi aur Status ke baad ek bada khaali maidan
+     dikhta tha — jaise koi column gayab ho. */
+  width: 1%; white-space: nowrap;
 }
+/* Slack Customer column le — naam hi wo cheez hai jo lambi ho sakti hai. */
+.tbl td:nth-child(2), .tbl th:nth-child(2) { width: auto; }
 .tbl tbody tr:hover td:last-child { background: #fafbfd; }
 .tbl td .act .btn { padding: 7px 12px; }
 .money { font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -463,7 +507,7 @@ a { color: var(--brand-600); text-decoration: none; }
 .th-search input:focus { background: #fff; box-shadow: 0 0 0 1.5px #00A884; }
 .thread-item { padding: 12px 14px; min-height: 60px; cursor: pointer; display: block; border-bottom: 1px solid #F0F2F5; overflow: hidden; min-width: 0; max-width: 100%; }
 .thread-item.on { background: #F0F2F5; border-left: 4px solid #00A884; padding-left: 10px; }
-.thread-item .nm { display: flex; justify-content: space-between; font-weight: 500; font-size: 14px; color: #111B21; gap: 6px; }
+.thread-item .nm { display: flex; justify-content: space-between; font-weight: 400; font-size: 14px; color: #111B21; gap: 6px; }
 .thread-item .nm .t { color: #667781; font-size: 11px; font-weight: 400; flex-shrink: 0; }
 .thread-item.on .nm .t { color: #00A884; }
 .thread-item .pv { display: block; color: #667781; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
@@ -638,12 +682,12 @@ a { color: var(--brand-600); text-decoration: none; }
   font-size: 13.5px; flex-wrap: wrap; align-items: center;
 }
 .sumrow > * { min-width: 0; overflow-wrap: anywhere; }
-.sumrow.total { font-size: 1.125rem; font-weight: 800; border-top: 2px solid var(--n300); padding-top: 10px; margin-top: 6px; }
+.sumrow.total { font-size: 1.125rem; font-weight: 700; border-top: 2px solid var(--n300); padding-top: 10px; margin-top: 6px; }
 /* Due = what the counter actually collects — it must be unmissable */
 .sumrow.due {
   background: var(--brand-50); border: 1px solid #ffd9c8; border-radius: 10px;
   padding: 10px 12px; margin-top: 8px;
-  font-size: 1.1875rem; font-weight: 800; color: var(--brand-600);
+  font-size: 1.1875rem; font-weight: 700; color: var(--brand-600);
 }
 .sumrow.due .money { font-size: inherit; font-weight: inherit; color: inherit; }
 /* Save bill: sticky above the tab bar on phones — thumb-zone, no hunting */
@@ -787,7 +831,7 @@ b.subhead { display: block; font-size: 13.5px; }
 }
 .tabbar div { text-align: center; font-size: 10px; color: #8b97ab; cursor: pointer; padding: 5px 0 3px; min-height: 48px; font-weight: 700; border-radius: 13px; margin: 0 3px; transition: all .12s; }
 .tabbar div .ti { display: block; font-size: 19px; margin-bottom: 1px; }
-.tabbar div.on { color: #fff; background: var(--g-orange); box-shadow: var(--shadow-pop); }
+.tabbar div.on { color: var(--on-brand); background: var(--brand-strong); box-shadow: var(--shadow-pop); }
 
 /* ---------- mobile chrome: sheet, badges, pills, offline ---------- */
 .sheet-ov { position: fixed; inset: 0; background: rgba(16,24,40,.5); z-index: 80; display: none; }
@@ -808,7 +852,7 @@ b.subhead { display: block; font-size: 13.5px; }
 .sheet-grid .si { display: block; font-size: 23px; margin-bottom: 4px; }
 .tab-badge {
   position: absolute; top: 0; right: 16%; min-width: 17px; height: 17px; border-radius: 9px;
-  background: var(--danger); color: #fff; font-size: 10px; font-weight: 800;
+  background: var(--danger); color: #fff; font-size: 10px; font-weight: 700;
   display: none; place-items: center; padding: 0 4px; box-shadow: 0 2px 6px rgba(244,63,94,.4);
 }
 .tab-badge.show { display: grid; }
@@ -983,7 +1027,7 @@ select {
 
   /* page heading wapas — bade screen par topbar nahi hota */
   .pagehead { margin-bottom: 18px; }
-  .pagehead h2 { display: block; font-size: clamp(1.25rem, 1rem + 1vw, 1.5rem); font-weight: 800; color: var(--n900); letter-spacing: -.3px; }
+  .pagehead h2 { display: block; font-size: clamp(1.25rem, 1rem + 1vw, 1.5rem); font-weight: 700; color: var(--n900); letter-spacing: -.3px; }
   .pagehead p { display: block; color: var(--n500); font-size: 13px; margin-top: 2px; }
   .pagehead .actions { margin-left: 0; }
 
@@ -1275,14 +1319,14 @@ select {
 .donut { display: grid; place-items: center; }
 .donut-center { text-align: center; line-height: 1.15; z-index: 1; }
 .donut-center .dc-lbl { display: block; font-size: .625rem; color: var(--n500); text-transform: uppercase; letter-spacing: .5px; }
-.donut-center .dc-val { display: block; font-size: 1rem; font-weight: 800; color: var(--n900); font-variant-numeric: tabular-nums; }
+.donut-center .dc-val { display: block; font-size: 1rem; font-weight: 700; color: var(--n900); font-variant-numeric: tabular-nums; }
 
 /* table extras: zebra striping, sortable headers, totals row */
 .tbl.zebra tbody tr:nth-child(even) td { background: var(--n50); }
 .tbl th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 .tbl th.sortable.num { text-align: right; }
 .tbl tfoot .totalrow td {
-  border-top: 2px solid var(--n300); font-weight: 800; color: var(--n900);
+  border-top: 2px solid var(--n300); font-weight: 700; color: var(--n900);
   background: var(--n0); position: sticky; bottom: 0;
 }
 

@@ -247,3 +247,234 @@ async def test_system_context_still_sees_everything(two_tenants) -> None:
             )
         ).scalars().all()
     assert set(rows) == {HOME_PHONE, B_PHONE}
+
+
+# ---------------------------------------- per-dukaan unique constraints ----
+
+
+async def _fresh(slug: str, table: str):
+    """Tenant do, aur uski purani rows hatao.
+
+    Ye test har baar wahi row daalte hain. Bina safai ke doosra run us
+    dukaan ke ANDAR duplicate banata hai aur constraint sahi hi mana kar
+    deta — test lal ho jaata bina kisi bug ke.
+    """
+    tid = await _tenant(slug)
+    async with async_session_factory() as db:
+        await db.execute(sqltext(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": tid})
+        await db.commit()
+    return tid
+
+
+async def _tenant(slug: str):
+    """Ek nanga tenant — sirf constraint jaanchne ke liye."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import TENANT_ACTIVE
+
+    async with async_session_factory() as db:
+        t = (await db.execute(select(Tenant).where(Tenant.slug == slug))).scalar_one_or_none()
+        if t is None:
+            t = Tenant(
+                slug=slug, shop_name=slug, owner_name="O", owner_phone=f"+9199{abs(hash(slug)) % 10**8:08d}",
+                owner_email=f"{slug}@t.test", city="X", plan="pro", status=TENANT_ACTIVE,
+                current_period_end=datetime.now(timezone.utc) + timedelta(days=90),
+            )
+            db.add(t)
+            await db.commit()
+        return t.id
+
+
+async def test_two_shops_can_price_the_same_garment(client) -> None:
+    """Do dukaanein ek hi service+garment rakh saken.
+
+    rate_card par UNIQUE (service, garment) tha — tenant ke bina. Yaani
+    platform ki DOOSRI dukaan apne rate card mein "Shirt" daal hi nahi
+    sakti thi, aur uska onboarding pehli hi row par phat jaata. Ek dukaan
+    wale deployment par ye kabhi nahi dikhta.
+    """
+    from decimal import Decimal
+
+    from app.models import Rate
+
+    a, b = await _fresh("iso-rate-a", "rate_card"), await _fresh("iso-rate-b", "rate_card")
+    for tid, price in ((a, "45"), (b, "60")):
+        token = tenant_context.current_tenant_id.set(tid)
+        try:
+            async with async_session_factory() as db:
+                db.add(Rate(service="Wash & Iron", garment="Shirt", unit="pc",
+                            rate=Decimal(price)))
+                await db.commit()
+        finally:
+            tenant_context.current_tenant_id.reset(token)
+
+    # Aur dono ka apna daam — ek doosre ko overwrite nahi kiya
+    for tid, want in ((a, 45), (b, 60)):
+        token = tenant_context.current_tenant_id.set(tid)
+        try:
+            async with async_session_factory() as db:
+                rows = (await db.execute(select(Rate).where(Rate.garment == "Shirt"))).scalars().all()
+                assert len(rows) == 1 and float(rows[0].rate) == want
+        finally:
+            tenant_context.current_tenant_id.reset(token)
+
+
+async def test_two_shops_can_use_the_same_coupon_code(client) -> None:
+    """"OFF10" har dukaan ka apna ho.
+
+    `code` KHUD primary key thi, yaani poore platform par ek hi OFF10.
+    Aur rasta isse bhi bura tha: owner ko "ye code pehle se hai" ki jagah
+    500 milta, kyunki duplicate check RLS ke peeche chhupe coupon ko dekh
+    hi nahi pata tha.
+    """
+    from decimal import Decimal
+
+    from app.models import Coupon
+
+    a, b = await _fresh("iso-cpn-a", "coupons"), await _fresh("iso-cpn-b", "coupons")
+    for tid, val in ((a, "10"), (b, "25")):
+        token = tenant_context.current_tenant_id.set(tid)
+        try:
+            async with async_session_factory() as db:
+                db.add(Coupon(code="OFF10", discount_type="percent", value=Decimal(val)))
+                await db.commit()
+        finally:
+            tenant_context.current_tenant_id.reset(token)
+
+    for tid, want in ((a, 10), (b, 25)):
+        token = tenant_context.current_tenant_id.set(tid)
+        try:
+            async with async_session_factory() as db:
+                from app.services.marketing import get_coupon
+
+                c = await get_coupon(db, "off10")     # lookup case-insensitive
+                assert c is not None and float(c.value) == want
+        finally:
+            tenant_context.current_tenant_id.reset(token)
+
+
+async def test_two_shops_can_have_the_same_lead_phone(client) -> None:
+    """Ek aadmi do laundry mein poochh-taachh kar sakta hai."""
+    from app.models import Lead
+
+    a, b = await _fresh("iso-lead-a", "leads"), await _fresh("iso-lead-b", "leads")
+    for tid, name in ((a, "Poocha A se"), (b, "Poocha B se")):
+        token = tenant_context.current_tenant_id.set(tid)
+        try:
+            async with async_session_factory() as db:
+                db.add(Lead(phone="+919812345678", name=name))
+                await db.commit()
+        finally:
+            tenant_context.current_tenant_id.reset(token)
+
+    token = tenant_context.current_tenant_id.set(a)
+    try:
+        async with async_session_factory() as db:
+            rows = (await db.execute(select(Lead).where(Lead.phone == "+919812345678"))).scalars().all()
+            assert len(rows) == 1 and rows[0].name == "Poocha A se"
+    finally:
+        tenant_context.current_tenant_id.reset(token)
+
+
+async def test_rls_is_actually_in_force_not_just_configured(client) -> None:
+    """Schema nahi — ASAL vyavhaar jaancho.
+
+    Har tenant table par ENABLE + FORCE ROW LEVEL SECURITY laga hai aur
+    schema dekh kar sab theek lagta hai. Par SUPERUSER RLS ko poori tarah
+    nazarandaz karta hai, aur FORCE uspar laagu nahi hota — FORCE sirf
+    TABLE OWNER ke liye hai. docker-compose ka POSTGRES_USER Postgres ka
+    bootstrap superuser hai, isliye default setup mein defence-in-depth ki
+    teesri parat maujood hi nahi hoti.
+
+    Ye test us haalat mein SKIP hota hai (fail nahi) — kyunki wo deployment
+    ki kami hai, code ki nahi, aur suite ko laal rakhne se sirf log lal
+    rehne ke aadi ho jaate hain. Jis din app NOSUPERUSER role par jayegi,
+    ye test apne aap pehra dena shuru kar dega.
+    """
+    async with async_session_factory() as db:
+        bypasses = (
+            await db.execute(
+                sqltext("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")
+            )
+        ).scalar_one()
+    if bypasses:
+        pytest.skip(
+            "DB role bypasses RLS (superuser/BYPASSRLS) — isolation rests on "
+            "the ORM filter alone. Use a NOSUPERUSER app role to enable this check."
+        )
+
+    a, b = await _fresh("rls-live-a", "customers"), await _fresh("rls-live-b", "customers")
+    async with async_session_factory() as db:
+        for tid, name in ((a, "A ka grahak"), (b, "B ka grahak")):
+            await db.execute(
+                sqltext("INSERT INTO customers (id, tenant_id, phone, name) "
+                        "VALUES (gen_random_uuid(), :t, :p, :n)"),
+                {"t": tid, "p": f"+9190{str(tid)[:8]}", "n": name},
+            )
+        await db.commit()
+
+    # RAW SQL — jaan-boojh kar. ORM ka filter yahan lagta hi nahi, isliye
+    # jo bhi rokta hai wo sirf RLS hai. Yahi is test ka poora maqsad hai.
+    async with async_session_factory() as db:
+        await db.execute(sqltext(f"SET LOCAL app.tenant_id = '{a}'"))
+        rows = (
+            await db.execute(sqltext("SELECT name FROM customers WHERE phone LIKE '+9190%'"))
+        ).scalars().all()
+    assert rows == ["A ka grahak"], f"RLS ne doosri dukaan ki row nahi roki: {rows}"
+
+
+async def test_every_tenant_table_has_an_rls_policy(client) -> None:
+    """Koi tenant table policy ke bina na chhoote.
+
+    users aur invites saalon "app-level filter hi hai" par chal rahe the.
+    Ye test naye table par bhi lagta hai: TenantScoped mixin lagate hi
+    policy bhi chahiye, warna ye laal hoga.
+    """
+    async with async_session_factory() as db:
+        rows = (
+            await db.execute(sqltext("""
+                SELECT c.relname FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+                JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'tenant_id'
+                WHERE c.relkind = 'r'
+                  AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity
+                       OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid))
+                ORDER BY 1
+            """))
+        ).scalars().all()
+    assert rows == [], f"in tables par RLS adhoori hai: {rows}"
+
+
+async def test_an_owner_of_another_shop_can_still_log_in(client) -> None:
+    """RLS ke baad bhi doosri dukaan ka owner andar aa sake.
+
+    Ye us bug ka pehra hai jo users par policy lagate hi paida hota hai:
+    bina session ke request ka context HOME tenant hota hai, isliye login
+    ka lookup doosri dukaan ke user ko dekh hi nahi pata aur 401 milta —
+    bina kisi wajah ke. Login ab system context mein chalta hai.
+    """
+    from app.models import ROLE_OWNER, User
+    from app.services import auth
+
+    # Pichhle run ka session pehle hataao — warna users par DELETE
+    # login_sessions ke FK par phat jaata hai, aur wo asli constraint
+    # failure jaisa dikhta hai.
+    async with async_session_factory() as db:
+        await db.execute(sqltext(
+            "DELETE FROM login_sessions WHERE user_id IN "
+            "(SELECT id FROM users WHERE email = :e)"
+        ), {"e": "outsider@iso-login.test"})
+        await db.commit()
+    tid = await _fresh("iso-login-shop", "users")
+    email = "outsider@iso-login.test"
+    async with async_session_factory() as db:
+        db.add(User(
+            tenant_id=tid, name="Bahar Wala", email=email,
+            phone="+919812340000", password_hash=auth.hash_password("passw0rd123"),
+            role=ROLE_OWNER,
+        ))
+        await db.commit()
+
+    r = await client.post("/api/login", json={"email": email, "password": "passw0rd123"})
+    assert r.status_code == 200, r.text
+    client.cookies.delete("kk_session")

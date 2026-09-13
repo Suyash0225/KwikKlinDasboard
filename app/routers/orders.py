@@ -47,7 +47,6 @@ from app.services.order_service import (
     OrderNotFoundError,
     PlanLimitError,
 )
-from app.utils.phone import normalize_phone
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 log = structlog.get_logger()

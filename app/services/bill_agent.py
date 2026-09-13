@@ -392,7 +392,9 @@ async def _handle_order_button(
         return None
     number, action = m.group(1).upper(), m.group(2).lower()
     try:
-        order = await get_order(db, number)
+        # Sirf maujoodgi ki jaanch — ye call OrderNotFoundError uthata hai.
+        # Nateeja aage kahin use nahi hota, isliye bindna hi nahi.
+        await get_order(db, number)
     except OrderNotFoundError:
         return get_message("order_not_found_staff", order_number=number)
 
@@ -2000,7 +2002,6 @@ async def _handle_pickup_exchange(
     payload = btn.group(1) if btn else text
 
     if btn and (_PICKUP_YES_RE.search(payload) or _PICKUP_NO_RE.search(payload)):
-        code = None
         m_code = re.search(r"(T-\d+)", payload)
         if m_code:
             task = await task_service.get_by_code(db, m_code.group(1))

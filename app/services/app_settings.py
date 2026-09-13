@@ -106,7 +106,10 @@ DEFAULTS: dict[str, Any] = {
     "shop_address": "",
     "shop_gstin": "",
     "shop_contact_phone": "",
-    "invoice_footer": "Thank you for choosing Kwik Klin! 🙏",
+    # Neutral default: ye har NAYE tenant ko milta hai. Pehle yahan
+    # "Kwik Klin" likha tha, yaani koi bhi nayi dukaan sign-up karti
+    # aur uske bill ke neeche kisi aur ka naam chhapta.
+    "invoice_footer": "Thank you for your business! 🙏",
     "upi_vpa": "",                    # scan-to-pay on bills when set
     "upi_payee": "",
     "gst_percent": 18,

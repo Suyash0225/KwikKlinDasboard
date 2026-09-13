@@ -10,7 +10,21 @@ from app.config import settings
 from app.database import async_session_factory
 from app.services import tenant_context
 
-AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
+# /control ka master key. VENDOR_API_KEY set ho to ADMIN_API_KEY wahan
+# chalta hi NAHI (orders.vendor_master_key ka jaan-boojh kar rakha gaya
+# niyam). Ye test seedha ADMIN_API_KEY bhejte the, isliye purane
+# ek-dukaan wale .env par pass hote the aur alag vendor key wale par
+# 401. Wahi helper use karo jo server use karta hai — dono soorat mein
+# sahi.
+from app.routers.orders import vendor_master_key
+
+AUTH = {"X-API-Key": vendor_master_key()}
+
+# Dukaan ka apna key — /orders aur /admin/api ke liye. /control ka master
+# key isse alag hota hai (upar AUTH), aur dono ko ek maan lena hi wo
+# galti thi jo in tests ko 401 de rahi thi.
+SHOP_AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
+
 
 
 # ------------------------------------------------------- super-admin panel --
@@ -124,7 +138,7 @@ async def test_per_tenant_rate_limit_and_isolation(client, monkeypatch) -> None:
     # home tenant: 5 allowed, 6th blocked
     codes = []
     for _ in range(6):
-        codes.append((await client.get("/admin/api/rates", headers=AUTH)).status_code)
+        codes.append((await client.get("/admin/api/rates", headers=SHOP_AUTH)).status_code)
     assert codes[:5] == [200] * 5 and codes[5] == 429
 
     # tenant B (apna bucket): abhi bhi 200

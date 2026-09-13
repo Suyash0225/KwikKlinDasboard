@@ -579,8 +579,13 @@ const kpi = (lbl, val, sub, click, icon = "📊", tint = "blue") =>
 
 function renderChips() {
   const by = DASH.counts.by_status || {};
-  const chips = [["", `All active <b>${DASH.counts.active_total}</b>`]]
-    .concat(STATUS_SEQ.filter((s) => s !== "DELIVERED").map((s) => [s, `${statusName(s)} <b>${by[s] || 0}</b>`]));
+  // Ginti .cnt pill mein — <b> ke saath koi jagah nahi banti aur "Washing0"
+  // ek shabd jaisa padha jaata hai. .cnt ka CSS pehle se maujood tha (uske
+  // upar likha comment bhi), sirf yahan lagaya nahi gaya tha.
+  const cnt = (n) => `<span class="cnt">${n}</span>`;
+  const chips = [["", `All active${cnt(DASH.counts.active_total)}`]]
+    .concat(STATUS_SEQ.filter((s) => s !== "DELIVERED")
+      .map((s) => [s, `${statusName(s)}${cnt(by[s] || 0)}`]));
   $("dash-chips").innerHTML = chips
     .map(([v, h]) => `<span class="chip ${dashFilter.status === v ? "on" : ""}" onclick="dashFilter.status='${v}';dashFilter.page=1;renderChips();renderOrders()">${h}</span>`)
     .join("");
@@ -812,7 +817,7 @@ function renderLines() {
           onchange="LINES[${i}].rate=parseFloat(this.value)||0;calcBill()"></div>
       <div class="lf lf-amt"><span class="ll">Amount</span>
         <div class="money" id="nb-amt-${i}">${money(l.amount)}</div></div>
-      <button class="btn sm danger del" aria-label="Remove item" title="Remove item" onclick="delLine(${i})">✕</button>
+      <button class="btn sm ghost danger-ic del" aria-label="Remove item" title="Remove item" onclick="delLine(${i})">✕</button>
     </div>`).join("");
   calcBill();
 }
@@ -1033,18 +1038,28 @@ function waShareUrl(phone, text) {
 let SHARE_TEXT = "";
 
 /* Deep-link wala share — bina kisi API ke, hamesha kaam karta hai. */
-function shareBillModal(o, note) {
-  SHARE_TEXT = receiptText(o);
-  const who = displayName(o.customer_name, o.customer_phone);
-  openModal(`<h3>Share bill ${esc(o.order_number)}</h3>
-    <p class="muted">${note ? esc(note) : `WhatsApp khulega, bill pehle se likha hua — bas Send dabana hai. To: ${esc(who)}`}</p>
+/* Kisi bhi text ko WhatsApp par bhejne ka fallback — bill ho ya reminder.
+   Ek hi modal, kyunki do banane ka matlab hai ek din unme se ek theek
+   karna bhool jaana. */
+function shareTextModal(phone, text, title, note) {
+  SHARE_TEXT = text;
+  openModal(`<h3>${esc(title)}</h3>
+    <p class="muted">${esc(note)}</p>
     <pre class="sharetext">${esc(SHARE_TEXT)}</pre>
     <div class="btnrow" style="margin-top:12px">
-      <a class="btn" href="${esc(waShareUrl(o.customer_phone, SHARE_TEXT))}" target="_blank" rel="noopener"
-         onclick="closeModal()">📲 Open WhatsApp</a>
-      <button class="btn ghost" onclick="copyShareText()">📋 Copy text</button>
+      <a class="btn" href="${esc(waShareUrl(phone, SHARE_TEXT))}" target="_blank" rel="noopener"
+         onclick="closeModal()">Open WhatsApp</a>
+      <button class="btn ghost" onclick="copyShareText()">Copy text</button>
       <button class="btn ghost" onclick="closeModal()">Close</button>
     </div>`);
+}
+
+function shareBillModal(o, note) {
+  const who = displayName(o.customer_name, o.customer_phone);
+  shareTextModal(
+    o.customer_phone, receiptText(o), `Share bill ${o.order_number}`,
+    note || `WhatsApp khulega, bill pehle se likha hua — bas Send dabana hai. To: ${who}`,
+  );
 }
 async function copyShareText() {
   try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied — paste it in WhatsApp"); }
@@ -1402,7 +1417,7 @@ function renderCustomers() {
       <td class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</td>
       <td class="muted">${c.last_message_at ? fmtWhen(c.last_message_at) : "—"}</td>
       <td><div class="act">
-        ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}','${c.outstanding}')">Remind</button>` : ""}
+        ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
         <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">💬</button>
         <button class="btn sm ghost" onclick="editCustomerModal('${c.phone}')">Edit</button>
         <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button>
@@ -1412,7 +1427,7 @@ function renderCustomers() {
       <div class="rowcard"><div class="r1"><b>${esc(displayName(c.name, c.phone))}</b><span class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</span></div>
       <div class="kv"><span>${c.phone}</span><span>${c.total_orders} orders</span></div>
       <div class="kv"><span>Business ${money(c.business)}</span><span>Paid ${money(c.paid)}</span></div>
-      <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}','${c.outstanding}')">Remind</button>` : ""}
+      <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
       <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">Chat</button>
       <button class="btn sm ghost" onclick="editCustomerModal('${c.phone}')">Edit</button>
       <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button></div></div>`).join("")}</div>${moreBtn}`;
@@ -1470,11 +1485,20 @@ function deleteCustomerModal(phone) {
     closeModal(); toast(`${label} deleted`); loadCustomers(); loadDashboard();
   });
 }
-async function sendReminder(phone, amt) {
+async function sendReminder(phone) {
+  // Text SERVER banata hai. Browser ke paas sirf kul rakam hoti hai —
+  // kaunse bill, kis din ke, kitne ke, aur dukaan ka asli naam, ye sab
+  // wahan hai. Yahan banane ki koshish mein hi "— Kwik Klin" har dukaan
+  // ke message mein chipak gaya tha.
+  let r;
   try {
-    await api("/admin/api/inbox/send", { method: "POST", body: { phone, text: `Namaste! Aapka ₹${amt} baaki hai. Jab suvidha ho, de dijiyega 🙏 — Kwik Klin` } });
-    toast(T.reminderSent);
-  } catch (e) { toast(e.message, true); }
+    r = await api("/admin/api/customers/reminder", { method: "POST", body: { phone } });
+  } catch (e) { toast(e.message, true); return; }
+
+  if (r.sent) { toast(T.reminderSent); return; }
+  // API se nahi gaya — apne phone ka WhatsApp hamesha hai.
+  shareTextModal(r.phone, r.text, "Payment reminder",
+    `WhatsApp khulega, message pehle se likha hua — bas Send dabana hai.`);
 }
 
 /* Media ka URL. Login session ho to cookie hi kaafi hai; sirf purane
@@ -2567,7 +2591,9 @@ async function loadSettings() {
     $("set-washer").innerHTML = staffOpts(s.default_washer_phone);
     $("set-delivery").innerHTML = staffOpts(s.default_delivery_phone);
     // business profile
-    $("bp-name").value = "Kwik Klin";
+    // Tenant se, hardcoded nahi — ye har dukaan ka apna naam hai.
+    $("bp-name").value =
+      (SIGNED_IN_AS && SIGNED_IN_AS.tenant && SIGNED_IN_AS.tenant.shop_name) || "";
     $("bp-gstin").value = s.shop_gstin || "";
     $("bp-phone").value = s.shop_contact_phone || "";
     $("bp-hours").value = s.shop_hours || "";

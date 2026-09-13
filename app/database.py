@@ -28,7 +28,10 @@ logger = logging.getLogger(__name__)
 # pool_pre_ping: test connections before handing them out, so a Postgres
 # restart doesn't surface as a mid-request crash.
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    # App NOSUPERUSER role se judti hai jab wo maujood ho. Migrations
+    # (alembic) hamesha DATABASE_URL — owner — se chalti hain, kyunki DDL
+    # ke liye wahi chahiye.
+    settings.APP_DATABASE_URL or settings.DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
     # 10 steady + 20 burst connections: enough for a busy inbox plus the

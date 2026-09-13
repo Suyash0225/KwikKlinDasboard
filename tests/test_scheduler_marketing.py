@@ -115,7 +115,9 @@ async def test_payment_reminders_polite_then_firm(sched_sent, sent) -> None:
         await s.commit()
     await run_payment_reminders()
     texts = [c["text"] for c in sched_sent]
-    assert any("kaafi dino" in t for t in texts)
+    # Reminder ab angrezi mein jaate hain (dashboard/panel/scheduler teeno
+    # ek bhasha), isliye "kaafi dino" ki jagah uska en variant.
+    assert any("pending for a while" in t for t in texts)
     admin_msgs = [c for c in sched_sent if c["to"] != PHONE and c["to"] != TEST_WASHER_PHONE]
     assert any("udhaar" in (c["text"] or "").lower() for c in admin_msgs)
 

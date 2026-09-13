@@ -328,7 +328,7 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
 
         from app.models import Order, OrderStatus, Staff
         from app.services import app_settings
-        from app.services.order_service import ACTIVE_STATUSES, create_order, update_status
+        from app.services.order_service import create_order, update_status
 
         # duplicate guard: an active pre-wash order already exists -> don't stack
         existing = (
@@ -395,7 +395,6 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
 async def _notify_admin_fyi(db: AsyncSession, customer: Customer, note: str) -> None:
     """One-line 'maine ye sambhal liya' to the owner. Never raises."""
     try:
-        from app.config import settings as app_config
         from app.services.whatsapp import SendError, send_message
 
         who = customer.name or customer.phone

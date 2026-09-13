@@ -13,7 +13,21 @@ from app.database import async_session_factory
 from app.models.tenant import TENANT_PAST_DUE, TENANT_TRIAL, Tenant
 from app.services import billing, plans, tenant_context
 
-AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
+# /control ka master key. VENDOR_API_KEY set ho to ADMIN_API_KEY wahan
+# chalta hi NAHI (orders.vendor_master_key ka jaan-boojh kar rakha gaya
+# niyam). Ye test seedha ADMIN_API_KEY bhejte the, isliye purane
+# ek-dukaan wale .env par pass hote the aur alag vendor key wale par
+# 401. Wahi helper use karo jo server use karta hai — dono soorat mein
+# sahi.
+from app.routers.orders import vendor_master_key
+
+AUTH = {"X-API-Key": vendor_master_key()}
+
+# Dukaan ka apna key — /orders aur /admin/api ke liye. /control ka master
+# key isse alag hota hai (upar AUTH), aur dono ko ek maan lena hi wo
+# galti thi jo in tests ko 401 de rahi thi.
+SHOP_AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
+
 SLUG = "test-panel-v2"
 PHONE = "+919999900051"
 EMAIL = "panel-v2@test.local"
@@ -230,7 +244,7 @@ async def test_order_monthly_limit_enforced(client) -> None:
     orig = plans.PLANS["growth"]
     plans.PLANS["growth"] = dataclasses.replace(orig, max_orders_month=0)
     try:
-        r = await client.post("/orders", headers=AUTH, json={
+        r = await client.post("/orders", headers=SHOP_AUTH, json={
             "customer_phone": "+919999900054",
             "items": [{"type": "shirt", "qty": 1}],
         })

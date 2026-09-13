@@ -14,9 +14,15 @@
   --bad: #ff8098; --bad-bg: #3a1b26;
   --accent: #7cbaff; --accent-ink: #0f1420;
   --focus: #ffd166;
-  /* geometry */
-  --r-sm: 7px; --r: 10px; --r-lg: 14px;
-  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 22px;
+  /* Vendor panel DARK hai, aur uske status rang dark background ke liye
+     tune kiye gaye hain (#46e39b jaisa bright green light page par nahi
+     chalta). Isliye yahan tokens.css ke LIGHT surface aur status rang
+     nahi aate — sirf geometry, spacing aur type, jinka theme se koi
+     lena-dena nahi. Dark theme ke tokens alag kaam hai. */
+  /* geometry — tokens.css se */
+  --r: var(--r-md);   /* --r-lg tokens.css se, wahi 14px */
+  --r-sm: 7px;
+  --sp-5: 22px;
   --shadow: 0 8px 28px rgba(0,0,0,.38);
   --fs-xs: 11.5px; --fs-sm: 12.5px; --fs: 14px; --fs-lg: 15px; --fs-xl: 19px;
 }

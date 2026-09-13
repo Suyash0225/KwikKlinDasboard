@@ -19,8 +19,12 @@ from app.models.base import Base, TenantScoped
 class Rate(Base, TenantScoped):
     __tablename__ = "rate_card"
     __table_args__ = (
-        # one price per service+garment combination
-        UniqueConstraint("service", "garment", name="uq_service_garment"),
+        # Ek daam per service+garment — PER DUKAAN. tenant_id ke bina ye
+        # constraint poore platform par ek hi "Shirt" ki ijaazat deta tha,
+        # yaani doosri dukaan apna rate card bana hi nahi sakti thi.
+        UniqueConstraint(
+            "tenant_id", "service", "garment", name="uq_rate_tenant_service_garment"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
