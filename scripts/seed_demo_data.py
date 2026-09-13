@@ -4,9 +4,19 @@ dikhti hai" dekhne ke liye. Sirf dev/staging par.
 Har row par `KK-DEMO-` / `TD-` ka nishaan hai, isliye --clear se poora
 kachra ek command mein nikal jaata hai. Asli data kabhi nahi chhuta.
 
+CHETAVNI — TEST SUITE ISI DB PAR CHALTI HAI:
+
+Demo data bharne ke baad `pytest` mein lagbhag 10 test fail honge. Wo
+tootey nahi hain: kai test ginti par asserts karte hain ("customers
+endpoint N lautaye", "standup mein itne pending"), aur 6000 nakli rows
+un gintiyon ko badal dete hain. Testing se pehle `--clear` chala lo,
+phir baseline wapas aa jaata hai. (Ye khud jaanch kar likha hai:
+clear karte hi wo dason failures gayab ho jaate hain.)
+
 Run:
     python -m scripts.seed_demo_data            # 400 orders, 120 tasks
-    python -m scripts.seed_demo_data 1200 300   # apni ginti
+    python -m scripts.seed_demo_data 1200 300   # orders, tasks
+    python -m scripts.seed_demo_data 1000 500 1000   # orders, tasks, customers
     python -m scripts.seed_demo_data --clear    # sab hataao
 """
 
@@ -62,10 +72,11 @@ async def clear() -> None:
     print("demo data cleared")
 
 
-async def seed(n_orders: int, n_tasks: int) -> None:
+async def seed(n_orders: int, n_tasks: int, n_cust: int = 0) -> None:
     from scripts._bootstrap import prime
 
     await prime()   # warna sab rows tenant_id=NULL ke saath jayengi
+    n_cust = n_cust or max(20, n_orders // 4)
     async with async_session_factory() as db:
         staff = (await db.execute(select(Staff))).scalars().all()
         if not staff:
@@ -73,8 +84,11 @@ async def seed(n_orders: int, n_tasks: int) -> None:
         deliv = next((s for s in staff if s.role is StaffRole.DELIVERY), None)
         wash = next((s for s in staff if s.role is StaffRole.WASHER), None)
 
+        # Customers ki apni ginti. Pehle ye n_orders//4 thi, yaani 1000
+        # orders maangne par sirf 250 customers milte the — aur customer
+        # list ki pagination/search us paimane par test hi nahi hoti thi.
         custs = []
-        for i in range(max(20, n_orders // 4)):
+        for i in range(n_cust):
             c = Customer(
                 phone=f"{PHONE_TAG}{i:08d}",
                 name=f"{random.choice(FIRST)} {random.choice(LAST)}",
@@ -146,7 +160,8 @@ def main() -> None:
         return
     n_orders = int(args[0]) if args else 400
     n_tasks = int(args[1]) if len(args) > 1 else 120
-    asyncio.run(seed(n_orders, n_tasks))
+    n_cust = int(args[2]) if len(args) > 2 else 0     # 0 = orders se andaza
+    asyncio.run(seed(n_orders, n_tasks, n_cust))
 
 
 if __name__ == "__main__":

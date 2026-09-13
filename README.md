@@ -23,6 +23,22 @@ kisi ishaare ke. Browser mein app khuli dikhti rahegi jabki kuch chal hi
 nahi raha hoga. Isliye jab bhi lage "code badla par kuch nahi hua", pehle
 dekho ki `READY` likha aaya tha ya nahi.
 
+## Nakli data (dev/staging only)
+
+```bash
+python -m scripts.seed_demo_data 1000 500 1000   # home dukaan: orders, tasks, customers
+python -m scripts.seed_demo_shops 5 1000 1000 500 # 5 aur poori dukaanein (multi-tenant test)
+python -m scripts.seed_demo_data --clear          # aur
+python -m scripts.seed_demo_shops --clear         # dono saaf
+```
+
+Demo dukaanon ka login: `owner1@demo.test` … `owner5@demo.test`, password
+`demo12345`.
+
+Testing se pehle dono `--clear` chala lo. Test suite isi DB par chalti hai
+aur kai test gintiyon par assert karte hain, isliye nakli rows unhe fail
+kara dete hain.
+
 ## Setup (Windows)
 
 ```bat
