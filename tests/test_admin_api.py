@@ -139,12 +139,12 @@ async def test_reminder_lists_the_bills_and_signs_the_right_shop(client, monkeyp
     text = sends[0]["text"]
     # Dukaan ka naam SABSE UPAR, letterhead ki tarah — signature ki tarah
     # aakhri line mein daba hua nahi.
-    assert text.splitlines()[0].strip(), "pehli line shop ka naam ho"
-    assert "Namaste API Grahak," in text
-    assert "2 bill ka bhugtaan abhi baaki hai" in text
+    assert "Dear API Grahak," in text
+    assert "Payment is pending for 2 of your bills:" in text
     assert "\u20b9540" in text and "\u20b945" in text, "har bill ka apna amount"
-    assert "Kul rakam: \u20b9585" in text
-    assert "Dhanyavaad." in text
+    assert "Total due: \u20b9585" in text
+    # Shop ka naam sign-off mein, aakhri line — owner ka chuna hua roop
+    assert text.rstrip().endswith("Thank you,\nKwik Klin"), text[-60:]
     # Paise ka hisaab paison tak nahi — "630.00" machine ka likha lagta hai
     assert ".00" not in text
     # Aur kisi aur dukaan ka naam kabhi nahi
@@ -207,6 +207,7 @@ async def test_reminder_uses_the_upi_id_from_settings(client, monkeypatch) -> No
     )
     assert r.status_code == 200, r.text
     assert "UPI: testshop@okaxis (Test Shop)" in sends[0]["text"]
+    assert "Or pay at the shop." in sends[0]["text"]
 
     # UPI set na ho to us line ki jagah dukaan par bhugtaan wali baat
     async with async_session_factory() as db:
@@ -216,4 +217,4 @@ async def test_reminder_uses_the_upi_id_from_settings(client, monkeypatch) -> No
     sends.clear()
     await client.post("/admin/api/customers/reminder", json={"phone": PHONE}, headers=AUTH)
     assert "UPI:" not in sends[0]["text"]
-    assert "dukaan par" in sends[0]["text"]
+    assert "Payment can be made at the shop." in sends[0]["text"]

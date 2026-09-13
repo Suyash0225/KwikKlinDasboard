@@ -377,16 +377,11 @@ async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)
     shop = (tenant.shop_name if tenant and tenant.shop_name else "").strip()
     total = sum((Decimal(str(o.total_amount)) - Decimal(str(o.amount_paid or 0))) for o in rows)
 
-    # Dukaan ka naam sabse upar, letterhead ki tarah — grahak ko pehli
-    # nazar mein pata chale ki kiska bakaya hai. Pehle wo aakhri line
-    # mein dabaa hua tha ("— Kwik Klin") jaise koi signature ho.
     who = (cust.name or "").strip()
-    lines = [shop or "Laundry", ""]
-    lines.append(f"Namaste {who}," if who else "Namaste,")
-    lines.append("")
+    lines = [f"Dear {who}," if who else "Dear Customer,", ""]
     lines.append(
-        f"Aapke {len(rows)} bill ka bhugtaan abhi baaki hai:" if len(rows) > 1
-        else "Aapke ek bill ka bhugtaan abhi baaki hai:"
+        f"Payment is pending for {len(rows)} of your bills:" if len(rows) > 1
+        else "Payment is pending for your bill:"
     )
     lines.append("")
     # Lambi list WhatsApp par deewar ban jaati hai. Chhe dikhao, baaki gino.
@@ -395,9 +390,9 @@ async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)
         day = o.created_at.strftime("%d %b %Y") if o.created_at else "-"
         lines.append(f"{o.order_number} · {day} · {rupees(due)}")
     if len(rows) > 6:
-        lines.append(f"...aur {len(rows) - 6} bill")
+        lines.append(f"...and {len(rows) - 6} more")
 
-    lines += ["", f"Kul rakam: {rupees(total)}", ""]
+    lines += ["", f"Total due: {rupees(total)}", ""]
 
     # UPI Settings -> Business Profile se aata hai (upi_vpa / upi_payee) —
     # wahi do keys jo bill ke receipt par chhapti hain. Number saamne ho to
@@ -407,10 +402,13 @@ async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)
     payee = (await app_settings.get(db, "upi_payee") or "").strip()
     if upi:
         lines.append(f"UPI: {upi}" + (f" ({payee})" if payee else ""))
-        lines.append("Ya dukaan par bhugtaan kar sakte hain.")
+        lines.append("Or pay at the shop.")
     else:
-        lines.append("Bhugtaan dukaan par kiya ja sakta hai.")
-    lines += ["", "Dhanyavaad."]
+        lines.append("Payment can be made at the shop.")
+
+    # Dukaan ka naam sign-off mein. Ye owner ka chuna hua roop hai — ek
+    # business letter ki tarah, jahan naam neeche aata hai.
+    lines += ["", "Please pay as soon as possible.", "", "Thank you,", shop or "Laundry"]
 
     text = "\n".join(lines)
 
