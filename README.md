@@ -4,7 +4,19 @@ WhatsApp-based order management for a laundry shop in Varanasi. Customers,
 washer, and delivery staff all interact over WhatsApp; the bot coordinates.
 Full context: [PROJECT_SPEC.md](PROJECT_SPEC.md).
 
-## Quick start (Linux / macOS / Codespaces)
+## Codespaces
+
+Naya Codespace khulte hi taiyar hota hai (`.devcontainer/`): dependencies,
+Postgres, migrations, `kk_app` DB role aur rate card — sab apne aap. Bas:
+
+```bash
+./run.sh
+```
+
+Purana Codespace wapas kholne ke liye: repo par **Code → Codespaces**, ya
+`github.com/codespaces`. Us par setup dobara nahi chalta — sirf `./run.sh`.
+
+## Quick start (Linux / macOS)
 
 ```bash
 pip install -r requirements.txt
