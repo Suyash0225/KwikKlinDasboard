@@ -355,7 +355,9 @@ async def validate_coupon(
     db, code: str, customer_id, order_total: Decimal
 ) -> tuple[Coupon | None, Decimal, str]:
     """Returns (coupon, discount, error). error='' when valid."""
-    coupon = await db.get(Coupon, code.strip().upper())
+    from app.services.marketing import get_coupon
+
+    coupon = await get_coupon(db, code)
     if coupon is None or not coupon.active:
         return None, Decimal("0"), "coupon nahi mila ya band hai"
     today = date.today()
@@ -399,6 +401,11 @@ async def validate_coupon(
 async def redeem_coupon(db, coupon: Coupon, order: Order, discount: Decimal) -> None:
     db.add(
         CouponRedemption(
+            # CouponRedemption TenantScoped NAHI hai, isliye before_flush
+            # ise tenant_id nahi lagata. Composite FK (tenant_id, code) ke
+            # saath NULL ko Postgres chalne deta hai (MATCH SIMPLE), yaani
+            # integrity chup-chaap gayab ho jaati. Coupon se hi le lo.
+            tenant_id=coupon.tenant_id,
             coupon_code=coupon.code,
             order_id=order.id,
             customer_id=order.customer_id,

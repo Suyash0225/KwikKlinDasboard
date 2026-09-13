@@ -459,3 +459,20 @@ async def track_reply(db: AsyncSession, customer_id) -> None:
     if rec is not None:
         rec.status = "replied"
         await db.commit()
+
+
+async def get_coupon(db, code: str):
+    """Code se coupon — is dukaan ka.
+
+    Pehle ye `db.get(Coupon, code)` tha, kyunki code hi primary key thi.
+    Ab code sirf is dukaan mein unique hai, isliye SELECT — aur uspar RLS
+    aur ORM ka tenant filter apne aap lagta hai, to doosri dukaan ka coupon
+    yahan se kabhi nahi milta.
+    """
+    from sqlalchemy import select as _select
+
+    from app.models import Coupon as _C
+
+    return (
+        await db.execute(_select(_C).where(_C.code == code.strip().upper()))
+    ).scalar_one_or_none()

@@ -187,7 +187,9 @@ async def create_coupon(body: CouponIn, db: AsyncSession = Depends(get_db)) -> d
     from decimal import Decimal as D
 
     code = body.code.strip().upper()
-    if await db.get(Coupon, code):
+    from app.services.marketing import get_coupon
+
+    if await get_coupon(db, code):
         raise HTTPException(status_code=409, detail="coupon code already exists")
     db.add(
         Coupon(
@@ -203,7 +205,9 @@ async def create_coupon(body: CouponIn, db: AsyncSession = Depends(get_db)) -> d
 
 @router.post("/coupons/{code}/toggle", dependencies=[Depends(require_feature("campaigns"))])
 async def toggle_coupon(code: str, db: AsyncSession = Depends(get_db)) -> dict:
-    c = await db.get(Coupon, code.upper())
+    from app.services.marketing import get_coupon
+
+    c = await get_coupon(db, code)
     if c is None:
         raise HTTPException(status_code=404, detail="coupon not found")
     c.active = not c.active
