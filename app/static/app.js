@@ -1038,18 +1038,28 @@ function waShareUrl(phone, text) {
 let SHARE_TEXT = "";
 
 /* Deep-link wala share — bina kisi API ke, hamesha kaam karta hai. */
-function shareBillModal(o, note) {
-  SHARE_TEXT = receiptText(o);
-  const who = displayName(o.customer_name, o.customer_phone);
-  openModal(`<h3>Share bill ${esc(o.order_number)}</h3>
-    <p class="muted">${note ? esc(note) : `WhatsApp khulega, bill pehle se likha hua — bas Send dabana hai. To: ${esc(who)}`}</p>
+/* Kisi bhi text ko WhatsApp par bhejne ka fallback — bill ho ya reminder.
+   Ek hi modal, kyunki do banane ka matlab hai ek din unme se ek theek
+   karna bhool jaana. */
+function shareTextModal(phone, text, title, note) {
+  SHARE_TEXT = text;
+  openModal(`<h3>${esc(title)}</h3>
+    <p class="muted">${esc(note)}</p>
     <pre class="sharetext">${esc(SHARE_TEXT)}</pre>
     <div class="btnrow" style="margin-top:12px">
-      <a class="btn" href="${esc(waShareUrl(o.customer_phone, SHARE_TEXT))}" target="_blank" rel="noopener"
-         onclick="closeModal()">📲 Open WhatsApp</a>
-      <button class="btn ghost" onclick="copyShareText()">📋 Copy text</button>
+      <a class="btn" href="${esc(waShareUrl(phone, SHARE_TEXT))}" target="_blank" rel="noopener"
+         onclick="closeModal()">Open WhatsApp</a>
+      <button class="btn ghost" onclick="copyShareText()">Copy text</button>
       <button class="btn ghost" onclick="closeModal()">Close</button>
     </div>`);
+}
+
+function shareBillModal(o, note) {
+  const who = displayName(o.customer_name, o.customer_phone);
+  shareTextModal(
+    o.customer_phone, receiptText(o), `Share bill ${o.order_number}`,
+    note || `WhatsApp khulega, bill pehle se likha hua — bas Send dabana hai. To: ${who}`,
+  );
 }
 async function copyShareText() {
   try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied — paste it in WhatsApp"); }
@@ -1476,10 +1486,25 @@ function deleteCustomerModal(phone) {
   });
 }
 async function sendReminder(phone, amt) {
+  // Dukaan ka ASLI naam. Pehle yahan "Kwik Klin" likha hua tha — ye
+  // multi-tenant app hai, yaani har doosri dukaan ke grahak ko bhi Kwik
+  // Klin ke naam se reminder jaata tha. shop_name /api/me se pehle se
+  // aa raha hai, bas istemal nahi ho raha tha.
+  const shop = (SIGNED_IN_AS && SIGNED_IN_AS.tenant && SIGNED_IN_AS.tenant.shop_name) || "your laundry";
+  const text = `Namaste! Aapka ₹${amt} baaki hai. Jab suvidha ho, de dijiyega 🙏 — ${shop}`;
+  const note = `WhatsApp khulega, message pehle se likha hua — bas Send dabana hai.`;
+
+  // Wahi do-rasta jo bill bhejne mein pehle se hai: API ho to API, warna
+  // apne phone ka WhatsApp. Reminder ko ye kabhi diya hi nahi gaya tha,
+  // isliye WhatsApp connect na hone par button sirf 502 dikha kar ruk
+  // jaata tha — jabki paisa maangna wo kaam hai jo rukna nahi chahiye.
+  if (!waConnected()) { shareTextModal(phone, text, "Payment reminder", note); return; }
   try {
-    await api("/admin/api/inbox/send", { method: "POST", body: { phone, text: `Namaste! Aapka ₹${amt} baaki hai. Jab suvidha ho, de dijiyega 🙏 — Kwik Klin` } });
+    await api("/admin/api/inbox/send", { method: "POST", body: { phone, text } });
     toast(T.reminderSent);
-  } catch (e) { toast(e.message, true); }
+  } catch (e) {
+    shareTextModal(phone, text, "Payment reminder", `${e.message} — apne phone se bhej dijiye.`);
+  }
 }
 
 /* Media ka URL. Login session ho to cookie hi kaafi hai; sirf purane
@@ -2572,7 +2597,9 @@ async function loadSettings() {
     $("set-washer").innerHTML = staffOpts(s.default_washer_phone);
     $("set-delivery").innerHTML = staffOpts(s.default_delivery_phone);
     // business profile
-    $("bp-name").value = "Kwik Klin";
+    // Tenant se, hardcoded nahi — ye har dukaan ka apna naam hai.
+    $("bp-name").value =
+      (SIGNED_IN_AS && SIGNED_IN_AS.tenant && SIGNED_IN_AS.tenant.shop_name) || "";
     $("bp-gstin").value = s.shop_gstin || "";
     $("bp-phone").value = s.shop_contact_phone || "";
     $("bp-hours").value = s.shop_hours || "";
