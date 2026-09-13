@@ -217,3 +217,22 @@ th[aria-sort="descending"] button.sort::after { content: " ↓"; opacity: 1; }
   .ws-tiles { grid-template-columns: 1fr 1fr; }
   .tabs { padding: 0 var(--sp-2); }
 }
+
+/* ---- WhatsApp health ---------------------------------------------------
+   Har check ek row: haalat ka nishaan, naam, aur wajah. Rang akela kaam
+   nahi karta — har nishaan ke saath uska matlab bhi likha hota hai. */
+.wa-row { display: flex; gap: .75rem; align-items: flex-start;
+  padding: .7rem 0; border-bottom: 1px solid var(--line); }
+.wa-row:last-child { border-bottom: 0; }
+.wa-dot { flex: 0 0 auto; width: 1.4rem; height: 1.4rem; border-radius: 50%;
+  display: grid; place-items: center; font-size: .8rem; font-weight: 700;
+  margin-top: .1rem; }
+.wa-ok   { background: var(--ok-bg);   color: var(--ok); }
+.wa-bad  { background: var(--bad-bg);  color: var(--bad); }
+.wa-warn { background: var(--warn-bg); color: var(--warn); }
+.wa-body { min-width: 0; }
+.wa-label { font-weight: 600; }
+.wa-detail { font-size: .85rem; color: var(--mut); word-break: break-word;
+  margin-top: .15rem; }
+.wa-note { font-size: .85rem; color: var(--mut); margin-top: 1rem;
+  padding-top: .8rem; border-top: 1px solid var(--line); }

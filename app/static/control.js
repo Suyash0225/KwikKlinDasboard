@@ -1293,6 +1293,7 @@ function createKeyModal() {
 const COMMANDS = [
   { id: "add", label: "Add tenant", hint: "create", run: addTenantModal, need: "write" },
   { id: "backup", label: "Run backup now", hint: "job", run: () => runBackup(), need: "write" },
+  { id: "wa", label: "Check WhatsApp health", hint: "diagnose", run: () => whatsappHealthModal() },
   { id: "sweep", label: "Run subscription sweep + dunning", hint: "job", run: () => runSweep(), need: "write" },
   { id: "key", label: "Create admin key", hint: "security", run: createKeyModal, need: "danger" },
   { id: "csv", label: "Export tenants as CSV", hint: "export", run: () => exportTenantsCsv() },
@@ -1458,6 +1459,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("btn-add").addEventListener("click", addTenantModal);
   $("btn-backup").addEventListener("click", runBackup);
   $("btn-sweep").addEventListener("click", runSweep);
+  $("btn-wa").addEventListener("click", whatsappHealthModal);
   $("btn-palette").addEventListener("click", openPalette);
   $("btn-new-key").addEventListener("click", createKeyModal);
   $("btn-export-tenants").addEventListener("click", exportTenantsCsv);
@@ -1559,4 +1561,44 @@ async function fetchOrThrow(url, init) {
     throw new Error(d);
   }
   return r;
+}
+
+/* ---------- WhatsApp health -------------------------------------------
+   Chaar check ek jagah, kyunki "bot jawab nahi de raha" ki teen alag
+   wajah hoti hain aur teenon bahar se ek jaisi dikhti hain. Aakhri check
+   sabse kaam ka: upar sab hara ho aur "aakhri aaya message" kabhi na ho,
+   to gadbad aane wale raste mein hai, bhejne wale mein nahi. */
+const WA_MARK = { true: ["wa-ok", "✓"], false: ["wa-bad", "✕"], null: ["wa-warn", "?"] };
+
+async function whatsappHealthModal() {
+  openModal((sheet) => {
+    const box = el("div");
+    box.appendChild(el("p", "muted", "Meta se poochh rahe hain…"));
+    sheet.appendChild(box);
+    buttonRow(sheet, [{ label: "Band karo", onClick: closeModal }]);
+
+    api("/control/api/whatsapp/health").then((d) => {
+      box.replaceChildren();
+      for (const c of d.checks) {
+        const [cls, glyph] = WA_MARK[String(c.ok)];
+        const row = el("div", "wa-row");
+        const dot = el("span", `wa-dot ${cls}`, glyph);
+        /* Rang akela kaam nahi karta — screen reader ko bhi haalat pata chale. */
+        dot.setAttribute("role", "img");
+        dot.setAttribute("aria-label", c.ok === true ? "theek" : c.ok === false ? "gadbad" : "pata nahi");
+        const body = el("div", "wa-body");
+        body.appendChild(el("div", "wa-label", c.label));
+        body.appendChild(el("div", "wa-detail", c.detail));
+        row.appendChild(dot); row.appendChild(body);
+        box.appendChild(row);
+      }
+      const note = el("div", "wa-note");
+      note.textContent = d.ok
+        ? "Sab theek. Yaad rahe: 24 ghante se purane grahak ko sirf approved template ja sakta hai."
+        : "Upar jo laal hai, wahi pehle theek karo — neeche wale usi ki wajah se laal ho sakte hain.";
+      box.appendChild(note);
+    }).catch((e) => {
+      box.replaceChildren(el("p", "muted", `Check nahi ho paya: ${e.message || e}`));
+    });
+  }, "WhatsApp health");
 }
