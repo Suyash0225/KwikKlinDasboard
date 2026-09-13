@@ -12,7 +12,21 @@ from app.database import async_session_factory
 from app.models.tenant import Tenant, User
 from app.services import auth, kpis, plans, quota, tenant_context
 
-AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
+# /control ka master key. VENDOR_API_KEY set ho to ADMIN_API_KEY wahan
+# chalta hi NAHI (orders.vendor_master_key ka jaan-boojh kar rakha gaya
+# niyam). Ye test seedha ADMIN_API_KEY bhejte the, isliye purane
+# ek-dukaan wale .env par pass hote the aur alag vendor key wale par
+# 401. Wahi helper use karo jo server use karta hai — dono soorat mein
+# sahi.
+from app.routers.orders import vendor_master_key
+
+AUTH = {"X-API-Key": vendor_master_key()}
+
+# Dukaan ka apna key — /orders aur /admin/api ke liye. /control ka master
+# key isse alag hota hai (upar AUTH), aur dono ko ek maan lena hi wo
+# galti thi jo in tests ko 401 de rahi thi.
+SHOP_AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
+
 SLUG = "test-ops-b"
 EMAIL = "ops-b@test.local"
 
@@ -267,7 +281,7 @@ async def test_bill_with_task_can_be_deleted(client, sent) -> None:
     from tests.conftest import purge_phones
 
     phone = "+919999900023"
-    r = await client.post("/orders", headers=AUTH, json={
+    r = await client.post("/orders", headers=SHOP_AUTH, json={
         "customer_phone": phone, "customer_name": "Task Wala",
         "items": [{"type": "shirt", "qty": 1}], "total_amount": "50.00",
     })
@@ -283,7 +297,7 @@ async def test_bill_with_task_can_be_deleted(client, sent) -> None:
         db.add(Task(code=f"T-{num[-4:]}", title="pickup karo", order_id=oid))
         await db.commit()
 
-    r = await client.delete(f"/orders/{num}", headers=AUTH)
+    r = await client.delete(f"/orders/{num}", headers=SHOP_AUTH)
     assert r.status_code == 200, f"delete fail: {r.status_code} {r.text[:150]}"
 
     async with async_session_factory() as db:

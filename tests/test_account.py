@@ -23,7 +23,15 @@ from app.models import (
 from app.models.tenant import TENANT_PAST_DUE
 from app.services import auth, billing, plans
 
-AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
+# /control ka master key. VENDOR_API_KEY set ho to ADMIN_API_KEY wahan
+# chalta hi NAHI (orders.vendor_master_key ka jaan-boojh kar rakha gaya
+# niyam). Ye test seedha ADMIN_API_KEY bhejte the, isliye purane
+# ek-dukaan wale .env par pass hote the aur alag vendor key wale par
+# 401. Wahi helper use karo jo server use karta hai — dono soorat mein
+# sahi.
+from app.routers.orders import vendor_master_key
+
+AUTH = {"X-API-Key": vendor_master_key()}
 PHONE = "+919999900077"
 PHONE2 = "+919999900078"
 EMAIL = "shop-test@example.com"
