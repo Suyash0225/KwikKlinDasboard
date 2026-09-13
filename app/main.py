@@ -351,6 +351,109 @@ async def welcome_page():
 
 
 @app.get("/", include_in_schema=False)
+@app.get("/pay/{token}", include_in_schema=False)
+async def pay_page(token: str):
+    """Grahak ka ek-tap UPI page. Bina login ke — grahak hamara user nahi hai.
+
+    Kyun ye page beech mein hai: WhatsApp sirf http/https ko tap-able banata
+    hai. `upi://` seedha message mein daalo to wo plain text hi rehta hai —
+    lamba, badsurat, aur phir bhi tap nahi hota. Isliye message mein https
+    jaata hai aur upi:// yahan se fire hota hai.
+
+    Page par teen cheezein, teenon zaroori:
+      - auto-redirect (Android par yahi asli rasta hai)
+      - ek bada button, agar auto na chale ya desktop par khule
+      - VPA text mein, taaki UPI app na khule to bhi paisa bheja ja sake
+        (DuckDNS free hai, aur iOS par deep link ka bharosa kam hai)
+
+    Token mein sirf dukaan aur amount hai. Link forward ho sakta hai, isliye
+    is page par grahak ka naam, phone ya order number kabhi nahi.
+    """
+    from fastapi.responses import Response as _Resp
+
+    from app.database import async_session_factory
+    from app.models.tenant import Tenant
+    from app.services import app_settings, pay_link, tenant_context
+
+    def _fail() -> _Resp:
+        # Galat, chhera hua, expire — sab ek jaisa 404. Farq batana sirf
+        # chhedne wale ke kaam aata hai.
+        return _Resp(
+            content="<!doctype html><meta charset=utf-8><title>Link not valid</title>"
+                    "<p style='font:16px system-ui;padding:2rem'>This payment link is "
+                    "no longer valid. Please ask the shop for a new one.</p>",
+            media_type="text/html", status_code=404,
+            headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"},
+        )
+
+    parsed = pay_link.parse(token)
+    if parsed is None:
+        return _fail()
+    tenant_id, amount = parsed
+
+    async with async_session_factory() as db:
+        async with tenant_context.as_tenant(tenant_id):
+            tenant = await db.get(Tenant, tenant_id)
+            if tenant is None:
+                return _fail()
+            vpa = (await app_settings.get(db, "upi_vpa") or "").strip()
+            payee = (await app_settings.get(db, "upi_payee") or "").strip()
+
+    # VPA hataye jaane ke baad purane link zinda reh jaate hain. Bina VPA ke
+    # page par bhejna matlab grahak ko khali screen — isse 404 behtar hai.
+    if not vpa:
+        return _fail()
+
+    shop = tenant.shop_name or payee or "Shop"
+    uri = pay_link.upi_uri(vpa, payee or shop, amount)
+    amt = f"{amount:.2f}"
+
+    html = f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex"><title>Pay {_esc(shop)}</title>
+<style>
+ body{{font:16px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;
+   min-height:100vh;display:grid;place-items:center;background:#faf7f4;color:#1c1917}}
+ .card{{background:#fff;padding:2rem 1.5rem;border-radius:16px;text-align:center;
+   max-width:22rem;width:calc(100% - 2rem);box-shadow:0 1px 3px rgba(0,0,0,.08)}}
+ .amt{{font-size:2.5rem;font-weight:700;margin:.25rem 0 1.5rem}}
+ .btn{{display:block;background:#ea580c;color:#fff;text-decoration:none;
+   padding:.9rem;border-radius:10px;font-weight:600;font-size:1.05rem}}
+ .vpa{{margin-top:1.5rem;font-size:.9rem;color:#57534e;word-break:break-all}}
+ code{{background:#f5f5f4;padding:.2rem .4rem;border-radius:4px}}
+</style></head><body>
+<div class="card">
+  <div>Pay {_esc(shop)}</div>
+  <div class="amt">&#8377;{amt}</div>
+  <a class="btn" href="{_esc(uri)}">Pay with UPI app</a>
+  <div class="vpa">Or send to <code>{_esc(vpa)}</code></div>
+</div>
+<script>
+ /* Android: tap se seedha app chooser. Kuch browsers pehle render ke bina
+    navigate nahi karte, isliye chhoti der. Na chale to button hai hi. */
+ setTimeout(function(){{ location.href = {_json(uri)}; }}, 350);
+</script>
+</body></html>"""
+
+    return _Resp(
+        content=html, media_type="text/html",
+        headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"},
+    )
+
+
+def _esc(s: str) -> str:
+    import html as _html
+
+    return _html.escape(str(s), quote=True)
+
+
+def _json(s: str) -> str:
+    import json as _json_mod
+
+    return _json_mod.dumps(s)
+
+
 @app.get("/join", include_in_schema=False)
 async def join_page():
     from fastapi.responses import Response as _Resp

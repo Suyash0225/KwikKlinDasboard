@@ -55,7 +55,7 @@ from app.models import (
     Staff,
     StaffRole,
 )
-from app.services import audit
+from app.services import audit, pay_link, tenant_context
 from app.utils.phone import normalize_phone as _norm_phone
 from app.routers.orders import require_admin_key, require_admin_owner, require_feature
 from app.services.order_service import ACTIVE_STATUSES, get_active_orders_for_phone
@@ -401,6 +401,20 @@ async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)
     upi = (await app_settings.get(db, "upi_vpa") or "").strip()
     payee = (await app_settings.get(db, "upi_payee") or "").strip()
     if upi:
+        # Link https par jaata hai kyunki WhatsApp SIRF http/https ko tap-able
+        # banata hai. `upi://` seedha likhne par wo plain text rehta hai —
+        # lamba, badsurat, aur phir bhi tap nahi hota. Ye link kholte hi
+        # /pay wala page upi:// fire karta hai aur GPay/PhonePe/Paytm khulta
+        # hai, amount bhara hua. Paisa seedha dukaan ke VPA mein — beech
+        # mein koi gateway nahi.
+        base = (await app_settings.get(db, "public_base_url") or "").strip().rstrip("/")
+        tid = tenant_context.current_tenant_id.get() or tenant_context.cached_home_tenant_id()
+        if base and tid is not None:
+            link = f"{base}/pay/{pay_link.make(tid, total)}"
+            lines.append(f"Pay {rupees(total)}: {link}")
+        # VPA hamesha saath mein. Link kaam na kare — public URL badla ho,
+        # ya iPhone par UPI app na khule — to grahak phir bhi paisa bhej
+        # sakta hai. Yahi wo halat hai jismein wo abhi tak kaam chalata tha.
         lines.append(f"UPI: {upi}" + (f" ({payee})" if payee else ""))
         lines.append("Or pay at the shop.")
     else:
