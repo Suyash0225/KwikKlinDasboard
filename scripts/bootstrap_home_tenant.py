@@ -56,7 +56,22 @@ async def bootstrap(email: str, password: str) -> None:
             await db.flush()
             log.info("home_tenant_created", slug=HOME_SLUG)
         else:
-            log.info("home_tenant_exists", slug=HOME_SLUG)
+            # Row pehle se hai — par uska matlab "set ho chuka" nahi. Ye row
+            # multi_tenant_foundation migration ne banayi hoti hai, aur wahan
+            # plan column apni default 'starter' par rehta hai. Bootstrap sirf
+            # CREATE par entitlements deta tha, isliye apni hi dukaan starter
+            # par atki rehti thi: reports aur CSV export 402, order limit
+            # dashboard par lagti hui. Isliye ye har baar pakka karo.
+            tenant.plan = "growth"
+            tenant.status = TENANT_ACTIVE
+            tenant.setup_fee_paid = True
+            tenant.onboarding_done = True
+            if (
+                tenant.current_period_end is None
+                or tenant.current_period_end < datetime.now(timezone.utc)
+            ):
+                tenant.current_period_end = datetime.now(timezone.utc) + timedelta(days=3650)
+            log.info("home_tenant_exists", slug=HOME_SLUG, entitlements="ensured")
 
         user = (
             await db.execute(
