@@ -29,9 +29,57 @@ ok()   { echo "  ${GRN}✓${OFF} $*"; }
 warn() { echo "  ${YEL}!${OFF} $*"; }
 die()  { echo "  ${RED}✗ $*${OFF}" >&2; exit 1; }
 
+# Port khaali hai ya nahi — bash se, kisi tool ke bharose nahi.
+#
+# /dev/tcp har bash mein hai. lsof/fuser/ss aksar container images mein
+# nahi hote (is repo ke apne dev sandbox mein teenon nahi the), aur unke
+# bharose "koi pid nahi mila = port khaali" maan lena jhoot bolna hai.
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+# Pid pata karna best-effort hai — jo tool mile usse. Na mile to khaali.
+port_pids() {
+  if command -v lsof >/dev/null; then lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null
+  elif command -v fuser >/dev/null; then fuser "$1/tcp" 2>/dev/null | tr -s ' ' '\n'
+  elif command -v ss >/dev/null; then ss -lptnH "sport = :$1" 2>/dev/null | grep -oP 'pid=\K[0-9]+'
+  fi
+}
+
+# Purana server hatao.
+#
+# Sirf `pkill -f "uvicorn app.main:app"` kaafi nahi tha, aur yahi asli bug
+# tha: --reload DO process chalata hai, aur socket WORKER pakadta hai. Wo
+# worker multiprocessing se spawn hota hai, isliye uski command line mein
+# "uvicorn app.main:app" hota hi nahi. pkill parent maar deta tha, script
+# "purana server band kiya" likh deti thi, aur anaath worker port pakde
+# baitha rehta tha — agla uvicorn "Address already in use" par mar jaata.
+#
+# Isliye ab: pattern se maaro, phir PORT se poochho ki sach mein khaali
+# hua ya nahi, aur na hua to jo mila use maaro. Aur agar port abhi bhi
+# busy hai par pid nikalne ka koi tool hi nahi hai, to maan lene ke bajaye
+# saaf bata do.
+free_port() {
+  pkill -f "uvicorn app.main:app" 2>/dev/null || true
+  for _ in $(seq 1 12); do
+    port_busy "$1" || return 0
+    sleep 0.25
+  done
+  local pids; pids=$(port_pids "$1" | tr '\n' ' ')
+  if [[ -n "${pids// }" ]]; then
+    kill $pids 2>/dev/null || true; sleep 1
+    port_busy "$1" && { kill -9 $pids 2>/dev/null || true; sleep 1; }
+  fi
+  if port_busy "$1"; then
+    warn "port $1 abhi bhi busy hai"
+    command -v lsof >/dev/null || command -v fuser >/dev/null || command -v ss >/dev/null \
+      || warn "lsof/fuser/ss mein se koi nahi hai, isliye kaun pakde hai ye bata nahi sakta"
+    return 1
+  fi
+  return 0
+}
+
 # ── --stop ──────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--stop" ]]; then
-  pkill -f "uvicorn app.main:app" 2>/dev/null && ok "server band" || warn "server chal hi nahi raha tha"
+  free_port "$PORT" && ok "port $PORT khaali" || die "port $PORT khaali nahi kar paya"
   exit 0
 fi
 
@@ -109,9 +157,9 @@ fi
 # ── 5. Purana server ────────────────────────────────────────────────────
 # Do uvicorn ek hi port par = "address already in use", ya isse bura, purana
 # wala pakda rehta hai aur naya code kabhi load hi nahi hota.
-if pkill -f "uvicorn app.main:app" 2>/dev/null; then
-  ok "purana server band kiya"
-  sleep 1
+if port_busy "$PORT"; then
+  free_port "$PORT" || die "port $PORT khaali nahi ho raha — dusra PORT do: PORT=8001 ./run.sh"
+  ok "purana server band kiya (port $PORT khaali)"
 fi
 
 # ── 6. Server ───────────────────────────────────────────────────────────
