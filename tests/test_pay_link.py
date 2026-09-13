@@ -146,6 +146,19 @@ async def test_no_vpa_means_404_not_an_empty_page(client) -> None:
     assert r.status_code == 404
 
 
+async def test_the_landing_page_still_answers(client) -> None:
+    """/ and /join are stacked decorators on ONE function.
+
+    Adding /pay landed between them, so `/` bound to pay_page, which wants a
+    token and answered 422 to every visitor. Nothing caught it: the suite
+    never asked for the front page. Now it does.
+    """
+    for path in ("/", "/join"):
+        r = await client.get(path)
+        assert r.status_code == 200, f"{path} -> {r.status_code}"
+        assert "text/html" in r.headers["content-type"]
+
+
 async def test_the_page_needs_no_login(client, shop_upi) -> None:
     """Grahak hamara user nahi hai — koi cookie, koi API key nahi."""
     tid = await tenant_context.get_home_tenant_id()

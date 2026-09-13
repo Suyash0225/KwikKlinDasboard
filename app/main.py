@@ -350,7 +350,6 @@ async def welcome_page():
     )
 
 
-@app.get("/", include_in_schema=False)
 @app.get("/pay/{token}", include_in_schema=False)
 async def pay_page(token: str):
     """Grahak ka ek-tap UPI page. Bina login ke — grahak hamara user nahi hai.
@@ -454,6 +453,7 @@ def _json(s: str) -> str:
     return _json_mod.dumps(s)
 
 
+@app.get("/", include_in_schema=False)
 @app.get("/join", include_in_schema=False)
 async def join_page():
     from fastapi.responses import Response as _Resp
