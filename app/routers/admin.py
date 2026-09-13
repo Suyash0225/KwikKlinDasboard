@@ -377,29 +377,40 @@ async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)
     shop = (tenant.shop_name if tenant and tenant.shop_name else "").strip()
     total = sum((Decimal(str(o.total_amount)) - Decimal(str(o.amount_paid or 0))) for o in rows)
 
+    # Dukaan ka naam sabse upar, letterhead ki tarah — grahak ko pehli
+    # nazar mein pata chale ki kiska bakaya hai. Pehle wo aakhri line
+    # mein dabaa hua tha ("— Kwik Klin") jaise koi signature ho.
     who = (cust.name or "").strip()
-    lines = [f"Namaste {who} 🙏" if who else "Namaste 🙏", ""]
+    lines = [shop or "Laundry", ""]
+    lines.append(f"Namaste {who}," if who else "Namaste,")
+    lines.append("")
     lines.append(
-        f"{shop} se — aapke {len(rows)} bill baaki hain:" if len(rows) > 1
-        else f"{shop} se — aapka ek bill baaki hai:"
+        f"Aapke {len(rows)} bill ka bhugtaan abhi baaki hai:" if len(rows) > 1
+        else "Aapke ek bill ka bhugtaan abhi baaki hai:"
     )
     lines.append("")
     # Lambi list WhatsApp par deewar ban jaati hai. Chhe dikhao, baaki gino.
     for o in rows[:6]:
         due = Decimal(str(o.total_amount)) - Decimal(str(o.amount_paid or 0))
-        day = o.created_at.strftime("%d %b") if o.created_at else "-"
+        day = o.created_at.strftime("%d %b %Y") if o.created_at else "-"
         lines.append(f"{o.order_number} · {day} · {rupees(due)}")
     if len(rows) > 6:
         lines.append(f"...aur {len(rows) - 6} bill")
 
-    lines += ["", f"Kul baaki: {rupees(total)}"]
+    lines += ["", f"Kul rakam: {rupees(total)}", ""]
 
+    # UPI Settings -> Business Profile se aata hai (upi_vpa / upi_payee) —
+    # wahi do keys jo bill ke receipt par chhapti hain. Number saamne ho to
+    # paisa aaj hi aa sakta hai; na ho to grahak ko poochhna padta hai aur
+    # wahin ruk jaata hai.
     upi = (await app_settings.get(db, "upi_vpa") or "").strip()
+    payee = (await app_settings.get(db, "upi_payee") or "").strip()
     if upi:
-        # Number saamne ho to paisa aaj hi aa sakta hai. Na ho to grahak ko
-        # poochhna padta hai, aur wahin ruk jaata hai.
-        lines.append(f"UPI: {upi}")
-    lines += ["", "Jab suvidha ho, de dijiyega."]
+        lines.append(f"UPI: {upi}" + (f" ({payee})" if payee else ""))
+        lines.append("Ya dukaan par bhugtaan kar sakte hain.")
+    else:
+        lines.append("Bhugtaan dukaan par kiya ja sakta hai.")
+    lines += ["", "Dhanyavaad."]
 
     text = "\n".join(lines)
 

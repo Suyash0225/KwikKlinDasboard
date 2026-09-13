@@ -106,11 +106,23 @@ async def test_reminder_lists_the_bills_and_signs_the_right_shop(client, monkeyp
     hardcoded "Kwik Klin" — yaani har doosri dukaan kisi aur ke naam se
     paisa maang rahi thi. Ab bills, tareekh, kul, aur asli shop_name.
     """
+    from app.database import async_session_factory
+    from app.services import app_settings
+
     sends: list = []
 
     async def _ok(db, **k):
         sends.append(k)
         return {"ok": True}
+
+    # app_settings poore DB mein saanjha hai aur test ke baad bacha rehta
+    # hai. Ye test UPI ke baare mein kuch nahi keh raha, isliye use khaali
+    # kar dete hain — warna nateeja is baat par nirbhar ho jaata hai ki
+    # pehle kaunsa test chala tha.
+    async with async_session_factory() as db:
+        await app_settings.set_value(db, "upi_vpa", "")
+        await app_settings.set_value(db, "upi_payee", "")
+        await db.commit()
 
     for amt in ("540.00", "45.00"):
         body = dict(ORDER_BODY, total_amount=amt)
@@ -125,10 +137,14 @@ async def test_reminder_lists_the_bills_and_signs_the_right_shop(client, monkeyp
     assert b["sent"] is True and b["bills"] == 2
 
     text = sends[0]["text"]
-    assert "API Grahak" in text, "naam se shuru ho"
-    assert "2 bill baaki hain" in text
+    # Dukaan ka naam SABSE UPAR, letterhead ki tarah — signature ki tarah
+    # aakhri line mein daba hua nahi.
+    assert text.splitlines()[0].strip(), "pehli line shop ka naam ho"
+    assert "Namaste API Grahak," in text
+    assert "2 bill ka bhugtaan abhi baaki hai" in text
     assert "\u20b9540" in text and "\u20b945" in text, "har bill ka apna amount"
-    assert "Kul baaki: \u20b9585" in text
+    assert "Kul rakam: \u20b9585" in text
+    assert "Dhanyavaad." in text
     # Paise ka hisaab paison tak nahi — "630.00" machine ka likha lagta hai
     assert ".00" not in text
     # Aur kisi aur dukaan ka naam kabhi nahi
@@ -162,3 +178,42 @@ async def test_reminder_refuses_when_nothing_is_owed(client, monkeypatch) -> Non
         "/admin/api/customers/reminder", json={"phone": "+919999900999"}, headers=AUTH
     )
     assert r.status_code == 404, r.text
+
+
+async def test_reminder_uses_the_upi_id_from_settings(client, monkeypatch) -> None:
+    """UPI Settings -> Business Profile se aata hai, hardcoded nahi.
+
+    Wahi do keys jo bill ke receipt par chhapti hain (upi_vpa/upi_payee),
+    taaki reminder aur receipt kabhi alag number na bolein.
+    """
+    from app.database import async_session_factory
+    from app.services import app_settings
+
+    sends: list = []
+
+    async def _ok(db, **k):
+        sends.append(k)
+        return {"ok": True}
+
+    assert (await client.post("/orders", json=ORDER_BODY, headers=AUTH)).status_code == 201
+    async with async_session_factory() as db:
+        await app_settings.set_value(db, "upi_vpa", "testshop@okaxis")
+        await app_settings.set_value(db, "upi_payee", "Test Shop")
+        await db.commit()
+
+    monkeypatch.setattr("app.services.whatsapp.send_message", _ok)
+    r = await client.post(
+        "/admin/api/customers/reminder", json={"phone": PHONE}, headers=AUTH
+    )
+    assert r.status_code == 200, r.text
+    assert "UPI: testshop@okaxis (Test Shop)" in sends[0]["text"]
+
+    # UPI set na ho to us line ki jagah dukaan par bhugtaan wali baat
+    async with async_session_factory() as db:
+        await app_settings.set_value(db, "upi_vpa", "")
+        await app_settings.set_value(db, "upi_payee", "")
+        await db.commit()
+    sends.clear()
+    await client.post("/admin/api/customers/reminder", json={"phone": PHONE}, headers=AUTH)
+    assert "UPI:" not in sends[0]["text"]
+    assert "dukaan par" in sends[0]["text"]
