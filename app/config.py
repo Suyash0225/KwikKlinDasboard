@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # Must use the asyncpg driver, e.g.
     # postgresql+asyncpg://laundry:laundry@localhost:5432/laundry
     DATABASE_URL: str
+    # App ka apna DB role — NOSUPERUSER, taaki RLS uspar sach mein lage.
+    # KHALI ho to DATABASE_URL hi chalta hai (yaani kuch todta nahi), par
+    # tab RLS bypass hoti hai aur startup hardening uspar chillata hai.
+    # Banane ke liye: python -m scripts.create_app_role
+    APP_DATABASE_URL: str = ""
 
     # --- Provider switch ---
     # "meta"  = direct Meta Cloud API (test number, development)

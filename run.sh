@@ -134,6 +134,15 @@ if ! python3 -m alembic upgrade head >/tmp/kk-alembic.log 2>&1; then
 fi
 ok "Migrations head par"
 
+# ── 3b. App ka DB role ──────────────────────────────────────────────────
+# RLS superuser par lagti hi nahi, aur docker-compose ka user wahi hai.
+# Role na ho to app chalegi — bas isolation ek parat kam ho jayegi, aur
+# startup hardening uspar chillayega.
+if ! grep -q '^APP_DATABASE_URL=.\+' .env 2>/dev/null; then
+  warn "APP_DATABASE_URL khali — app superuser se judegi aur RLS bypass hogi"
+  warn "banane ke liye:  python3 -m scripts.create_app_role"
+fi
+
 # ── 4. --seed ───────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--seed" ]]; then
   # `-m scripts.x`, `scripts/x.py` nahi — inke apne docstring mein yahi
