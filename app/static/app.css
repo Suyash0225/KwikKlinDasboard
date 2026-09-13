@@ -85,7 +85,7 @@ a { color: var(--brand-600); text-decoration: none; }
 /* Sidebar: base = off-canvas drawer (phone/tablet). Desktop pins it. */
 .sidebar {
   width: var(--sidebar-w);
-  background: linear-gradient(180deg, var(--sidebar-bg), var(--sidebar-bg2));
+  background: var(--sidebar-bg);
   color: #cdd5e1;
   position: fixed; inset: 0 auto 0 0; z-index: 40; display: flex;
   flex-direction: column; transition: transform .2s ease;
@@ -96,7 +96,10 @@ a { color: var(--brand-600); text-decoration: none; }
 /* scrim behind the open drawer — tap anywhere outside to close */
 .side-ov { position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 39; display: none; }
 .side-ov.open { display: block; }
-.sidebar .logo { display: flex; align-items: center; gap: 11px; padding: 22px 18px 18px; }
+.sidebar .logo {
+  display: flex; align-items: center; gap: 11px; padding: 18px 16px 16px;
+  border-bottom: 1px solid rgba(255,255,255,.07);
+}
 .logo-badge {
   width: 42px; height: 42px; border-radius: 50%; background: var(--g-orange);
   color: #fff; font-weight: 700; display: grid; place-items: center; font-size: 15px;
@@ -104,26 +107,53 @@ a { color: var(--brand-600); text-decoration: none; }
 }
 .logo h1 { font-size: 16px; color: #fff; letter-spacing: .6px; font-weight: 700; }
 .logo small { display: block; font-size: 9.5px; color: var(--brand); font-weight: 700; letter-spacing: 2.2px; }
-.nav { flex: 1; overflow-y: auto; padding: 8px 14px 16px; }
+/* Scrollbar patli aur apne rang ki. Pehle native grey patti thi jo active
+   item ke bilkul upar baithti thi aur use kata hua dikhati thi. */
+.nav {
+  flex: 1; overflow-y: auto; overscroll-behavior: contain;
+  padding: 4px 10px 12px;
+  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.16) transparent;
+}
+.nav::-webkit-scrollbar { width: 6px; }
+.nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 3px; }
+.nav::-webkit-scrollbar-track { background: transparent; }
 .nav div {
-  display: flex; align-items: center; gap: 11px; padding: 12px 14px;
-  min-height: 46px;
-  border-radius: 14px; cursor: pointer; font-size: 13.5px; color: #aeb8c9;
-  margin-bottom: 4px; transition: background .12s, color .12s, transform .12s;
-  font-weight: 600;
+  position: relative;
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  min-height: 38px;
+  border-radius: var(--r-sm); cursor: pointer; font-size: 13.5px; color: #9aa6b8;
+  margin-bottom: 1px; transition: background .12s, color .12s;
+  font-weight: var(--fw-semi);
 }
+.nav div:hover { background: rgba(255,255,255,.05); color: #e6ebf2; }
+.nav div:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+
+/* Icon text ka hi rang leta hai (currentColor) — isliye active hone par
+   apne aap safed ho jaata hai, alag rule ki zaroorat nahi. */
+.ic { width: 17px; height: 17px; flex: 0 0 auto; }
 .nav div.on {
-  background: var(--brand-strong); color: var(--on-brand); box-shadow: var(--shadow-pop);
-  font-weight: 700;
+  background: rgba(255,255,255,.07); color: #fff; font-weight: var(--fw-bold);
 }
-.nav .navsec { font-size: 9.5px; letter-spacing: 2px; color: #58657c; padding: 14px 14px 4px; cursor: default; font-weight: 700; min-height: 0; }
-.sysline { padding: 12px 18px; font-size: 11px; color: #7c8aa0; border-top: 1px solid rgba(255,255,255,.07); }
+.nav div.on::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--brand);
+}
+.nav div.on .ic { color: var(--brand); }
+.nav .navsec {
+  font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
+  color: #5d6a80; padding: 16px 12px 6px; cursor: default;
+  font-weight: var(--fw-semi); min-height: 0;
+}
+.navsec:first-child { padding-top: 4px; }
+.sysline { padding: 8px 12px 6px; font-size: 11px; color: #6f7d92; }
 .sysline .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; box-shadow: 0 0 8px var(--ok); }
+.side-foot { border-top: 1px solid rgba(255,255,255,.07); padding: 6px 10px 10px; }
 .logout {
-  display: flex; align-items: center; gap: 10px; padding: 12px 18px; cursor: pointer;
-  min-height: var(--tap);
-  color: #aeb8c9; font-size: 13px; font-weight: 600; border-top: 1px solid rgba(255,255,255,.07);
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer;
+  min-height: var(--control-h); border-radius: var(--r-sm);
+  color: #9aa6b8; font-size: 13px; font-weight: var(--fw-semi);
 }
+.logout:hover { background: rgba(255,255,255,.05); color: #e6ebf2; }
 
 /* Main column: base = full width under a sticky top bar, with clearance for
    the bottom tab bar. Safe-area insets keep content off notches. */

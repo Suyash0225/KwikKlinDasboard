@@ -30,29 +30,33 @@
   <aside class="sidebar" id="sidebar">
     <div class="logo">
       <div class="logo-badge">KK</div>
-      <div><h1>Kwik Klin</h1><small>LAUNDRY PRO</small></div>
+      <div><h1>Kwik Klin</h1><small>Laundry Pro</small></div>
     </div>
     <nav class="nav">
-      <div data-s="dashboard" onclick="go('dashboard')">📊 Dashboard</div>
-      <div data-s="inbox" onclick="go('inbox')">💬 Inbox</div>
-      <div data-s="newbill" onclick="go('newbill')">➕ New bill</div>
-      <div data-s="bills" onclick="go('bills')">🧾 Bill history</div>
-      <div data-s="customers" onclick="go('customers')">👥 Customers</div>
-      <div data-s="expenses" onclick="go('expenses')">💸 Expenses</div>
-      <div data-s="reports" onclick="go('reports')">📈 Reports</div>
-      <div class="navsec">GROWTH</div>
-      <div data-s="campaigns" onclick="go('campaigns')">📣 Campaigns</div>
-      <div class="navsec">AGENT</div>
-      <div data-s="tasks" onclick="go('tasks')">✅ Tasks</div>
-      <div data-s="agents" onclick="go('agents')">🤖 Agents</div>
-      <div data-s="usage" onclick="go('usage')">📊 AI usage</div>
-      <div data-s="training" onclick="go('training')">🎓 AI training</div>
-      <div data-s="activity" onclick="go('activity')">🛰 Activity</div>
-      <div class="navsec">SYSTEM</div>
-      <div data-s="settings" onclick="go('settings')">⚙️ Settings</div>
+      <div class="navsec">Operations</div>
+      <div data-s="dashboard" onclick="go('dashboard')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-dashboard"/></svg>Dashboard</div>
+      <div data-s="inbox" onclick="go('inbox')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-inbox"/></svg>Inbox</div>
+      <div data-s="newbill" onclick="go('newbill')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-plus"/></svg>New bill</div>
+      <div data-s="bills" onclick="go('bills')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-receipt"/></svg>Bill history</div>
+      <div data-s="customers" onclick="go('customers')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-users"/></svg>Customers</div>
+      <div class="navsec">Money</div>
+      <div data-s="expenses" onclick="go('expenses')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-expense"/></svg>Expenses</div>
+      <div data-s="reports" onclick="go('reports')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-reports"/></svg>Reports</div>
+      <div class="navsec">Growth</div>
+      <div data-s="campaigns" onclick="go('campaigns')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-campaign"/></svg>Campaigns</div>
+      <div class="navsec">Agent</div>
+      <div data-s="tasks" onclick="go('tasks')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-task"/></svg>Tasks</div>
+      <div data-s="agents" onclick="go('agents')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-agent"/></svg>Agents</div>
+      <div data-s="usage" onclick="go('usage')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-usage"/></svg>AI usage</div>
+      <div data-s="training" onclick="go('training')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-training"/></svg>AI training</div>
+      <div data-s="activity" onclick="go('activity')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-activity"/></svg>Activity</div>
+      <div class="navsec">System</div>
+      <div data-s="settings" onclick="go('settings')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-settings"/></svg>Settings</div>
     </nav>
-    <div class="logout" onclick="kkLogout()">⎋ Log out admin</div>
-    <div class="sysline"><span class="dot"></span>Postgres · WhatsApp bot active</div>
+    <div class="side-foot">
+      <div class="sysline"><span class="dot"></span>Postgres · WhatsApp bot active</div>
+      <div class="logout" onclick="kkLogout()"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-logout"/></svg>Log out admin</div>
+    </div>
   </aside>
 
   <!-- ======== main ======== -->

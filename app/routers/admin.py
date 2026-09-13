@@ -2004,10 +2004,13 @@ async def dashboard_page(
         # file pakde rehta — aur dikkat "kabhi-kabhi purana orange" jaisi
         # dikhti, jo dhoondhne mein sabse mehngi hoti hai.
         (static_dir / "tokens.css").stat().st_mtime,
+        # Sprite bhi: icon badla aur version na badla to browser purana
+        # sprite pakde rehta hai aur nav aadha purana aadha naya dikhta.
+        (static_dir / "icons.svg").stat().st_mtime,
     ))
     import re as _re
 
-    html = _re.sub(r"((?:app|tokens)\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
+    html = _re.sub(r"((?:app|tokens)\.(?:js|css)|icons\.svg)\?v=[\w]+", rf"\1?v={v}", html)
     return Response(
         content=html, media_type="text/html",
         headers={"Cache-Control": "no-cache"},
