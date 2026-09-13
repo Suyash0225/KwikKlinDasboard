@@ -88,10 +88,22 @@ ok "Migrations head par"
 
 # ── 4. --seed ───────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--seed" ]]; then
+  # `-m scripts.x`, `scripts/x.py` nahi — inke apne docstring mein yahi
+  # likha hai. Path se chalane par repo root sys.path par nahi aata aur
+  # "No module named 'app'" milta hai, jo seed ki dikkat jaisa nahi lagta.
+  #
   # Rate card khaali ho to New Bill screen "rate card is empty" dikhati hai
   # aur naya banda samajhta hai ki app tooti hui hai.
-  python3 scripts/seed_rates.py >/dev/null 2>&1 && ok "rate card bhara" || warn "seed_rates fail"
-  python3 scripts/seed_staff.py >/dev/null 2>&1 && ok "staff bane"       || warn "seed_staff fail"
+  for mod in seed_rates seed_staff; do
+    if python3 -m "scripts.$mod" >"/tmp/kk-$mod.log" 2>&1; then
+      ok "$mod"
+    else
+      # Chupana nahi. Yahan ka aam jawab hota hai "pehle bootstrap_home_tenant
+      # chalao" — wo padh lena hi kaafi hai, dhoondhne mat bhejo.
+      warn "$mod nahi chala:"
+      sed 's/^/      /' "/tmp/kk-$mod.log" | tail -6
+    fi
+  done
 fi
 
 # ── 5. Purana server ────────────────────────────────────────────────────
