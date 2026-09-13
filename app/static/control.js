@@ -524,7 +524,7 @@ async function tenantAction(act, slug) {
 }
 const act2 = act; // alias kept short inside handlers
 
-function selectModal(title, label, options, onPick) {
+function selectModal(title, label, options, onPick, current) {
   openModal((sheet) => {
     const l = el("label", null, label);
     l.htmlFor = "sel-value";
@@ -535,6 +535,10 @@ function selectModal(title, label, options, onPick) {
       o.value = v;
       sel.appendChild(o);
     }
+    /* Bina iske dropdown hamesha PEHLA option dikhata tha. Business wale
+       tenant par bhi "Basic" khulta, aur bina soche Save dabane par shop
+       chupchaap downgrade ho jaati. Status par bhi wahi — hamesha "Trial". */
+    if (current != null) sel.value = current;
     sheet.appendChild(l); sheet.appendChild(sel);
     buttonRow(sheet, [
       { label: "Save", cls: "btn-primary", onClick: async () => { const v = sel.value; closeModal(); await onPick(v); } },
@@ -543,12 +547,17 @@ function selectModal(title, label, options, onPick) {
   }, title);
 }
 
+/* Values asli plan CODES hain (starter/pro/growth), bikne wale naam nahi.
+   Pehle yahan "premium"/"business" tha — backend ALIASES se resolve kar
+   leta tha, isliye Save chalta tha, par DB "growth" lautati hai aur us par
+   koi option match nahi karta. Isi wajah se Business wali shop par bhi
+   dropdown "Basic" dikhata tha. */
 const planModal = (slug, row) => selectModal(`Change plan — ${row.shop_name}`, "Plan",
-  [["starter", "Basic — ₹999"], ["premium", "Premium — ₹1,999"], ["business", "Business — ₹3,999"]],
+  [["starter", "Basic — ₹999"], ["pro", "Premium — ₹1,999"], ["growth", "Business — ₹3,999"]],
   async (plan) => {
     await act(() => api(`/control/api/tenants/${slug}`, { method: "PATCH", body: { plan } }), "Plan updated");
     refresh();
-  });
+  }, row.plan);
 
 const statusModal = (slug, row) => selectModal(`Change status — ${row.shop_name}`, "Status",
   [["trial", "Trial"], ["active", "Active"], ["past_due", "Past due (read-only)"],
@@ -556,7 +565,7 @@ const statusModal = (slug, row) => selectModal(`Change status — ${row.shop_nam
   async (status) => {
     await act(() => api(`/control/api/tenants/${slug}`, { method: "PATCH", body: { status } }), "Status updated");
     refresh();
-  });
+  }, row.status);
 
 function linkModal(title, body, path) {
   const url = location.origin + path;
