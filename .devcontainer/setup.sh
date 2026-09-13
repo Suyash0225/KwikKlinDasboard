@@ -38,12 +38,42 @@ PY
 fi
 
 # ── Postgres ────────────────────────────────────────────────────────────
-if docker compose up -d --wait >/tmp/kk-db.log 2>&1; then
-  ok "Postgres chalu"
+# Container ke andar seedha, docker ke bina — kyun, wo devcontainer.json
+# mein likha hai. Credentials wahi jo docker-compose.yml deta tha, isliye
+# .env.example ka DATABASE_URL bina badle chalta hai.
+bash "$(dirname "$0")/start-db.sh"
+if ! pg_isready -q 2>/dev/null; then
+  warn "Postgres nahi mili — baaki setup ka koi matlab nahi"
+  exit 0        # Codespace phir bhi khulne do
+fi
+
+# Postgres superuser tak pahunchne ka rasta image ke hisaab se badalta hai.
+#
+# `sudo -u postgres` yahan NAHI chalta: Codespaces ke is image mein sudoers
+# sirf root banne deta hai, kisi aur user ka nahi. Wo chupke se fail nahi
+# hota — password maang kar setup ko hamesha ke liye rok deta hai, jo saaf
+# fail hone se badtar hai.
+#
+# -n har jagah: sudo kabhi prompt na kare, seedha fail ho.
+pg_su() {
+  if [[ $(id -u) -eq 0 ]]; then
+    su postgres -c "psql -qtA"
+  else
+    sudo -n su postgres -c "psql -qtA"
+  fi
+}
+
+if pg_su <<<"SELECT 1 FROM pg_roles WHERE rolname='laundry'" 2>/dev/null | grep -q 1; then
+  ok "laundry role/DB pehle se hai"
+elif pg_su <<'SQL' >/dev/null 2>&1
+CREATE ROLE laundry LOGIN SUPERUSER PASSWORD 'laundry';
+CREATE DATABASE laundry OWNER laundry;
+SQL
+then
+  ok "laundry role + DB bane"
 else
-  warn "Postgres start nahi hua — dekho: docker compose logs db"
-  tail -5 /tmp/kk-db.log | sed 's/^/      /'
-  exit 0        # baaki setup ka koi matlab nahi, par Codespace khulne do
+  warn "laundry role/DB nahi bane — haath se:"
+  warn "  sudo su postgres -c \"psql -c \\\"CREATE ROLE laundry LOGIN SUPERUSER PASSWORD 'laundry';\\\" -c 'CREATE DATABASE laundry OWNER laundry;'\""
 fi
 
 # ── Migrations ──────────────────────────────────────────────────────────
@@ -83,16 +113,48 @@ PY
   fi
 fi
 
+# ── Home tenant ─────────────────────────────────────────────────────────
+# Ye pehle yahan nahi tha, aur naya Codespace isi par atakta tha: seed_rates
+# ko home tenant chahiye, home tenant sirf haath se banta tha, aur warning
+# padhne se pehle log bahut aage nikal chuka hota tha.
+#
+# Password yahan banta hai aur neeche chhapta hai. Dev Codespace hai —
+# `.env` mein already teen keys padi hain; ek aur secret yahan koi nayi
+# baat nahi.
+if [[ -f .kk-owner ]]; then
+  ok "home tenant pehle se hai (login: $(head -1 .kk-owner))"
+else
+  OWNER_EMAIL="owner@kwikklin.local"
+  OWNER_PASS="$(python3 -c 'import secrets; print(secrets.token_urlsafe(12))')"
+  if python3 -m scripts.bootstrap_home_tenant "$OWNER_EMAIL" "$OWNER_PASS" \
+       >/tmp/kk-bootstrap.log 2>&1; then
+    printf '%s\n%s\n' "$OWNER_EMAIL" "$OWNER_PASS" > .kk-owner
+    ok "home tenant bana"
+  else
+    warn "home tenant nahi bana — dekho: /tmp/kk-bootstrap.log"
+    tail -5 /tmp/kk-bootstrap.log | sed 's/^/      /'
+  fi
+fi
+
 # ── Seed ────────────────────────────────────────────────────────────────
 # Rate card khali ho to New Bill "rate card is empty" dikhata hai aur naya
-# banda samajhta hai ki app tooti hui hai. Home tenant chahiye pehle.
+# banda samajhta hai ki app tooti hui hai.
 if python3 -m scripts.seed_rates >/dev/null 2>&1; then
   ok "rate card bhara"
 else
-  warn "rate card seed nahi hua — pehle owner banao:"
-  warn "  python3 -m scripts.bootstrap_home_tenant <email> <password>"
+  warn "rate card seed nahi hua — dekho: python3 -m scripts.seed_rates"
+fi
+
+if python3 -m scripts.seed_staff >/dev/null 2>&1; then
+  ok "staff bhara"
+else
+  warn "staff seed nahi hua — dekho: python3 -m scripts.seed_staff"
 fi
 
 echo "─────────────────────────────────────────"
+if [[ -f .kk-owner ]]; then
+  echo "  Login  :  $(sed -n 1p .kk-owner)  /  $(sed -n 2p .kk-owner)"
+  echo "            (yeh .kk-owner mein bhi rakha hai, gitignored)"
+fi
 echo "  Ab chalao:  ./run.sh"
 echo

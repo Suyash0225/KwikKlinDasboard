@@ -4,21 +4,38 @@
   // Python 3.12 — wahi jis par app aur test chalte hain.
   "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
 
-  "features": {
-    // Postgres docker-compose se aata hai, isliye container ke andar
-    // docker chahiye.
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
-  },
+  // FEATURES JAAN-BUJH KAR KHALI HAIN.
+  //
+  // Pehle yahan docker-in-docker tha, sirf isliye ki Postgres
+  // docker-compose se aati thi. Wo feature install hote waqt apt-get
+  // update chalata hai, aur base image mein yarn ka ek apt source pada
+  // hai jiski GPG key ab valid nahi:
+  //
+  //   W: GPG error: https://dl.yarnpkg.com/debian stable InRelease:
+  //      NO_PUBKEY 62D54FD4003F6525
+  //   ERROR: Feature "Docker (Docker-in-Docker)" failed to install!
+  //
+  // Feature marta hai to POORA container build girta hai, aur Codespace
+  // recovery container mein khulta hai — jahan na docker hota hai na
+  // apt-get. Yaani ek upstream image ki tooti key is repo ka Codespace
+  // band kar deti thi.
+  //
+  // Postgres ab seedha container ke andar chalti hai (install.sh).
+  // Ek kam parat, ek kam cheez tootne ke liye. docker-compose.yml waise
+  // ka waisa hai — jo apne laptop par docker se chalate hain unke liye.
+  "features": {},
 
-  // onCreateCommand PREBUILD ke waqt chalta hai (agar prebuild on ho),
-  // isliye bhaari aur ek-baar wala kaam yahan: dependencies.
-  // postCreateCommand har naye Codespace par chalta hai.
-  "onCreateCommand": "pip install --no-cache-dir -r requirements.txt",
+  // Bhaari, ek-baar wala kaam. Prebuild on ho to yahi prebuild mein pakta hai.
+  "onCreateCommand": "bash .devcontainer/install.sh",
 
-  // Yahan sirf wo cheezein jo har Codespace ki apni hain — .env ki keys
-  // aur DB ka apna role. Ye prebuild mein bake NAHI honi chahiye: prebuild
-  // sab ke liye ek hi image hai, aur usmein secrets nahi jaane chahiye.
+  // Har naye Codespace ka apna: .env ki keys, DB ka role, seed.
+  // Prebuild mein NAHI — prebuild ki image sabke saath saanjha hoti hai.
   "postCreateCommand": "bash .devcontainer/setup.sh",
+
+  // Codespace ruk kar dobara chalu ho to Postgres apne aap wapas aaye.
+  // docker-compose yeh `restart: unless-stopped` se karta tha; ab yeh line
+  // wahi kaam karti hai. Iske bina resume ke baad har request DB error deti.
+  "postStartCommand": "bash .devcontainer/start-db.sh",
 
   "forwardPorts": [8000],
   "portsAttributes": {

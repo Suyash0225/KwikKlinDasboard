@@ -22,7 +22,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import async_session_factory, engine
 from app.models import ROLE_OWNER, TENANT_ACTIVE, Tenant, User
-from app.services import app_settings, auth
+from app.services import app_settings, auth, tenant_context
 from app.utils.logger import configure_logging
 from app.utils.phone import normalize_phone
 
@@ -56,7 +56,22 @@ async def bootstrap(email: str, password: str) -> None:
             await db.flush()
             log.info("home_tenant_created", slug=HOME_SLUG)
         else:
-            log.info("home_tenant_exists", slug=HOME_SLUG)
+            # Row pehle se hai — par uska matlab "set ho chuka" nahi. Ye row
+            # multi_tenant_foundation migration ne banayi hoti hai, aur wahan
+            # plan column apni default 'starter' par rehta hai. Bootstrap sirf
+            # CREATE par entitlements deta tha, isliye apni hi dukaan starter
+            # par atki rehti thi: reports aur CSV export 402, order limit
+            # dashboard par lagti hui. Isliye ye har baar pakka karo.
+            tenant.plan = "growth"
+            tenant.status = TENANT_ACTIVE
+            tenant.setup_fee_paid = True
+            tenant.onboarding_done = True
+            if (
+                tenant.current_period_end is None
+                or tenant.current_period_end < datetime.now(timezone.utc)
+            ):
+                tenant.current_period_end = datetime.now(timezone.utc) + timedelta(days=3650)
+            log.info("home_tenant_exists", slug=HOME_SLUG, entitlements="ensured")
 
         user = (
             await db.execute(
@@ -84,7 +99,16 @@ async def bootstrap(email: str, password: str) -> None:
 
         # Ab home pakka — koi naya signup 'sabse purana tenant' bankar
         # is dukaan ka data nahi le sakta.
-        await app_settings.set_value(db, "home_tenant_slug", HOME_SLUG)
+        #
+        # Ye likhna context ke ANDAR hona zaroori hai. settings_kv.tenant_id
+        # ab NOT NULL hai, aur naye row par wo id `before_flush` event
+        # `cached_home_tenant_id()` se leta hai — jo abhi khali hai, kyunki
+        # home ko tay karne wali setting yahi hai jo likhi ja rahi hai.
+        # Bina iske script anda-murgi par girti thi:
+        #   null value in column "tenant_id" of relation "settings_kv"
+        # yaani ek bilkul nayi DB bootstrap ho hi nahi sakti thi.
+        async with tenant_context.as_tenant(tenant.id, tenant.owner_phone):
+            await app_settings.set_value(db, "home_tenant_slug", HOME_SLUG)
         log.info("home_tenant_locked", slug=HOME_SLUG)
 
     await engine.dispose()

@@ -540,6 +540,19 @@ async function loadDashboard() {
   renderKpis(); renderChips(); renderOrders();
   loadWaStats();
 }
+/* "unreachable" used to cover every case, including shops that simply never
+   connected WhatsApp. Each state needs a different next step from the owner. */
+function metaPill(s) {
+  if (s.meta_ok) return "";
+  const states = {
+    not_connected: ["PARTIAL", "WhatsApp not connected"],
+    auth_failed: ["UNPAID", "WhatsApp token rejected — reconnect"],
+    unreachable: ["UNPAID", "Meta API unreachable"],
+    error: ["UNPAID", "Meta API error"],
+  };
+  const [cls, label] = states[s.meta_state] || states.unreachable;
+  return `<span class="pill ${cls}">${label}</span>`;
+}
 async function loadWaStats() {
   try {
     const s = await api("/admin/api/whatsapp/stats");
@@ -553,7 +566,7 @@ async function loadWaStats() {
         <span>👥 Baat hui: <b>${s.today.customers_talked}</b> customers se</span>
         <span>📑 Templates: <b style="color:var(--ok)">${t.approved} ✓</b> · <b style="color:var(--warn)">${t.pending} pending</b>${t.rejected ? ` · <b style="color:var(--danger)">${t.rejected} ✗</b>` : ""}</span>
         ${qpill}
-        ${s.meta_ok ? "" : '<span class="pill UNPAID">Meta API unreachable</span>'}
+        ${metaPill(s)}
       </div>`;
   } catch (e) {
     $("wa-stats").innerHTML = `<span class="muted">📱 Could not load WhatsApp stats: ${esc(e.message)}</span>`;
