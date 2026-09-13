@@ -32,9 +32,16 @@ structlog==26.1.0
 # --- Testing ---
 pytest==9.1.1
 pytest-asyncio==1.4.0
-python-multipart==0.0.20  # FastAPI file uploads (Inbox media)
+python-multipart==0.0.31  # FastAPI file uploads (Inbox media); 0.0.20 ke CVE fix
 pypdf
 openpyxl  # .xlsx contact imports (Inbox bulk upload)
+
+# services/social.py module level par `from PIL import ...` karta hai.
+# Ye yahan tha hi nahi — prod par haath se install karke chalaya gaya tha,
+# aur dev machines par matplotlib jaisi kisi cheez ke saath chupke se aa
+# jaata tha. Import scheduler ke andar hota hai, isliye app to chalu ho
+# jaati thi; marta sirf daily social job, roz raat ko.
+pillow==12.3.0
 
 # dev/build only: static asset minification (scripts/minify_static.py)
 rjsmin
