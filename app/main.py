@@ -27,6 +27,7 @@ log = structlog.get_logger()
 async def _multi_tenant_hardening_check() -> None:
     """60 dukaanon se pehle jo pakka hona chahiye — nahi hai to ERROR log."""
     from sqlalchemy import func, select
+    from sqlalchemy import text as sqltext
 
     from app.database import async_session_factory
     from app.models.tenant import WRITABLE_STATUSES, Tenant
@@ -40,6 +41,32 @@ async def _multi_tenant_hardening_check() -> None:
     if n <= 1:
         return
     gaps: list[str] = []
+
+    # RLS SACH MEIN chal rahi hai ya nahi — schema se nahi, ASAL BEHAVIOUR se.
+    #
+    # Tables par ENABLE + FORCE ROW LEVEL SECURITY laga hai aur schema dekh
+    # kar sab theek lagta hai. Par superuser RLS ko poori tarah nazarandaz
+    # karta hai, aur FORCE uspar laagu hi nahi hota — FORCE sirf TABLE OWNER
+    # ke liye hai. docker-compose ka POSTGRES_USER Postgres ka bootstrap
+    # superuser hota hai, isliye default setup mein defence-in-depth ki
+    # teesri parat maujood hi nahi hoti, aur isolation akele ORM filter par
+    # tik jaati hai. Ek bhi raw query us filter ke bahar ho to leak chup-
+    # chaap hoga.
+    #
+    # Isliye jaanch schema ki nahi, role ki hai — wahi cheez jo jhooth nahi
+    # bol sakti.
+    async with async_session_factory() as db:
+        row = (
+            await db.execute(
+                sqltext("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")
+            )
+        ).scalar_one_or_none()
+    if row:
+        gaps.append(
+            "DB role bypasses RLS (superuser/BYPASSRLS) — tenant isolation "
+            "rests on the ORM filter alone; use a NOSUPERUSER app role"
+        )
+
     if not settings.TOKEN_ENCRYPTION_KEY:
         gaps.append("TOKEN_ENCRYPTION_KEY empty — WhatsApp tokens stored in plaintext")
     if not settings.VENDOR_API_KEY:

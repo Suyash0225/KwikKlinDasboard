@@ -146,8 +146,10 @@ class CouponRedemption(Base):
     )
     # FK ab (tenant_id, coupon_code) -> coupons(tenant_id, code) par hai,
     # __table_args__ mein — kyunki parent ki unique jodi bhi do column ki hai.
-    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), index=True
+    # NOT NULL: ye FK ka aadha hissa hai, aur composite FK mein ek column
+    # NULL ho to Postgres poori jodi ki jaanch chhod deta hai (MATCH SIMPLE).
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), index=True, nullable=False
     )
     coupon_code: Mapped[str] = mapped_column(String(30), index=True)
     order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("orders.id"))

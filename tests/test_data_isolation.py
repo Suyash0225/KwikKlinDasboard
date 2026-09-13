@@ -374,3 +374,50 @@ async def test_two_shops_can_have_the_same_lead_phone(client) -> None:
             assert len(rows) == 1 and rows[0].name == "Poocha A se"
     finally:
         tenant_context.current_tenant_id.reset(token)
+
+
+async def test_rls_is_actually_in_force_not_just_configured(client) -> None:
+    """Schema nahi — ASAL vyavhaar jaancho.
+
+    Har tenant table par ENABLE + FORCE ROW LEVEL SECURITY laga hai aur
+    schema dekh kar sab theek lagta hai. Par SUPERUSER RLS ko poori tarah
+    nazarandaz karta hai, aur FORCE uspar laagu nahi hota — FORCE sirf
+    TABLE OWNER ke liye hai. docker-compose ka POSTGRES_USER Postgres ka
+    bootstrap superuser hai, isliye default setup mein defence-in-depth ki
+    teesri parat maujood hi nahi hoti.
+
+    Ye test us haalat mein SKIP hota hai (fail nahi) — kyunki wo deployment
+    ki kami hai, code ki nahi, aur suite ko laal rakhne se sirf log lal
+    rehne ke aadi ho jaate hain. Jis din app NOSUPERUSER role par jayegi,
+    ye test apne aap pehra dena shuru kar dega.
+    """
+    async with async_session_factory() as db:
+        bypasses = (
+            await db.execute(
+                sqltext("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")
+            )
+        ).scalar_one()
+    if bypasses:
+        pytest.skip(
+            "DB role bypasses RLS (superuser/BYPASSRLS) — isolation rests on "
+            "the ORM filter alone. Use a NOSUPERUSER app role to enable this check."
+        )
+
+    a, b = await _fresh("rls-live-a", "customers"), await _fresh("rls-live-b", "customers")
+    async with async_session_factory() as db:
+        for tid, name in ((a, "A ka grahak"), (b, "B ka grahak")):
+            await db.execute(
+                sqltext("INSERT INTO customers (id, tenant_id, phone, name) "
+                        "VALUES (gen_random_uuid(), :t, :p, :n)"),
+                {"t": tid, "p": f"+9190{str(tid)[:8]}", "n": name},
+            )
+        await db.commit()
+
+    # RAW SQL — jaan-boojh kar. ORM ka filter yahan lagta hi nahi, isliye
+    # jo bhi rokta hai wo sirf RLS hai. Yahi is test ka poora maqsad hai.
+    async with async_session_factory() as db:
+        await db.execute(sqltext(f"SET LOCAL app.tenant_id = '{a}'"))
+        rows = (
+            await db.execute(sqltext("SELECT name FROM customers WHERE phone LIKE '+9190%'"))
+        ).scalars().all()
+    assert rows == ["A ka grahak"], f"RLS ne doosri dukaan ki row nahi roki: {rows}"
