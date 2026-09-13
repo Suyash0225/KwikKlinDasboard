@@ -72,8 +72,18 @@ ok "Postgres ${DB_HOST}:${DB_PORT}"
 # ── 3. Migrations ───────────────────────────────────────────────────────
 # Har baar chalti hain: pehle se lagi hui ho to alembic kuch nahi karta,
 # aur nayi ho to yahin lag jaati hai. Bhoolne ki gunjaish hi na rahe.
-alembic upgrade head >/tmp/kk-alembic.log 2>&1 \
-  || die "Migration fail. Poora log: /tmp/kk-alembic.log"
+# `python3 -m alembic`, bare `alembic` nahi: console scripts har setup mein
+# PATH par nahi hote (jo `python -m uvicorn` chalata hai uske paas aksar
+# nahi hote), aur tab error "command not found" aata hai — jo migration ki
+# dikkat jaisa bilkul nahi dikhta.
+if ! python3 -m alembic upgrade head >/tmp/kk-alembic.log 2>&1; then
+  echo
+  echo "  ${RED}Migration fail:${OFF}"
+  # Log ki taraf ishaara karke chhod dena isi script ke maqsad ke khilaf hai.
+  # Wajah yahin dikhao.
+  sed 's/^/    /' /tmp/kk-alembic.log | tail -20
+  die "poora log: /tmp/kk-alembic.log"
+fi
 ok "Migrations head par"
 
 # ── 4. --seed ───────────────────────────────────────────────────────────
