@@ -4,6 +4,25 @@ WhatsApp-based order management for a laundry shop in Varanasi. Customers,
 washer, and delivery staff all interact over WhatsApp; the bot coordinates.
 Full context: [PROJECT_SPEC.md](PROJECT_SPEC.md).
 
+## Quick start (Linux / macOS / Codespaces)
+
+```bash
+pip install -r requirements.txt
+./run.sh --seed        # pehli baar: rate card aur staff bhi bhar dega
+./run.sh               # uske baad
+./run.sh --stop        # band
+```
+
+`run.sh` .env banata hai (agar nahi hai), Postgres uthata hai, migrations
+chalata hai, purana server band karta hai, aur naya chalu karke `/health`
+se **asli jawab** lekar `READY` dikhata hai.
+
+Ye aakhri kadam sabse zaroori hai. Dashboard ek PWA hai: server band ho to
+uska service worker cache se purana page de deta hai — bina error, bina
+kisi ishaare ke. Browser mein app khuli dikhti rahegi jabki kuch chal hi
+nahi raha hoga. Isliye jab bhi lage "code badla par kuch nahi hua", pehle
+dekho ki `READY` likha aaya tha ya nahi.
+
 ## Setup (Windows)
 
 ```bat
