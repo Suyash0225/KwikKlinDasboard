@@ -256,6 +256,66 @@ async def test_rate_card_rename(client) -> None:
             await s.commit()
 
 
+async def test_rate_card_one_name_one_unit(client) -> None:
+    """Ek naam per-kg aur per-piece dono nahi ban sakta.
+
+    Ye wahi cheez hai jo New Bill ke dropdown mein "Wash & Iron (kg)" aur
+    "Wash & Iron" bana kar duplicate dikhati thi. Unique constraint isse
+    nahi rokta: kg row ka garment khaali hota hai, pc row ka nahi.
+    """
+    r = await client.post(
+        "/admin/api/rates",
+        json={"service": "TEST Unit Svc", "garment": "", "unit": "kg", "rate": "80"},
+        headers=AUTH,
+    )
+    assert r.status_code == 201
+    try:
+        clash = await client.post(
+            "/admin/api/rates",
+            json={"service": "test unit svc", "garment": "TEST Kambal", "unit": "pc", "rate": "150"},
+            headers=AUTH,
+        )
+        assert clash.status_code == 409
+        assert "per kg" in clash.json()["detail"]
+
+        # doosre naam se wahi cheez chal jaati hai
+        ok = await client.post(
+            "/admin/api/rates",
+            json={"service": "TEST Unit Svc Piece", "garment": "TEST Kambal", "unit": "pc", "rate": "150"},
+            headers=AUTH,
+        )
+        assert ok.status_code == 201
+    finally:
+        async with async_session_factory() as s:
+            await s.execute(sqltext("DELETE FROM rate_card WHERE service LIKE 'TEST Unit Svc%'"))
+            await s.commit()
+
+
+async def test_rate_card_collapses_inner_spaces(client) -> None:
+    """"Wash  &  Iron" aur "Wash & Iron" ek hi naam hai."""
+    r = await client.post(
+        "/admin/api/rates",
+        json={"service": "TEST  Do   Space", "garment": "TEST Rumaal", "unit": "pc", "rate": "20"},
+        headers=AUTH,
+    )
+    assert r.status_code == 201
+    try:
+        rows = [x for x in (await client.get("/admin/api/rates", headers=AUTH)).json()
+                if x["service"].startswith("TEST Do")]
+        assert len(rows) == 1 and rows[0]["service"] == "TEST Do Space"
+
+        dup = await client.post(
+            "/admin/api/rates",
+            json={"service": "TEST Do Space", "garment": "TEST  Rumaal", "unit": "pc", "rate": "25"},
+            headers=AUTH,
+        )
+        assert dup.status_code == 409
+    finally:
+        async with async_session_factory() as s:
+            await s.execute(sqltext("DELETE FROM rate_card WHERE service LIKE 'TEST%Space'"))
+            await s.commit()
+
+
 async def test_staff_settings_crud(client) -> None:
     r = await client.post(
         "/admin/api/staff",

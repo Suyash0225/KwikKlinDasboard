@@ -980,11 +980,16 @@ async def create_bill(
         raise HTTPException(status_code=400, detail="Customer number is needed")
 
     rows = (await db.execute(select(Rate).where(Rate.is_active))).scalars().all()
-    by_key = {(r.service.strip().lower(), r.garment.strip().lower()): r for r in rows}
+    # Naam ki pehchaan case AUR beech ki extra spaces ke bina — wahi niyam
+    # jo admin ka rate card lagata hai (admin._name_key). Sirf .lower() se
+    # "Wash  &  Iron" wali purani row kabhi match hi nahi hoti aur biller ko
+    # "rate card par nahi hai" milta rehta.
+    key = lambda s: re.sub(r"\s+", " ", str(s or "")).strip().lower()  # noqa: E731
+    by_key = {(key(r.service), key(r.garment)): r for r in rows}
     items, gross = [], Decimal("0")
     overrides = []          # audit ke liye: kis line par card se kitna alag
     for it in body.items:
-        row = by_key.get((it.service.strip().lower(), it.garment.strip().lower()))
+        row = by_key.get((key(it.service), key(it.garment)))
         if row is None:
             raise HTTPException(
                 status_code=400,

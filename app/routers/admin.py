@@ -762,11 +762,21 @@ def _canonical_name(existing: list[str], name: str) -> str:
     constraint case dekhta hai, aadmi nahi — bina iske do alag rows ban
     jaati hain aur matrix mein ek hi kapde ki do lines dikhti hain.
     """
-    key = name.strip().casefold()
+    key = _name_key(name)
     for e in existing:
-        if e.strip().casefold() == key:
+        if _name_key(e) == key:
             return e.strip()
-    return name.strip()
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def _name_key(name: str) -> str:
+    """Naam ki pehchaan: case aur beech ki extra spaces hata kar.
+
+    "Wash  &  Iron" aur "wash & iron" ek hi cheez hain. Bina iske dono
+    alag rows ban jaati hain aur New Bill ke dropdown mein duplicate
+    dikhta hai.
+    """
+    return re.sub(r"\s+", " ", str(name or "")).strip().casefold()
 
 
 @router.post("/api/rates", dependencies=[Depends(require_admin_owner)], status_code=201)
@@ -788,8 +798,8 @@ async def rate_create(body: RateIn, db: AsyncSession = Depends(get_db)) -> dict:
         (
             r
             for r in rows
-            if r.service.strip().casefold() == service.casefold()
-            and r.garment.strip().casefold() == garment.casefold()
+            if _name_key(r.service) == _name_key(service)
+            and _name_key(r.garment) == _name_key(garment)
         ),
         None,
     )
@@ -809,6 +819,24 @@ async def rate_create(body: RateIn, db: AsyncSession = Depends(get_db)) -> dict:
         await db.commit()
         log.info("rate_reactivated", service=service, garment=garment, rate=str(body.rate))
         return {"id": str(dupe.id), "reactivated": True}
+
+    # Ek naam, ek unit. Unique constraint (tenant, service, garment) isse
+    # nahi rokta: per-kg row ka garment khaali hota hai aur per-piece ka
+    # "Shirt", to "Wash & Iron" dono units mein ban jaata tha. New Bill ka
+    # service dropdown sirf naam dikhata hai, isliye counter par do ek jaisi
+    # lines dikhti thin aur galat wali chunne par galat daam lag jaata tha.
+    # Dukaandar isi se bachne ke liye naam ke andar "(kg)" likhne lagta hai.
+    unit_clash = next(
+        (r for r in rows if _name_key(r.service) == _name_key(service) and r.unit != body.unit),
+        None,
+    )
+    if unit_clash is not None:
+        other = "per kg" if unit_clash.unit == "kg" else "per piece"
+        raise HTTPException(
+            status_code=409,
+            detail=f"\u201c{unit_clash.service.strip()}\u201d is already a {other} service. "
+                   f"A name can only be one or the other — use a different name for this one.",
+        )
 
     rate = Rate(service=service, garment=garment, unit=body.unit, rate=body.rate)
     db.add(rate)
@@ -849,17 +877,18 @@ async def rate_rename(body: RateRenameIn, db: AsyncSession = Depends(get_db)) ->
         raise HTTPException(status_code=400, detail="New name cannot be empty")
 
     rows = (await db.execute(select(Rate))).scalars().all()
-    hits = [r for r in rows if getattr(r, field).strip().casefold() == old.casefold()]
+    hits = [r for r in rows if _name_key(getattr(r, field)) == _name_key(old)]
     if not hits:
         raise HTTPException(
             status_code=404, detail=f"No {body.kind} called \u201c{old}\u201d on the rate card"
         )
 
-    if new.casefold() != old.casefold():
+    new = re.sub(r"\s+", " ", new)
+    if _name_key(new) != _name_key(old):
         # Do naam jodne ka matlab hota ki kis row ka daam bacha — wo faisla
         # hum nahi le sakte, aur unique constraint waise bhi tootta.
         clash = next(
-            (r for r in rows if getattr(r, field).strip().casefold() == new.casefold()),
+            (r for r in rows if _name_key(getattr(r, field)) == _name_key(new)),
             None,
         )
         if clash is not None:
@@ -930,7 +959,7 @@ async def rate_delete_group(
     hoti hain (har service ke liye ek). Match case-insensitive hai, warna
     "Shirt" delete karne par "shirt" peeche reh jaata.
     """
-    g, s = garment.strip().casefold(), service.strip().casefold()
+    g, s = _name_key(garment), _name_key(service)
     if not g and not s:
         raise HTTPException(
             status_code=400, detail="Tell me which garment or service to remove"
@@ -942,8 +971,8 @@ async def rate_delete_group(
     rows = (await db.execute(select(Rate))).scalars().all()
     hits = [
         r for r in rows
-        if (not g or r.garment.strip().casefold() == g)
-        and (not s or r.service.strip().casefold() == s)
+        if (not g or _name_key(r.garment) == g)
+        and (not s or _name_key(r.service) == s)
     ]
     if not hits:
         raise HTTPException(status_code=404, detail="Nothing on the rate card by that name")

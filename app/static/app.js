@@ -806,8 +806,29 @@ function applyPreset() {
 }
 function addLine() { LINES.push({ service: "", garment: "", qty: 1, rate: "", amount: 0 }); renderLines(); }
 function delLine(i) { LINES.splice(i, 1); if (!LINES.length) addLine(); renderLines(); }
-const services = () => [...new Set(RATES.filter((r) => r.is_active).map((r) => r.service))];
-const garmentsFor = (svc) => RATES.filter((r) => r.is_active && r.service === svc);
+/* New Bill ka service dropdown.
+ *
+ * Naam ki pehchaan case aur extra spaces ke bina hoti hai, warna "Wash &
+ * Iron" aur "wash & iron" dropdown mein do lines ban kar baithte hain.
+ *
+ * Unit label bhi yahin lagta hai. Pehle dropdown sirf naam dikhata tha, to
+ * dukaandar ko per-kg service pehchanne ke liye naam ke andar khud "(kg)"
+ * likhna padta tha — aur phir list mein "Wash & Iron (kg)" aur "Wash &
+ * Iron" duplicate jaisi dikhti thi. Ab unit apne aap dikhta hai. */
+const nameKey = (s) => String(s ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+function serviceRows() {
+  const out = [];
+  for (const r of RATES.filter((x) => x.is_active)) {
+    const key = nameKey(r.service);
+    if (!key) continue;
+    const seen = out.find((x) => x.key === key);
+    if (seen) { if (r.unit !== seen.unit) seen.unit = ""; continue; }
+    out.push({ key, name: String(r.service).replace(/\s+/g, " ").trim(), unit: r.unit });
+  }
+  return out;
+}
+const services = () => serviceRows().map((x) => x.name);
+const garmentsFor = (svc) => RATES.filter((r) => r.is_active && nameKey(r.service) === nameKey(svc));
 
 function renderLines() {
   $("nb-lines").innerHTML = LINES.map((l, i) => `
@@ -815,7 +836,7 @@ function renderLines() {
       <div class="lf lf-service"><span class="ll">Service</span>
         <select aria-label="Service" onchange="LINES[${i}].service=this.value;LINES[${i}].garment='';lineRate(${i})">
           <option value="">Service…</option>
-          ${services().map((s) => `<option ${l.service === s ? "selected" : ""}>${esc(s)}</option>`).join("")}
+          ${serviceRows().map((x) => `<option value="${esc(x.name)}" ${nameKey(l.service) === x.key ? "selected" : ""}>${esc(x.name)}${x.unit === "kg" ? " · per kg" : x.unit === "pc" ? " · per piece" : ""}</option>`).join("")}
         </select></div>
       <div class="lf lf-item"><span class="ll">Item</span>
         <select aria-label="Item" onchange="LINES[${i}].garment=this.value;lineRate(${i})">
@@ -834,9 +855,16 @@ function renderLines() {
     </div>`).join("");
   calcBill();
 }
+/* Line ki rate card row. Match nameKey se hota hai, `===` se nahi: dropdown
+   ab normalised naam bhejta hai, aur purane rows mein double space ya alag
+   case pada ho sakta hai. Exact match par wo line "rate card par nahi hai"
+   ban jaati. */
+const rateRowFor = (l) => RATES.find(
+  (x) => x.is_active && nameKey(x.service) === nameKey(l.service) && nameKey(x.garment) === nameKey(l.garment));
+
 function lineRate(i) {
   const l = LINES[i];
-  const r = RATES.find((x) => x.service === l.service && x.garment === l.garment);
+  const r = rateRowFor(l);
   if (r) l.rate = parseFloat(r.rate);
   renderLines();
 }
@@ -959,10 +987,19 @@ async function saveBill(btn) {
       $("nb-phone").focus();
       return;
     }
-    const items = LINES.filter((l) => l.service && (l.garment || l.service.toLowerCase().includes("kg"))).map((l) => {
-      const r = RATES.find((x) => x.service === l.service && x.garment === l.garment) || {};
-      return { type: l.garment || l.service, service: l.service, qty: l.qty, rate: l.rate, amount: l.amount, unit: r.unit || "pc" };
-    });
+    // Per-kg line ki pehchaan rate card ke `unit` se hoti hai, naam se
+    // nahi. Pehle yahan `l.service.toLowerCase().includes("kg")` tha —
+    // yaani per-kg line bill mein tabhi jaati thi jab service ke NAAM ke
+    // andar "kg" likha ho. Isi wajah se dukaan ko "Wash & Fold (kg)" jaise
+    // naam rakhne pade, aur naam se "(kg)" hatate hi wo line chupchaap
+    // bill se gayab ho jaati — bina kisi error ke.
+    const items = LINES
+      .map((l) => ({ l, r: rateRowFor(l) }))
+      .filter(({ l, r }) => l.service && (l.garment || (r && r.unit === "kg")))
+      .map(({ l, r }) => ({
+        type: l.garment || l.service, service: l.service, qty: l.qty,
+        rate: l.rate, amount: l.amount, unit: (r && r.unit) || "pc",
+      }));
     if (!items.length) {
       $("nb-items-err").textContent = "Add at least one item — pick a service and an item.";
       return;
@@ -2720,7 +2757,7 @@ async function delPreset(i) {
    aur "Kid's shirt" par JS string toot jaati hai. JSON.stringify pehle,
    esc() baad mein — tab quote JS ke andar bhi surakshit rehta hai. */
 const jsArg = (s) => esc(JSON.stringify(String(s ?? "")));
-const sameName = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+const sameName = (a, b) => nameKey(a) === nameKey(b);
 
 function renderRateMatrix() {
   const pc = RM_RATES.filter((r) => r.unit === "pc");
@@ -2917,8 +2954,15 @@ async function rmAddKg(btn) {
     const s = $("rk-service").value.trim(), v = parseFloat($("rk-rate").value);
     if (!s) throw new Error("Service name is needed");
     if (!(v > 0)) throw new Error("Enter a rate above zero");
-    const clash = RM_RATES.find((r) => r.unit === "kg" && sameName(r.service, s));
-    if (clash) throw new Error(`"${clash.service}" is already a per-kg service`);
+    // Sirf kg rows dekhna kaafi nahi: ek hi naam dono units mein banne se
+    // hi New Bill ka dropdown duplicate dikhata hai. Backend bhi rokta hai,
+    // par yahan rokne se error counter par nahi, form par dikhta hai.
+    const clash = RM_RATES.find((r) => sameName(r.service, s));
+    if (clash) {
+      throw new Error(clash.unit === "kg"
+        ? `"${clash.service}" is already a per-kg service`
+        : `"${clash.service}" is already a per-piece service — pick a different name`);
+    }
     await api("/admin/api/rates", { method: "POST", body: { service: s, garment: "", unit: "kg", rate: v } });
     $("rk-service").value = ""; $("rk-rate").value = "";
     toast("Per-kg service added");
