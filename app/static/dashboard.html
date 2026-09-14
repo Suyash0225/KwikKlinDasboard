@@ -485,8 +485,15 @@
             <button class="btn sm ghost" onclick="rmAddService()">+ Add service</button>
           </div>
           <div id="rate-matrix" style="margin-top:10px;overflow-x:auto"></div>
+          <p class="muted" style="margin-top:8px">Clear a cell to drop just that rate. Use ✕ next to a garment or a service heading to delete it everywhere. Bills already printed keep their old rates either way.</p>
         </div>
-        <div class="card"><b>⚖️ Weight-based (per kg) rates</b><div id="rate-kg" style="margin-top:10px"></div></div>
+        <div class="card"><b>⚖️ Weight-based (per kg) rates</b>
+          <div class="filters" style="margin-top:8px">
+            <input id="rk-service" placeholder="Service name (e.g. Wash &amp; Fold)" aria-label="New per-kg service name" style="min-width:180px">
+            <input id="rk-rate" type="number" step="0.5" placeholder="₹ per kg" aria-label="Rate per kg" style="max-width:110px">
+            <button class="btn sm ghost" onclick="rmAddKg(this)">+ Add per-kg service</button>
+          </div>
+          <div id="rate-kg" style="margin-top:10px"></div></div>
       </div>
 
       <div id="st-ops" style="display:none">

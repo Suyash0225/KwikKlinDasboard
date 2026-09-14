@@ -116,6 +116,75 @@ async def test_rate_card_crud(client) -> None:
             await s.commit()
 
 
+async def test_rate_card_rejects_same_name_in_other_case(client) -> None:
+    """"shirt" aur "Shirt" ek hi kapda hai — do rows kabhi nahi."""
+    mk = lambda g, r: {"service": "TEST Dhulai", "garment": g, "unit": "pc", "rate": r}  # noqa: E731
+    assert (await client.post("/admin/api/rates", json=mk("TEST Kurta", "80"), headers=AUTH)).status_code == 201
+    try:
+        for typed in ("test kurta", "  TEST KURTA  "):
+            dup = await client.post("/admin/api/rates", json=mk(typed, "40"), headers=AUTH)
+            assert dup.status_code == 409, typed
+            assert "already on the rate card" in dup.json()["detail"]
+        rows = [x for x in (await client.get("/admin/api/rates", headers=AUTH)).json()
+                if x["service"] == "TEST Dhulai"]
+        assert len(rows) == 1 and rows[0]["rate"] == "80.00"
+
+        # Band row par dobara daam daalo -> wahi row zinda ho, nayi na bane
+        await client.put(f"/admin/api/rates/{rows[0]['id']}", json={"is_active": False}, headers=AUTH)
+        again = await client.post("/admin/api/rates", json=mk("test kurta", "95"), headers=AUTH)
+        assert again.status_code == 201 and again.json()["id"] == rows[0]["id"]
+        rows = [x for x in (await client.get("/admin/api/rates", headers=AUTH)).json()
+                if x["service"] == "TEST Dhulai"]
+        assert len(rows) == 1 and rows[0]["is_active"] is True and rows[0]["rate"] == "95.00"
+    finally:
+        async with async_session_factory() as s:
+            await s.execute(sqltext("DELETE FROM rate_card WHERE service = 'TEST Dhulai'"))
+            await s.commit()
+
+
+async def test_rate_card_delete(client) -> None:
+    """Ek cell, poora kapda, poori service — teeno hatane ka raasta."""
+    async def add(service: str, garment: str) -> str:
+        r = await client.post(
+            "/admin/api/rates",
+            json={"service": service, "garment": garment, "unit": "pc", "rate": "70"},
+            headers=AUTH,
+        )
+        assert r.status_code == 201
+        return r.json()["id"]
+
+    async def mine() -> list[dict]:
+        rows = (await client.get("/admin/api/rates", headers=AUTH)).json()
+        return [x for x in rows if x["service"].startswith("TEST Del")]
+
+    one = await add("TEST Del A", "TEST Topi")
+    await add("TEST Del B", "TEST Topi")
+    await add("TEST Del B", "TEST Mojaa")
+    try:
+        # 1. ek cell
+        assert (await client.delete(f"/admin/api/rates/{one}", headers=AUTH)).status_code == 200
+        assert (await client.delete(f"/admin/api/rates/{one}", headers=AUTH)).status_code == 404
+        assert len(await mine()) == 2
+
+        # 2. poora kapda — naam ka case maayne nahi rakhta
+        r = await client.delete("/admin/api/rates?garment=test%20topi", headers=AUTH)
+        assert r.status_code == 200 and r.json()["deleted"] == 1
+        assert [x["garment"] for x in await mine()] == ["TEST Mojaa"]
+
+        # 3. poori service
+        r = await client.delete("/admin/api/rates?service=TEST%20Del%20B", headers=AUTH)
+        assert r.status_code == 200 and r.json()["deleted"] == 1
+        assert await mine() == []
+
+        # kuch match na ho to 404, aur khaali sawaal par 400
+        assert (await client.delete("/admin/api/rates?garment=TEST%20Nahi", headers=AUTH)).status_code == 404
+        assert (await client.delete("/admin/api/rates", headers=AUTH)).status_code == 400
+    finally:
+        async with async_session_factory() as s:
+            await s.execute(sqltext("DELETE FROM rate_card WHERE service LIKE 'TEST Del%'"))
+            await s.commit()
+
+
 async def test_staff_settings_crud(client) -> None:
     r = await client.post(
         "/admin/api/staff",

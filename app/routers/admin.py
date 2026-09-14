@@ -755,17 +755,69 @@ async def rates_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
     ]
 
 
+def _canonical_name(existing: list[str], name: str) -> str:
+    """Jo spelling pehle se card par hai, wahi wapas do.
+
+    Dukaandar "shirt" type karta hai, card par "Shirt" hai. DB ka unique
+    constraint case dekhta hai, aadmi nahi — bina iske do alag rows ban
+    jaati hain aur matrix mein ek hi kapde ki do lines dikhti hain.
+    """
+    key = name.strip().casefold()
+    for e in existing:
+        if e.strip().casefold() == key:
+            return e.strip()
+    return name.strip()
+
+
 @router.post("/api/rates", dependencies=[Depends(require_admin_owner)], status_code=201)
 async def rate_create(body: RateIn, db: AsyncSession = Depends(get_db)) -> dict:
-    rate = Rate(service=body.service.strip(), garment=body.garment.strip(),
-                unit=body.unit, rate=body.rate)
+    service = body.service.strip()
+    garment = body.garment.strip()
+    if not service:
+        raise HTTPException(status_code=400, detail="Service name is needed")
+    if body.unit == "pc" and not garment:
+        raise HTTPException(
+            status_code=400, detail="Per-piece rate needs a garment name"
+        )
+
+    rows = (await db.execute(select(Rate))).scalars().all()
+    service = _canonical_name([r.service for r in rows], service)
+    garment = _canonical_name([r.garment for r in rows if r.garment], garment)
+
+    dupe = next(
+        (
+            r
+            for r in rows
+            if r.service.strip().casefold() == service.casefold()
+            and r.garment.strip().casefold() == garment.casefold()
+        ),
+        None,
+    )
+    if dupe is not None:
+        if dupe.is_active:
+            label = f"{garment} ({service})" if garment else service
+            raise HTTPException(
+                status_code=409,
+                detail=f"{label} is already on the rate card at ₹{dupe.rate}",
+            )
+        # Band padi row ko zinda karo. Nayi row banate to unique constraint
+        # waise bhi todti, aur user ko 409 milta jabki uski nazar mein wo
+        # cheez card par hai hi nahi.
+        dupe.rate = body.rate
+        dupe.unit = body.unit
+        dupe.is_active = True
+        await db.commit()
+        log.info("rate_reactivated", service=service, garment=garment, rate=str(body.rate))
+        return {"id": str(dupe.id), "reactivated": True}
+
+    rate = Rate(service=service, garment=garment, unit=body.unit, rate=body.rate)
     db.add(rate)
     try:
         await db.commit()
     except Exception:
         await db.rollback()
         raise HTTPException(status_code=409, detail="This service + item is already on the rate card")
-    log.info("rate_created", service=body.service, garment=body.garment, rate=str(body.rate))
+    log.info("rate_created", service=service, garment=garment, rate=str(body.rate))
     return {"id": str(rate.id)}
 
 
@@ -785,6 +837,66 @@ async def rate_update(rate_id: str, body: RateUpdateIn, db: AsyncSession = Depen
     await db.commit()
     log.info("rate_updated", rate_id=rate_id, rate=str(rate.rate), active=rate.is_active)
     return {"ok": True}
+
+
+# Purane bill par asar kyun nahi padta: staff_panel.bill_create har line ka
+# daam us waqt hi orders.items (JSONB) mein likh deta hai — garment, service,
+# qty, rate, amount, aur override hua to card_rate bhi. Bill kabhi rate_card
+# ko dobara nahi padhta. Isliye yahan se row hatana safe hai: sirf naye bill
+# ke dropdown se wo option gayab hota hai, purana bill jaisa tha waisa hi
+# chhapta rahega.
+
+@router.delete("/api/rates/{rate_id}", dependencies=[Depends(require_admin_owner)])
+async def rate_delete(rate_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Ek cell (service × garment) ko rate card se poori tarah hata do."""
+    try:
+        rid = uuid_module.UUID(rate_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid rate id")
+    rate = await db.get(Rate, rid)
+    if rate is None:
+        raise HTTPException(status_code=404, detail="rate not found")
+    service, garment = rate.service, rate.garment
+    await db.delete(rate)
+    await db.commit()
+    log.info("rate_deleted", rate_id=rate_id, service=service, garment=garment)
+    return {"ok": True, "deleted": 1}
+
+
+@router.delete("/api/rates", dependencies=[Depends(require_admin_owner)])
+async def rate_delete_group(
+    garment: str = Query(default="", max_length=60),
+    service: str = Query(default="", max_length=60),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Poora kapda (row) ya poori service (column) ek saath hatao.
+
+    Naam se chalta hai, id se nahi — matrix mein ek garment ki kai rows
+    hoti hain (har service ke liye ek). Match case-insensitive hai, warna
+    "Shirt" delete karne par "shirt" peeche reh jaata.
+    """
+    g, s = garment.strip().casefold(), service.strip().casefold()
+    if not g and not s:
+        raise HTTPException(
+            status_code=400, detail="Tell me which garment or service to remove"
+        )
+
+    # Select pehle: tenant filter ORM SELECT par lagta hai (app/database.py
+    # ka do_orm_execute), to id nikaal kar delete karna doosri dukaan ki row
+    # chhoone ke khatre ko poori tarah khatam kar deta hai.
+    rows = (await db.execute(select(Rate))).scalars().all()
+    hits = [
+        r for r in rows
+        if (not g or r.garment.strip().casefold() == g)
+        and (not s or r.service.strip().casefold() == s)
+    ]
+    if not hits:
+        raise HTTPException(status_code=404, detail="Nothing on the rate card by that name")
+
+    await db.execute(delete(Rate).where(Rate.id.in_([r.id for r in hits])))
+    await db.commit()
+    log.info("rate_group_deleted", garment=garment, service=service, count=len(hits))
+    return {"ok": True, "deleted": len(hits)}
 
 
 # ---------- Settings: Staff ----------

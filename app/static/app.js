@@ -2665,6 +2665,14 @@ async function delPreset(i) {
 }
 
 /* pricing matrix (legacy-style: garment rows x service columns) */
+
+/* Naam inline onclick ke andar jaate hain. esc() akela kaafi nahi: wo ' ko
+   &#39; banata hai, jise browser attribute padhte waqt wapas ' kar deta hai
+   aur "Kid's shirt" par JS string toot jaati hai. JSON.stringify pehle,
+   esc() baad mein — tab quote JS ke andar bhi surakshit rehta hai. */
+const jsArg = (s) => esc(JSON.stringify(String(s ?? "")));
+const sameName = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+
 function renderRateMatrix() {
   const pc = RM_RATES.filter((r) => r.unit === "pc");
   const kg = RM_RATES.filter((r) => r.unit === "kg");
@@ -2672,37 +2680,112 @@ function renderRateMatrix() {
   const garments = [...new Set([...pc.map((r) => r.garment), ...RM_EXTRA_G])].filter(Boolean).sort();
   const cell = (g, s) => {
     const r = pc.find((x) => x.garment === g && x.service === s);
-    return `<td><input type="number" step="0.5" style="max-width:86px" value="${r ? r.rate : ""}"
-      placeholder="—" onchange="rmCell('${esc(g)}','${esc(s)}',this.value,'${r ? r.id : ""}')"></td>`;
+    // Band row ka daam dikhana jhooth hai — wo bill par lagta hi nahi.
+    // Khaali cell dikhao, dobara type karne par row zinda ho jaayegi.
+    const shown = r && r.is_active ? r.rate : "";
+    return `<td><input type="number" step="0.5" style="max-width:86px" value="${shown}"
+      placeholder="—" onchange="rmCell(${jsArg(g)},${jsArg(s)},this.value,'${r ? r.id : ""}')"></td>`;
   };
   $("rate-matrix").innerHTML = `
-    <table class="tbl keep" style="min-width:${180 + services.length * 110}px"><thead><tr>
-      <th>Laundry garment name</th>${services.map((s) => `<th>${esc(s)} (₹)</th>`).join("")}
+    <table class="tbl keep" style="min-width:${200 + services.length * 120}px"><thead><tr>
+      <th>Laundry garment name</th>${services.map((s) => `<th>
+        <span style="display:inline-flex;align-items:center;gap:6px">${esc(s)} (₹)
+        <button class="btn sm ghost" title="Remove the ${esc(s)} service"
+          onclick="rmDelService(${jsArg(s)})">✕</button></span></th>`).join("")}
     </tr></thead><tbody>
-      ${garments.map((g) => `<tr><td><b style="font-size:13px;text-transform:none;letter-spacing:0">${esc(g)}</b></td>${services.map((s) => cell(g, s)).join("")}</tr>`).join("")}
-    </tbody></table>`;
+      ${garments.map((g) => `<tr><td>
+        <span style="display:inline-flex;align-items:center;gap:8px">
+          <b style="font-size:13px;text-transform:none;letter-spacing:0">${esc(g)}</b>
+          <button class="btn sm ghost" title="Remove ${esc(g)} from the rate card"
+            onclick="rmDelGarment(${jsArg(g)})">✕</button></span>
+        </td>${services.map((s) => cell(g, s)).join("")}</tr>`).join("")}
+    </tbody></table>
+    ${garments.length ? "" : `<p class="muted">No garments yet — add one above.</p>`}`;
   $("rate-kg").innerHTML = kg.map((r) => `
     <div class="sumrow"><span>${esc(r.service)}</span>
-      <span style="max-width:110px"><input type="number" step="0.5" value="${r.rate}" onchange="updRate('${r.id}', this.value, null)"></span></div>`).join("")
+      <span style="display:flex;align-items:center;gap:8px;max-width:170px">
+        <input type="number" step="0.5" value="${r.rate}" onchange="updRate('${r.id}', this.value, null)">
+        <button class="btn sm danger" title="Remove this per-kg service"
+          onclick="rmDelRate('${r.id}', ${jsArg(r.service)})">✕</button></span></div>`).join("")
     || `<p class="muted">No per-kg services yet.</p>`;
+}
+async function rmReload() {
+  RM_RATES = await api("/admin/api/rates");
+  renderRateMatrix();
 }
 async function rmCell(garment, service, value, id) {
   const v = parseFloat(value);
   try {
     if (id) {
-      if (!(v > 0)) { await api(`/admin/api/rates/${id}`, { method: "PUT", body: { is_active: false } }); toast("Rate disabled"); }
+      if (!(v > 0)) { await api(`/admin/api/rates/${id}`, { method: "PUT", body: { is_active: false } }); toast("Rate cleared — not on new bills"); }
       else { await api(`/admin/api/rates/${id}`, { method: "PUT", body: { rate: v, is_active: true } }); toast("Rate saved — new bills only"); }
     } else if (v > 0) {
       await api("/admin/api/rates", { method: "POST", body: { service, garment, unit: "pc", rate: v } });
       toast("Rate added");
     }
-    RM_RATES = await api("/admin/api/rates");
-    renderRateMatrix();
+    await rmReload();
   } catch (e) { toast(e.message, true); }
 }
+
+/* ---- delete: cell, poora kapda, poori service ---- */
+function rmDelRate(id, label) {
+  confirmDialog(`Remove ${label} from the rate card? Old bills keep their printed rate.`, async () => {
+    try {
+      await api(`/admin/api/rates/${id}`, { method: "DELETE" });
+      toast("Removed");
+      await rmReload();
+    } catch (e) { toast(e.message, true); }
+  });
+}
+function rmDelGarment(g) {
+  const saved = RM_RATES.filter((r) => sameName(r.garment, g)).length;
+  if (!saved) {                       // sirf abhi add kiya tha, DB mein hai hi nahi
+    RM_EXTRA_G = RM_EXTRA_G.filter((x) => !sameName(x, g));
+    renderRateMatrix();
+    return;
+  }
+  confirmDialog(
+    `Delete "${g}" and its ${saved} rate${saved > 1 ? "s" : ""}? It disappears from New Bill. Old bills keep their printed rates.`,
+    async () => {
+      try {
+        const r = await api(`/admin/api/rates?garment=${encodeURIComponent(g)}`, { method: "DELETE" });
+        RM_EXTRA_G = RM_EXTRA_G.filter((x) => !sameName(x, g));
+        toast(`Deleted ${g} (${r.deleted} rate${r.deleted > 1 ? "s" : ""})`);
+        await rmReload();
+      } catch (e) { toast(e.message, true); }
+    });
+}
+function rmDelService(s) {
+  const saved = RM_RATES.filter((r) => sameName(r.service, s)).length;
+  if (!saved) {
+    RM_EXTRA_S = RM_EXTRA_S.filter((x) => !sameName(x, s));
+    renderRateMatrix();
+    return;
+  }
+  confirmDialog(
+    `Delete the "${s}" service and its ${saved} rate${saved > 1 ? "s" : ""}? Old bills keep their printed rates.`,
+    async () => {
+      try {
+        const r = await api(`/admin/api/rates?service=${encodeURIComponent(s)}`, { method: "DELETE" });
+        RM_EXTRA_S = RM_EXTRA_S.filter((x) => !sameName(x, s));
+        toast(`Deleted ${s} (${r.deleted} rate${r.deleted > 1 ? "s" : ""})`);
+        await rmReload();
+      } catch (e) { toast(e.message, true); }
+    });
+}
+
+/* ---- add: duplicate naam yahin rok do ---- */
 function rmAddGarment() {
   const g = $("rm-garment").value.trim();
   if (!g) return;
+  // Server bhi 409 deta hai, par wo tabhi jab pehla rate type ho. Yahan
+  // rokne se do "Shirt" rows banti hi nahi.
+  const clash = [...RM_RATES.map((r) => r.garment), ...RM_EXTRA_G].find((x) => x && sameName(x, g));
+  if (clash) {
+    toast(`"${clash}" is already on the rate card`, true);
+    $("rm-garment").select();
+    return;
+  }
   RM_EXTRA_G.push(g); $("rm-garment").value = "";
   renderRateMatrix();
   toast("Now type a rate in any service cell — it saves automatically");
@@ -2710,8 +2793,27 @@ function rmAddGarment() {
 function rmAddService() {
   const s = $("rm-service").value.trim();
   if (!s) return;
+  const clash = [...RM_RATES.map((r) => r.service), ...RM_EXTRA_S].find((x) => x && sameName(x, s));
+  if (clash) {
+    toast(`"${clash}" service already exists`, true);
+    $("rm-service").select();
+    return;
+  }
   RM_EXTRA_S.push(s); $("rm-service").value = "";
   renderRateMatrix();
+}
+async function rmAddKg(btn) {
+  await busy(btn, async () => {
+    const s = $("rk-service").value.trim(), v = parseFloat($("rk-rate").value);
+    if (!s) throw new Error("Service name is needed");
+    if (!(v > 0)) throw new Error("Enter a rate above zero");
+    const clash = RM_RATES.find((r) => r.unit === "kg" && sameName(r.service, s));
+    if (clash) throw new Error(`"${clash.service}" is already a per-kg service`);
+    await api("/admin/api/rates", { method: "POST", body: { service: s, garment: "", unit: "kg", rate: v } });
+    $("rk-service").value = ""; $("rk-rate").value = "";
+    toast("Per-kg service added");
+    await rmReload();
+  });
 }
 let rateTimer = {};
 function updRate(id, rate, active) {
