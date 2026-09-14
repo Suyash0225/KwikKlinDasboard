@@ -821,6 +821,61 @@ async def rate_create(body: RateIn, db: AsyncSession = Depends(get_db)) -> dict:
     return {"id": str(rate.id)}
 
 
+class RateRenameIn(BaseModel):
+    kind: str = Field(pattern="^(garment|service)$")
+    old: str = Field(min_length=1, max_length=60)
+    new: str = Field(min_length=1, max_length=60)
+
+
+# NOTE: ye route /api/rates/{rate_id} se PEHLE hona zaroori hai. FastAPI
+# declaration ke order mein match karta hai — neeche rakha to "rename"
+# rate_id samjha jaata aur har rename 400 "invalid rate id" deti.
+
+@router.put("/api/rates/rename", dependencies=[Depends(require_admin_owner)])
+async def rate_rename(body: RateRenameIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Kapde ya service ka naam badlo — uski saari rows par ek saath.
+
+    Ek garment ki matrix mein kai rows hoti hain (har service ke liye ek),
+    isliye rename naam se chalta hai, id se nahi.
+
+    Purane bill par asar nahi padta: naam bhi daam ke saath orders.items
+    mein likha ja chuka hota hai. Jo bill "Shirt" par bana tha wo "Shirt"
+    hi chhapega, chahe card par ab "Shirt / Formal" likha ho. Ye galti
+    nahi hai — bill wahi dikhana chahiye jo grahak ko diya gaya tha.
+    """
+    field = "garment" if body.kind == "garment" else "service"
+    old, new = body.old.strip(), body.new.strip()
+    if not new:
+        raise HTTPException(status_code=400, detail="New name cannot be empty")
+
+    rows = (await db.execute(select(Rate))).scalars().all()
+    hits = [r for r in rows if getattr(r, field).strip().casefold() == old.casefold()]
+    if not hits:
+        raise HTTPException(
+            status_code=404, detail=f"No {body.kind} called \u201c{old}\u201d on the rate card"
+        )
+
+    if new.casefold() != old.casefold():
+        # Do naam jodne ka matlab hota ki kis row ka daam bacha — wo faisla
+        # hum nahi le sakte, aur unique constraint waise bhi tootta.
+        clash = next(
+            (r for r in rows if getattr(r, field).strip().casefold() == new.casefold()),
+            None,
+        )
+        if clash is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"\u201c{getattr(clash, field).strip()}\u201d already exists — "
+                       f"delete one of them first, they can't be merged",
+            )
+
+    for r in hits:
+        setattr(r, field, new)
+    await db.commit()
+    log.info("rate_renamed", kind=body.kind, old=old, new=new, rows=len(hits))
+    return {"ok": True, "renamed": len(hits), "name": new}
+
+
 @router.put("/api/rates/{rate_id}", dependencies=[Depends(require_admin_owner)])
 async def rate_update(rate_id: str, body: RateUpdateIn, db: AsyncSession = Depends(get_db)) -> dict:
     try:

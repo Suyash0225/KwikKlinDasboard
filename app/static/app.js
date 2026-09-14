@@ -2572,10 +2572,59 @@ async function loadActivity(reset = true) {
 let STAFF = [], SETTINGS_CACHE = {}, RM_RATES = [], RM_EXTRA_G = [], RM_EXTRA_S = [];
 
 function stTab(t) {
-  ["profile", "pricing", "messages", "ops"].forEach((x) => {
+  ["profile", "pricing", "messages", "ops", "account"].forEach((x) => {
     const el = $("st-" + x); if (el) el.style.display = x === t ? "" : "none";
   });
   document.querySelectorAll("[data-st]").forEach((el) => el.classList.toggle("on", el.dataset.st === t));
+  if (t === "account") acctInfo();
+}
+
+/* Password badalne ke liye email/password wala SESSION chahiye. Purani
+ * admin-key se andar aaya banda /api/me/password par 401 khayega, isliye
+ * pehle hi saaf bata do — warna wo teen baar sahi password type karke bhi
+ * "galat hai" padhta rahega. */
+function acctInfo() {
+  const u = SIGNED_IN_AS && SIGNED_IN_AS.user;
+  const btn = $("pw-go");
+  if (u) {
+    $("acct-who").textContent = `Signed in as ${u.name || u.email} (${u.email}).`;
+    if (btn) btn.disabled = false;
+  } else {
+    $("acct-who").textContent =
+      "You are signed in with the admin key, not an email login. Log in with your email and password to change it.";
+    if (btn) btn.disabled = true;
+  }
+}
+
+async function changePassword(btn) {
+  const err = (m) => { $("pw-err").textContent = m; };
+  err("");
+  const old = $("pw-old").value, np = $("pw-new").value, np2 = $("pw-new2").value;
+  if (!old) return err("Enter your current password.");
+  if (np.length < 8) return err("The new password needs at least 8 characters.");
+  if (np !== np2) return err("The two new passwords do not match.");
+  if (np === old) return err("That is the password you already have.");
+
+  // Yahan api() jaan-boojh kar nahi: uska 401 handler login modal khol
+  // deta hai, aur "purana password galat" par login modal kholna aadmi ko
+  // ye sochne par majboor karta hai ki uski session hi ud gayi.
+  await busy(btn, async () => {
+    const res = await fetch("/api/me/password", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: old, new_password: np }),
+    });
+    if (!res.ok) {
+      let d = "";
+      try { d = (await res.json()).detail || ""; } catch (e) {}
+      if (typeof d !== "string") d = "That password was not accepted.";
+      if (res.status === 401 && !d) d = "Your current password is not right.";
+      return err(d || "Could not change the password. Try again.");
+    }
+    $("pw-old").value = $("pw-new").value = $("pw-new2").value = "";
+    toast("Password changed ✅ — other devices are signed out");
+  });
 }
 
 async function loadSettings() {
@@ -2687,15 +2736,19 @@ function renderRateMatrix() {
       placeholder="—" onchange="rmCell(${jsArg(g)},${jsArg(s)},this.value,'${r ? r.id : ""}')"></td>`;
   };
   $("rate-matrix").innerHTML = `
-    <table class="tbl keep" style="min-width:${200 + services.length * 120}px"><thead><tr>
+    <table class="tbl keep" style="min-width:${230 + services.length * 130}px"><thead><tr>
       <th>Laundry garment name</th>${services.map((s) => `<th>
-        <span style="display:inline-flex;align-items:center;gap:6px">${esc(s)} (₹)
+        <span style="display:inline-flex;align-items:center;gap:4px">${esc(s)} (₹)
+        <button class="btn sm ghost" title="Rename the ${esc(s)} service"
+          onclick="rmRename('service',${jsArg(s)})">✎</button>
         <button class="btn sm ghost" title="Remove the ${esc(s)} service"
           onclick="rmDelService(${jsArg(s)})">✕</button></span></th>`).join("")}
     </tr></thead><tbody>
       ${garments.map((g) => `<tr><td>
-        <span style="display:inline-flex;align-items:center;gap:8px">
+        <span style="display:inline-flex;align-items:center;gap:6px">
           <b style="font-size:13px;text-transform:none;letter-spacing:0">${esc(g)}</b>
+          <button class="btn sm ghost" title="Rename ${esc(g)}"
+            onclick="rmRename('garment',${jsArg(g)})">✎</button>
           <button class="btn sm ghost" title="Remove ${esc(g)} from the rate card"
             onclick="rmDelGarment(${jsArg(g)})">✕</button></span>
         </td>${services.map((s) => cell(g, s)).join("")}</tr>`).join("")}
@@ -2703,8 +2756,10 @@ function renderRateMatrix() {
     ${garments.length ? "" : `<p class="muted">No garments yet — add one above.</p>`}`;
   $("rate-kg").innerHTML = kg.map((r) => `
     <div class="sumrow"><span>${esc(r.service)}</span>
-      <span style="display:flex;align-items:center;gap:8px;max-width:170px">
+      <span style="display:flex;align-items:center;gap:6px;max-width:210px">
         <input type="number" step="0.5" value="${r.rate}" onchange="updRate('${r.id}', this.value, null)">
+        <button class="btn sm ghost" title="Rename this service"
+          onclick="rmRename('service',${jsArg(r.service)})">✎</button>
         <button class="btn sm danger" title="Remove this per-kg service"
           onclick="rmDelRate('${r.id}', ${jsArg(r.service)})">✕</button></span></div>`).join("")
     || `<p class="muted">No per-kg services yet.</p>`;
@@ -2772,6 +2827,61 @@ function rmDelService(s) {
         await rmReload();
       } catch (e) { toast(e.message, true); }
     });
+}
+
+/* ---- rename: kapda ya service ka naam badlo ---- */
+function rmRename(kind, oldName) {
+  const pick = (r) => (kind === "garment" ? r.garment : r.service);
+  const saved = RM_RATES.filter((r) => sameName(pick(r), oldName)).length;
+  const label = kind === "garment" ? "garment" : "service";
+  openModal(`<h3>Rename ${label}</h3>
+    <p class="muted">${saved
+      ? `“${esc(oldName)}” has ${saved} rate${saved > 1 ? "s" : ""} on the card. All of them move to the new name.`
+      : `“${esc(oldName)}” has no rates yet.`}
+      Bills already printed keep the old name — that is what the customer was handed.</p>
+    <div class="frm" style="margin-top:10px">
+      <input id="rn-new" maxlength="60" value="${esc(oldName)}" aria-label="New ${label} name">
+    </div>
+    <p id="rn-err" class="muted" style="color:var(--danger);min-height:18px"></p>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn" id="rn-go">Rename</button></div>`);
+  const inp = $("rn-new");
+  inp.focus(); inp.select();
+  inp.onkeydown = (e) => { if (e.key === "Enter") $("rn-go").click(); };
+
+  $("rn-go").onclick = async () => {
+    const next = inp.value.trim();
+    const fail = (m) => { $("rn-err").textContent = m; inp.select(); };
+    if (!next) return fail("Give it a name.");
+    if (sameName(next, oldName) && next === oldName) { closeModal(); return; }
+    // Sirf case badalna theek hai ("shirt" -> "Shirt"). Kisi DOOSRE
+    // maujooda naam par le jaana nahi — us jodi ki rows aapas mein
+    // takrayengi aur kiska daam bache ye faisla hum nahi le sakte.
+    const pool = kind === "garment"
+      ? [...RM_RATES.map((r) => r.garment), ...RM_EXTRA_G]
+      : [...RM_RATES.map((r) => r.service), ...RM_EXTRA_S];
+    const clash = pool.find((x) => x && sameName(x, next) && !sameName(x, oldName));
+    if (clash) return fail(`“${clash}” already exists — delete one of them first.`);
+
+    if (!saved) {                      // abhi add kiya tha, DB mein hai hi nahi
+      const arr = kind === "garment" ? RM_EXTRA_G : RM_EXTRA_S;
+      const i = arr.findIndex((x) => sameName(x, oldName));
+      if (i >= 0) arr[i] = next;
+      closeModal(); renderRateMatrix();
+      return;
+    }
+    await busy($("rn-go"), async () => {
+      const r = await api("/admin/api/rates/rename", {
+        method: "PUT", body: { kind, old: oldName, new: next },
+      });
+      const arr = kind === "garment" ? RM_EXTRA_G : RM_EXTRA_S;
+      const i = arr.findIndex((x) => sameName(x, oldName));
+      if (i >= 0) arr[i] = next;
+      closeModal();
+      toast(`Renamed to ${r.name} (${r.renamed} rate${r.renamed > 1 ? "s" : ""})`);
+      await rmReload();
+    });
+  };
 }
 
 /* ---- add: duplicate naam yahin rok do ---- */

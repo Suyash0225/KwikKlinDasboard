@@ -434,6 +434,7 @@
         <span class="chip" data-st="pricing" onclick="stTab('pricing')">🔥 Pricing rates matrix</span>
         <span class="chip" data-st="messages" onclick="stTab('messages')">✉️ Message formats</span>
         <span class="chip" data-st="ops" onclick="stTab('ops')">⚙️ Operations & Agents</span>
+        <span class="chip" data-st="account" onclick="stTab('account')">🔐 My account</span>
       </div>
 
       <div id="st-profile">
@@ -629,6 +630,24 @@
           </div>
         </div>
       </div>
+      </div>
+
+      <div id="st-account" style="display:none">
+        <div class="card">
+          <b>🔐 Change your password</b>
+          <p class="muted" style="margin-top:4px" id="acct-who"></p>
+          <div class="frm" style="margin-top:10px;max-width:420px">
+            <label for="pw-old">Current password</label>
+            <input id="pw-old" type="password" autocomplete="current-password">
+            <label for="pw-new" style="margin-top:8px">New password (at least 8 characters)</label>
+            <input id="pw-new" type="password" autocomplete="new-password">
+            <label for="pw-new2" style="margin-top:8px">Repeat new password</label>
+            <input id="pw-new2" type="password" autocomplete="new-password">
+            <p id="pw-err" class="muted" style="color:var(--danger);min-height:18px;margin-top:6px"></p>
+            <button class="btn" id="pw-go" style="margin-top:4px" onclick="changePassword(this)">Update password</button>
+          </div>
+          <p class="muted" style="margin-top:10px">Changing it signs you out everywhere else — any other phone or laptop has to log in again. This device stays signed in.</p>
+        </div>
       </div>
     </section>
 

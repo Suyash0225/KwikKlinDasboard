@@ -185,6 +185,77 @@ async def test_rate_card_delete(client) -> None:
             await s.commit()
 
 
+async def test_rate_card_rename(client) -> None:
+    """Naam badlo — kapda ho ya service, uski saari rows ek saath."""
+    async def add(service: str, garment: str) -> None:
+        r = await client.post(
+            "/admin/api/rates",
+            json={"service": service, "garment": garment, "unit": "pc", "rate": "60"},
+            headers=AUTH,
+        )
+        assert r.status_code == 201
+
+    async def mine() -> list[dict]:
+        rows = (await client.get("/admin/api/rates", headers=AUTH)).json()
+        return [x for x in rows if x["service"].startswith("TEST Rn")]
+
+    await add("TEST Rn Wash", "TEST Chadar")
+    await add("TEST Rn Iron", "TEST Chadar")
+    await add("TEST Rn Wash", "TEST Takiya")
+    try:
+        # kapda: dono rows ka naam badla, service waisi ki waisi
+        r = await client.put(
+            "/admin/api/rates/rename",
+            json={"kind": "garment", "old": "test chadar", "new": "TEST Bedsheet"},
+            headers=AUTH,
+        )
+        assert r.status_code == 200 and r.json()["renamed"] == 2
+        assert sorted({x["garment"] for x in await mine()}) == ["TEST Bedsheet", "TEST Takiya"]
+
+        # service: uski saari rows
+        r = await client.put(
+            "/admin/api/rates/rename",
+            json={"kind": "service", "old": "TEST Rn Wash", "new": "TEST Rn Dhulai"},
+            headers=AUTH,
+        )
+        assert r.status_code == 200 and r.json()["renamed"] == 2
+
+        # sirf case badalna chalta hai
+        assert (
+            await client.put(
+                "/admin/api/rates/rename",
+                json={"kind": "garment", "old": "TEST Bedsheet", "new": "TEST BEDSHEET"},
+                headers=AUTH,
+            )
+        ).status_code == 200
+
+        # maujooda doosre naam par le jaana -> 409, kyunki rows takrayengi
+        clash = await client.put(
+            "/admin/api/rates/rename",
+            json={"kind": "garment", "old": "TEST Takiya", "new": "test bedsheet"},
+            headers=AUTH,
+        )
+        assert clash.status_code == 409
+
+        # jo card par hai hi nahi
+        assert (
+            await client.put(
+                "/admin/api/rates/rename",
+                json={"kind": "garment", "old": "TEST Nahi Hai", "new": "TEST Kuch"},
+                headers=AUTH,
+            )
+        ).status_code == 404
+
+        # rename route ko {rate_id} nigal na le -- ye asli regression hai
+        assert (
+            await client.put("/admin/api/rates/rename", json={}, headers=AUTH)
+        ).status_code == 422
+    finally:
+        async with async_session_factory() as s:
+            await s.execute(sqltext("DELETE FROM rate_card WHERE service LIKE 'TEST Rn%'"))
+            await s.commit()
+
+
 async def test_staff_settings_crud(client) -> None:
     r = await client.post(
         "/admin/api/staff",
