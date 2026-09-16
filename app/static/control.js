@@ -552,12 +552,72 @@ function selectModal(title, label, options, onPick, current) {
    leta tha, isliye Save chalta tha, par DB "growth" lautati hai aur us par
    koi option match nahi karta. Isi wajah se Business wali shop par bhi
    dropdown "Basic" dikhata tha. */
-const planModal = (slug, row) => selectModal(`Change plan — ${row.shop_name}`, "Plan",
-  [["starter", "Basic — ₹999"], ["pro", "Premium — ₹1,999"], ["growth", "Business — ₹3,999"]],
-  async (plan) => {
-    await act(() => api(`/control/api/tenants/${slug}`, { method: "PATCH", body: { plan } }), "Plan updated");
-    refresh();
-  }, row.plan);
+/* Plan + muddat ek saath: 1/3/6/12 mahine chuno, period end utna aage badhta
+   hai aur status active. "Payment received" se raseed bhi Billing tab mein.
+   Daam server ke catalog se — yahan hardcode nahi (pehle ₹3,999 galat likha tha). */
+let PLAN_CATALOG = null;
+const DURATION_LABEL = { 1: "1 month", 3: "3 months", 6: "6 months", 12: "12 months" };
+async function planModal(slug, row) {
+  try { PLAN_CATALOG = PLAN_CATALOG || await api("/control/api/plan-catalog"); }
+  catch (e) { toast(e.message, "err"); return; }
+  openModal((sheet) => {
+    const pl = el("label", null, "Plan");
+    pl.htmlFor = "pm-plan";
+    const plan = el("select");
+    plan.id = "pm-plan";
+    for (const p of PLAN_CATALOG.plans) {
+      const o = el("option", null, `${p.name} — ${inr(p.price_inr)}/month`);
+      o.value = p.code;
+      plan.appendChild(o);
+    }
+    plan.value = row.plan || "starter";
+
+    const dl = el("label", null, "Duration");
+    dl.htmlFor = "pm-dur";
+    const dur = el("select");
+    dur.id = "pm-dur";
+    dur.appendChild(Object.assign(el("option", null, "Keep current period (plan change only)"), { value: "" }));
+    for (const d of PLAN_CATALOG.durations) {
+      dur.appendChild(Object.assign(el("option", null, DURATION_LABEL[d.months]), { value: String(d.months) }));
+    }
+
+    const payWrap = el("label", "inline mt");
+    const pay = el("input");
+    pay.type = "checkbox"; pay.id = "pm-pay"; pay.checked = true;
+    payWrap.append(pay, document.createTextNode(" Payment received — record an invoice"));
+    const preview = el("p", "muted mt");
+
+    const paint = () => {
+      const months = parseInt(dur.value, 10);
+      payWrap.hidden = !months;
+      if (!months) { preview.textContent = "Only the plan changes. Period end and status stay as they are."; return; }
+      const d = PLAN_CATALOG.durations.find((x) => x.months === months);
+      const now = new Date();
+      const cur = row.current_period_end ? new Date(row.current_period_end) : now;
+      const start = cur > now ? cur : now;
+      const end = new Date(start);
+      end.setMonth(end.getMonth() + months);
+      preview.textContent = `${DURATION_LABEL[months]} · ${inr(d.prices[plan.value])} + GST · active until `
+        + end.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+        + (cur > now ? " (added after the current paid period)" : "");
+    };
+    plan.addEventListener("change", paint);
+    dur.addEventListener("change", paint);
+    sheet.append(pl, plan, dl, dur, payWrap, preview);
+    paint();
+    buttonRow(sheet, [
+      { label: "Save", cls: "btn-primary", onClick: async () => {
+        const body = { plan: plan.value };
+        if (dur.value) { body.duration_months = parseInt(dur.value, 10); body.payment_received = pay.checked; }
+        closeModal();
+        await act(() => api(`/control/api/tenants/${slug}`, { method: "PATCH", body }),
+          dur.value ? `Plan set for ${DURATION_LABEL[dur.value]}` : "Plan updated");
+        refresh();
+      } },
+      { label: "Cancel", onClick: closeModal },
+    ]);
+  }, `Change plan — ${row.shop_name}`);
+}
 
 const statusModal = (slug, row) => selectModal(`Change status — ${row.shop_name}`, "Status",
   [["trial", "Trial"], ["active", "Active"], ["past_due", "Past due (read-only)"],
@@ -741,7 +801,7 @@ function bar(parent, label, used, limit) {
    (workspace turant khulta hai, spinner ke peeche nahi baithta). */
 const WS_TABS = [
   ["overview", "Overview"], ["usage", "Usage & limits"], ["recharge", "Recharge"],
-  ["whatsapp", "WhatsApp"], ["agent", "AI agent"], ["users", "Users"],
+  ["whatsapp", "WhatsApp"], ["integrations", "Instagram & Google"], ["agent", "AI agent"], ["users", "Users"],
   ["billing", "Billing"], ["activity", "Activity"], ["danger", "Danger"],
 ];
 
@@ -813,7 +873,7 @@ function selectTab(slug, d, id) {
   panel.setAttribute("aria-labelledby", `tab-${id}`);
   ({
     overview: tabOverview, usage: tabUsage, recharge: tabRecharge,
-    whatsapp: tabWhatsapp, agent: tabAgent, users: tabUsers,
+    whatsapp: tabWhatsapp, integrations: tabIntegrations, agent: tabAgent, users: tabUsers,
     billing: tabBilling, activity: tabActivity, danger: tabDanger,
   })[id](panel, slug, d);
 }
@@ -1011,6 +1071,129 @@ function tabWhatsapp(box, slug, d) {
   } }]);
   box.appendChild(el("p", "muted mt",
     "Meta's own limits (250 → 1K → 10K unique customers/day) apply on top of this and rise with the number's quality rating."));
+  if (d.wa_connected) waTemplates(box, slug);
+}
+
+/* Auto-message templates: without API the shop sends from its phone; with API
+   these approved templates go automatically once the 24h window is closed. */
+async function waTemplates(box, slug) {
+  const sec = el("div", "mt");
+  sec.appendChild(el("h4", null, "Auto-message templates"));
+  const list = el("div");
+  list.appendChild(el("p", "muted", "Loading…"));
+  sec.appendChild(list);
+  buttonRow(sec, [{ label: "Submit missing templates to Meta", cls: "btn-primary", onClick: async () => {
+    const r = await act(() => api(`/control/api/tenants/${slug}/whatsapp/templates`, { method: "POST" }),
+      "Submitted — Meta usually reviews utility templates within a day");
+    const failed = ((r && r.results) || []).filter((x) => x.status === "FAILED");
+    if (failed.length) toast(failed.map((x) => `${x.name}: ${x.error}`).join(" · "), "err");
+    reopen(slug, "whatsapp");
+  } }]);
+  box.appendChild(sec);
+  try {
+    const d = await api(`/control/api/tenants/${slug}/whatsapp/templates`);
+    list.replaceChildren();
+    if (d.state !== "ok") list.appendChild(el("p", "muted", "Could not read templates from Meta (check WABA ID and token)."));
+    for (const t of d.templates) {
+      const item = el("div", "tl-item");
+      item.appendChild(el("b", null, `${t.purpose} `));
+      item.appendChild(el("span", "muted", `${t.name} · ${t.status}` +
+        (t.rejected_reason && t.rejected_reason !== "NONE" ? ` · ${t.rejected_reason}` : "")));
+      list.appendChild(item);
+    }
+  } catch (e) { list.replaceChildren(el("p", "muted", "Could not load templates")); }
+}
+
+/* --- tab: Instagram & Google ------------------------------------------- */
+/* Tokens are set here only — the shop's own dashboard just shows status. */
+async function tabIntegrations(box, slug) {
+  box.appendChild(el("p", "muted", "Loading…"));
+  let d;
+  try { d = await api(`/control/api/tenants/${slug}/integrations`); }
+  catch (e) { box.replaceChildren(el("p", "muted", e.message)); return; }
+  box.replaceChildren();
+
+  const ig = d.instagram;
+  box.appendChild(el("h4", null, "Instagram (daily posts)"));
+  box.appendChild(el("p", "muted", ig.linked
+    ? `Connected — Instagram user ${ig.user_id}. The token is stored encrypted and never shown again.`
+    : "Not connected. Paste the Instagram Business user ID and a token with instagram_content_publish."));
+  const g = el("div", "grid-2");
+  const igId = field(g, "ig-id", "Instagram user ID", ig.user_id || "");
+  box.appendChild(g);
+  const igTok = field(box, "ig-token", "Access token (stored encrypted, never shown again)", "", "password");
+  igTok.autocomplete = "new-password";
+  addEyeToggle(igTok);
+  const igBtns = [{ label: "Validate with Meta and save", cls: "btn-primary", onClick: async () => {
+    if (!igTok.value.trim()) { toast("Paste the access token first", "err"); return; }
+    const r = await act(() => api(`/control/api/tenants/${slug}/instagram`, { method: "PUT", body: {
+      user_id: igId.value.trim(), token: igTok.value.trim(),
+    } }), "Instagram connected");
+    if (r && r.username) toast(`Linked @${r.username}`, "ok");
+    reopen(slug, "integrations");
+  } }];
+  if (ig.linked) igBtns.push({ label: "Disconnect", cls: "btn-danger", onClick: () => confirmDialog({
+    title: "Disconnect Instagram", danger: true,
+    body: "Daily posters will stop going to Instagram for this client.", confirmLabel: "Disconnect",
+    onConfirm: async () => {
+      await act(() => api(`/control/api/tenants/${slug}/instagram`, { method: "DELETE" }), "Instagram disconnected");
+      reopen(slug, "integrations");
+    },
+  }) });
+  buttonRow(box, igBtns);
+
+  const gb = d.google;
+  const gsec = el("div", "mt");
+  gsec.appendChild(el("h4", null, "Google Business Profile (reviews on website)"));
+  box.appendChild(gsec);
+  if (!gb.configured) {
+    gsec.appendChild(el("p", "muted", "Google sign-in is not configured on the server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)."));
+    return;
+  }
+  if (gb.last_error) gsec.appendChild(el("p", "muted", `⚠️ ${gb.last_error}`));
+  if (!gb.connected) {
+    gsec.appendChild(el("p", "muted",
+      "Sign in with the Google account that manages this client's listing (do it on the setup call)."));
+    const a = el("a", "btn-primary", "Connect Google");
+    a.href = `/control/api/tenants/${encodeURIComponent(slug)}/google-business/connect`;
+    gsec.appendChild(a);
+    return;
+  }
+  if (gb.choices && gb.choices.length) {
+    const sel = el("select");
+    for (const c of gb.choices) {
+      const o = el("option", null, c.title + (c.address ? ` — ${c.address}` : ""));
+      o.value = c.location;
+      sel.appendChild(o);
+    }
+    gsec.appendChild(sel);
+    buttonRow(gsec, [{ label: "Use this listing", cls: "btn-primary", onClick: async () => {
+      const r = await act(() => api(`/control/api/tenants/${slug}/google-business/location`,
+        { method: "POST", body: { location: sel.value } }));
+      toast(r.ok ? "Listing connected — reviews synced" : r.error, r.ok ? "ok" : "err");
+      reopen(slug, "integrations");
+    } }]);
+    return;
+  }
+  gsec.appendChild(el("p", null, `Connected: ${gb.title || "Google listing"}` +
+    (gb.rating ? ` · ${Number(gb.rating).toFixed(1)} ★ · ${gb.count} reviews · ${gb.stored} on website` : "")));
+  gsec.appendChild(el("p", "muted", `Last sync: ${gb.synced_at ? fmtWhen(gb.synced_at) : "not yet"}`));
+  buttonRow(gsec, [
+    { label: "Sync now", onClick: async () => {
+      const r = await act(() => api(`/control/api/tenants/${slug}/google-business/sync`, { method: "POST" }));
+      toast(`Synced ${r.stored} reviews`, "ok");
+      reopen(slug, "integrations");
+    } },
+    { label: "Disconnect", cls: "btn-danger", onClick: () => confirmDialog({
+      title: "Disconnect Google", danger: true,
+      body: "The token is revoked at Google and reviews are removed from this client's website.",
+      confirmLabel: "Disconnect",
+      onConfirm: async () => {
+        await act(() => api(`/control/api/tenants/${slug}/google-business/disconnect`, { method: "POST" }), "Google disconnected");
+        reopen(slug, "integrations");
+      },
+    }) },
+  ]);
 }
 
 /* --- tab: AI agent ------------------------------------------------------ */

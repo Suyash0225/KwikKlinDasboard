@@ -16,7 +16,7 @@ import app.services.whatsapp as whatsapp_module
 from app.config import settings
 from app.database import async_session_factory
 from app.models import Conversation, Customer, OutboundMessage, WebhookEvent
-from app.routers.orders import _FAILED_AUTH
+from app.routers.orders import _auth_throttle
 from app.services.whatsapp import SendError, send_message
 from tests.conftest import (
     TEST_CUSTOMER_PHONE,
@@ -212,7 +212,7 @@ async def test_permanent_send_failure_not_queued(_window_open_customer, monkeypa
 # --- admin auth hardening ---
 
 async def test_auth_throttle_after_repeated_bad_keys(client) -> None:
-    _FAILED_AUTH.clear()  # other tests' deliberate bad keys must not count
+    _auth_throttle.reset()  # other tests' deliberate bad keys must not count
     try:
         for _ in range(10):
             r = await client.get("/orders", headers={"X-API-Key": "wrong-key"})
@@ -223,7 +223,7 @@ async def test_auth_throttle_after_repeated_bad_keys(client) -> None:
         r = await client.get("/orders", headers={"X-API-Key": settings.ADMIN_API_KEY})
         assert r.status_code == 429
     finally:
-        _FAILED_AUTH.clear()  # never leak throttle state into other tests
+        _auth_throttle.reset()  # never leak throttle state into other tests
 
 
 async def test_valid_key_still_works(client) -> None:

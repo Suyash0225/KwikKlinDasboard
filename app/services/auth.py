@@ -16,8 +16,6 @@ import hashlib
 import hmac
 import os
 import secrets
-import time
-from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
 import structlog
@@ -35,6 +33,7 @@ from app.models import (
     Tenant,
     User,
 )
+from app.utils.throttle import IPThrottle
 
 log = structlog.get_logger()
 
@@ -45,10 +44,23 @@ SESSION_DAYS = 30
 # theek, brute force ke liye mehnga.
 _N, _R, _P = 2**14, 8, 1
 
+# scrypt ke wo parameters jo hum SACH MEIN jaari karte hain. verify_password
+# n/r/p stored hash ki string se padhta hai, isliye wo attacker-shaped ho
+# sakte hain (corrupted row, purana import, DB write). Bina is list ke
+# n=2**30 wali ek row login attempt ko memory bomb bana deti thi.
+# Params kabhi badlein to naya tuple YAHAN jodein aur purana rakhein,
+# warna purane users login nahi kar payenge.
+_ALLOWED_SCRYPT_PARAMS = {(_N, _R, _P)}
+# hash ki lambai bhi stored string se aati hai (dklen). 32 hum likhte hain;
+# range rakhi hai taaki kal 64 par jaayen to kuch na toote.
+_MIN_DKLEN, _MAX_DKLEN = 16, 64
+
 # per-IP login throttle: 8 galat try / 10 min
-_FAILED: dict[str, deque] = defaultdict(deque)
 _FAIL_WINDOW = 600
 _FAIL_MAX = 8
+_login_throttle = IPThrottle(
+    max_failures=_FAIL_MAX, window_secs=_FAIL_WINDOW, name="login"
+)
 
 
 # --- passwords --------------------------------------------------------------
@@ -69,37 +81,57 @@ def verify_password(password: str, stored: str) -> bool:
         scheme, n, r, p, salt_hex, hash_hex = (stored or "").split("$")
         if scheme != "scrypt":
             return False
+        params = (int(n), int(r), int(p))
+        # Ye teen number DB ki string se aa rahe hain, humare code se nahi.
+        # scrypt ki memory ~ 128*n*r bytes hai: n=2**30 wali ek row par ek
+        # login attempt poora process kha jaata. Sirf apne jaari kiye hue
+        # params par kaam karo — baaki kuch bhi ho to bas "galat password".
+        if params not in _ALLOWED_SCRYPT_PARAMS:
+            log.warning("password_hash_unknown_params", params=params)
+            return False
+        expected = bytes.fromhex(hash_hex)
+        if not _MIN_DKLEN <= len(expected) <= _MAX_DKLEN:
+            return False
         dk = hashlib.scrypt(
             (password or "").encode(), salt=bytes.fromhex(salt_hex),
-            n=int(n), r=int(r), p=int(p), dklen=len(bytes.fromhex(hash_hex)),
+            n=params[0], r=params[1], p=params[2], dklen=len(expected),
         )
-        return hmac.compare_digest(dk, bytes.fromhex(hash_hex))
+        return hmac.compare_digest(dk, expected)
     except Exception:
         return False
 
 
+# Confusable characters jaan-boojh kar bahar: 0/O, 1/l/I. Ye password
+# WhatsApp par jaata hai aur banda ise phone par haath se type karta hai.
+_TEMP_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # 31 chars
+
+
 def temp_password() -> str:
-    """Pehli baar bhejne wala password — bolne/type karne layak."""
-    return "kk-" + secrets.token_urlsafe(6).replace("_", "").replace("-", "")[:8]
+    """Pehli baar bhejne wala password — bolne/type karne layak.
+
+    Pehle ye `token_urlsafe(6)` se `-` aur `_` hata kar `[:8]` karta tha.
+    Do dikkatein: entropy ~36 bits reh jaati thi, aur lambai TAY nahi thi —
+    jis token mein do-teen special char aa gaye, uska password chhota ho
+    jaata tha. Ab 10 chars x 31-char alphabet = ~49 bits, aur lambai hamesha
+    ek jaisi (13 with prefix), yaani `hash_password()` ka 8-char minimum
+    kabhi miss nahi hota.
+    """
+    return "kk-" + "".join(secrets.choice(_TEMP_ALPHABET) for _ in range(10))
 
 
 # --- throttle ---------------------------------------------------------------
 
 
 def throttled(ip: str) -> bool:
-    q = _FAILED[ip]
-    now = time.monotonic()
-    while q and now - q[0] > _FAIL_WINDOW:
-        q.popleft()
-    return len(q) >= _FAIL_MAX
+    return _login_throttle.throttled(ip)
 
 
 def note_failure(ip: str) -> None:
-    _FAILED[ip].append(time.monotonic())
+    _login_throttle.note_failure(ip)
 
 
 def clear_failures(ip: str) -> None:
-    _FAILED.pop(ip, None)
+    _login_throttle.clear(ip)
 
 
 # --- sessions ---------------------------------------------------------------

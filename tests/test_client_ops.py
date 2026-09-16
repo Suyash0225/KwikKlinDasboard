@@ -104,7 +104,7 @@ async def test_impersonate_flow(client, tenant_b) -> None:
 
     # galat token -> login par
     r = await client.get("/api/session/adopt/galat-token", follow_redirects=False)
-    assert r.status_code == 303 and "/#login" in r.headers["location"]
+    assert r.status_code == 303 and "/join#login" in r.headers["location"]
 
 
 async def test_impersonate_needs_danger_key(client, tenant_b) -> None:
@@ -291,7 +291,10 @@ async def test_bill_with_task_can_be_deleted(client, sent) -> None:
     async with async_session_factory() as db:
         oid = (
             await db.execute(
-                sqltext("SELECT id FROM orders WHERE order_number = :n"), {"n": num}
+                sqltext(
+                    "SELECT o.id FROM orders o JOIN customers c ON c.id = o.customer_id"
+                    " WHERE o.order_number = :n AND c.phone = :p"
+                ), {"n": num, "p": phone},
             )
         ).scalar_one()
         db.add(Task(code=f"T-{num[-4:]}", title="pickup karo", order_id=oid))
@@ -303,12 +306,13 @@ async def test_bill_with_task_can_be_deleted(client, sent) -> None:
     async with async_session_factory() as db:
         gone = (
             await db.execute(
-                sqltext("SELECT count(*) FROM orders WHERE order_number = :n"), {"n": num}
+                sqltext("SELECT count(*) FROM orders WHERE id = :i"), {"i": str(oid)}
             )
         ).scalar_one()
         task_left = (
             await db.execute(
-                sqltext("SELECT order_id FROM tasks WHERE code = :c"), {"c": f"T-{num[-4:]}"}
+                sqltext("SELECT order_id FROM tasks WHERE code = :c AND title = 'pickup karo'"),
+                {"c": f"T-{num[-4:]}"},
             )
         ).scalar_one_or_none()
         await db.execute(sqltext("DELETE FROM tasks WHERE code = :c"), {"c": f"T-{num[-4:]}"})

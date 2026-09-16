@@ -117,6 +117,9 @@ class Settings(BaseSettings):
     RAZORPAY_WEBHOOK_SECRET: str = ""
     # Public URL jahan checkout/callback wapas aayega (tunnel ya domain).
     APP_BASE_URL: str = "http://127.0.0.1:8000"
+    # Public website ka pakka domain (canonical, sitemap, OG, JSON-LD) —
+    # production: https://kwikklin.online. Khali = request ke host se (dev).
+    SITE_URL: str = ""
 
     # --- Google se login ---
     # Google Cloud Console -> APIs & Services -> Credentials -> OAuth client ID
@@ -126,13 +129,26 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
+    # --- Website (/laundry) par live Google reviews ---
+    # Google Cloud Console -> "Places API (New)" enable -> API key banao.
+    # Khali chhodne par site par reviews ki jagah "Read reviews on Google"
+    # button dikhta hai. PLACE_ID khali ho to dukaan ka naam se dhoondh lete hain.
+    GOOGLE_PLACES_API_KEY: str = ""
+    GOOGLE_PLACE_ID: str = ""
+
     ENVIRONMENT: Literal["development", "production"] = "development"
 
     # Per-tenant API rate limit (requests/min). Ek runaway client (loop mein
-    # fansa script, scraper) sabko slow na kare. Itna ooncha hai ki asli
-    # dashboard use (aur pura test-suite bhi) kabhi nahi chhuega; DDoS-scale
-    # ke liye upar CDN/proxy hai. 0 = off.
-    RATE_LIMIT_PER_MIN: int = 6000
+    # fansa script, scraper) sabko slow na kare. DDoS-scale ke liye upar
+    # CDN/proxy hai. 0 = off.
+    #
+    # Pehle 6000 tha — "itna ooncha ki kabhi nahi chhuega". Wo sach tha, aur
+    # isi liye ye pehra kabhi laga hi nahi; upar se limiter ka bucket 4096 par
+    # capped tha, to 6000 tak pahunchna possible hi nahi tha (dekhein
+    # main.py `_rate_limited`). 600/min = 10 req/sec per tenant — asli
+    # dashboard use isse bahut neeche rehta hai, par loop mein fansi script
+    # ab sach mein rukti hai.
+    RATE_LIMIT_PER_MIN: int = 600
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
 

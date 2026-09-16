@@ -74,6 +74,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .toolbar { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin: var(--sp-4) 0; }
 .toolbar input[type="password"], .toolbar input[type="search"] { flex: 1; min-width: 220px; max-width: 420px; }
 label.inline { display: inline-flex; align-items: center; gap: 6px; }
+label.inline input[type="checkbox"] { width: auto; min-height: 0; margin: 0; flex: none; }
 
 /* ---- KPI tiles (clickable = drill-down) -------------------------------- */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--sp-2); margin: var(--sp-4) 0; }

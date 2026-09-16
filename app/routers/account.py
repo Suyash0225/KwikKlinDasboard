@@ -522,7 +522,7 @@ async def adopt_session(token: str, db: AsyncSession = Depends(get_db)):
     async with tenant_context.system_context(db):
         user = await auth.user_for_token(db, token)
     if user is None:
-        return RedirectResponse(url="/#login", status_code=303)
+        return RedirectResponse(url="/join#login", status_code=303)
     resp = RedirectResponse(url="/admin", status_code=303)
     _set_cookie(resp, token)
     log.info("session_adopted", user=user.email)
@@ -588,60 +588,9 @@ async def _invite_accept_inner(body, request, response, db) -> dict:
 
 
 # --------------------------------------------------------------------------
-# WhatsApp connect — har tenant apna number (official Meta Cloud API)
+# WhatsApp status — jodna sirf vendor Control panel se hota hai
+# (POST /control/api/tenants/{slug}/whatsapp). Dukaan sirf haal dekhti hai.
 # --------------------------------------------------------------------------
-
-
-class WaConnectIn(BaseModel):
-    phone_number_id: str = Field(min_length=5, max_length=30)
-    token: str = Field(min_length=20)
-    waba_id: str = ""
-
-
-@router.post("/api/whatsapp/connect")
-async def whatsapp_connect(
-    body: WaConnectIn,
-    p: auth.Principal = Depends(auth.require_owner),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """Tenant apna WhatsApp number jodta hai (Meta Cloud API creds).
-
-    Creds Graph API par LIVE validate hote hain — galat token/number yahin
-    pakda jaata hai, webhook par nahi. Token store hota hai, wapas kabhi
-    nahi bheja jaata (masked). Ek number = ek tenant (unique)."""
-    from app.services import whatsapp
-
-    pnid = body.phone_number_id.strip()
-    if not await whatsapp.validate_credentials(pnid, body.token.strip()):
-        raise HTTPException(
-            status_code=400,
-            detail="Meta ne creds reject kiye — phone_number_id/token check karein "
-                   "(test mode: Meta App Dashboard > WhatsApp > API Setup).",
-        )
-    dupe = (
-        await db.execute(
-            select(Tenant).where(
-                Tenant.wa_phone_number_id == pnid, Tenant.id != p.user.tenant_id
-            )
-        )
-    ).scalar_one_or_none()
-    if dupe is not None:
-        raise HTTPException(
-            status_code=409, detail="Ye WhatsApp number kisi aur account se juda hai."
-        )
-    t = await db.get(Tenant, p.user.tenant_id)
-    t.wa_phone_number_id = pnid
-    t.wa_waba_id = body.waba_id.strip() or None
-    t.wa_token = body.token.strip()
-    await db.commit()
-    log.info("whatsapp_connected", tenant=t.slug, phone_number_id=pnid)
-    from app.services import audit
-
-    await audit.record(
-        actor_role="user", actor=p.user.email, action="whatsapp_connect",
-        args={"tenant": t.slug, "phone_number_id": pnid},
-    )
-    return {"connected": True, "phone_number_id": pnid, "waba_id": t.wa_waba_id}
 
 
 @router.get("/api/whatsapp/status")
@@ -750,7 +699,7 @@ def _fail(reason: str) -> RedirectResponse:
     """Login page par wapas, ek padhne layak wajah ke saath."""
     from urllib.parse import quote
 
-    return RedirectResponse(url=f"/?err={quote(reason[:120])}#login", status_code=303)
+    return RedirectResponse(url=f"/join?err={quote(reason[:120])}#login", status_code=303)
 
 
 @router.get("/api/auth/google/callback")
@@ -821,7 +770,7 @@ async def _google_callback_inner(request, code, state, error, db) -> Response:
         return resp
 
     # naya banda: pehchaan sambhal ke rakho, baaki detail form se lo
-    resp = RedirectResponse(url="/?google=1#signup", status_code=303)
+    resp = RedirectResponse(url="/join?google=1#signup", status_code=303)
     resp.set_cookie(
         google_auth.PENDING_COOKIE,
         json.dumps({"sub": ident["sub"], "email": ident["email"], "name": ident["name"]}),

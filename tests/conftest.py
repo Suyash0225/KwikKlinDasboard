@@ -113,8 +113,10 @@ def _fresh_throttles():
     import app.routers.orders as orders_mod
     from app.services import auth as auth_mod
 
-    orders_mod._FAILED_AUTH.clear()
-    auth_mod._FAILED.clear()
+    # Dono throttle ab app/utils/throttle.py ke IPThrottle hain — inka apna
+    # reset() hai, is file ko unke andar ka dict chhune ki zaroorat nahi.
+    orders_mod._auth_throttle.reset()
+    auth_mod._login_throttle.reset()
     main_mod._RL_BUCKETS.clear()
     yield
 

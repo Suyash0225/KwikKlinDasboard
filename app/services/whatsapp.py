@@ -98,6 +98,20 @@ async def resolve_creds(db: AsyncSession) -> WaCreds:
     return _env_creds()
 
 
+def shop_can_send(tenant) -> bool:
+    """Kya ye dukaan WhatsApp API se bhej sakti hai? resolve_creds ka hi niyam:
+    dukaan ke apne creds, ya home dukaan ke liye .env wale. Sirf haan/na."""
+    from app.services import tenant_context
+
+    if tenant is None:
+        return False
+    if tenant.wa_token and tenant.wa_phone_number_id:
+        return True
+    return tenant.id == tenant_context.cached_home_tenant_id() and bool(
+        settings.WHATSAPP_TOKEN and settings.WHATSAPP_PHONE_NUMBER_ID
+    )
+
+
 async def validate_credentials(phone_number_id: str, token: str) -> bool:
     """Connect karte waqt creds ko Graph se live check karo (read-only call)."""
     try:

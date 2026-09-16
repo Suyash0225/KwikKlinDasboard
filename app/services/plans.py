@@ -162,6 +162,32 @@ ALIASES = {"basic": "starter", "premium": "pro", "business": "growth"}
 DEFAULT_PLAN = "starter"
 TRIAL_DAYS = 7
 
+# Vendor panel se plan ki muddat: mahine -> billing_cycle ka naam.
+# 12 mahine = annual daam (10 ka 12); 3/6 = mahine ka daam x mahine.
+DURATIONS: dict[int, str] = {1: "monthly", 3: "quarterly", 6: "halfyearly", 12: "annual"}
+CYCLE_MONTHS: dict[str, int] = {v: k for k, v in DURATIONS.items()}
+
+
+def price_for(code: str, months: int) -> int:
+    """Itne mahine ka daam (GST ke bina)."""
+    p = get(code)
+    return p.annual_inr if months == 12 else p.price_inr * months
+
+
+def monthly_value(code: str, cycle: str | None) -> int:
+    """MRR — lambi muddat ka daam mahino mein baant kar."""
+    months = CYCLE_MONTHS.get(cycle or "monthly", 1)
+    return round(price_for(code, months) / months)
+
+
+def add_months(dt, months: int):
+    """Calendar mahine jodo — 31 Jan + 1 = 28/29 Feb (din mahine ki hadd tak)."""
+    import calendar
+
+    m = dt.month - 1 + months
+    y, m = dt.year + m // 12, m % 12 + 1
+    return dt.replace(year=y, month=m, day=min(dt.day, calendar.monthrange(y, m)[1]))
+
 
 def get(code: str) -> Plan:
     """Plan by code ya alias; unknown -> Basic (never crash a login over it)."""

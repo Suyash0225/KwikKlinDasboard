@@ -93,7 +93,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
 
 async function logout() {
   try { await api("/api/logout", {}); } catch (e) {}
-  location.href = "/";
+  location.href = "/join";
 }
 
 (async function () {
@@ -126,39 +126,15 @@ async function logout() {
       document.getElementById("meta").after(go);
     }
 
-    // WhatsApp connect card (owner) — apna number khud jodo
+    // WhatsApp status card (owner) — number hamari team Control panel se jodti hai
     if (d.user.role === "OWNER") {
       const wa = await api("/api/whatsapp/status").catch(() => null);
       const card = document.createElement("div");
       card.style.cssText = "margin-top:18px;padding:14px;border:1px solid #eee;border-radius:10px;text-align:left";
-      if (wa && wa.connected) {
-        card.innerHTML = `<b>📱 WhatsApp: connected ✅</b><br>
-          <span style="color:#667085;font-size:13px">number id: ${esc(wa.phone_number_id)}</span>`;
-      } else {
-        card.innerHTML = `<b>📱 WhatsApp connect karein</b>
-          <div style="color:#667085;font-size:13px;margin:4px 0 8px">
-            Meta se mile creds yahan daalo (setup call par hum saath mein karte hain):</div>
-          <input id="wa-pnid" placeholder="Phone Number ID" style="width:100%;margin:3px 0;padding:8px">
-          <input id="wa-waba" placeholder="WABA ID (optional)" style="width:100%;margin:3px 0;padding:8px">
-          <input id="wa-token" type="password" placeholder="Access token" style="width:100%;margin:3px 0;padding:8px">
-          <button id="wa-go" style="margin-top:6px;padding:8px 14px;cursor:pointer">Connect</button>
-          <span id="wa-msg" style="font-size:13px;margin-left:8px"></span>`;
-        setTimeout(() => {
-          document.getElementById("wa-go").onclick = async () => {
-            const msg = document.getElementById("wa-msg");
-            msg.textContent = "checking with Meta…";
-            try {
-              await api("/api/whatsapp/connect", {
-                phone_number_id: document.getElementById("wa-pnid").value.trim(),
-                waba_id: document.getElementById("wa-waba").value.trim(),
-                token: document.getElementById("wa-token").value.trim(),
-              });
-              msg.textContent = "✅ connected!";
-              setTimeout(() => location.reload(), 800);
-            } catch (e) { msg.textContent = "❌ " + e.message; }
-          };
-        }, 0);
-      }
+      card.innerHTML = wa && wa.connected
+        ? `<b>📱 WhatsApp API: connected ✅</b>`
+        : `<b>📱 WhatsApp API: not connected yet</b><br>
+          <span style="color:#667085;font-size:13px">Our team connects your number during setup. Until then you can send bills and updates from your own phone.</span>`;
       document.querySelector(".card, body > div") ?
         document.body.lastElementChild.before(card) : document.body.appendChild(card);
     }
@@ -173,7 +149,7 @@ async function logout() {
       document.getElementById("meta").after(btn);
     }
   } catch (e) {
-    location.href = "/#login";   // session nahi hai
+    location.href = "/join#login";   // session nahi hai
   }
 })();
 

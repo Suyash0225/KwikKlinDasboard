@@ -33,13 +33,32 @@ current_tenant_id: ContextVar[uuid.UUID | None] = ContextVar(
     "current_tenant_id", default=None
 )
 
-# Home tenant cache — is deployment ki apni dukaan. Resolve once, reuse.
+# Home tenant cache — is deployment ki apni dukaan.
 # sync DB events (before_flush) await nahi kar sakte, isliye cache zaroori hai.
+#
+# Pehle ye "resolve once, forever" tha. Ek process ke liye theek, par do
+# problem thin:
+#   * `home_tenant_slug` setting badalne par `invalidate_home_cache()` SIRF
+#     usi worker mein chalta tha jisne wo request handle ki — baaki worker
+#     purani dukaan par atke rehte the, aur unke banaye naye rows GALAT
+#     tenant par stamp hote.
+#   * boot par resolve fail ho jaye (DB abhi upar nahi aayi) to cache khali
+#     rehta aur dobara koshish ka koi trigger nahi tha.
+# Ab TTL hai, yaani har worker apne aap 5 min ke andar sach par aa jaata hai.
+_HOME_TTL_S = 300
 _home_id: uuid.UUID | None = None
+_home_id_at: float = 0.0
 
 
 def cached_home_tenant_id() -> uuid.UUID | None:
-    """Sync read of the cache — for use inside sync ORM events only."""
+    """Sync read of the cache — for use inside sync ORM events only.
+
+    TTL jaan-boojh kar YAHAN nahi dekha jaata. Ye sync hai, refresh nahi kar
+    sakta; stale hone par None lautana matlab naya row BINA tenant stamp ke
+    chala jaayega — jo purane id se stamp hone se kahin bura hai. Refresh
+    `get_home_tenant_id()` ka kaam hai (async path), aur wo har request par
+    chalta hai.
+    """
     return _home_id
 
 
@@ -51,15 +70,20 @@ def effective_tenant_id() -> uuid.UUID | None:
 
 
 def invalidate_home_cache() -> None:
-    global _home_id
+    """Isi process ka cache bhool jao. Doosre worker TTL par khud sudhrenge."""
+    global _home_id, _home_id_at
     _home_id = None
+    _home_id_at = 0.0
 
 
 async def get_home_tenant_id() -> uuid.UUID | None:
-    """Home tenant ka id — cached. Apna session kholta hai (tenants table
+    """Home tenant ka id — TTL-cached. Apna session kholta hai (tenants table
     RLS-scoped nahi hai, isliye yahan koi recursion/filter issue nahi)."""
-    global _home_id
-    if _home_id is not None:
+    global _home_id, _home_id_at
+    import time
+
+    now = time.monotonic()
+    if _home_id is not None and now - _home_id_at < _HOME_TTL_S:
         return _home_id
     from app.database import async_session_factory
     from app.services.auth import home_tenant
@@ -68,10 +92,15 @@ async def get_home_tenant_id() -> uuid.UUID | None:
         async with async_session_factory() as db:
             home = await home_tenant(db)
     except Exception:
+        # DB abhi neeche hai — jo pata tha wahi lauta do (agar tha). Khali
+        # cache par None hi sahi; agli request phir koshish karegi.
         log.exception("home_tenant_resolve_failed")
-        return None
+        return _home_id
     if home is not None:
+        if _home_id is not None and home.id != _home_id:
+            log.info("home_tenant_changed", old=str(_home_id), new=str(home.id))
         _home_id = home.id
+        _home_id_at = now
     return _home_id
 
 

@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import text as sqltext
 
 import app.routers.agent_admin as aa
+import app.services.wa_templates as wa_templates
 from app.config import settings
 from app.database import async_session_factory
 from app.models import ROLE_OWNER, User
@@ -81,7 +82,7 @@ def graph_calls(monkeypatch):
             return calls.replies["templates"]
         return calls.replies["phone"]
 
-    monkeypatch.setattr(aa, "_graph", fake_graph)
+    monkeypatch.setattr(wa_templates, "graph", fake_graph)
     return calls
 
 

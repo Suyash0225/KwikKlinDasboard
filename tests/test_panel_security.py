@@ -125,25 +125,29 @@ async def test_logged_out_requests_do_not_trip_the_throttle(client) -> None:
     Ye counter dashboard ke saath share hota hai — isliye ise ginne se
     panel AUR dukaan ka dashboard dono 429 mein chale jaate the.
     """
-    from app.routers.orders import _AUTH_MAX_FAILURES, _FAILED_AUTH
+    from app.routers.orders import _AUTH_MAX_FAILURES, _auth_throttle
 
-    _FAILED_AUTH.clear()
+    _auth_throttle.reset()
     client.cookies.clear()
     for _ in range(_AUTH_MAX_FAILURES + 4):
         assert (await client.get("/control/api/session")).status_code == 401
-    assert not any(_FAILED_AUTH.values()), "logged-out requests throttle mein gine gaye"
+    # `tracked == 0` pehle likha hi nahi ja sakta tha: purana defaultdict
+    # padhne par hi entry bana deta tha, isliye test ko `any(values())` se
+    # kaam chalana padta tha — yaani khali deque bante rehte the aur wo
+    # leak kabhi pakda nahi gaya. Ab entry banni hi nahi chahiye.
+    assert _auth_throttle.tracked == 0, "logged-out requests throttle mein gine gaye"
     # asli key ab bhi chalti hai (429 nahi)
     assert (await client.post("/control/api/session", headers=AUTH)).status_code == 200
     client.cookies.clear()
 
     # GALAT key zaroor ginni chahiye — brute force par lock lagta rahe
-    _FAILED_AUTH.clear()
+    _auth_throttle.reset()
     bad = {"X-API-Key": "definitely-not-the-key"}
     for _ in range(_AUTH_MAX_FAILURES):
         await client.get("/control/api/tenants", headers=bad)
     r = await client.get("/control/api/tenants", headers=AUTH)
     assert r.status_code == 429, "brute-force ke baad lock lagna hi chahiye"
-    _FAILED_AUTH.clear()
+    _auth_throttle.reset()
 
 
 async def test_signed_out_panel_hides_data_sections(client) -> None:

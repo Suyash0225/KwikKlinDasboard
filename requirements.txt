@@ -42,6 +42,8 @@ openpyxl  # .xlsx contact imports (Inbox bulk upload)
 # jaata tha. Import scheduler ke andar hota hai, isliye app to chalu ho
 # jaati thi; marta sirf daily social job, roz raat ko.
 pillow==12.3.0
+# Bill page (/b/<token>) par UPI QR — server par SVG, koi bahari CDN nahi
+qrcode==8.2
 
 # dev/build only: static asset minification (scripts/minify_static.py)
 rjsmin

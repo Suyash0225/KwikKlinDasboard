@@ -50,6 +50,20 @@ ROLE = "kk_app"
 
 
 async def main() -> None:
+    app_url = await ensure_role()
+    if app_url is None:
+        print("\n  Password pehle se hai. Bhool gaye ho to:")
+        print(f"    ALTER ROLE {ROLE} PASSWORD '<naya>';")
+        print("  ya: python -m scripts.secure_setup (naya password bana kar .env mein likh deta hai)\n")
+        return
+    print("\n  Ye line .env mein daalo (DATABASE_URL waisa hi rehne do —")
+    print("  migrations usi owner se chalti hain):\n")
+    print(f"APP_DATABASE_URL={app_url}\n")
+
+
+async def ensure_role(reset_password: bool = False) -> str | None:
+    """Role + grants. Naya password bana (ya reset hua) to APP_DATABASE_URL
+    lautata hai, warna None (role pehle se, password waisa hi)."""
     password = os.environ.get("APP_DB_PASSWORD") or secrets.token_urlsafe(24)
     owner_url = settings.DATABASE_URL
 
@@ -70,21 +84,24 @@ async def main() -> None:
                 )
             ).scalar_one_or_none()
 
-            if exists:
+            # CREATE/ALTER ROLE DDL hai — bind parameters leta hi nahi,
+            # password inline karna padta hai. Yahi wo jagah hai jahan
+            # SQL injection ghusti hai, isliye charset par pehra:
+            # token_urlsafe se bana password hamesha safe hai, par env
+            # se aaya hua kuch bhi ho sakta hai.
+            if not re.fullmatch(r"[A-Za-z0-9_\-.~]{12,128}", password):
+                raise SystemExit(
+                    "APP_DB_PASSWORD mein sirf A-Z a-z 0-9 _ - . ~ chalega "
+                    "(12-128 akshar). Quote/backslash wala password yahan "
+                    "inline karna padta, jo surakshit nahi."
+                )
+            if exists and reset_password:
+                await conn.execute(text(f"ALTER ROLE {ROLE} PASSWORD '{password}'"))
+                print(f"  role {ROLE} ka naya password set hua")
+            elif exists:
                 print(f"  role {ROLE} pehle se hai — password waisa hi, grants taaza kar raha hoon")
                 password = None
             else:
-                # CREATE ROLE DDL hai — bind parameters leta hi nahi,
-                # password inline karna padta hai. Yahi wo jagah hai jahan
-                # SQL injection ghusti hai, isliye charset par pehra:
-                # token_urlsafe se bana password hamesha safe hai, par env
-                # se aaya hua kuch bhi ho sakta hai.
-                if not re.fullmatch(r"[A-Za-z0-9_\-.~]{12,128}", password):
-                    raise SystemExit(
-                        "APP_DB_PASSWORD mein sirf A-Z a-z 0-9 _ - . ~ chalega "
-                        "(12-128 akshar). Quote/backslash wala password yahan "
-                        "inline karna padta, jo surakshit nahi."
-                    )
                 await conn.execute(
                     text(f"CREATE ROLE {ROLE} LOGIN NOSUPERUSER NOCREATEDB "
                          f"NOCREATEROLE PASSWORD '{password}'")
@@ -121,17 +138,11 @@ async def main() -> None:
         await engine.dispose()
 
     if password is None:
-        print("\n  Password pehle se hai. Bhool gaye ho to:")
-        print(f"    ALTER ROLE {ROLE} PASSWORD '<naya>';\n")
-        return
-
+        return None
     parts = urlsplit(owner_url)
     host = parts.netloc.split("@", 1)[-1]
-    app_url = urlunsplit((parts.scheme, f"{ROLE}:{password}@{host}", parts.path,
-                          parts.query, parts.fragment))
-    print("\n  Ye line .env mein daalo (DATABASE_URL waisa hi rehne do —")
-    print("  migrations usi owner se chalti hain):\n")
-    print(f"APP_DATABASE_URL={app_url}\n")
+    return urlunsplit((parts.scheme, f"{ROLE}:{password}@{host}", parts.path,
+                       parts.query, parts.fragment))
 
 
 if __name__ == "__main__":

@@ -71,7 +71,7 @@ def _out(t: Tenant, users: int = 0, usage: dict | None = None,
         "city": t.city,
         "plan": plan.code,
         "plan_name": plan.name,
-        "mrr_inr": plan.price_inr,
+        "mrr_inr": plans.monthly_value(plan.code, t.billing_cycle),
         "status": t.status,
         "days_left": days_left,
         "setup_fee_paid": t.setup_fee_paid,
@@ -474,6 +474,11 @@ class TenantPatchIn(BaseModel):
     onboarding_done: bool | None = None
     notes: str | None = None
     extend_days: int | None = Field(default=None, ge=1, le=400)
+    # Plan ki muddat (1/3/6/12 mahine): period end utne mahine aage, status
+    # active, billing_cycle us naam ka. payment_received = raseed (invoice)
+    # bhi darj — offline/UPI mila paisa bhi Billing tab mein dikhe.
+    duration_months: int | None = None
+    payment_received: bool = False
     # profile edits (Phase 2)
     shop_name: str | None = Field(default=None, min_length=2, max_length=120)
     owner_name: str | None = Field(default=None, min_length=2, max_length=120)
@@ -511,6 +516,28 @@ async def patch_tenant(
         t.current_period_end = base + timedelta(days=body.extend_days)
         if t.status != TENANT_ACTIVE:
             t.status = TENANT_ACTIVE
+    invoice = None
+    if body.duration_months is not None:
+        if body.duration_months not in plans.DURATIONS:
+            raise HTTPException(status_code=400, detail="Duration must be 1, 3, 6 or 12 months")
+        now = datetime.now(timezone.utc)
+        # Bacha hua paid time nahi kat-ta: nayi muddat purane end ke baad se
+        start = max(t.current_period_end or now, now)
+        t.current_period_end = plans.add_months(start, body.duration_months)
+        t.billing_cycle = plans.DURATIONS[body.duration_months]
+        t.status = TENANT_ACTIVE
+        if body.payment_received:
+            import uuid as _uuid
+
+            from app.models.tenant import Invoice
+
+            invoice = Invoice(
+                tenant_id=t.id, rzp_payment_id=f"manual_{_uuid.uuid4().hex[:20]}",
+                plan=t.plan, cycle=t.billing_cycle,
+                amount_paise=plans.price_for(t.plan, body.duration_months) * 100,
+                status="paid", period_start=start, period_end=t.current_period_end,
+            )
+            db.add(invoice)
     # profile fields — before/after audit ke liye changes collect karo
     changes: dict = {}
 
@@ -532,8 +559,8 @@ async def patch_tenant(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     if body.billing_cycle:
-        if body.billing_cycle not in ("monthly", "annual"):
-            raise HTTPException(status_code=400, detail="cycle: monthly ya annual")
+        if body.billing_cycle not in plans.CYCLE_MONTHS:
+            raise HTTPException(status_code=400, detail="cycle: monthly, quarterly, halfyearly ya annual")
         _set("billing_cycle", body.billing_cycle)
     if body.tags is not None:
         clean = sorted({tg.strip().lower()[:24] for tg in body.tags if tg.strip()})[:12]
@@ -550,9 +577,24 @@ async def patch_tenant(
     await audit.record(
         actor_role="admin", actor="control-panel", action="tenant_updated", tenant_id=t.id,
         args={"tenant": slug, "plan": t.plan, "status": t.status,
+              "duration_months": body.duration_months,
+              "period_end": t.current_period_end.isoformat() if body.duration_months else None,
+              "invoice_inr": invoice.amount_paise // 100 if invoice else None,
               "changes": changes or None},
     )
     return _out(t)
+
+
+@router.get("/api/plan-catalog")
+async def plan_catalog() -> dict:
+    """Plan badalne wale modal ke liye — daam yahin se, UI mein hardcode nahi."""
+    return {
+        "plans": [{"code": p.code, "name": p.name, "price_inr": p.price_inr} for p in plans.PLANS.values()],
+        "durations": [
+            {"months": m, "cycle": c, "prices": {code: plans.price_for(code, m) for code in plans.PLANS}}
+            for m, c in plans.DURATIONS.items()
+        ],
+    }
 
 
 @router.post(
@@ -1446,6 +1488,238 @@ async def set_tenant_whatsapp(
               "ip": request.client.host if request.client else None},
     )
     return {"connected": True, "phone_number_id": pnid}
+
+
+@router.get("/api/tenants/{slug}/whatsapp/templates")
+async def tenant_wa_templates(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Is client ke WABA par app ke auto-message templates ka haal."""
+    from app.services import wa_templates
+
+    t = await _tenant_or_404(db, slug)
+    return await wa_templates.standard_status(wa_templates.creds_for(t))
+
+
+@router.post("/api/tenants/{slug}/whatsapp/templates")
+async def submit_tenant_wa_templates(
+    slug: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Bache hue auto-message templates ISI client ke WABA par approval ko bhejo."""
+    from app.services import audit, wa_templates
+
+    t = await _tenant_or_404(db, slug)
+    try:
+        results = await wa_templates.submit_standard(wa_templates.creds_for(t))
+    except wa_templates.TemplateError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
+    await audit.record(
+        actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
+        action="wa_templates_submitted", tenant_id=t.id,
+        args={"tenant": slug, "results": {r["name"]: r["status"] for r in results}},
+    )
+    return {"results": results}
+
+
+# --- Instagram + Google Business: token ka har kaam sirf yahin ------------
+
+
+async def _audit_integration(request: Request, t, action: str, args: dict) -> None:
+    from app.services import audit
+
+    await audit.record(
+        actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
+        action=action, tenant_id=t.id, args={"tenant": t.slug, **args},
+    )
+
+
+@router.get("/api/tenants/{slug}/integrations")
+async def tenant_integrations(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.routers.google_business import status_for
+    from app.services import integrations
+
+    t = await _tenant_or_404(db, slug)
+    async with integrations.tenant_db(t.id) as tdb:
+        return {
+            "instagram": await integrations.instagram_status(tdb),
+            "google": await status_for(tdb),
+        }
+
+
+class InstagramIn(BaseModel):
+    user_id: str = Field(min_length=5, max_length=40)
+    token: str = Field(min_length=20, max_length=1000)
+
+
+@router.put("/api/tenants/{slug}/instagram")
+async def set_tenant_instagram(
+    slug: str, body: InstagramIn, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Graph par live jaanch, phir token ENCRYPTED save — wapas kabhi nahi jaata."""
+    from app.services import integrations
+
+    t = await _tenant_or_404(db, slug)
+    async with integrations.tenant_db(t.id) as tdb:
+        try:
+            username = await integrations.set_instagram(tdb, body.user_id, body.token)
+        except integrations.IntegrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    await _audit_integration(request, t, "instagram_connect", {"ig_user_id": body.user_id.strip()})
+    return {"linked": True, "username": username}
+
+
+@router.delete("/api/tenants/{slug}/instagram")
+async def remove_tenant_instagram(
+    slug: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict:
+    from app.services import integrations
+
+    t = await _tenant_or_404(db, slug)
+    async with integrations.tenant_db(t.id) as tdb:
+        await integrations.clear_instagram(tdb)
+    await _audit_integration(request, t, "instagram_disconnect", {})
+    return {"linked": False}
+
+
+_GBP_BACK = "/control"
+
+
+@router.get("/api/tenants/{slug}/google-business/connect")
+async def tenant_gbp_connect(slug: str, db: AsyncSession = Depends(get_db)):
+    """Browser Google consent par — dukaan ke Google account se login karna hai.
+    State cookie mein dukaan ka slug bhi, taaki callback sahi dukaan par likhe."""
+    import secrets as _secrets
+
+    from fastapi.responses import RedirectResponse
+
+    from app.services import google_auth, google_business as gbp, integrations, tenant_context
+
+    t = await _tenant_or_404(db, slug)
+    if not gbp.enabled():
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured on the server")
+    async with integrations.tenant_db(await tenant_context.get_home_tenant_id()) as hdb:
+        base = await google_auth.public_base(hdb)
+    state = _secrets.token_urlsafe(24)
+    resp = RedirectResponse(gbp.start_url(state, base), status_code=302)
+    resp.set_cookie(
+        gbp.STATE_COOKIE, f"{state}.{t.slug}", max_age=600, httponly=True, samesite="lax",
+        secure=settings.ENVIRONMENT == "production", path="/control/api/google-business",
+    )
+    return resp
+
+
+@router.get("/api/google-business/callback")
+async def tenant_gbp_callback(
+    request: Request, code: str = "", state: str = "", error: str = "",
+    db: AsyncSession = Depends(get_db),
+):
+    from fastapi.responses import RedirectResponse
+
+    from app.services import google_auth, google_business as gbp, integrations, tenant_context
+
+    cookie = request.cookies.get(gbp.STATE_COOKIE, "")
+    want_state, _, slug = cookie.partition(".")
+    resp = RedirectResponse(_GBP_BACK, status_code=303)
+    resp.delete_cookie(gbp.STATE_COOKIE, path="/control/api/google-business")
+    t = (await db.execute(select(Tenant).where(Tenant.slug == slug))).scalar_one_or_none() if slug else None
+    if t is None:
+        return resp
+
+    async with integrations.tenant_db(t.id) as tdb:
+        conn = await gbp.get_connection(tdb)
+
+        async def fail(msg: str):
+            conn["last_error"] = msg
+            await gbp.save_connection(tdb, conn)
+            return resp
+
+        if error:
+            return await fail("Google connection was cancelled.")
+        if not code or not state or state != want_state:
+            log.warning("gbp_state_mismatch", tenant=slug)
+            return await fail("The Google link expired. Please click Connect again.")
+        async with integrations.tenant_db(await tenant_context.get_home_tenant_id()) as hdb:
+            base = await google_auth.public_base(hdb)
+        try:
+            refresh = await gbp.exchange_code(code, base)
+        except gbp.GBPError as exc:
+            return await fail(str(exc))
+        if conn.get("refresh_token") and conn["refresh_token"] != refresh:
+            await gbp.revoke(conn["refresh_token"])  # purana token latka na rahe
+        conn = {"refresh_token": refresh, "last_error": ""}
+        try:
+            locations = await gbp.list_locations(refresh)
+        except gbp.GBPError as exc:
+            return await fail(str(exc))
+        if not locations:
+            return await fail("This Google account does not manage any Business Profile listing.")
+        if len(locations) == 1:
+            conn.update(locations[0])
+            await gbp.save_connection(tdb, conn)
+            try:
+                await gbp.sync(tdb)
+            except gbp.GBPError:
+                pass  # error gbp_reviews mein likha gaya — status dikhayega
+        else:
+            conn["choices"] = locations
+            await gbp.save_connection(tdb, conn)
+    await _audit_integration(request, t, "google_business_connect", {"listings": len(locations)})
+    return resp
+
+
+class GbpLocationIn(BaseModel):
+    location: str = Field(min_length=3, max_length=120)
+
+
+@router.post("/api/tenants/{slug}/google-business/location")
+async def tenant_gbp_location(
+    slug: str, body: GbpLocationIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    from app.services import google_business as gbp, integrations
+
+    t = await _tenant_or_404(db, slug)
+    async with integrations.tenant_db(t.id) as tdb:
+        conn = await gbp.get_connection(tdb)
+        pick = next((c for c in conn.get("choices") or [] if c["location"] == body.location), None)
+        if not conn.get("refresh_token") or pick is None:
+            raise HTTPException(status_code=400, detail="Pick one of the listings from the Google account")
+        conn.update(pick)
+        conn.pop("choices", None)
+        conn["last_error"] = ""
+        await gbp.save_connection(tdb, conn)
+        try:
+            await gbp.sync(tdb)
+        except gbp.GBPError as exc:
+            return {"ok": False, "error": str(exc)}
+    return {"ok": True}
+
+
+@router.post("/api/tenants/{slug}/google-business/sync")
+async def tenant_gbp_sync(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.services import google_business as gbp, integrations
+
+    t = await _tenant_or_404(db, slug)
+    async with integrations.tenant_db(t.id) as tdb:
+        try:
+            data = await gbp.sync(tdb)
+        except gbp.GBPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+    return {"ok": True, "stored": len(data["reviews"]), "rating": data.get("rating")}
+
+
+@router.post("/api/tenants/{slug}/google-business/disconnect")
+async def tenant_gbp_disconnect(
+    slug: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict:
+    from app.services import app_settings, google_business as gbp, integrations
+
+    t = await _tenant_or_404(db, slug)
+    async with integrations.tenant_db(t.id) as tdb:
+        conn = await gbp.get_connection(tdb)
+        if conn.get("refresh_token"):
+            await gbp.revoke(conn["refresh_token"])
+        await app_settings.set_value(tdb, "gbp_connection", {})
+        await app_settings.set_value(tdb, "gbp_reviews", {})
+    await _audit_integration(request, t, "google_business_disconnect", {})
+    return {"ok": True}
 
 
 class TenantSettingIn(BaseModel):

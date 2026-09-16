@@ -9,7 +9,7 @@ hai hi nahi is project mein).
    behtar) + loud log.
 4. Outbound: current tenant ke DB creds (token/number) use hote hain;
    DB creds nahi to .env fallback.
-5. Connect API: Graph-validated, duplicate number 409, token hamesha masked.
+5. Connect sirf Control panel se (tests/test_client_ops.py, test_template_studio.py).
 """
 
 import pytest
@@ -186,89 +186,3 @@ async def test_outbound_uses_tenant_creds_with_env_fallback(
         creds = await whatsapp.resolve_creds(db)
     assert creds.phone_number_id == settings.WHATSAPP_PHONE_NUMBER_ID
     assert creds.token == settings.WHATSAPP_TOKEN
-
-
-async def test_connect_api_validates_and_masks(client, monkeypatch, wa_tenant_b) -> None:
-    async with async_session_factory() as db:
-        u = User(
-            tenant_id=wa_tenant_b.id, name="B Owner", email=B_EMAIL,
-            password_hash=auth.hash_password("wa-test-pw-1"), role="OWNER",
-        )
-        db.add(u)
-        await db.commit()
-        token = await auth.start_session(db, u, ip="127.0.0.1", user_agent="pytest")
-
-    calls = []
-
-    async def _fake_validate(pnid, tok):
-        calls.append(pnid)
-        return pnid != "badnumber"
-
-    monkeypatch.setattr(whatsapp, "validate_credentials", _fake_validate)
-    client.cookies.set("kk_session", token)
-    try:
-        # galat creds -> 400, kuch save nahi hota
-        r = await client.post("/api/whatsapp/connect", json={
-            "phone_number_id": "badnumber", "token": "x" * 25,
-        })
-        assert r.status_code == 400
-
-        # sahi creds -> save; token response mein NAHI aata
-        r = await client.post("/api/whatsapp/connect", json={
-            "phone_number_id": "555000999888", "token": "EAAnewTokenValue000000000",
-            "waba_id": "waba999",
-        })
-        assert r.status_code == 200 and r.json()["connected"] is True
-        assert "EAAnewToken" not in r.text
-
-        # status: masked token only
-        r = await client.get("/api/whatsapp/status")
-        d = r.json()
-        assert d["connected"] is True and d["phone_number_id"] == "555000999888"
-        assert d["token"].startswith("••••••••") and "EAAnewToken" not in r.text
-    finally:
-        client.cookies.delete("kk_session")
-
-
-async def test_connect_rejects_duplicate_number(client, monkeypatch, wa_tenant_b) -> None:
-    """Doosre tenant ka juda number chura nahi sakte — 409."""
-    async with async_session_factory() as db:
-        t2 = Tenant(
-            slug="test-wa-c", shop_name="WA C", owner_name="C", plan="starter",
-            owner_phone="+919999900089", status="active",
-        )
-        u = User(
-            tenant_id=None, name="C Owner", email="wa-c@test.local",
-            password_hash=auth.hash_password("wa-test-pw-2"), role="OWNER",
-        )
-        db.add(t2)
-        await db.flush()
-        u.tenant_id = t2.id
-        db.add(u)
-        await db.commit()
-        token = await auth.start_session(db, u, ip="127.0.0.1", user_agent="pytest")
-
-    async def _ok(pnid, tok):
-        return True
-
-    monkeypatch.setattr(whatsapp, "validate_credentials", _ok)
-    client.cookies.set("kk_session", token)
-    try:
-        r = await client.post("/api/whatsapp/connect", json={
-            "phone_number_id": B_PNID, "token": "y" * 25,
-        })
-        assert r.status_code == 409
-    finally:
-        client.cookies.delete("kk_session")
-        async with async_session_factory() as db:
-            await db.execute(
-                sqltext(
-                    "DELETE FROM login_sessions WHERE user_id IN "
-                    "(SELECT id FROM users WHERE email = 'wa-c@test.local')"
-                )
-            )
-            await db.execute(
-                sqltext("DELETE FROM users WHERE email = 'wa-c@test.local'")
-            )
-            await db.execute(sqltext("DELETE FROM tenants WHERE slug = 'test-wa-c'"))
-            await db.commit()

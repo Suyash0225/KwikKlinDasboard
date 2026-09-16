@@ -8,7 +8,6 @@ import asyncio
 import time as _time
 import uuid as uuid_module
 from datetime import datetime, timezone
-from typing import NamedTuple
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -519,6 +518,10 @@ _MSG_LABELS = {
     "delay_notice": "Delivery date changed",
     "payment_reminder": "Payment reminder (polite)",
     "payment_reminder_firm": "Payment reminder (firm)",
+    "payment_thanks": "Payment received — thank you",
+    "partial_delivery": "Part of the order delivered",
+    "service_thanks": "Thank you for the service",
+    "review_request": "Please review us on Google",
     "ack_received": "Fallback acknowledgement",
     "complaint_ack": "Complaint apology",
     "escalated_ack": "Escalated to manager",
@@ -538,11 +541,12 @@ async def message_formats() -> list[dict]:
         MESSAGES,
         allowed_placeholders,
         get_override,
+        lang_for,
     )
 
     out = []
     for key in EDITABLE_KEYS:
-        default = MESSAGES[key].get(DEFAULT_LANG) or MESSAGES[key]["en"]
+        default = MESSAGES[key].get(lang_for(key)) or MESSAGES[key].get(DEFAULT_LANG) or MESSAGES[key]["en"]
         out.append(
             {
                 "key": key,
@@ -602,66 +606,7 @@ async def put_message_format(body: MsgFormatIn, db: AsyncSession = Depends(get_d
 # WhatsApp template studio (create -> submit to Meta -> track approval)
 # ---------------------------------------------------------------------------
 
-import re as _re
-
-import httpx as _httpx
-
-from app.config import settings as _settings
-
-_GRAPH = "https://graph.facebook.com/v21.0"
-
-
-async def _graph(method: str, path: str, token: str | None = None, **kw):
-    """One Graph API call — isolated so tests can fake it.
-
-    `token` is the calling tenant's WhatsApp token. It defaults to the .env
-    one only because the template studio still runs on home-shop creds; any
-    new caller should pass the tenant's own token explicitly.
-    """
-    async with _httpx.AsyncClient(timeout=30) as c:
-        r = await c.request(
-            method, f"{_GRAPH}/{path}",
-            headers={"Authorization": f"Bearer {token or _settings.WHATSAPP_TOKEN}"}, **kw,
-        )
-    return r.status_code, r.json()
-
-
-class _WaStatsCreds(NamedTuple):
-    token: str
-    waba_id: str
-    phone_number_id: str
-
-
-async def _wa_stats_creds(db: AsyncSession) -> _WaStatsCreds | None:
-    """Current tenant's own Graph creds, or None if WhatsApp isn't connected.
-
-    Mirrors whatsapp.resolve_creds, including the rule that .env creds belong
-    to the HOME shop alone: reading another shop's dashboard must never fall
-    back to them, or shop B ends up looking at shop A's templates and quality
-    rating. Returns None instead of raising — a dashboard with no WhatsApp is
-    a normal state, not an error.
-    """
-    from app.models.tenant import Tenant
-    from app.services import tenant_context
-
-    tid = tenant_context.current_tenant_id.get() or tenant_context.cached_home_tenant_id()
-    if tid is not None:
-        t = await db.get(Tenant, tid)
-        if t is not None and t.wa_token and t.wa_waba_id and t.wa_phone_number_id:
-            return _WaStatsCreds(t.wa_token, t.wa_waba_id, t.wa_phone_number_id)
-        if tid != tenant_context.cached_home_tenant_id():
-            return None
-    if (
-        _settings.WHATSAPP_TOKEN
-        and _settings.WHATSAPP_WABA_ID
-        and _settings.WHATSAPP_PHONE_NUMBER_ID
-    ):
-        return _WaStatsCreds(
-            _settings.WHATSAPP_TOKEN,
-            _settings.WHATSAPP_WABA_ID,
-            _settings.WHATSAPP_PHONE_NUMBER_ID,
-        )
-    return None
+from app.services import wa_templates
 
 
 # Template counts and quality rating move on Meta's timescale (hours), not
@@ -1085,39 +1030,11 @@ async def templates_registry() -> list[dict]:
 
 
 @router.get("/templates")
-async def list_templates() -> list[dict]:
-    if not _settings.WHATSAPP_WABA_ID:
-        raise HTTPException(status_code=400, detail="WHATSAPP_WABA_ID not configured")
-    status, data = await _graph(
-        "GET", f"{_settings.WHATSAPP_WABA_ID}/message_templates",
-        params={"fields": "name,status,category,language,components,rejected_reason", "limit": 100},
-    )
-    if status != 200:
-        raise HTTPException(status_code=502, detail=str(data)[:300])
-    out = []
-    for t in data.get("data", []):
-        body = next(
-            (c.get("text", "") for c in t.get("components", []) if c.get("type") == "BODY"), ""
-        )
-        buttons = next(
-            (c.get("buttons", []) for c in t.get("components", []) if c.get("type") == "BUTTONS"),
-            [],
-        )
-        out.append(
-            {
-                "name": t["name"], "status": t.get("status"),
-                "category": t.get("category"), "language": t.get("language"),
-                "body": body, "buttons": buttons,
-                "rejected_reason": t.get("rejected_reason"),
-            }
-        )
-        # approved templates become sendable through the single door
-        if t.get("status") == "APPROVED":
-            from app.services.templates import register_dynamic
-
-            params = len(set(_re.findall(r"\{\{(\d+)\}\}", body)))
-            register_dynamic(t["name"], t.get("language", "en_US"), params)
-    return out
+async def list_templates(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    try:
+        return await wa_templates.list_remote(await wa_templates.creds_for_current(db))
+    except wa_templates.TemplateError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
 
 
 class TplButtonIn(BaseModel):
@@ -1138,70 +1055,27 @@ class TemplateIn(BaseModel):
 
 
 @router.post("/templates", status_code=201)
-async def create_template(body: TemplateIn) -> dict:
-    if not _settings.WHATSAPP_WABA_ID:
-        raise HTTPException(status_code=400, detail="WHATSAPP_WABA_ID not configured")
-    name = _re.sub(r"[^a-z0-9_]", "_", body.name.strip().lower())
-    var_ids = sorted({int(n) for n in _re.findall(r"\{\{(\d+)\}\}", body.body)})
-    if var_ids != list(range(1, len(var_ids) + 1)):
-        raise HTTPException(
-            status_code=400, detail="Variables must be {{1}}, {{2}}… in order, no gaps"
+async def create_template(body: TemplateIn, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        out = await wa_templates.create(
+            await wa_templates.creds_for_current(db), **body.model_dump(exclude={"buttons"}),
+            buttons=[b.model_dump() for b in body.buttons],
         )
-    if var_ids and len(body.samples) < len(var_ids):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Provide a sample value for each of the {len(var_ids)} variables (Meta needs them for review)",
-        )
-    components: list[dict] = []
-    body_comp: dict = {"type": "BODY", "text": body.body}
-    if var_ids:
-        body_comp["example"] = {"body_text": [body.samples[: len(var_ids)]]}
-    components.append(body_comp)
-    if body.footer:
-        components.append({"type": "FOOTER", "text": body.footer})
-    if body.buttons:
-        btns = []
-        for b in body.buttons:
-            if b.type == "QUICK_REPLY":
-                btns.append({"type": "QUICK_REPLY", "text": b.text})
-            elif b.type == "URL":
-                if not b.url:
-                    raise HTTPException(status_code=400, detail=f"Button '{b.text}' needs a URL")
-                btns.append({"type": "URL", "text": b.text, "url": b.url})
-            else:
-                if not b.phone_number:
-                    raise HTTPException(status_code=400, detail=f"Button '{b.text}' needs a phone number")
-                btns.append({"type": "PHONE_NUMBER", "text": b.text, "phone_number": b.phone_number})
-        components.append({"type": "BUTTONS", "buttons": btns})
-
-    status, data = await _graph(
-        "POST", f"{_settings.WHATSAPP_WABA_ID}/message_templates",
-        json={
-            "name": name, "language": body.language,
-            "category": body.category, "components": components,
-        },
-    )
-    if status != 200:
-        err = data.get("error", {})
-        raise HTTPException(
-            status_code=400,
-            detail=err.get("error_user_msg") or err.get("message") or str(data)[:250],
-        )
+    except wa_templates.TemplateError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
     await audit.record(
         actor_role="admin", actor="dashboard", action="template_submitted",
-        args={"name": name, "category": body.category}, result=data.get("status", "PENDING"),
+        args={"name": out["name"], "category": body.category}, result=out["status"],
     )
-    return {"name": name, "status": data.get("status", "PENDING")}
+    return out
 
 
 @router.delete("/templates/{name}")
-async def delete_template(name: str) -> dict:
-    status, data = await _graph(
-        "DELETE", f"{_settings.WHATSAPP_WABA_ID}/message_templates",
-        params={"name": name},
-    )
-    if status != 200:
-        raise HTTPException(status_code=400, detail=str(data)[:250])
+async def delete_template(name: str, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        await wa_templates.delete(await wa_templates.creds_for_current(db), name)
+    except wa_templates.TemplateError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
     return {"deleted": name}
 
 
@@ -1317,7 +1191,10 @@ async def agents_overview(db: AsyncSession = Depends(get_db)) -> dict:
 
 
 # Settings whose values are credentials — never sent back to the browser.
-_SECRET_SETTINGS = {"ig_access_token"}
+_SECRET_SETTINGS = {"ig_access_token", "gbp_connection"}
+# Sirf vendor Control panel likhta hai (routers/control.py) — dukaan ke
+# dashboard ke generic settings PUT se nahi, warna koi token/listing badal de.
+_READONLY_SETTINGS = {"gbp_connection", "gbp_reviews", "ig_user_id", "ig_access_token"}
 _SECRET_MASK = "••••••••"
 
 
@@ -1342,6 +1219,8 @@ async def put_setting(body: SettingIn, db: AsyncSession = Depends(get_db)) -> di
     # Saving the mask back would overwrite the real secret with dots.
     if body.key in _SECRET_SETTINGS and body.value == _SECRET_MASK:
         return {"ok": True, "unchanged": True}
+    if body.key in _READONLY_SETTINGS:
+        raise HTTPException(status_code=400, detail=f"{body.key} is managed by the Kwik Klin team (Control panel)")
     try:
         await app_settings.set_value(db, body.key, body.value)
     except KeyError as exc:
@@ -1414,7 +1293,7 @@ async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
     tpl = {"approved": 0, "pending": 0, "rejected": 0}
     quality, meta_ok, meta_state = None, False, "not_connected"
 
-    creds = await _wa_stats_creds(db)
+    creds = await wa_templates.creds_for_current(db)
     if creds is not None:
         cached = _wa_stats_cached(creds.waba_id)
         if cached is not None:
@@ -1422,7 +1301,7 @@ async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
             meta_ok, meta_state = cached["meta_ok"], cached["meta_state"]
         else:
             try:
-                status, data = await _graph(
+                status, data = await wa_templates.graph(
                     "GET", f"{creds.waba_id}/message_templates",
                     token=creds.token,
                     params={"fields": "name,status", "limit": 100},
@@ -1435,7 +1314,7 @@ async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
                             tpl[k] += 1
                     # Only worth asking for quality once the token has proven
                     # itself. Firing it after a 401 was the second wasted call.
-                    s2, d2 = await _graph(
+                    s2, d2 = await wa_templates.graph(
                         "GET", creds.phone_number_id,
                         token=creds.token,
                         params={"fields": "quality_rating"},
