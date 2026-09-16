@@ -3030,7 +3030,6 @@ function paintFaqs() {
     return;
   }
   const rows = FAQ_ALL.slice(0, FAQ_SHOWN);
-  const dupNote = "";
   $("faq-list").innerHTML = rows.map((f) => `
     <div class="sumrow" style="align-items:flex-start;gap:8px">
       <span style="flex:1"><b>Q:</b> ${esc(f.question)}<br><b>A:</b> ${esc(f.answer)} <span class="tag">${f.audience}</span></span>

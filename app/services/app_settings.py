@@ -55,7 +55,6 @@ DEFAULTS: dict[str, Any] = {
     "standup_hour": 10,             # daily staff standup (Asia/Kolkata hour)
     "turnaround_days": 2,           # default delivery = today + this
     "default_washer_phone": "",     # unassigned orders go to this staff phone
-    "staff_reply_window_hours": 2,  # no standup reply -> remind, then admin
     # marketing compliance
     "marketing_freq_cap_per_month": 2,
     "marketing_monthly_msg_budget": 300,
@@ -141,8 +140,6 @@ DEFAULTS: dict[str, Any] = {
         "RECEIVED": 6, "PICKUP_ASSIGNED": 6, "PICKED_UP": 12, "IN_WASH": 24,
         "IN_DRY": 12, "IN_IRON": 12, "READY": 24, "OUT_FOR_DELIVERY": 6, "ON_HOLD": 48,
     },
-    # Bill banane mein isse zyada second lage to "slow bill" (reports mein)
-    "bill_time_alert_seconds": 180,
     # Staff panel mein grahak ka pata + "Route" (Google Maps) button. Abhi
     # band: pata sirf haath se likha text hai, WhatsApp pin save nahi hota —
     # galat raasta dikhane se behtar hai na dikhana. Zaroorat pade to
@@ -170,8 +167,6 @@ DEFAULTS: dict[str, Any] = {
     "gbp_reviews": {},
     "google_review_link": "",    # bheja jata hai sirf 4-5 star par
     "google_review_link_2": "",  # doosri listing — customers me rotate hota hai
-    "tone": "friendly",               # formal | professional | friendly | casual
-    "emoji_level": "minimal",         # off | minimal | expressive
     # --- live-conversation follow-ups (app/services/engage.py) ---
     # A customer wrote, the thread went quiet, no order came of it: nudge
     # them warmly while their 24h window is still open. Capped on purpose —

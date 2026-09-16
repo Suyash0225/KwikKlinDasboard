@@ -34,7 +34,7 @@ Security (see ARCHITECTURE.md §5).
 | POS integration | DotPe webhook → normalised into the same pipeline | `app/routers/webhook.py`, `services/dotpe.py` |
 | Frontend | Vanilla HTML/CSS/JS single-page dashboard (PWA + service worker), no framework, no build step (only minification) | `app/static/` |
 | Ingress | **cloudflared tunnel** → local uvicorn (Windows machine) | `scripts/keepalive.ps1` |
-| Tests | **pytest** (asyncio), ~340 tests across 35 files | `tests/` |
+| Tests | **pytest** (asyncio), ~700 tests across ~80 files | `tests/` |
 | Logging | structlog (structured JSON logs) | `app/utils/logger.py` |
 
 ## 3. High-level architecture
@@ -407,7 +407,7 @@ I verify by inspection plus one manual observation.
 
 ### Q13. What does the regression suite look like? What runs before a release?
 
-**A.** ~340 pytest tests in 35 files, grouped by feature: webhook, durability,
+**A.** ~700 pytest tests in ~80 files, grouped by feature: webhook, durability,
 order service, pickup flow, inbox, billing, tenant isolation, agent quality,
 media, notifications. They run against a real Postgres so migrations and
 constraints are covered. Before release: full suite green, `alembic upgrade

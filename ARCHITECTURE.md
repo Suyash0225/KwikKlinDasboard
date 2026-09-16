@@ -34,7 +34,7 @@ Layered guarantees, har layer independent:
 | Atomic transitions | Order status + history + SLA date **ek hi commit** mein | Aadha-updated order kabhi nahi ban sakta |
 | Idempotency keys | `sent_events` + unclaim-on-permanent-failure | Scheduled message na double jaata hai, na burn hota hai |
 | Nightly backup | `pg_dump -Fc` → `backups/` (14 din retention), scheduler 21:30 pe | Disk crash par bhi kal raat tak ka data wapas aata hai |
-| Keepalive | Startup script: Postgres service → `alembic upgrade head` → uvicorn → cloudflared, har 5 min health check | Reboot/crash ke baad system khud khada hota hai, migrations ke saath |
+| Process supervision | Server par systemd/docker restart policy; `/health` liveness | Reboot/crash ke baad app khud khadi hoti hai |
 
 **Restore drill** (kabhi zaroorat pade):
 ```
@@ -163,7 +163,7 @@ card → plan control se. Koi naya process, DB ya `.env` nahi.
 
 ## 6. Monitoring / ops
 
-- `/health` — liveness + DB check (keepalive isi ko poll karta hai; 503 = DB
+- `/health` — liveness + DB check (process supervisor/uptime check isi ko poll karta hai; 503 = DB
   down, app restart NAHI hota, Postgres service start hota hai).
 - `webhook_events` / `outbound_queue` mein `status='dead'` rows = manual
   dekhne wali cheez (ab tak ka data kabhi delete nahi hota).

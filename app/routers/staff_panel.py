@@ -294,25 +294,6 @@ def _tasks_query(p: StaffPrincipal, tab: str):
     return q
 
 
-async def _visible_tasks(db: AsyncSession, p: StaffPrincipal, tab: str) -> list[Task]:
-    """Ye aadmi kaunse kaam dekh sakta hai.
-
-    Non-manager ke liye shart DB query mein hai, UI mein nahi — isliye
-    URL se doosre ka code daal kar bhi kuch nahi milta.
-    """
-    q = select(Task).order_by(Task.urgent.desc(), Task.created_at.desc()).limit(200)
-    if not p.is_manager:
-        q = q.where(Task.assigned_staff_id == p.staff.id)
-    if tab == "pending":
-        q = q.where(Task.status == TASK_OPEN)
-    elif tab == "mine":
-        q = q.where(Task.assigned_staff_id == p.staff.id, Task.status == TASK_OPEN)
-    elif tab == "done":
-        q = q.where(Task.status == TASK_DONE)
-    elif tab == "cancelled":
-        q = q.where(Task.status == TASK_CANCELLED)
-    return list((await db.execute(q)).scalars().all())
-
 
 async def _prefetch(db: AsyncSession, tasks: list[Task], p: StaffPrincipal) -> dict:
     """Ek baar mein sab orders, customers aur staff — na ki har task par.

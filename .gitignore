@@ -1,5 +1,7 @@
 # Secrets — never commit these
 .env
+.env.*
+!.env.example
 *.pem
 
 # Python
@@ -28,5 +30,13 @@ app/media/
 
 # Database backups (nightly pg_dump output)
 backups/
+*.dump
+*.log
 app/static/dist/
+dist/
 .kk-owner
+
+# Local artefacts
+*.patch
+*.docx
+.claude/

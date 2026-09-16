@@ -256,14 +256,6 @@ def public_catalog() -> list[dict]:
     ]
 
 
-class LimitReached(Exception):
-    """Plan ki limit khatam. Caller isse 402 banata hai, 500 nahi."""
-
-    def __init__(self, message: str, *, limit: str, upgrade_to: str | None = None):
-        super().__init__(message)
-        self.limit = limit
-        self.upgrade_to = upgrade_to
-
 
 def next_plan_after(code: str) -> str | None:
     order = ["starter", "pro", "growth"]
@@ -315,7 +307,6 @@ def public_packs() -> list[dict]:
 # Cost basis (India, Aug 2026 — apne Meta rate card se confirm karte rehna).
 COST_MARKETING_INR = 0.80    # per marketing template
 COST_UTILITY_INR = 0.13      # per utility template
-COST_SERVICE_INR = 0.0       # customer ke 24h window ka jawab — FREE
 COST_AI_REPLY_INR = 0.02     # Gemini Flash-Lite, ~1.5k in / 150 out
 SERVER_COST_PER_TENANT_INR = 150
 

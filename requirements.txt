@@ -45,6 +45,3 @@ pillow==12.3.0
 # Bill page (/b/<token>) par UPI QR — server par SVG, koi bahari CDN nahi
 qrcode==8.2
 
-# dev/build only: static asset minification (scripts/minify_static.py)
-rjsmin
-rcssmin

@@ -109,6 +109,7 @@ async def bootstrap(email: str, password: str) -> None:
         # yaani ek bilkul nayi DB bootstrap ho hi nahi sakti thi.
         async with tenant_context.as_tenant(tenant.id, tenant.owner_phone):
             await app_settings.set_value(db, "home_tenant_slug", HOME_SLUG)
+            tenant_context.invalidate_home_cache()   # isi process ka cache bhi taaza
         log.info("home_tenant_locked", slug=HOME_SLUG)
 
     await engine.dispose()

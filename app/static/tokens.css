@@ -41,7 +41,6 @@
    * panel se aaye hain, jo is app ki sabse saaf-likhi CSS hai. */
   --bg: #f7f8fa;             /* page ka kaagaz                          */
   --surface: #ffffff;        /* card, sheet, row                        */
-  --surface-2: #f0f2f6;      /* halka bharav: chip, disabled, inset     */
   --border: #e4e8ee;         /* asli lakeer                             */
   --border-soft: #f0f2f6;    /* row ke beech ki halki lakeer            */
 
@@ -63,7 +62,7 @@
   --warning: #b45309;  --warning-soft: #fffbeb;   /* pahunchana, baaki   */
   --error:   #be123c;  --error-soft:   #fff1f2;   /* late, galti         */
   --info:    #4f46e5;  --info-soft:    #eef2ff;   /* lene jaana          */
-  --busy:    #0d9488;  --busy-soft:    #f0fdfa;   /* dhulai chal rahi    */
+  --busy:    #0d9488;   /* dhulai chal rahi    */
 
   /* ── Type ──────────────────────────────────────────────────────────
    * Poppins 400/600/700 — pehle 5 weight load hote the (400,500,600,700,
@@ -78,22 +77,9 @@
    * mit jaye. --font ka fallback bhi yahi stack hai, isliye jab tak
    * Poppins aata hai dono ek jaise dikhte hain. */
   --font-system: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
-  --font-mono: ui-monospace, Menlo, Consolas, monospace;
 
-  --text-xs: 11px;
-  --text-sm: 12.5px;
-  --text-base: 15px;   /* body. Input par 16px alag — iOS zoom rok      */
-  --text-lg: 16.5px;
-  --text-xl: 19px;
-  --text-2xl: 24px;
-
-  --fw-normal: 400;
   --fw-semi: 600;
   --fw-bold: 700;
-
-  --lh-tight: 1.25;    /* heading, ek line ke number                    */
-  --lh-normal: 1.4;    /* UI text                                       */
-  --lh-relaxed: 1.6;   /* paragraph, empty state                        */
 
   /* ── Space ─────────────────────────────────────────────────────────
    * Ek hi seedhi: 4 se shuru, 8 ke gunak. Beech ki value chunni pade to
@@ -102,15 +88,11 @@
   --sp-2: 8px;
   --sp-3: 12px;
   --sp-4: 16px;
-  --sp-6: 24px;
-  --sp-8: 32px;
-  --sp-12: 48px;
 
   /* ── Radius ────────────────────────────────────────────────────────*/
   --r-sm: 8px;
   --r-md: 10px;      /* default: button, input                          */
   --r-lg: 14px;      /* card, sheet                                     */
-  --r-pill: 999px;   /* chip, badge                                     */
 
   /* ── Shadow ────────────────────────────────────────────────────────
    * Do hi. Teesri chahiye lage to aksar border chahiye hoti hai. */
@@ -119,7 +101,6 @@
 
   /* ── Layout ────────────────────────────────────────────────────────*/
   --content-max: 1180px;
-  --header-h: 56px;
   --sidebar-w: 232px;
   /* Sabse chhota tap target. Ye geele haath aur dhoop wali screen ke liye
    * hai, kisi guideline ke minimum ke liye nahi — isliye 44 nahi, 46. */

@@ -1,8 +1,10 @@
-# Laundry WhatsApp Bot
+# Kwik Klin
 
-WhatsApp-based order management for a laundry shop in Varanasi. Customers,
-washer, and delivery staff all interact over WhatsApp; the bot coordinates.
-Full context: [PROJECT_SPEC.md](PROJECT_SPEC.md).
+WhatsApp-first laundry CRM (multi-tenant SaaS) + Kwik Klin's own public website.
+Owner dashboard `/admin`, staff PWA `/staff`, vendor Control panel `/control`,
+public site `/` (app/site). Docs: [ARCHITECTURE.md](ARCHITECTURE.md),
+[docs/ARCHITECTURE-DETAILED.md](docs/ARCHITECTURE-DETAILED.md),
+[docs/QA-TESTING-HANDBOOK.md](docs/QA-TESTING-HANDBOOK.md), [docs/PRD.md](docs/PRD.md).
 
 ## Codespaces
 
@@ -61,9 +63,13 @@ python -m venv .venv
 :: 2. Config — copy and fill in real values (dummies boot fine in Phase 1)
 copy .env.example .env
 
-:: 3. Keys — teeno ek saath banao, output .env mein paste karo
-.venv\Scripts\python.exe -c "from cryptography.fernet import Fernet; import secrets; print('ADMIN_API_KEY=' + secrets.token_urlsafe(32)); print('VENDOR_API_KEY=' + secrets.token_urlsafe(32)); print('TOKEN_ENCRYPTION_KEY=' + Fernet.generate_key().decode())"
+:: 3. Keys + NOSUPERUSER DB role — ek command, seedha .env mein likhta hai
+.venv\Scripts\python.exe -m scripts.secure_setup
 ```
+
+`secure_setup` `TOKEN_ENCRYPTION_KEY`, `VENDOR_API_KEY` aur `APP_DATABASE_URL`
+bharta hai aur purane plaintext tokens encrypt karta hai. Production mein in
+teeno ke bina app shuru hi nahi hoti.
 
 `TOKEN_ENCRYPTION_KEY` ka backup rakho — kho gayi to DB ke encrypted
 WhatsApp tokens wapas nahi milenge (har dukaan ko number dobara connect
@@ -137,11 +143,15 @@ regenerate and update `WHATSAPP_TOKEN` in `.env`, then restart uvicorn
 
 ## Layout
 
-See PROJECT_SPEC.md → "PROJECT STRUCTURE". Rules that matter:
+- `app/routers` HTTP, `app/services` business logic, `app/models` SQLAlchemy,
+  `app/static` dashboard/staff/control UI, `app/site` public website
+  (see `app/site/README.md`), `alembic/` migrations, `scripts/` ops.
+
+Rules that matter:
 
 - All outbound WhatsApp messages go through `app/services/whatsapp.py`. Never
   call the Graph API anywhere else.
-- Only `app/services/llm_client.py` may import `anthropic`.
+- Only `app/services/llm_client.py` talks to an LLM (Anthropic or Gemini).
 - All human-facing strings live in `app/services/messages.py`.
 - `orders.notes` is internal-only — never sent to a customer.
 - Payment status is derived in exactly one place: `app/models/order.py`.
@@ -173,4 +183,26 @@ kept: set `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`).
 **Migrations**: `alembic upgrade head` (latest: payments ledger, audit_log,
 campaigns/coupons, open_questions, faq/corrections, settings_kv).
 
-**Tests**: `.venv\Scripts\python -m pytest` — 137, all LLM/WhatsApp mocked.
+**Tests**: `.venv\Scripts\python -m pytest` — all LLM/WhatsApp mocked. Suite runs
+against the local DB; seed demo data makes a few count-based tests fail.
+
+## Deploy (server)
+
+`.env` git mein nahi jaati — server par ek baar banti hai aur rehti hai.
+
+```bash
+# pehli baar
+git clone <repo> && cd KwikKlinDasboard
+python -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env   # DATABASE_URL, keys, SITE_URL=https://kwikklin.online, ENVIRONMENT=production
+.venv/bin/alembic upgrade head
+.venv/bin/python -m scripts.secure_setup   # keys + kk_app role, .env mein likhta hai
+.venv/bin/python -m scripts.bootstrap_home_tenant
+
+# har update par
+git pull && .venv/bin/pip install -r requirements.txt && .venv/bin/alembic upgrade head
+# phir app restart (systemd/pm2/docker — jo bhi use ho)
+```
+
+Server ki `.env` ka backup password manager mein rakho — khaaskar
+`TOKEN_ENCRYPTION_KEY`.

@@ -42,9 +42,6 @@ from app.services.templates import TEMPLATES, build_template
 
 log = structlog.get_logger()
 
-GRAPH_URL = (
-    f"https://graph.facebook.com/v21.0/{settings.WHATSAPP_PHONE_NUMBER_ID}/messages"
-)
 SERVICE_WINDOW = timedelta(hours=24)
 
 _GRAPH = "https://graph.facebook.com/v21.0"

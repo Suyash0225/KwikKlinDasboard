@@ -36,14 +36,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Sorry, something went wrong on our side. We will get back to you shortly. — {shop}",
     },
     # --- order lifecycle notifications ---
-    "order_confirmed": {
-        "hi": "Namaste! Aapka order {order_number} humein mil gaya 🧺 ({items_count} items). Ready hote hi khabar karenge. — {shop}",
-        "en": "Hello! Your order {order_number} is received ({items_count} items). We'll update you when it's ready. — {shop}",
-    },
-    "order_confirmed_with_date": {
-        "hi": "Namaste! Aapka order {order_number} humein mil gaya 🧺 ({items_count} items). Expected delivery: {date}. — {shop}",
-        "en": "Hello! Your order {order_number} is received ({items_count} items). Expected delivery: {date}. — {shop}",
-    },
     # No rate matched yet (customer said "chandni, kurta pajama" — we price
     # it when the clothes arrive). Showing "Total: ₹— | Baaki: ₹—" looked
     # broken, so the money line is simply left out until we know it.
@@ -451,7 +443,7 @@ def get_override(key: str) -> str | None:
 # warna wo staff ki bhasha (Hinglish) mein chali jayegi.
 CUSTOMER_KEYS = frozenset({
     "ack_received", "error_fallback",
-    "order_confirmed", "order_confirmed_with_date", "order_confirmed_no_price",
+    "order_confirmed_no_price",
     "order_confirmed_bill", "lead_day1", "lead_day3", "lead_day7",
     "pickup_done", "pickup_confirmed_customer", "thankyou_rating",
     "rate_good_reply", "rate_mid_reply", "rate_bad_reply",

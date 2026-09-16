@@ -19,14 +19,14 @@
   --danger: var(--error); --danger-50: var(--error-soft);
   --warn: var(--warning); --warn-50: var(--warning-soft);
   /* --info tokens.css se. */ --info-50: var(--info-soft);
-  --purple: #8b5cf6; --teal: #14b8a6; --pink: #ec4899;
+  --teal: #14b8a6;
   --g-orange: linear-gradient(135deg, var(--brand), var(--brand-strong));
   --g-blue: var(--info);
   /* neutrals */
   --n0: var(--surface); --n50: var(--bg); --n100: #edf0f7; --n200: #e2e6f0;
   --n300: #cbd2de; --n400: #98a2b3; --n500: #667085; --n600: #475467;
   --n700: #344054; --n800: #1d2939; --n900: #101828;
-  --sidebar-bg: var(--ink-plate); --sidebar-bg2: #111c33;
+  --sidebar-bg: var(--ink-plate);
   --line: var(--border);    /* one border colour everywhere */
   --line-soft: var(--border-soft);
   /* Teen radius, teen kaam. 20px card bahut gol lagta tha. */
@@ -38,7 +38,7 @@
   --sidebar-w: 244px;
   --content-max: 1400px;   /* content column cap; centred on ultra-wide screens */
   /* spacing scale — use these, not magic numbers */
-  --s1: .25rem; --s2: .5rem; --s3: .875rem; --s4: 1.25rem; --s5: 1.625rem;
+  --s3: .875rem; --s4: 1.25rem;
   --pad: 1.25rem;           /* the single spacing step cards use */
   /* --tap tokens.css se: 46px, geele haath ke liye 44 nahi. */
   --tabbar-h: 64px;         /* bottom tab bar clearance on phones */
@@ -332,7 +332,6 @@ a { color: var(--brand-600); text-decoration: none; }
 .pill.PARTIAL { background: var(--warn-50); color: var(--warn); }
 .pill.UNPAID { background: var(--danger-50); color: var(--danger); }
 .pill.urgent { background: var(--danger); color: #fff; }
-.pill.neutral { background: var(--n100); color: var(--n600); }
 
 /* ---------- data lists: cards on phones, tables from 768px ----------
    Base hides .tbl and shows the stacked .rowcards that every list renders
@@ -838,7 +837,7 @@ a { color: var(--brand-600); text-decoration: none; }
 .hr { border: none; border-top: 1px solid var(--n200); margin: 14px 0; }
 
 /* keyboard users must always see where they are */
-.btn:focus-visible, .peek:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+.btn:focus-visible, a:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--brand); outline-offset: 2px;
 }
 
@@ -868,16 +867,6 @@ b.subhead { display: block; font-size: 13.5px; }
 /* save + secondary action stack instead of squeezing on a narrow phone */
 #st-ops .act { flex-wrap: wrap; gap: 8px; }
 
-/* token field with a show/hide toggle inside */
-.inputwrap { position: relative; }
-.inputwrap input { padding-right: 68px; }
-/* attached suffix button — full field height so it is a real tap target */
-.peek {
-  position: absolute; right: 0; top: 0; height: var(--tap); min-width: 58px;
-  border: 1.5px solid var(--n200); border-left: none; background: var(--n100);
-  color: var(--n600); cursor: pointer; font-size: 11.5px; font-weight: 700;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: 0 12px;
-}
 .connstate { font-size: 12.5px; color: var(--n500); margin-top: 10px; }
 .connstate .dot {
   display: inline-block; width: 8px; height: 8px; border-radius: 50%;
@@ -1303,7 +1292,6 @@ select {
   .acp div:hover { background: var(--brand-50); }
   .emojis span:hover { background: var(--n100); }
   .composer .btn.ghost.sm:hover { background: rgba(0,0,0,.06); color: #54656F; }
-  .peek:hover { background: var(--n200); }
   .seg-card:hover { border-color: var(--brand); }
   .filechip:hover { background: rgba(0,0,0,.09); }
   .bubble .breply { opacity: 0; }
@@ -1332,7 +1320,7 @@ select {
   .composer .btn.ghost.sm { width: 44px; height: 44px; }
   .emojis span { width: auto; height: auto; font-size: 19px; padding: 4px; }
   .filters input, .filters select { min-height: 0; }
-  .setfield input, .setfield select, .peek, .setfield.addbtn .btn { height: 44px; }
+  .setfield input, .setfield select, .setfield.addbtn .btn { height: 44px; }
   .replybar .rx { min-width: 0; min-height: 0; font-size: 15px; padding: 6px; }
   .acp div { min-height: 0; padding: 8px 12px; }
   .th-search input { padding: 7px 12px; }

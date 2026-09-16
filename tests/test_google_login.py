@@ -140,7 +140,12 @@ async def test_google_button_hidden_until_configured(client) -> None:
     assert "google_login" in d
 
 
-async def test_start_needs_configuration(client) -> None:
+async def test_start_needs_configuration(client, monkeypatch) -> None:
+    # .env mein asli Google keys hon to bhi ye test "configured nahi" wala rasta jaanche
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "GOOGLE_CLIENT_ID", "")
+    monkeypatch.setattr(settings, "GOOGLE_CLIENT_SECRET", "")
     r = await client.get("/api/auth/google/start", follow_redirects=False)
     assert r.status_code == 503
 

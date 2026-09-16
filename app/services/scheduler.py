@@ -383,6 +383,10 @@ async def _meta_block_watch(now_ist: datetime) -> None:
 
 
 async def _tunnel_tick() -> None:
+    # Pakka domain (SITE_URL, production) par tunnel ka sawaal hi nahi —
+    # laptop-dev ka cloudflared guard sirf tab jab domain na ho.
+    if settings.SITE_URL:
+        return
     try:
         from app.services.tunnel_guard import check_and_heal
 

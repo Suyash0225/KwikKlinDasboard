@@ -25,7 +25,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import (
-    ROLE_ACCOUNTANT,
     ROLE_MANAGER,
     ROLE_OWNER,
     WRITABLE_STATUSES,
@@ -298,18 +297,6 @@ def require_role(*roles: str):
 
     return _dep
 
-
-async def require_write(p: Principal = Depends(current_user)) -> Principal:
-    """Data badalne wale endpoints ke liye. Paisa ruka ho to 402."""
-    if not p.can_write:
-        raise HTTPException(
-            status_code=402,
-            detail="Subscription band hai — data dikhega par badla nahi ja sakta. "
-                   "Payment karke wapas chalu karein.",
-        )
-    if p.role == ROLE_ACCOUNTANT:
-        raise HTTPException(status_code=403, detail="Accountant sirf dekh sakta hai")
-    return p
 
 
 # Owner/Manager hi settings + staff chhoo sakte hain
