@@ -24,8 +24,9 @@ configure_logging()
 log = structlog.get_logger()
 
 
-async def _multi_tenant_hardening_check() -> None:
-    """60 dukaanon se pehle jo pakka hona chahiye — nahi hai to ERROR log."""
+async def _multi_tenant_hardening_check() -> list[str]:
+    """60 dukaanon se pehle jo pakka hona chahiye — nahi hai to ERROR log.
+    Kamiyan lautata hai; production mein lifespan inke saath shuru hi nahi hota."""
     from sqlalchemy import func, select
     from sqlalchemy import text as sqltext
 
@@ -38,8 +39,6 @@ async def _multi_tenant_hardening_check() -> None:
                 select(func.count()).select_from(Tenant).where(Tenant.status.in_(WRITABLE_STATUSES))
             )
         ).scalar_one()
-    if n <= 1:
-        return
     gaps: list[str] = []
 
     # RLS SACH MEIN chal rahi hai ya nahi — schema se nahi, ASAL BEHAVIOUR se.
@@ -68,7 +67,7 @@ async def _multi_tenant_hardening_check() -> None:
         )
 
     if not settings.TOKEN_ENCRYPTION_KEY:
-        gaps.append("TOKEN_ENCRYPTION_KEY empty — WhatsApp tokens stored in plaintext")
+        gaps.append("TOKEN_ENCRYPTION_KEY empty — WhatsApp/Instagram/Google tokens stored in plaintext")
     if not settings.VENDOR_API_KEY:
         gaps.append("VENDOR_API_KEY empty — shop ADMIN_API_KEY doubles as vendor master key")
     elif settings.VENDOR_API_KEY == settings.ADMIN_API_KEY:
@@ -76,9 +75,11 @@ async def _multi_tenant_hardening_check() -> None:
     if settings.ADMIN_API_KEY.startswith("change-me"):
         gaps.append("ADMIN_API_KEY is the .env.example placeholder")
     if gaps:
-        log.error("multi_tenant_hardening_incomplete", active_tenants=n, gaps=gaps)
+        log.error("multi_tenant_hardening_incomplete", active_tenants=n, gaps=gaps,
+                  fix="python -m scripts.secure_setup")
     else:
         log.info("multi_tenant_hardening_ok", active_tenants=n)
+    return gaps
 
 
 @asynccontextmanager
@@ -93,13 +94,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         log.exception("home_tenant_prime_failed")
 
-    # Multi-tenant hardening check: ek se zyada dukaan aur secrets/keys
-    # single-shop wale hi hain to shuru mein hi chilla do. Rokta nahi —
-    # existing deploy chalta rahe — par log mein ERROR, har restart par.
+    # Security check: token encryption key, alag vendor key, NOSUPERUSER DB
+    # role. Local par sirf ERROR log. PRODUCTION mein kami ho to app shuru hi
+    # nahi hoti — plaintext tokens ya RLS-bypass ke saath chalna chup-chaap
+    # khatra hai. Theek karne ke liye: python -m scripts.secure_setup
+    gaps: list[str] = []
     try:
-        await _multi_tenant_hardening_check()
+        gaps = await _multi_tenant_hardening_check()
     except Exception:
         log.exception("hardening_check_failed")
+    if gaps and settings.ENVIRONMENT == "production":
+        raise RuntimeError(
+            "Refusing to start in production: " + "; ".join(gaps)
+            + " — run: python -m scripts.secure_setup"
+        )
 
     scheduler.start()
     # owner's edited message formats survive restarts
@@ -219,11 +227,19 @@ async def tenant_scope(request: Request, call_next):
         return await call_next(request)
 
 
-# Sliding window per tenant (in-memory — restart par reset, theek hai).
-from collections import defaultdict as _dd, deque as _deque
+# Sliding window per tenant (in-memory, per-PROCESS — restart par reset,
+# aur N workers matlab asli limit N x RATE_LIMIT_PER_MIN. Ye jaan-boojh kar
+# simple hai: ye limiter ek runaway client ko rokne ke liye hai, DDoS ke
+# liye nahi — uske liye upar CDN/proxy hai.)
+from collections import deque as _deque
 import time as _time
 
-_RL_BUCKETS: dict = _dd(lambda: _deque(maxlen=4096))
+# BUG THA: bucket `deque(maxlen=4096)` tha aur default limit 6000. len(dq)
+# 4096 se upar ja hi nahi sakta, isliye `len(dq) >= limit` default config par
+# KABHI sach nahi hota tha — yaani rate limiting chupchaap band padi thi.
+# Test suite ise nahi pakad payi kyunki wo limit 1/5 par set karke chalti hai.
+# Ab cap limit se hi nikalta hai.
+_RL_BUCKETS: dict = {}
 _RL_PREFIXES = ("/admin/api", "/admin/media", "/orders", "/api/", "/control", "/staff/api")
 
 
@@ -234,7 +250,12 @@ def _rate_limited(tid, path: str) -> bool:
     if limit <= 0:
         return False  # 0/negative = disabled
     now = _time.monotonic()
-    dq = _RL_BUCKETS[tid]
+    dq = _RL_BUCKETS.get(tid)
+    if dq is None or dq.maxlen != limit + 1:
+        # Pehli baar, ya limit runtime par badal di gayi (tests karte hain).
+        # maxlen = limit + 1: window bharne ke liye kaafi, aur memory bandhi
+        # rehti hai chahe tenant kitna bhi maare.
+        dq = _RL_BUCKETS[tid] = _deque(dq or (), maxlen=limit + 1)
     while dq and now - dq[0] > 60:
         dq.popleft()
     if len(dq) >= limit:
@@ -281,6 +302,11 @@ app.include_router(control_router)
 from app.routers.staff_panel import router as staff_panel_router
 
 app.include_router(staff_panel_router)
+
+# Google Business Profile: saare Google reviews website par (Settings se connect)
+from app.routers.google_business import router as google_business_router
+
+app.include_router(google_business_router)
 
 # Static assets for the dashboard (CSS/JS — no secrets, safe to serve openly)
 from pathlib import Path
@@ -348,6 +374,52 @@ async def welcome_page():
         media_type="text/html",
         headers={"Cache-Control": "no-store"},
     )
+
+
+@app.get("/r/{slug}", include_in_schema=False)
+async def review_redirect(slug: str):
+    """Choti review link: /r/kwik-klin -> dukaan ka Google "write a review".
+
+    Message mein Google ki lambi link (placeid=ChIJ...) badsurat lagti hai
+    aur WhatsApp par aadhi kat jaati hai. Ye dukaan ke apne domain par
+    chhoti rehti hai, bahar ki kisi shortener service par nahi — na expire,
+    na kisi aur ka branding, aur har click hamare log mein.
+    Do listing hon to baari-baari dono par bhejte hain.
+    """
+    import random
+
+    from fastapi.responses import RedirectResponse
+    from fastapi.responses import Response as _Resp
+    from sqlalchemy import select as _select
+
+    from app.database import async_session_factory
+    from app.models.tenant import Tenant
+    from app.services import customer_messages, tenant_context
+
+    async with async_session_factory() as db:
+        tid = (
+            await db.execute(_select(Tenant.id).where(Tenant.slug == slug[:80].lower()))
+        ).scalar_one_or_none()
+    links = []
+    if tid is not None:
+        # Naya session CONTEXT KE ANDAR: RLS ka app.tenant_id transaction shuru
+        # hote hi lagta hai — purane session mein context badalne se DB ki
+        # pehchaan nahi badalti aur dukaan ki settings chhupi reh jaati.
+        async with tenant_context.as_tenant(tid):
+            async with async_session_factory() as db:
+                links = await customer_messages.review_links(db)
+    if not links:
+        return _Resp(
+            content="<!doctype html><meta charset=utf-8><title>Link not found</title>"
+                    "<p style='font:16px system-ui;padding:2rem'>This review link is not set up.</p>",
+            media_type="text/html", status_code=404,
+            headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"},
+        )
+    target = random.choice(links)
+    log.info("review_link_clicked", tenant=slug)
+    # 302 (307 nahi): GET hi rahe; no-store taaki link badle to turant lage
+    return RedirectResponse(target, status_code=302,
+                            headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
 
 
 @app.get("/pay/{token}", include_in_schema=False)
@@ -441,6 +513,205 @@ async def pay_page(token: str):
     )
 
 
+_STATUS_WORD = {
+    "RECEIVED": ("Received", "wait"), "PICKUP_ASSIGNED": ("Pickup scheduled", "wait"),
+    "PICKED_UP": ("Picked up", "wait"), "IN_WASH": ("Washing", "wait"), "IN_DRY": ("Drying", "wait"),
+    "IN_IRON": ("Ironing", "wait"), "READY": ("Ready", "ok"), "OUT_FOR_DELIVERY": ("Out for delivery", "ok"),
+    "DELIVERED": ("Delivered", "ok"), "CANCELLED": ("Cancelled", ""), "ON_HOLD": ("On hold", "wait"),
+}
+
+
+@app.get("/b/{token}", include_in_schema=False)
+async def bill_page(token: str):
+    """Grahak ka bill — web page + UPI (GPay/PhonePe/Paytm) se payment.
+
+    Token signed hai (services/bill_link.py). Amount LIVE: payment ke baad
+    wahi link "Paid" dikhata hai. Link forward ho sakta hai — isliye phone
+    masked, noindex, aur koi galti ho to sab ek jaisa 404.
+    """
+    from decimal import Decimal
+
+    from fastapi.responses import Response as _Resp
+
+    from app.models import Customer, Order
+    from app.models.tenant import Tenant
+    from app.services import app_settings, bill_link, integrations, receipt
+
+    def _fail() -> _Resp:
+        return _Resp(
+            content="<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
+                    "<title>Bill not found</title><p style='font:16px system-ui;padding:2rem'>"
+                    "This bill link is not valid. Please ask the shop to send it again.</p>",
+            media_type="text/html", status_code=404,
+            headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"},
+        )
+
+    parsed = bill_link.parse(token)
+    if parsed is None:
+        return _fail()
+    tid, oid = parsed
+    # Context pehle, session baad — RLS us dukaan par transaction ke shuru mein lagti hai
+    async with integrations.tenant_db(tid) as db:
+        order = await db.get(Order, oid)
+        if order is None or order.tenant_id != tid:
+            return _fail()
+        tenant = await db.get(Tenant, tid)
+        cust = await db.get(Customer, order.customer_id)
+        s = await app_settings.all_settings(db)
+
+    e = _esc
+    shop = (tenant.shop_name if tenant else "") or "Laundry"
+    r = receipt.build(order=order, customer_name=cust.name if cust else None,
+                      customer_phone=None, shop_name=shop, settings=s)
+    money = lambda v: f"₹{v:,.0f}" if float(v).is_integer() else f"₹{v:,.2f}"  # noqa: E731
+    phone = "".join(ch for ch in (cust.phone if cust else "") if ch.isdigit())
+    customer = e((cust.name or "").strip() if cust and cust.name else "Customer")
+    if phone:
+        customer += f" <span class='label'>· ••••{e(phone[-4:])}</span>"
+
+    meta = [x for x in (r["address"], f"Ph: {r['phone']}" if r["phone"] else "", f"GSTIN: {r['gstin']}" if r["gstin"] else "") if x]
+    shop_meta = "".join(f"<p>{e(x)}</p>" for x in meta)
+
+    items = []
+    for it in r["items"]:
+        unit = " kg" if it["kg"] else ""
+        detail = f"{it['qty']}{unit}" + (f" × {money(it['rate'])}" if it["rate"] is not None else "")
+        pieces = ", ".join(f"{n} {q}" for n, q in it["pieces"])
+        items.append(
+            f"<li><span><span class='name'>{e(it['title'])}</span><small>{e(detail)}"
+            f"{' · ' + e(pieces) if pieces else ''}</small></span>"
+            f"<span class='amt'>{money(it['amount']) if it['amount'] is not None else ''}</span></li>"
+        )
+    if r["urgent_charge"]:
+        items.append(f"<li><span class='name'>Urgent charge</span><span class='amt'>{money(r['urgent_charge'])}</span></li>")
+
+    rows = []
+    if r["has_total"]:
+        if r["discount"] or r["gst"] or r["urgent_charge"]:
+            rows.append(("Subtotal", money(r["subtotal"])))
+            if r["discount"]:
+                rows.append(("Discount", "−" + money(r["discount"])))
+            if r["gst"]:
+                rows.append(("GST", money(r["gst"])))
+        rows.append(("<b class='grand'>Total</b>", f"<b class='grand'>{money(r['total'])}</b>"))
+        rows.append(("Paid", money(r["paid"])))
+        rows.append(("<b>Balance due</b>", f"<b>{money(r['due']) if r['due'] > 0 else 'Paid in full ✅'}</b>"))
+    totals = "".join(
+        f"<div class='row{' due-row' if a.startswith('<b>Balance') else ''}'><span>{a}</span><span>{b}</span></div>"
+        for a, b in rows
+    )
+
+    status_word, status_cls = _STATUS_WORD.get(order.status.name, (order.status.name.title(), ""))
+    due = Decimal(str(r["due"])).quantize(Decimal("0.01"))
+    pay_block, pay_script = "", ""
+    if r["has_total"] and due <= 0 and r["total"] > 0:
+        pay_block = ""   # hero khud "Paid in full" bolta hai
+    elif r["has_total"] and due > 0 and r["upi"]:
+        params = bill_link.upi_params(r["upi"], r["upi_payee"] or shop, due, f"Bill {order.order_number}")
+        links = bill_link.app_links(params)
+        buttons = "".join(
+            f"<a class='mobile-only{' primary' if key == 'gpay' else ''}' href='{e(links['upi'])}' "
+            f"data-android='{e(links[key]['android'])}' data-ios='{e(links[key]['ios'])}'>Pay with {e(label)}</a>"
+            for key, label, _, _ in bill_link.UPI_APPS
+        )
+        buttons += f"<a class='mobile-only' href='{e(links['upi'])}'>Other UPI app</a>"
+        pay_block = (
+            "<section class='card pay'>"
+            f"<div class='due'>Amount due</div><div class='amount'>{money(float(due))}</div>"
+            f"<div class='apps'>{buttons}</div>"
+            f"<div class='qr desktop-only' role='img' aria-label='UPI QR code'>{bill_link.qr_svg(links['upi'])}</div>"
+            "<p class='desktop-only note'>Scan with any UPI app on your phone.</p>"
+            f"<p class='vpa'>UPI ID: <b>{e(r['upi'])}</b><button type='button' id='copy-vpa' data-vpa='{e(r['upi'])}'>Copy</button></p>"
+            "<p class='note'>After paying, the shop confirms it on your bill. Keep the payment screenshot until then.</p>"
+            "</section>"
+        )
+        pay_script = f"<script src='/site/assets/js/bill.js?v={_SITE_ASSET_V}' defer></script>"
+    elif r["has_total"] and due > 0:
+        pay_block = (f"<section class='card pay'><div class='due'>Amount due</div>"
+                     f"<div class='amount'>{money(float(due))}</div><p class='note'>Please pay at the shop or at delivery.</p></section>")
+
+    terms = ""
+    if r["terms"]:
+        terms = ("<section class='card'><details class='terms'><summary>Terms &amp; conditions</summary><ol>"
+                 + "".join(f"<li>{e(t)}</li>" for t in r["terms"]) + "</ol></details></section>")
+    digits = "".join(ch for ch in r["phone"] if ch.isdigit())
+    contact_btn = ""
+    if digits:
+        wa = digits if digits.startswith("91") or len(digits) != 10 else "91" + digits
+        contact_btn = f"<a class='contact-btn' href='https://wa.me/{wa}'>💬 WhatsApp the shop</a>"
+
+    # ---- mood: paid (sparkle) / due / happy (delivered on time) / info ----
+    st = order.status.name
+    first_name = ((cust.name or "").strip().split() or ["there"])[0] if cust else "there"
+    paid_full = r["has_total"] and due <= 0 and r["total"] > 0
+    on_time = (st == "DELIVERED" and order.actual_delivery is not None
+               and (order.expected_delivery is None or order.actual_delivery.date() <= order.expected_delivery))
+    if paid_full and st == "DELIVERED":
+        mood, emoji, title = "paid", "🎉", "All done, thank you!"
+        sub = f"{first_name}, your clothes are delivered and the bill is settled."
+    elif paid_full:
+        mood, emoji, title = "paid", "✨", "Payment received!"
+        sub = f"Thank you, {first_name}. We'll update you as your order moves."
+    elif st == "DELIVERED":
+        mood, emoji, title = "happy", "😊", "Delivered!"
+        sub = "Hope the clothes came back just the way you like them."
+    elif st in ("READY", "OUT_FOR_DELIVERY"):
+        mood, emoji, title = ("due" if due > 0 else "happy"), "🧺", ("Your clothes are ready" if st == "READY" else "On the way to you")
+        sub = f"Balance of {money(float(due))} — pay now or at delivery." if due > 0 else "Fresh, folded and coming home."
+    elif st == "CANCELLED":
+        mood, emoji, title, sub = "info", "🚫", "Order cancelled", "Message us if this looks wrong."
+    elif due > 0:
+        mood, emoji, title = "due", "🧾", f"Hi {first_name}, here's your bill"
+        sub = f"{money(float(due))} due · pay online in one tap."
+    else:
+        mood, emoji, title = "info", "🧺", f"Hi {first_name}, here's your order"
+        sub = "We'll share the bill once the clothes reach us."
+    badge = ""
+    if on_time:
+        badge = "<span class='hero-badge'>⏱️ Delivered on time</span>"
+    elif order.priority == "urgent" and st not in ("DELIVERED", "CANCELLED"):
+        badge = "<span class='hero-badge'>⚡ Urgent service</span>"
+    art = ""
+    if mood in ("paid", "happy"):
+        import random as _rnd
+
+        rnd = _rnd.Random(order.order_number)
+        art = "".join(f"<i style='left:{rnd.randint(2, 98)}%;animation-delay:{rnd.uniform(0, 3):.1f}s'></i>" for _ in range(22))
+        art += "".join(f"<i class='spark' style='left:{rnd.randint(4, 94)}%;top:{rnd.randint(8, 80)}%;animation-delay:{rnd.uniform(0, 1.8):.1f}s'>✦</i>" for _ in range(8))
+    theme = {"paid": "#059669", "due": "#f97316", "happy": "#0ea5e9"}.get(mood, "#1f2937")
+
+    # ---- progress: Booked -> Picked up -> Cleaning -> Ready -> Delivered ----
+    stage = {"RECEIVED": 0, "PICKUP_ASSIGNED": 0, "PICKED_UP": 1, "IN_WASH": 2, "IN_DRY": 2, "IN_IRON": 2,
+             "READY": 3, "OUT_FOR_DELIVERY": 3, "DELIVERED": 4}.get(st, -1)
+    steps = ["Booked", "Picked up", "Cleaning", "Ready", "Delivered"]
+    if st == "RECEIVED":
+        steps[1] = "At shop"
+    progress = "".join(
+        f"<li class='{'done' if i < stage or (i == stage == 4) else 'now' if i == stage else ''}'>{e(s)}</li>"
+        for i, s in enumerate(steps)
+    )
+    if stage >= 0:
+        progress += f"<span class='bar' style='width:{stage * 20}%'></span>"
+
+    fills = {
+        "{{SHOP_META}}": shop_meta, "{{NUMBER}}": e(order.order_number), "{{DATE}}": e(r["date"]),
+        "{{CUSTOMER}}": customer,
+        "{{DELIVERY_ROW}}": (f"<div class='row'><span class='label'>Delivery</span><span>{e(r['delivery'])}</span></div>"
+                             if r["delivery"] else ""),
+        "{{STATUS_CLASS}}": status_cls, "{{STATUS}}": e(status_word),
+        "{{PAY_BLOCK}}": pay_block, "{{ITEMS}}": "".join(items), "{{TOTALS}}": totals,
+        "{{TERMS}}": terms, "{{CONTACT_BTN}}": contact_btn, "{{PAY_SCRIPT}}": pay_script,
+        "{{MOOD}}": mood, "{{THEME}}": theme, "{{HERO_ART}}": art, "{{HERO_EMOJI}}": emoji,
+        "{{HERO_TITLE}}": e(title), "{{HERO_SUB}}": e(sub), "{{HERO_BADGE}}": badge, "{{PROGRESS}}": progress,
+        "{{ASSET_V}}": _SITE_ASSET_V, "{{SHOP}}": e(shop),
+    }
+    html = (_SITE_DIR / "templates" / "bill.html").read_text(encoding="utf-8")
+    for k, v in fills.items():
+        html = html.replace(k, v)
+    return _Resp(content=html, media_type="text/html",
+                 headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
 def _esc(s: str) -> str:
     import html as _html
 
@@ -453,7 +724,291 @@ def _json(s: str) -> str:
     return _json_mod.dumps(s)
 
 
+# Public website — apna folder, dashboard ke static se alag:
+#   app/site/templates/index.html   server placeholders ({{...}}) wala HTML
+#   app/site/assets/{css,js,img}    /site/assets/... par, saal bhar cache
+_SITE_DIR = Path(__file__).resolve().parent / "site"
+_SITE_FILE = _SITE_DIR / "templates" / "index.html"
+app.mount(
+    "/site/assets",
+    CachedStaticFiles(directory=_SITE_DIR / "assets"),
+    name="site-assets",
+)
+
+
+def _site_asset_version() -> str:
+    """CSS/JS badle to naya ?v= — browser purani file cache se na uthaye."""
+    import hashlib
+
+    h = hashlib.sha1()
+    for p in sorted((_SITE_DIR / "assets").rglob("*.*")):
+        if p.suffix in (".css", ".js"):
+            h.update(p.read_bytes())
+    return h.hexdigest()[:10]
+
+
+_SITE_ASSET_V = _site_asset_version()
+
+from app.services import site_pages  # noqa: E402  (service pages ka registry)
+
+
+def _public_base(request: Request) -> str:
+    """Canonical/OG/sitemap ke liye poora origin.
+
+    SITE_URL set ho (production: https://kwikklin.online) to HAMESHA wahi —
+    warna IP/duckdns/tunnel se khula page apna alag canonical deta aur Google
+    ek hi page ke kai URL index karta (duplicate content). Set na ho to
+    request se (proxy ke X-Forwarded-* pehle); Host header bahar se aata hai
+    — sirf saaf hostname hi maana jaata hai."""
+    import re as _re
+
+    if settings.SITE_URL:
+        return settings.SITE_URL.rstrip("/")
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+    if proto not in ("http", "https"):
+        proto = "https"
+    if not _re.fullmatch(r"[A-Za-z0-9.-]+(:\d{1,5})?", host):
+        host = request.url.netloc
+    return f"{proto}://{host}"
+
+
+@app.get("/laundry", include_in_schema=False)
+async def site_old_url():
+    """Purana pata — 301 taaki Google ranking aur purane links naye / par aayein."""
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse("/", status_code=301)
+
+
 @app.get("/", include_in_schema=False)
+async def site_page(request: Request):
+    """Kwik Klin ki public website (main domain) — grahak (pickup, rate list,
+    reviews), franchise aur CRM. Local SEO mein domain ka root sabse taqatwar
+    page hai, isliye laundry site yahin; CRM signup /join par. Rate list HOME
+    dukaan ke CRM rate card se aati hai (app/services/site_rates.py)."""
+    from fastapi.responses import Response as _Resp
+
+    from app.services import google_business, site_rates
+
+    html = (
+        _SITE_FILE.read_text(encoding="utf-8")
+        .replace("__BASE__", _public_base(request))
+        # dev mein --reload har badlaav par process naya karta hai; prod mein deploy par
+        .replace("{{ASSET_V}}", _SITE_ASSET_V)
+    )
+    html = await site_rates.render(html)
+    import html as _html
+
+    html = html.replace("{{AREAS_HTML}}", "".join(f"<li>{_html.escape(a)}</li>" for a in site_pages.AREAS))
+    summary, cards = google_business.render_block(await google_business.home_reviews())
+    html = html.replace("{{GBP_SUMMARY}}", summary).replace("{{GBP_REVIEWS}}", cards)
+    return _Resp(content=html, media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
+# Legal pages: ek shell (templates/legal.html) + har page ka content
+# (templates/legal/*.html). Google OAuth verification aur grahak dono ke liye.
+# Razorpay website verification bhi yahi pages maangta hai: About, Contact,
+# Privacy, Terms, Cancellation & Refund, Shipping & Delivery (+ daam /laundry par).
+_LEGAL_PAGES = {
+    "about": ("About Kwik Klin", "Our story", "Kwik Klin was founded in Varanasi by Suyash Srivastava to make laundry hassle-free — every order tracked from pickup to delivery, with free pickup across Varanasi."),
+    "contact": ("Contact Us", "Company", "Contact Kwik Klin in Varanasi on WhatsApp or phone, or visit our shop at Sundarpur Chauraha."),
+    "privacy": ("Privacy Policy", "Legal", "How Kwik Klin collects, uses and protects personal data for laundry customers, website visitors and CRM businesses."),
+    "terms": ("Terms of Service", "Legal", "Terms for the Kwik Klin laundry service in Varanasi, our website, WhatsApp assistant and the Kwik Klin CRM."),
+    "refund-policy": ("Cancellation & Refund Policy", "Legal", "How cancellations and refunds work for Kwik Klin laundry orders and CRM subscriptions."),
+    "shipping-policy": ("Shipping & Delivery Policy", "Legal", "Laundry pickup and delivery areas and timelines in Varanasi, and online delivery of the Kwik Klin CRM."),
+}
+_LEGAL_UPDATED = "17 September 2026"
+
+
+def _legal_route(name: str):
+    import html as _html
+
+    title, eyebrow, description = _LEGAL_PAGES[name]
+
+    async def page(request: Request):
+        from fastapi.responses import Response as _Resp
+
+        body = (_SITE_DIR / "templates" / "legal" / f"{name}.html").read_text(encoding="utf-8")
+        html = (
+            (_SITE_DIR / "templates" / "legal.html").read_text(encoding="utf-8")
+            .replace("{{BODY}}", body)
+            .replace("{{TITLE}}", _html.escape(title))
+            .replace("{{EYEBROW}}", eyebrow)
+            .replace("{{DESCRIPTION}}", _html.escape(description))
+            .replace("{{PATH}}", f"/{name}")
+            .replace("{{UPDATED}}", _LEGAL_UPDATED)
+            # header/footer mein is page ka link "abhi yahan ho" dikhe
+            .replace(f'<a href="/{name}">', f'<a href="/{name}" aria-current="page">')
+            .replace("{{ASSET_V}}", _SITE_ASSET_V)
+            .replace("__BASE__", _public_base(request))
+        )
+        return _Resp(content=html, media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+    return page
+
+
+for _name in _LEGAL_PAGES:
+    app.add_api_route(f"/{_name}", _legal_route(_name), methods=["GET"], include_in_schema=False)
+
+
+def _service_route(slug: str):
+    """Local SEO service page: templates/service.html shell + services/<slug>.html
+    content + CRM daam + FAQ (HTML aur JSON-LD ek hi data se)."""
+    import html as _html
+    import json as _json
+    from urllib.parse import quote
+
+    meta = site_pages.SERVICES[slug]
+
+    async def page(request: Request):
+        from fastapi.responses import Response as _Resp
+
+        from app.services import site_rates
+
+        base = _public_base(request)
+        esc = _html.escape
+        rates_html, offers = await site_rates.category_block(meta["rates"])
+        faq_html = "".join(
+            f'<details class="q"{" open" if i == 0 else ""}><summary>{esc(q)}</summary><p>{esc(a)}</p></details>'
+            for i, (q, a) in enumerate(meta["faq"])
+        )
+        related = "".join(
+            f'<li><a href="/{s}">{esc(m["name"])} in Varanasi</a></li>'
+            for s, m in site_pages.SERVICES.items() if s != slug
+        )
+        ld = {
+            "@context": "https://schema.org",
+            "@graph": [
+                {
+                    "@type": "Service",
+                    "@id": f"{base}/{slug}#service",
+                    "name": f'{meta["name"]} in Varanasi',
+                    "serviceType": meta["name"],
+                    "description": meta["description"],
+                    "url": f"{base}/{slug}",
+                    "areaServed": {"@type": "City", "name": "Varanasi"},
+                    "provider": {
+                        "@type": "DryCleaningOrLaundry", "@id": f"{base}/#business", "name": "Kwik Klin",
+                        "telephone": "+91-96968-56069", "url": f"{base}/",
+                        "address": {"@type": "PostalAddress", "streetAddress": "Sundarpur Chauraha",
+                                    "addressLocality": "Varanasi", "addressRegion": "Uttar Pradesh",
+                                    "postalCode": "221005", "addressCountry": "IN"},
+                    },
+                    **({"offers": offers} if offers else {}),
+                },
+                {
+                    "@type": "BreadcrumbList",
+                    "itemListElement": [
+                        {"@type": "ListItem", "position": 1, "name": "Home", "item": f"{base}/"},
+                        {"@type": "ListItem", "position": 2, "name": "Services", "item": f"{base}/#services"},
+                        {"@type": "ListItem", "position": 3, "name": meta["name"], "item": f"{base}/{slug}"},
+                    ],
+                },
+                {
+                    "@type": "FAQPage",
+                    "mainEntity": [
+                        {"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": a}}
+                        for q, a in meta["faq"]
+                    ],
+                },
+            ],
+        }
+        body = (_SITE_DIR / "templates" / "services" / f"{slug}.html").read_text(encoding="utf-8")
+        fills = {
+            "{{BODY}}": body,
+            "{{JSON_LD}}": _json.dumps(ld, ensure_ascii=False).replace("</", "<\\/"),
+            "{{RATES}}": rates_html,
+            "{{FAQ}}": faq_html,
+            "{{RELATED}}": related,
+            "{{AREAS}}": "".join(f"<li>{esc(a)}</li>" for a in site_pages.AREAS),
+            "{{TITLE}}": esc(meta["title"]),
+            "{{DESCRIPTION}}": esc(meta["description"]),
+            "{{H1}}": esc(meta["h1"]),
+            "{{LEAD}}": esc(meta["lead"]),
+            "{{NAME_LOWER}}": esc(meta["name"].lower()),
+            "{{NAME}}": esc(meta["name"]),
+            "{{SLUG}}": slug,
+            "{{WA_TEXT}}": quote(f'Hello Kwik Klin, I would like {meta["name"].lower()} in Varanasi.'),
+            "{{ASSET_V}}": _SITE_ASSET_V,
+            "__BASE__": base,
+        }
+        html = (_SITE_DIR / "templates" / "service.html").read_text(encoding="utf-8")
+        for k, v in fills.items():
+            html = html.replace(k, v)
+        html = html.replace(f'<a href="/{slug}">', f'<a href="/{slug}" aria-current="page">')
+        return _Resp(content=html, media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+    return page
+
+
+for _slug in site_pages.SERVICES:
+    app.add_api_route(f"/{_slug}", _service_route(_slug), methods=["GET"], include_in_schema=False)
+
+
+@app.get("/api/public/reviews", include_in_schema=False)
+async def public_reviews() -> JSONResponse:
+    """Website ke liye Google reviews (cached). Key na ho to configured=false."""
+    from app.services import google_reviews
+
+    return JSONResponse(
+        await google_reviews.get_reviews(),
+        headers={"Cache-Control": "public, max-age=600"},
+    )
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt(request: Request):
+    from fastapi.responses import PlainTextResponse
+
+    return PlainTextResponse(
+        "User-agent: *\n"
+        "Allow: /$\n"
+        + "".join(f"Allow: /{n}\n" for n in (*site_pages.SERVICES, *_LEGAL_PAGES)) +
+        "Allow: /join\n"
+        "Allow: /admin/static/\n"
+        "Allow: /site/assets/\n"
+        # Google page ko JS ke saath render karta hai — reviews/plans ki
+        # API band ho to wo hissa use khali dikhta hai
+        "Allow: /api/public/\n"
+        "Allow: /api/plans\n"
+        "Disallow: /admin\n"
+        "Disallow: /control\n"
+        "Disallow: /staff\n"
+        "Disallow: /pay/\n"
+        "Disallow: /b/\n"
+        "Disallow: /r/\n"
+        "Disallow: /api/\n"
+        "Disallow: /webhook\n"
+        f"\nSitemap: {_public_base(request)}/sitemap.xml\n"
+    )
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+async def sitemap_xml(request: Request):
+    from datetime import date as _date
+
+    from fastapi.responses import Response as _Resp
+
+    base = _public_base(request)
+    tpl = _SITE_DIR / "templates"
+
+    def url(path: str, file: Path, priority: str) -> str:
+        mod = _date.fromtimestamp(file.stat().st_mtime).isoformat()
+        return f"  <url><loc>{base}{path}</loc><lastmod>{mod}</lastmod><priority>{priority}</priority></url>\n"
+
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        + url("/", _SITE_FILE, "1.0")
+        + "".join(url(f"/{s}", tpl / "services" / f"{s}.html", "0.9") for s in site_pages.SERVICES)
+        + url("/join", _JOIN_FILE, "0.6")
+        + "".join(url(f"/{n}", tpl / "legal" / f"{n}.html", "0.3") for n in _LEGAL_PAGES)
+        + "</urlset>\n"
+    )
+    return _Resp(content=xml, media_type="application/xml")
+
+
 @app.get("/join", include_in_schema=False)
 async def join_page():
     from fastapi.responses import Response as _Resp

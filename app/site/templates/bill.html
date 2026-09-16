@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en-IN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Bill {{NUMBER}} · {{SHOP}}</title>
+<meta name="theme-color" content="{{THEME}}">
+<link rel="icon" href="/site/assets/img/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all';this.onload=null">
+<link rel="stylesheet" href="/site/assets/css/bill.css?v={{ASSET_V}}">
+</head>
+<body class="mood-{{MOOD}}">
+<main class="bill">
+
+  <section class="hero">
+    <div class="hero-art" aria-hidden="true">{{HERO_ART}}</div>
+    <p class="hero-shop">{{SHOP}}</p>
+    <div class="hero-emoji" aria-hidden="true">{{HERO_EMOJI}}</div>
+    <h1>{{HERO_TITLE}}</h1>
+    <p class="hero-sub">{{HERO_SUB}}</p>
+    {{HERO_BADGE}}
+  </section>
+
+  {{PAY_BLOCK}}
+
+  <section class="card progress-card">
+    <ol class="progress">{{PROGRESS}}</ol>
+  </section>
+
+  <section class="card">
+    <div class="row"><span class="label">Bill</span><b>{{NUMBER}}</b></div>
+    <div class="row"><span class="label">Date</span><span>{{DATE}}</span></div>
+    <div class="row"><span class="label">Customer</span><span>{{CUSTOMER}}</span></div>
+    {{DELIVERY_ROW}}
+    <div class="row"><span class="label">Status</span><span class="status {{STATUS_CLASS}}">{{STATUS}}</span></div>
+  </section>
+
+  <section class="card">
+    <h2>Items</h2>
+    <ul class="items">{{ITEMS}}</ul>
+    <div class="totals">{{TOTALS}}</div>
+  </section>
+
+  {{TERMS}}
+
+  <section class="card shopcard">
+    <b>{{SHOP}}</b>
+    {{SHOP_META}}
+    {{CONTACT_BTN}}
+  </section>
+
+  <p class="foot"><span>Powered by <a href="https://kwikklin.online/join" rel="noopener">Kwik Klin</a></span></p>
+</main>
+{{PAY_SCRIPT}}
+</body>
+</html>
