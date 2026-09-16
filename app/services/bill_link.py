@@ -85,13 +85,9 @@ def url(order, app_settings_dict: dict | None = None) -> str:
 
 async def url_for(db, order) -> str:
     """Message bhejte waqt: us dukaan ki settings se link (context set hona chahiye)."""
-    from app.services import app_settings
+    from app.services.google_auth import public_base
 
-    try:
-        base = await app_settings.get(db, "public_base_url")
-    except Exception:
-        base = ""
-    return url(order, {"public_base_url": base or ""})
+    return url(order, {"public_base_url": await public_base(db)})
 
 
 def message_line(link: str) -> str:

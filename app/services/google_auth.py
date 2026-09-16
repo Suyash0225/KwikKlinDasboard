@@ -50,15 +50,16 @@ def enabled() -> bool:
 
 
 async def public_base(db) -> str:
-    """Bahar se app kis URL par dikhti hai.
+    """Bahar se app kis URL par dikhti hai — HAR grahak link (bill, review,
+    pay, OAuth callback, Instagram image) isi se bane.
 
-    Laptop se chalte waqt ye cloudflare tunnel hota hai, jiska URL har
-    restart par badal jaata hai — tunnel_guard use `public_base_url` setting
-    mein likhta rehta hai. APP_BASE_URL (127.0.0.1) sirf fallback hai, aur
-    usse Google ka callback phone par kabhi wapas nahi aa sakta.
+    Kram: .env ki SITE_URL (production ka pakka domain) > dukaan ki
+    `public_base_url` setting (laptop-dev: LAN IP / tunnel) > APP_BASE_URL.
     """
     from app.services import app_settings
 
+    if settings.SITE_URL:
+        return settings.SITE_URL.rstrip("/")
     try:
         live = (await app_settings.get(db, "public_base_url") or "").strip()
     except Exception:

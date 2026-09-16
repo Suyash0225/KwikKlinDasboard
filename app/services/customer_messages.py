@@ -5,7 +5,7 @@ browser mein nahi — warna har dukaan ke message mein kisi aur ka naam
 chipak jaata hai. Bhejna browser karta hai: dukaan ka WhatsApp API ho to
 wahan se, warna wa.me link se apne phone ka WhatsApp.
 
-Review link choti aur dukaan ki apni hai: {public_base_url}/r/{slug}. Wo
+Review link choti aur dukaan ki apni hai: {SITE_URL ya public_base_url}/r/{slug}. Wo
 Google ke review box par redirect karti hai (main.py). Bahar ki shortener
 service nahi: link par dukaan ka domain dikhta hai, kabhi expire nahi hoti,
 aur click ginti hamare log mein.
@@ -59,7 +59,9 @@ async def short_review_link(db: AsyncSession, tenant) -> str:
     links = await review_links(db)
     if not links:
         return ""
-    base = (await app_settings.get(db, "public_base_url") or "").strip().rstrip("/")
+    from app.services.google_auth import public_base
+
+    base = await public_base(db)
     if base and tenant is not None and getattr(tenant, "slug", None):
         return f"{base}/r/{tenant.slug}"
     return links[0]

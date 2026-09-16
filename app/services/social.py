@@ -363,7 +363,9 @@ async def run_daily_social(force: bool = False) -> str:
         caption = await _caption(db, theme_title, headline, subline)
 
         # Instagram (only when linked): Meta fetches from our public route
-        base = (await app_settings.get(db, "public_base_url") or "").rstrip("/")
+        from app.services.google_auth import public_base
+
+        base = await public_base(db)
         ig_status = "skipped"
         if base:
             ig_status = await post_to_instagram(db, f"{base}/social/{fname}", caption)

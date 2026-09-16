@@ -420,7 +420,9 @@ async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)
         # /pay wala page upi:// fire karta hai aur GPay/PhonePe/Paytm khulta
         # hai, amount bhara hua. Paisa seedha dukaan ke VPA mein — beech
         # mein koi gateway nahi.
-        base = (await app_settings.get(db, "public_base_url") or "").strip().rstrip("/")
+        from app.services.google_auth import public_base
+
+        base = await public_base(db)
         tid = tenant_context.current_tenant_id.get() or tenant_context.cached_home_tenant_id()
         if base and tid is not None:
             link = f"{base}/pay/{pay_link.make(tid, total)}"
