@@ -188,7 +188,9 @@ against the local DB; seed demo data makes a few count-based tests fail.
 
 ## Deploy (server)
 
-`.env` git mein nahi jaati — server par ek baar banti hai aur rehti hai.
+Poora kram (EC2, systemd, nginx, HTTPS): [docs/DEPLOY.md](docs/DEPLOY.md).
+Har update: `./scripts/deploy.sh`. `.env` git mein nahi jaati — server par ek
+baar banti hai aur rehti hai.
 
 ```bash
 # pehli baar
