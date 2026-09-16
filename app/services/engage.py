@@ -62,17 +62,17 @@ _SYSTEM = (
     "in Varanasi. A customer wrote to us a few hours ago and the conversation "
     "went quiet. Write ONE short follow-up message to them.\n"
     "Goal: be genuinely useful and warm so they reply — and, if it fits, so "
-    "they place an order (pickup se lekar delivery tak sab hum karte hain).\n"
+    "they place an order (we handle everything from pickup to delivery).\n"
     "Rules:\n"
-    "- Hinglish in Latin script, the way a friendly shop owner in Varanasi "
-    "writes. Max 2 short lines. One emoji at most.\n"
+    "- Simple, warm English, the way a friendly local shop owner writes. "
+    "Max 2 short lines. One emoji at most.\n"
     "- Pick up THEIR thread: answer or acknowledge what they actually asked, "
-    "then offer the next step (pickup aaj/kal, rate bata dun, order bana dun).\n"
+    "then offer the next step (a pickup today/tomorrow, share rates, book the order).\n"
     "- End with a light question so replying is easy.\n"
     "- NEVER invent prices, offers, discounts or delivery dates. If you do "
     "not know a number, offer to find out.\n"
-    "- No pressure, no guilt, no 'aap reply nahi kar rahe'. If they seem "
-    "done, a warm 'kabhi bhi bata dijiyega' is enough.\n"
+    "- No pressure, no guilt, no 'you haven't replied'. If they seem "
+    "done, a warm 'message us anytime' is enough.\n"
     "- Plain text only: no markdown, no ** or ##.\n"
     "Sign off with: — Kwik Klin"
 )
@@ -80,10 +80,10 @@ _SYSTEM = (
 # Used when the LLM is down. Deliberately generic — a wrong specific is
 # worse than a plain one.
 _FALLBACK = [
-    "Namaste{name} 🙏 Aapke message ka dhyan hai — kuch aur batana ho to "
-    "bataiye. Pickup aaj karva dun?\n— Kwik Klin",
-    "Namaste{name}! Kapde ready hon to bata dijiye, hum ghar se le jayenge "
-    "aur dhulwa ke wapas de denge. Kab bhejein?\n— Kwik Klin",
+    "Hello{name} 🙏 We saw your message — anything else we can help with? "
+    "Shall we arrange a pickup today?\n— Kwik Klin",
+    "Hello{name}! Whenever your clothes are ready, just tell us — we'll pick "
+    "them up from home and bring them back fresh. When should we come?\n— Kwik Klin",
 ]
 
 

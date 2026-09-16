@@ -104,7 +104,7 @@ async def test_unassigned_pickup_still_reaches_the_delivery_boy(
     )
 
 
-async def test_ask_is_saved_and_the_owner_can_answer(client, test_washer, sent) -> None:
+async def test_ask_is_saved_and_the_owner_can_answer(client, test_washer, sent, monkeypatch) -> None:
     """Sawaal thread mein, jawab thread mein, aur staff ko badge.
 
     HOME dukaan par: owner ka dashboard (ADMIN_API_KEY) home context mein
@@ -112,6 +112,10 @@ async def test_ask_is_saved_and_the_owner_can_answer(client, test_washer, sent) 
     dikhati hi nahi, jo bilkul sahi hai.
     """
     from app.config import settings
+
+    # Ask sirf WhatsApp API ke saath chalta hai — home ke .env creds "jude"
+    monkeypatch.setattr(settings, "WHATSAPP_TOKEN", "test-token")
+    monkeypatch.setattr(settings, "WHATSAPP_PHONE_NUMBER_ID", "123")
 
     from app.services import staff_auth, tasks as task_service
     from tests.conftest import TEST_CUSTOMER_PHONE, TEST_WASHER_PHONE
@@ -154,6 +158,76 @@ async def test_ask_is_saved_and_the_owner_can_answer(client, test_washer, sent) 
     assert [m["who"] for m in th["messages"]] == ["staff", "owner"]
     assert "gate ke paas" in th["messages"][1]["text"]
     assert (await client.get("/staff/api/notifications")).json()["unread"] == 0
+
+
+async def test_ask_is_hidden_and_refused_without_whatsapp(client, test_washer, sent, monkeypatch) -> None:
+    """Bina WhatsApp API ke sawaal owner tak jaata hi nahi tha — staff
+    samajhta tha ki pooch liya. Ab button nahi, aur API saaf mana karti hai."""
+    from app.config import settings
+
+    from app.services import staff_auth, tasks as task_service
+    from tests.conftest import TEST_WASHER_PHONE
+    from tests.test_staff_panel import PW
+
+    monkeypatch.setattr(settings, "WHATSAPP_TOKEN", "")
+    monkeypatch.setattr(settings, "WHATSAPP_PHONE_NUMBER_ID", "")
+    async with async_session_factory() as db:
+        st = await db.get(Staff, test_washer)
+        await staff_auth.set_password(db, st, PW, temp=False)
+        t = await task_service.create_task(db, title="Kurta dhona hai", staff=st, order=None, notify=False)
+        code = t.code
+
+    await _login(client, TEST_WASHER_PHONE)
+    assert (await client.get("/staff/api/me")).json()["can_ask"] is False
+    r = await client.post(f"/staff/api/tasks/{code}/ask", json={"text": "Kitne kapde?"})
+    assert r.status_code == 409
+    th = (await client.get(f"/staff/api/tasks/{code}/messages")).json()
+    assert th["messages"] == []
+
+
+async def test_route_address_follows_the_owner_setting(
+    client, two_shops, delivery_guy, sent  # noqa: F811
+) -> None:
+    """Route (pata + Google Maps) default band — pata server se aata hi nahi.
+    Owner Settings se chalu kare to aata hai."""
+    tok = tenant_context.current_tenant_id.set(two_shops["a"])
+    try:
+        async with async_session_factory() as db:
+            from app.models import Customer
+
+            c = Customer(phone=DEL_CUST, name="Pata Wala", address="62, Gomti Nagar")
+            db.add(c)
+            await db.flush()
+            db.add(Order(
+                order_number="KK-ROUTE-01", customer_id=c.id, status=OrderStatus.PICKUP_ASSIGNED,
+                items=[{"type": "Shirt", "qty": 1}], total_amount=50,
+            ))
+            await db.commit()
+    finally:
+        tenant_context.current_tenant_id.reset(tok)
+
+    try:
+        await _login(client, DEL_PHONE)
+        assert (await client.get("/staff/api/me")).json()["show_route"] is False
+        stop = [s for s in (await client.get("/staff/api/route")).json()["stops"] if s["number"] == "KK-ROUTE-01"][0]
+        assert stop["address"] == ""
+
+        tok = tenant_context.current_tenant_id.set(two_shops["a"])
+        try:
+            async with async_session_factory() as db:
+                await app_settings.set_value(db, "staff_show_route", True)
+        finally:
+            tenant_context.current_tenant_id.reset(tok)
+        assert (await client.get("/staff/api/me")).json()["show_route"] is True
+        stop = [s for s in (await client.get("/staff/api/route")).json()["stops"] if s["number"] == "KK-ROUTE-01"][0]
+        assert stop["address"] == "62, Gomti Nagar"
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(
+                sqltext("DELETE FROM settings_kv WHERE key = 'staff_show_route' AND tenant_id = :t"),
+                {"t": two_shops["a"]},
+            )
+            await db.commit()
 
 
 async def test_bills_can_be_searched_and_filtered(client, two_shops, sent) -> None:  # noqa: F811

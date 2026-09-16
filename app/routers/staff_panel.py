@@ -19,7 +19,7 @@ from fastapi import (
     APIRouter, Cookie, Depends, File, Form, HTTPException, Query, Request, Response,
     UploadFile,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,7 +36,7 @@ from app.models import (
     StaffRole,
     Task,
 )
-from app.services import audit, plans
+from app.services import audit, delivery, plans, receipt
 from app.services.auth import verify_password
 from app.services.staff_auth import (
     STAFF_COOKIE,
@@ -50,6 +50,7 @@ from app.services.staff_auth import (
     set_password,
     staff_for_token,
 )
+from app.schemas.orders import DeliverIn, PieceIn
 from app.services.work_orders import items_summary
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -180,13 +181,27 @@ async def staff_logout_api(
 
 
 @router.get("/me")
-async def me(p: StaffPrincipal = Depends(current_staff)) -> dict:
+async def me(
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Panel ka pehla call — kaun hoon main aur kya-kya khula hai.
 
     UI isi ke `features` se tabs dikhata/chhupata hai; asli rok API par
     hi hai, isliye dono kabhi alag nahi ho sakte.
     """
+    from app.services import app_settings, urgent as urgent_svc
+    from app.services.whatsapp import shop_can_send
+
     return {
+        # Owner ne Settings mein band kiya ho to pata + Route button nahi
+        "show_route": bool(await app_settings.get(db, "staff_show_route")),
+        # ⚡ Urgent ka default charge/din — panel preview dikhaye, server phir
+        # bhi khud hisaab lagata hai
+        "urgent": await urgent_svc.config(db),
+        # "Ask" sawaal owner ke WhatsApp par bhejta hai — API juda na ho to
+        # sawaal kahin nahi pahunchta, isliye button hi nahi
+        "can_ask": shop_can_send(p.tenant),
         "name": p.staff.name,
         "phone": mask_phone(p.staff.phone),
         "role": p.staff.role.name,
@@ -195,6 +210,7 @@ async def me(p: StaffPrincipal = Depends(current_staff)) -> dict:
         # Panel isi ek jhande se Bill/New tab dikhata hai — do jagah do
         # hisaab rakhne par hi "dikh raha hai par chalta nahi" hota hai.
         "can_bill": can_bill(p),
+        "can_expense": can_expense(p),
         "must_change_password": p.staff.must_change_password,
         "shop": p.tenant.shop_name if p.tenant else "",
         "plan": plans.get(p.plan).name,
@@ -357,6 +373,7 @@ def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
             "notes": order.notes,
             "total": float(order.total_amount or 0),
             "due": float((order.total_amount or 0) - (order.amount_paid or 0)),
+            "clothes": delivery.counts(order),
         }
     return card
 
@@ -463,11 +480,22 @@ async def ask_about(
     p: StaffPrincipal = Depends(current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Sawal seedha owner/manager tak — panel se bhi, WhatsApp ki tarah."""
+    """Sawal seedha owner/manager tak — panel se bhi, WhatsApp ki tarah.
+
+    Sirf tab jab dukaan ka WhatsApp API juda ho: sawaal owner ke WhatsApp
+    par jaata hai. Bina API ke wo kahin nahi pahunchta tha aur staff
+    samajhta tha ki pooch liya — isliye saaf mana (panel button bhi chhupata).
+    """
     from app.services import team
+    from app.services.whatsapp import shop_can_send
 
     from app.models import TaskMessage
 
+    if not shop_can_send(p.tenant):
+        raise HTTPException(
+            status_code=409,
+            detail="WhatsApp is not connected — please call the owner or manager",
+        )
     t = await _my_task(db, p, code)
     text = body.text.strip()
     # Sawaal ab store hota hai — pehle sirf WhatsApp par ek line jaati thi,
@@ -655,29 +683,28 @@ async def order_detail(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Order ki poori tasveer — par phone masked, aur timeline sirf us
-    plan mein jisme wo suvidha hai."""
-    order = (
-        await db.execute(select(Order).where(Order.order_number == number.strip().upper()))
-    ).scalar_one_or_none()
-    if order is None:
-        raise HTTPException(status_code=404, detail=f"{number} not found")
-    if not p.is_manager:
-        mine = (
-            await db.execute(
-                select(func.count()).select_from(Task).where(
-                    Task.order_id == order.id, Task.assigned_staff_id == p.staff.id
-                )
-            )
-        ).scalar_one()
-        if not mine and order.assigned_washer_id != p.staff.id and order.assigned_delivery_id != p.staff.id:
-            raise HTTPException(status_code=403, detail="This order is not yours")
+    plan mein jisme wo suvidha hai.
+
+    Ijazat wahi jo baaki order endpoints ki hai (_my_order): pehle yahan
+    apna alag niyam tha jisme "kisi ke naam nahi, par dukaan ke delivery
+    wale ka" order nahi aata tha — row dikhti thi, detail 403 deti thi."""
+    order = await _my_order(db, p, number)
     cust = await db.get(Customer, order.customer_id)
+    from app.services import urgent as urgent_svc
+
     out = {
         "number": order.order_number,
         "customer": (cust.name or "Customer") if cust else "?",
         "phone_masked": mask_phone(cust.phone if cust else ""),
         "items": order.items or [],
         "items_text": items_summary(order),
+        # har kapde ki line: kitne, kitne diye, kitne baaki (KG bore ke andar bhi)
+        "lines": delivery.lines(order),
+        "clothes": delivery.counts(order),
+        "urgent": order.priority == "urgent",
+        "urgent_charge": sum(
+            float(i.get("amount") or 0) for i in (order.items or []) if urgent_svc.is_charge_line(i)
+        ),
         "status": order.status.name,
         "delivery": order.expected_delivery.isoformat() if order.expected_delivery else None,
         "notes": order.notes,
@@ -686,6 +713,13 @@ async def order_detail(
         "due": float((order.total_amount or 0) - (order.amount_paid or 0)),
         "can_collect": p.has("cod_collection"),
     }
+    # Kitni der se is stage par, aur deri hai to kyon (milestones sirf
+    # order_timeline wale plan mein — neeche timeline ke saath)
+    from app.services import turnaround
+
+    tr = (await turnaround.track_many(db, [order]))[order.id]
+    out["tracking"] = {k: v for k, v in tr.items()
+                       if k != "milestones" or p.has("order_timeline")}
     if p.has("order_timeline"):
         from app.models import OrderStatusHistory
 
@@ -701,6 +735,74 @@ async def order_detail(
             for r in rows
         ]
     return out
+
+
+# ------------------------------------------------ order aage badhana ----
+
+# Kaun kya kar sakta hai — bill_agent ke "done" command wala hi niyam:
+# delivery wala pickup/delivery, washerman dhulai. Manager/owner sab.
+_DELIVERY_ROLES = (StaffRole.DELIVERY, StaffRole.MANAGER, StaffRole.SUPERVISOR, StaffRole.ADMIN)
+_WASH_ROLES = (StaffRole.WASHER, StaffRole.MANAGER, StaffRole.SUPERVISOR, StaffRole.ADMIN)
+
+
+def _role_or_403(p: StaffPrincipal, roles, what: str) -> None:
+    if p.staff.role not in roles:
+        raise HTTPException(status_code=403, detail=f"{what} is not your role's job")
+
+
+@router.post("/orders/{number}/deliver")
+async def deliver_order(
+    number: str,
+    body: DeliverIn,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Grahak ko kapde diye — sab, ya kuch (baaki pending rehte hain)."""
+    _role_or_403(p, _DELIVERY_ROLES, "Delivery")
+    order = await _my_order(db, p, number)
+    try:
+        out = await delivery.deliver(
+            db, order, [pk.model_dump() for pk in body.items] if body.items is not None else None,
+            by=p.staff.name,
+        )
+    except delivery.DeliveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    from app.services import team
+
+    await team.notify_admins(
+        db, f"🚚 {p.staff.name}: {order.order_number} — {out['delivered_now']} kapde diye"
+        + (f", {out['pending']} baaki" if out["pending"] else " (poora order)"),
+        skip_phone=p.staff.phone,
+    )
+    return out
+
+
+@router.post("/orders/{number}/picked-up")
+async def order_picked_up(
+    number: str,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    _role_or_403(p, _DELIVERY_ROLES, "Pickup")
+    order = await _my_order(db, p, number)
+    try:
+        return await delivery.picked_up(db, order, by=p.staff.name)
+    except delivery.DeliveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/orders/{number}/ready")
+async def order_ready(
+    number: str,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    _role_or_403(p, _WASH_ROLES, "Washing")
+    order = await _my_order(db, p, number)
+    try:
+        return await delivery.ready(db, order, by=p.staff.name)
+    except delivery.DeliveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.get("/orders/{number}/dues")
@@ -792,8 +894,13 @@ async def collect_payment(
             if o_due <= Decimal("0.009"):
                 continue
             take = min(left, o_due)
-            await record_payment(db, o, amount=take, method=method, recorded_by=p.staff.name)
+            # purane bill par alag-alag message nahi — ek hi paisa hai, ek hi raseed
+            # (neeche is order par, ya aakhri purane bill par)
             left -= take
+            await record_payment(
+                db, o, amount=take, method=method, recorded_by=p.staff.name,
+                notify_customer=left <= 0,
+            )
             settled.append({"order": o.order_number, "amount": float(take)})
 
     if left > 0:
@@ -842,6 +949,151 @@ async def rate_card(
         {"service": r.service, "garment": r.garment, "unit": r.unit, "rate": float(r.rate)}
         for r in rows
     ]
+
+
+class NewRateIn(BaseModel):
+    service: str = Field(min_length=1, max_length=60)
+    # KG service ka item naam khali hota hai (poora bora tulta hai) — dashboard
+    # jaisa hi. Piece wali service par naam zaroori.
+    garment: str = Field(default="", max_length=60)
+    unit: str = Field(default="pc", pattern="^(pc|kg)$")
+    rate: float = Field(gt=0, le=100000)
+
+    @model_validator(mode="after")
+    def _piece_needs_a_name(self):
+        if self.unit == "pc" and not self.garment.strip():
+            raise ValueError("Item name is required for per-piece services")
+        if self.unit == "kg":
+            self.garment = ""
+        return self
+
+
+@router.post("/rates", status_code=201)
+async def rate_add(
+    body: NewRateIn,
+    p: StaffPrincipal = Depends(require_biller()),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Counter par grahak aisa kapda laaya jo rate card par nahi — bill
+    chhod kar owner ko phone karne ke bajaye yahin jod do.
+
+    Jo bill bana sakta hai wahi jod sakta hai (owner ka faisla). Rate card
+    har agle bill ka daam hai, isliye har jod audit hota hai aur owner ko
+    dikhta hai kisne kya joda.
+    """
+    from decimal import Decimal
+
+    from app.services.rate_card import DuplicateRate, add_rate
+
+    try:
+        row, revived = await add_rate(
+            db, service=body.service, garment=body.garment, unit=body.unit,
+            rate=Decimal(str(body.rate)),
+        )
+    except DuplicateRate as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="rate_added",
+        args={"service": row.service, "garment": row.garment, "unit": row.unit,
+              "rate": body.rate, "revived": revived},
+        result=f"{row.service} / {row.garment} ₹{body.rate}",
+    )
+    log.info("staff_rate_added", staff=str(p.staff.id), service=row.service,
+             garment=row.garment, rate=body.rate, revived=revived)
+    return {"service": row.service, "garment": row.garment, "unit": row.unit,
+            "rate": float(row.rate)}
+
+
+# ------------------------------------------------------------- kharcha ----
+
+# Kharcha wahi likhe jo paisa haath mein rakhta hai: counter (manager) aur
+# raaste ka kharcha (delivery — petrol). Washerman nahi. Bill wali list hi
+# hai, jaan-boojh kar: dono ka matlab "dukaan ka paisa sambhalta hai".
+EXPENSE_ROLES = BILLING_ROLES
+# Purani tareekh ka kharcha owner dashboard se — staff sirf haal ka likhe,
+# taaki pichhle mahine ka hisaab chupke se na badle.
+EXPENSE_BACKDATE_DAYS = 7
+
+
+def can_expense(p: StaffPrincipal) -> bool:
+    return p.staff.role in EXPENSE_ROLES
+
+
+def require_expense_role(p: StaffPrincipal = Depends(current_staff)) -> StaffPrincipal:
+    if not can_expense(p):
+        raise HTTPException(status_code=403, detail="Kharcha likhna aapke role mein nahi hai")
+    return p
+
+
+class StaffExpenseIn(BaseModel):
+    category: str = Field(min_length=1, max_length=60)
+    amount: float = Field(gt=0, le=1_000_000)
+    spent_on: date | None = None
+    description: str = Field(default="", max_length=300)
+
+
+@router.get("/expenses")
+async def my_expenses(
+    p: StaffPrincipal = Depends(require_expense_role),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Categories + sirf APNE daale kharche (pichhle 30 din)."""
+    from app.models import Expense
+    from app.services import expenses as exp_svc
+
+    since = datetime.now(IST).date() - timedelta(days=30)
+    rows = (
+        await db.execute(
+            select(Expense)
+            .where(Expense.staff_id == p.staff.id, Expense.spent_on >= since)
+            .order_by(Expense.spent_on.desc(), Expense.created_at.desc())
+            .limit(100)
+        )
+    ).scalars().all()
+    return {
+        "categories": await exp_svc.all_categories(db),
+        "expenses": [exp_svc.row(e) for e in rows],
+        "total": float(sum((e.amount for e in rows), 0)),
+        "backdate_days": EXPENSE_BACKDATE_DAYS,
+    }
+
+
+@router.post("/expenses", status_code=201)
+async def add_my_expense(
+    body: StaffExpenseIn,
+    p: StaffPrincipal = Depends(require_expense_role),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from decimal import Decimal
+
+    from app.services import expenses as exp_svc
+
+    category = await exp_svc.canonical_category(db, body.category)
+    if category is None:
+        # Nayi category owner banata hai — warna har staff apni spelling
+        # bana deta aur report ka donut tukdon mein bikhar jaata
+        raise HTTPException(status_code=400, detail="Pick a category from the list")
+    today = datetime.now(IST).date()
+    spent_on = body.spent_on or today
+    if spent_on > today:
+        raise HTTPException(status_code=400, detail="Date cannot be in the future")
+    if (today - spent_on).days > EXPENSE_BACKDATE_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only the last {EXPENSE_BACKDATE_DAYS} days — ask the owner for older ones",
+        )
+    who = f"{p.staff.name} ({p.staff.role.name.title()})"
+    exp = await exp_svc.record(
+        db, category=category, amount=Decimal(str(body.amount)), spent_on=spent_on,
+        description=body.description, added_by=who, staff_id=p.staff.id,
+    )
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="expense_added",
+        args={"category": category, "amount": body.amount, "spent_on": spent_on.isoformat()},
+        result=f"₹{body.amount} {category}",
+    )
+    log.info("staff_expense_added", staff=str(p.staff.id), category=category, amount=body.amount)
+    return exp_svc.row(exp)
 
 
 @router.get("/customers/search", dependencies=[Depends(require_biller())])
@@ -903,13 +1155,18 @@ async def customer_search(
 
 class BillItemIn(BaseModel):
     service: str = Field(min_length=1, max_length=60)
-    garment: str = Field(min_length=1, max_length=60)
+    # KG wali service ka rate-card row bina kapde ke naam ka hota hai
+    # ("Wash & Fold (kg)", garment ""). Pehle yahan min_length=1 tha, yaani
+    # panel se kg ka bill ban hi nahi sakta tha — 422.
+    garment: str = Field(default="", max_length=60)
     qty: float = Field(gt=0, le=999)
     # Rate card ka daam hi default hai. Ye bharne par us EK line ka daam
     # badalta hai — rate card chhua nahi jaata, agla bill phir se card se
     # banta hai. Har override audit hota hai (neeche), kyunki counter par
     # chupke se daam girana hi wo chori hai jo kisi report mein nahi dikhti.
     rate: float | None = Field(default=None, ge=0, le=100000)
+    # Sirf KG line par: bore mein kaunse kapde kitne (daam nahi, ginti).
+    pieces: list[PieceIn] = Field(default_factory=list, max_length=50)
 
 
 class BillIn(BaseModel):
@@ -930,6 +1187,11 @@ class BillIn(BaseModel):
     # Isi ek jawab se tay hota hai ki order delivery wale ke panel mein
     # aayega ya washer ke. Default: dukaan mein — counter par yahi aam hai.
     needs_pickup: bool = False
+    # ⚡ Urgent. urgent_charge None = owner ki setting ka default, 0 = maaf.
+    urgent: bool = False
+    # "New bill" kholne se Save tak (turnaround tracking)
+    bill_seconds: int | None = None
+    urgent_charge: float | None = Field(default=None, ge=0, le=100000)
 
 
 @router.post("/bills", dependencies=[Depends(require_biller())], status_code=201)
@@ -996,9 +1258,13 @@ async def create_bill(
         amount = (rate * qty).quantize(Decimal("0.01"))
         gross += amount
         line = {
-            "type": row.garment, "service": row.service, "garment": row.garment,
-            "qty": float(qty), "rate": float(rate), "amount": float(amount),
+            "type": row.garment or row.service, "service": row.service, "garment": row.garment,
+            "qty": float(qty), "rate": float(rate), "amount": float(amount), "unit": row.unit,
         }
+        if row.unit == "kg" and it.pieces:
+            # pc line par ginti ka koi matlab nahi (qty hi ginti hai) —
+            # wahan aaye to chup-chaap chhod dete hain
+            line["pieces"] = [pc.model_dump() for pc in it.pieces]
         if rate != card_rate:
             # Bill par hamesha dikhega ki card ka daam kya tha. Baad mein
             # "maine to poora liya tha" wali baat ka jawab yahi line hai.
@@ -1016,17 +1282,37 @@ async def create_bill(
         discount = Decimal(str(body.discount_amount or 0)).quantize(Decimal("0.01"))
     if discount > gross:
         raise HTTPException(status_code=400, detail="Discount is more than the bill")
-    total = gross - discount
+
+    # ⚡ Urgent: charge chhoot ke BAAD judta hai (chhoot kapdon par hai, jaldi
+    # karne ki fees par nahi). urgent_charge na bheja = owner ki setting ka
+    # default; 0 = maaf. Order phir bhi urgent rehta hai.
+    from app.services import urgent as urgent_svc
+
+    urgent_cfg = await urgent_svc.config(db)
+    urgent_amt = Decimal("0")
+    if body.urgent:
+        urgent_amt = (
+            urgent_svc.default_charge(urgent_cfg, gross) if body.urgent_charge is None
+            else Decimal(str(body.urgent_charge)).quantize(Decimal("0.01"))
+        )
+        if urgent_amt > 0:
+            items.append(urgent_svc.line(urgent_amt))
+    total = gross - discount + urgent_amt
 
     if body.advance > float(total):
         raise HTTPException(status_code=400, detail="Advance cannot be more than the bill")
 
     # Delivery date dashboard wale bill ki tarah: aaj + turnaround.
     # Bina iske customer se "kab milega" ka koi jawab hi nahi hota tha.
+    # Urgent = owner ki "urgent delivery days" (default kal).
     try:
         turnaround = int(await app_settings.get(db, "turnaround_days"))
     except Exception:
         turnaround = 2
+    delivery = (
+        urgent_svc.delivery_date(urgent_cfg) if body.urgent
+        else _date.today() + _td(days=max(turnaround, 1))
+    )
     order = await create_order(
         db,
         customer_phone=normalize_phone(phone),
@@ -1037,10 +1323,12 @@ async def create_bill(
         # har report do jawab dene lagti hai.
         total_amount=total,
         discount_amount=discount or None,
-        expected_delivery=_date.today() + _td(days=max(turnaround, 1)),
+        expected_delivery=delivery,
         advance_hint=Decimal(str(body.advance)) if body.advance else None,
         created_by=p.staff.name,
         needs_pickup=body.needs_pickup,
+        priority="urgent" if body.urgent else "normal",
+        bill_seconds=body.bill_seconds,
     )
     # Advance ko paisa maankar ledger mein likhte hain — create ke baad,
     # wahi rasta jo dashboard ke New Bill par hai.
@@ -1051,6 +1339,7 @@ async def create_bill(
         await record_payment(
             db, order, amount=Decimal(str(body.advance)),
             method=PaymentMethod.CASH, recorded_by=p.staff.name,
+            notify_customer=False,   # "order received" message mein advance pehle se hai
         )
     # Washerman ko WhatsApp par work order — wahi jo dashboard ka New Bill
     # bhejta hai. Best-effort: khabar na ja paye to bhi bill ban chuka hai.
@@ -1068,6 +1357,7 @@ async def create_bill(
         args={
             "order": order.order_number, "total": float(total),
             "gross": float(gross), "discount": float(discount),
+            "urgent": body.urgent, "urgent_charge": float(urgent_amt),
             # Khali list bhi likhi jaati hai — "is bill par koi rate nahi
             # badla" ek jawab hai, aur uska na hona sawal.
             "rate_overrides": overrides,
@@ -1353,68 +1643,50 @@ async def order_receipt(
         raise HTTPException(status_code=404, detail="Customer not found")
     s = await app_settings.all_settings(db)
     tenant = await db.get(Tenant, p.staff.tenant_id)
-    shop = (tenant.shop_name if tenant and tenant.shop_name else "Kwik Klin").strip()
-
-    total = float(order.total_amount or 0)
-    paid = float(order.amount_paid or 0)
-    money = lambda v: f"₹{v:,.0f}" if float(v).is_integer() else f"₹{v:,.2f}"  # noqa: E731
-    lines = [shop]
-    if s.get("shop_address"):
-        lines.append(str(s["shop_address"]))
-    if s.get("shop_contact_phone"):
-        lines.append(f"Ph: {s['shop_contact_phone']}")
-    if s.get("shop_gstin"):
-        lines.append(f"GSTIN: {s['shop_gstin']}")
-    lines += [
-        "-" * 30,
-        f"Bill: {order.order_number}",
-        f"Customer: {cust.name or cust.phone}",
-        f"Date: {order.created_at.astimezone(IST).strftime('%d %b %Y')}",
-        "-" * 30,
-    ]
-    for it in order.items or []:
-        qty = it.get("qty", 1)
-        qty = int(qty) if float(qty).is_integer() else qty
-        name = it.get("type") or it.get("garment") or it.get("service") or "?"
-        amt = it.get("amount")
-        lines.append(f" {qty} x {name}  {money(amt) if amt is not None else ''}".rstrip())
-    discount = float(order.discount_amount or 0)
-    lines.append("-" * 30)
-    if discount:
-        # Chhoot dikhna zaroori hai. Sirf ghata hua total dikhane par grahak
-        # ko kabhi pata nahi chalta ki use kya mila — aur dukaan ko uska
-        # credit bhi nahi milta.
-        lines.append(f"Subtotal: {money(total + discount)}")
-        lines.append(f"Discount: -{money(discount)}")
-    lines += [
-        f"Total: {money(total) if total else '—'}",
-        f"Paid: {money(paid)}",
-        f"Due: {money(total - paid) if total else '—'}",
-    ]
     # Pichhle bilon ka baaki. Grahak ko ek hi number chahiye — "kitna dena
-    # hai" — isliye kul yahin jodkar likhte hain. Order ka apna total waisa
-    # ka waisa rehta hai; ye sirf padhne wali line hai.
+    # hai" — isliye kul bill par jodkar likhte hain. Order ka apna total
+    # waisa ka waisa rehta hai; ye sirf padhne wali line hai.
     prev_due, prev_bills = await customer_outstanding(db, cust.id, exclude_order_id=order.id)
-    if prev_due > 0:
-        lines += [
-            "-" * 30,
-            f"Pichhla baaki ({prev_bills} bill): {money(prev_due)}",
-            f"KUL DENA HAI: {money(total - paid + prev_due)}",
-        ]
-    if order.expected_delivery:
-        lines.append(f"Delivery: {order.expected_delivery.strftime('%d %b %Y')}")
-    lines.append("-" * 30)
-    if s.get("upi_vpa"):
-        payee = f" ({s['upi_payee']})" if s.get("upi_payee") else ""
-        lines.append(f"Pay via UPI: {s['upi_vpa']}{payee}")
-    lines.append(str(s.get("invoice_footer") or "Thank you! 🙏"))
+    out = receipt.payload(order, cust, tenant, s, prev_due, prev_bills)
 
     await audit.record(
         actor_role="staff", actor=p.staff.name, action="customer_number_viewed",
         args={"order": order.order_number}, result="share_bill", tenant_id=p.staff.tenant_id,
     )
     log.info("staff_shared_bill", staff=p.staff.name, order=order.order_number)
-    return {"phone": cust.phone, "name": cust.name or "Customer", "text": "\n".join(lines)}
+    return {"phone": cust.phone, "name": cust.name or "Customer", **out}
+
+
+@router.get("/orders/{number}/message")
+async def order_message(
+    number: str,
+    kind: str = Query(pattern="^(payment_thanks|service_thanks|review_request)$"),
+    p: StaffPrincipal = Depends(require_biller()),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Grahak ko thank you / payment mila / review ka message — apne bill par.
+
+    Receipt ki tarah poora number deta hai (wa.me ke liye), isliye wahi
+    niyam: sirf apna order, aur har baar audit.
+    """
+    from app.models.tenant import Tenant
+    from app.services import customer_messages
+
+    order = await _my_order(db, p, number)
+    cust = await db.get(Customer, order.customer_id)
+    if cust is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    tenant = await db.get(Tenant, p.staff.tenant_id)
+    try:
+        text = await customer_messages.compose(db, kind=kind, order=order, customer=cust, tenant=tenant)
+    except customer_messages.MessageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="customer_number_viewed",
+        args={"order": order.order_number, "kind": kind}, result="message",
+        tenant_id=p.staff.tenant_id,
+    )
+    return {"kind": kind, "text": text, "phone": cust.phone, "name": cust.name or "Customer"}
 
 
 @router.post("/orders/{number}/remind")
@@ -1471,6 +1743,9 @@ async def send_payment_reminder(
         # Ek hi message mein poora sach — warna grahak is bill ka paisa
         # dekar samajhta hai ki hisaab saaf ho gaya.
         text += f"\n\nPrevious balance: ₹{prev:.0f} ({prev_bills} bill). Total due: ₹{due + prev:.0f}"
+    from app.services import bill_link
+
+    text += bill_link.message_line(await bill_link.url_for(db, order))
 
     sent = False
     try:
@@ -1698,6 +1973,10 @@ async def my_route(
             ).scalars().all()
         }
 
+    from app.services import app_settings, delivery
+
+    # Route band ho to pata bhejte hi nahi — UI mein chhupana kaafi nahi
+    show_route = bool(await app_settings.get(db, "staff_show_route"))
     stops = []
     for o in rows:
         cust = customers.get(o.customer_id)
@@ -1712,12 +1991,14 @@ async def my_route(
                 "kind": kind,
                 "customer": (cust.name or "Customer") if cust else "?",
                 "phone_masked": mask_phone(cust.phone if cust else ""),
-                "address": (cust.address or "").strip() if cust else "",
+                "address": (cust.address or "").strip() if cust and show_route else "",
                 "items": items_summary(o),
                 "status": o.status.name,
                 "urgent": o.priority == "urgent",
                 "due": float((o.total_amount or 0) - (o.amount_paid or 0)),
                 "delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
+                # kitne kapde, kitne diye — thodi delivery ho chuki ho to row par "4 pending"
+                "clothes": delivery.counts(o),
             }
         )
     return {

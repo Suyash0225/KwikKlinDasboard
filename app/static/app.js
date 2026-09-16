@@ -245,7 +245,7 @@ async function kkLogout() {
   try {
     await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
   } catch (e) { /* offline — cookie waise bhi expire ho jayegi */ }
-  location.href = "/#login";
+  location.href = "/join#login";
 }
 
 /* login */
@@ -286,7 +286,7 @@ async function ensureSignedIn() {
     setTimeout(() => ensureSignedIn().then((ok) => { if (ok) startLiveUpdates(); }), 5000);
     return false;
   }
-  location.href = "/#login";             // server ne saaf kaha: session nahi
+  location.href = "/join#login";             // server ne saaf kaha: session nahi
   return false;
 }
 let SIGNED_IN_AS = null;
@@ -597,6 +597,8 @@ function renderChips() {
   // upar likha comment bhi), sirf yahan lagaya nahi gaya tha.
   const cnt = (n) => `<span class="cnt">${n}</span>`;
   const chips = [["", `All active${cnt(DASH.counts.active_total)}`]]
+    // IMP_006: stage ki hadd ya delivery date nikal gayi — sabse pehle yahi dikhe
+    .concat((DASH.counts.delayed || 0) ? [["DELAYED", `⏱ Delayed${cnt(DASH.counts.delayed)}`]] : [])
     .concat(STATUS_SEQ.filter((s) => s !== "DELIVERED")
       .map((s) => [s, `${statusName(s)}${cnt(by[s] || 0)}`]));
   $("dash-chips").innerHTML = chips
@@ -605,14 +607,26 @@ function renderChips() {
 }
 
 function orderMatches(o) {
-  if (dashFilter.status && o.status !== dashFilter.status) return false;
+  if (dashFilter.status === "DELAYED") { if (!(o.tracking && o.tracking.delayed)) return false; }
+  else if (dashFilter.status && o.status !== dashFilter.status) return false;
   if (dashFilter.pay && o.payment_status !== dashFilter.pay) return false;
   const q = dashFilter.q.toLowerCase();
   if (q && !(o.order_number.toLowerCase().includes(q) || (o.customer || "").toLowerCase().includes(q) || o.phone.includes(q))) return false;
   return true;
 }
-const isOverdue = (o) => o.expected_delivery && o.expected_delivery < new Date().toISOString().slice(0, 10) && !["DELIVERED", "CANCELLED"].includes(o.status);
-const itemsText = (items) => (items || []).map((i) => `${i.qty} × ${i.type || i.garment || i.service}`).join(", ");
+const isOverdue = (o) => (o.tracking && o.tracking.delayed) || (o.expected_delivery && o.expected_delivery < new Date().toISOString().slice(0, 10) && !["DELIVERED", "CANCELLED"].includes(o.status));
+/* "Washing 30h / 24h" — stage mein kitni der, hadd ke saath. Hadd paar = laal. */
+const fmtHours = (h) => h == null ? "" : h < 1 ? `${Math.round(h * 60)}m` : h < 48 ? `${Math.round(h)}h` : `${Math.round(h / 24)}d`;
+function stageTimer(o) {
+  const t = o.tracking;
+  if (!t) return "";
+  const cls = t.stage_late ? "late" : t.stage_limit && t.stage_hours > t.stage_limit * 0.75 ? "warn" : "";
+  return `<span class="stagetime ${cls}" title="${esc(t.delay_reason || `${t.stage_label} since ${fmtWhen(t.stage_since)}`)}">⏱ ${fmtHours(t.stage_hours)}${t.stage_limit ? ` / ${t.stage_limit}h` : ""}</span>`;
+}
+const whoLine = (o) => [o.washer && `🧼 ${esc(o.washer)}`, o.delivery_boy && `🛵 ${esc(o.delivery_boy)}`].filter(Boolean).join(" · ");
+const itemsText = (items) => (items || []).filter((i) => i.kind !== "urgent_charge").map((i) =>
+  `${i.qty} × ${i.type || i.garment || i.service}` + ((i.pieces || []).length
+    ? ` (${piecesCount(i.pieces)} pcs)` : "")).join(", ");
 
 function renderOrders() {
   const all = (DASH.active_orders || []).filter(orderMatches);
@@ -625,10 +639,10 @@ function renderOrders() {
     <table class="tbl"><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Status</th><th>Payment</th><th>Delivery</th><th>Actions</th></tr></thead>
     <tbody>${rows.map((o) => `
       <tr class="${isOverdue(o) ? "overdue" : ""}">
-        <td><b>${o.order_number}</b><div class="muted">${fmtDate(o.created_at)}</div></td>
+        <td><b>${o.order_number}</b>${o.priority === "urgent" ? ' <span title="Urgent">⚡</span>' : ""}<div class="muted">${fmtDate(o.created_at)}</div></td>
         <td>${esc(displayName(o.customer, o.phone))}<div class="muted">${esc(o.phone)}</div></td>
-        <td style="max-width:140px" title="${esc(itemsText(o.items))}"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div></td>
-        <td><span class="pill ${o.status}">${statusName(o.status)}</span>${isOverdue(o) ? ' <span class="pill UNPAID">Overdue</span>' : ""}</td>
+        <td style="max-width:140px" title="${esc(itemsText(o.items))}"><div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(itemsText(o.items))}</div>${whoLine(o) ? `<div class="muted" style="font-size:12px">${whoLine(o)}</div>` : ""}</td>
+        <td><span class="pill ${o.status}">${statusName(o.status)}</span> ${stageTimer(o)}${o.tracking && o.tracking.promise_late ? ' <span class="pill UNPAID">Overdue</span>' : ""}</td>
         <td><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span><div class="muted">${money(o.amount_paid)} / ${o.total_amount ? money(o.total_amount) : "—"}</div></td>
         <td>${fmtDate(o.expected_delivery)}</td>
         <td><div class="act">
@@ -640,8 +654,10 @@ function renderOrders() {
     </tbody></table>
     <div class="rowcards">${rows.map((o) => `
       <div class="rowcard ${isOverdue(o) ? "overdue" : ""}">
-        <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${statusName(o.status)}</span></div>
+        <div class="r1"><b>${o.order_number}${o.priority === "urgent" ? " ⚡" : ""}</b><span class="pill ${o.status}">${statusName(o.status)}</span></div>
+        ${o.tracking && o.tracking.delayed ? `<div class="delaynote">⏱ ${esc(o.tracking.delay_reason)}</div>` : ""}
         <div class="kv"><span>${esc(displayName(o.customer, o.phone))}</span><span>${esc(o.phone)}</span></div>
+        <div class="kv"><span>${whoLine(o) || '<span class="muted">Not assigned yet</span>'}</span><span>${stageTimer(o)}</span></div>
         <div class="kv"><span class="muted">${esc(itemsText(o.items))}</span></div>
         <div class="kv"><span>Paid ${money(o.amount_paid)} of ${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
         <div class="kv"><span>Delivery</span><span>${fmtDate(o.expected_delivery)}${isOverdue(o) ? " ⚠️" : ""}</span></div>
@@ -678,10 +694,65 @@ function billMenu(num) {
     <div class="frm">
       <button class="btn ghost" onclick="closeModal();printReceiptFromOrder('${num}')">🖨 Print receipt</button>
       <button class="btn ghost" onclick="closeModal();shareBillFromOrder('${num}')">📲 Share on WhatsApp</button>
+      <button class="btn ghost" onclick="closeModal();messageMenu('${num}')">💬 Send a message</button>
       <button class="btn ghost" onclick="closeModal();editBillModal('${num}')">✏️ Edit bill</button>
       <button class="btn ghost danger-ic" onclick="closeModal();deleteBillModal('${num}')">🗑 Delete bill</button>
     </div>
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
+}
+
+/* ---- bill par grahak ko message: yaad, thank you, review ----
+   Text server banata hai (owner ka apna format bhi). Preview dikhta hai,
+   phir dukaan ke number se ya apne WhatsApp se. */
+const MSG_KINDS = [
+  ["payment_reminder", "💰", "Payment reminder"],
+  ["payment_thanks", "💚", "Payment received — thank you"],
+  ["service_thanks", "🙏", "Thank you for the service"],
+  ["review_request", "⭐", "Please review us on Google"],
+];
+function messageMenu(num) {
+  openModal(`<h3>💬 Message — ${esc(num)}</h3>
+    <p class="muted">You see the message before it goes.</p>
+    <div class="frm">${MSG_KINDS.map(([k, ico, label]) =>
+      `<button class="btn ghost" onclick="composeMessage('${esc(num)}','${k}')">${ico} ${label}</button>`).join("")}
+    </div>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
+}
+async function composeMessage(num, kind) {
+  if (kind === "payment_reminder") {
+    // grahak ke saare baaki bil ek message mein, UPI link ke saath — purana rasta
+    let o;
+    try { o = (await api(`/orders/${encodeURIComponent(num)}`)).order; } catch (e) { toast(e.message, true); return; }
+    closeModal();
+    return sendReminder(o.customer_phone);
+  }
+  let r;
+  try { r = await api(`/orders/${encodeURIComponent(num)}/message?kind=${kind}`); }
+  catch (e) { toast(e.message, true); return; }
+  const label = (MSG_KINDS.find((x) => x[0] === kind) || [])[2] || "Message";
+  SHARE_TEXT = r.text; MSG_TARGET = r.phone;
+  const wa = waConnected();
+  openModal(`<h3>${esc(label)}</h3>
+    <p class="muted">To ${esc(displayName(r.name, r.phone))}</p>
+    <pre class="sharetext">${esc(r.text)}</pre>
+    <div class="btnrow" style="margin-top:12px">
+      ${wa ? `<button class="btn" onclick="sendComposed(this)">📲 Send from shop number</button>` : ""}
+      <a class="btn${wa ? " ghost" : ""}" href="${esc(waShareUrl(r.phone, r.text))}" target="_blank" rel="noopener" onclick="closeModal()">Open WhatsApp</a>
+      <button class="btn ghost" onclick="copyShareText()">Copy</button>
+      <button class="btn ghost" onclick="closeModal()">Close</button>
+    </div>`);
+}
+let MSG_TARGET = "";
+async function sendComposed(btn) {
+  await busy(btn, async () => {
+    try {
+      await api("/admin/api/inbox/send", { method: "POST", body: { phone: MSG_TARGET, text: SHARE_TEXT } });
+      closeModal(); toast(T.sent);
+    } catch (e) {
+      // 24h window band / API nahi — apna WhatsApp hamesha hai
+      toast(`Shop number couldn't send (${e.message}) — use Open WhatsApp`, true);
+    }
+  });
 }
 
 function statusModal(number, current) {
@@ -694,8 +765,81 @@ function statusModal(number, current) {
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
     <button class="btn" id="st-go">Update</button></div>`);
   $("st-go").onclick = (e) => busy(e.target, async () => {
+    // Delivered = kapde grahak ko — sab ya kuch (12 mein se 8). Seedha status
+    // nahi badalte; popup mein kapde chune jaate hain, baaki pending rehte hain.
+    if ($("st-new").value === "DELIVERED" && ["READY", "OUT_FOR_DELIVERY"].includes(current)) {
+      closeModal(); return dashDeliverModal(number);
+    }
     await api(`/orders/${number}/status`, { method: "POST", body: { status: $("st-new").value, changed_by: "dashboard" } });
     closeModal(); toast(T.statusUpdated); loadDashboard();
+    if (typeof loadBills === "function" && $("bills-list")) loadBills();
+  });
+}
+
+/* ---- delivery: sab ya kuch kapde (BUG_008) — staff panel jaisa hi ---- */
+let DL = { number: "", slots: [], pick: [], total: 0 };
+async function dashDeliverModal(number) {
+  let d;
+  try { d = await api(`/orders/${encodeURIComponent(number)}`); } catch (e) { toast(e.message, true); return; }
+  const slots = [];
+  (d.lines || []).forEach((l) => {
+    if (l.pieces) l.pieces.forEach((p) => { if (p.pending > 0) slots.push({ line: l.line, piece: p.piece, max: p.pending, name: p.type, group: `${l.name} · ${l.weight} kg` }); });
+    else if (l.pending > 0) slots.push({ line: l.line, max: l.pending, name: l.name, sub: l.service !== l.name ? l.service : "", bag: !!l.bag, weight: l.weight });
+  });
+  if (!slots.length) { toast("Nothing left to deliver on this bill", true); return; }
+  DL = { number, slots, pick: slots.map((s) => s.max), total: slots.reduce((a, s) => a + s.max, 0) };
+  let lastGroup = "";
+  openModal(`<h3>Deliver — ${esc(number)}</h3>
+    <p class="muted">${esc(displayName(d.order.customer_name, d.order.customer_phone))} · ${DL.total} to deliver${d.clothes.delivered ? ` (${d.clothes.delivered} already delivered)` : ""}</p>
+    <div class="btnrow" style="margin-top:8px">
+      <button class="btn ghost sm" onclick="dlSet('all')">Select all</button>
+      <button class="btn ghost sm" onclick="dlSet('none')">Clear</button>
+    </div>
+    <div class="dl-list">${slots.map((s, i) => {
+      const head = s.group && s.group !== lastGroup ? `<div class="dl-group">${esc(s.group)}</div>` : "";
+      lastGroup = s.group || "";
+      return head + (s.bag
+        ? `<label class="dl-row"><span class="dl-name">${esc(s.name)} <small>${esc(String(s.weight))} kg bag</small></span>
+             <input type="checkbox" id="dlq-${i}" checked onchange="DL.pick[${i}]=this.checked?1:0;dlPaint()"></label>`
+        : `<div class="dl-row"><span class="dl-name">${esc(s.name)}${s.sub ? ` <small>${esc(s.sub)}</small>` : ""}</span>
+             <div class="nbc-step">
+               <button type="button" aria-label="One less" onclick="dlStep(${i},-1)">−</button>
+               <input type="number" id="dlq-${i}" min="0" max="${s.max}" value="${s.max}" inputmode="numeric"
+                 oninput="DL.pick[${i}]=Math.max(0,Math.min(${s.max},parseInt(this.value)||0));dlPaint(${i})">
+               <button type="button" aria-label="One more" onclick="dlStep(${i},1)">+</button>
+             </div><small class="muted" style="min-width:34px">of ${s.max}</small></div>`);
+    }).join("")}</div>
+    <p id="dl-sum" style="margin-top:10px"></p>
+    <div class="btnrow" style="margin-top:12px">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn ok" id="dl-go" onclick="dlSubmit(this)">Deliver</button>
+    </div>`);
+  dlPaint();
+}
+function dlStep(i, by) { DL.pick[i] = Math.max(0, Math.min(DL.slots[i].max, DL.pick[i] + by)); dlPaint(); }
+function dlSet(which) { DL.pick = DL.slots.map((s) => (which === "all" ? s.max : 0)); dlPaint(); }
+function dlPaint(typing) {
+  const n = DL.pick.reduce((a, v) => a + v, 0), left = DL.total - n;
+  DL.slots.forEach((s, i) => {
+    const el = $(`dlq-${i}`);
+    if (!el || i === typing) return;
+    if (s.bag) el.checked = DL.pick[i] > 0; else el.value = DL.pick[i];
+  });
+  $("dl-sum").innerHTML = n === 0 ? "Pick the clothes being handed over."
+    : left === 0 ? `<b>All ${n}</b> — the order will be marked <b>delivered</b>.`
+    : `Delivering <b>${n}</b> · <b style="color:var(--danger)">${left} will stay pending</b>`;
+  $("dl-go").textContent = n === 0 ? "Deliver" : left === 0 ? `✅ Deliver all ${n}` : `✅ Deliver ${n}`;
+  $("dl-go").disabled = n === 0;
+}
+async function dlSubmit(btn) {
+  await busy(btn, async () => {
+    const n = DL.pick.reduce((a, v) => a + v, 0);
+    const items = n === DL.total ? null
+      : DL.slots.map((s, i) => ({ line: s.line, ...(s.piece != null ? { piece: s.piece } : {}), qty: DL.pick[i] })).filter((x) => x.qty > 0);
+    const r = await api(`/orders/${encodeURIComponent(DL.number)}/deliver`, { method: "POST", body: { items } });
+    closeModal();
+    toast(r.pending ? `${r.delivered_now} delivered — ${r.pending} still pending` : `${DL.number} delivered ✅`);
+    loadDashboard();
     if (typeof loadBills === "function" && $("bills-list")) loadBills();
   });
 }
@@ -724,6 +868,10 @@ function paymentModal(number) {
     // Bill history page has its own cache — refresh it too, else the
     // payment looks "not saved" when the modal was opened from there.
     if (typeof loadBills === "function" && $("bills-list")) loadBills();
+    // WhatsApp API judi ho to server khud "payment mila" bhej deta hai.
+    // Nahi to "mil gaya, dhanyawad" ka preview — apne WhatsApp se bhejo.
+    if (waConnected()) toast("Customer notified on WhatsApp");
+    else composeMessage(number, "payment_thanks");
   });
 }
 
@@ -753,13 +901,23 @@ async function orderDetail(number) {
       <h3>${o.order_number} <span class="pill ${o.status}">${statusName(o.status)}</span></h3>
       <p class="muted">${esc(displayName(o.customer_name, o.customer_phone))} · ${esc(o.customer_phone)}</p><hr class="hr">
       <b>Items</b>
-      ${(o.items || []).map((i) => `<div class="sumrow"><span>${i.qty} × ${esc(i.type || i.garment || i.service || "?")}</span><span>${i.amount != null ? money(i.amount) : ""}</span></div>`).join("")}
+      ${(o.items || []).map((i) => `<div class="sumrow"><span>${i.qty} × ${esc(i.type || i.garment || i.service || "?")}</span><span>${i.amount != null ? money(i.amount) : ""}</span></div>`
+        + (piecesCount(i.pieces) ? `<div class="muted" style="font-size:12.5px;margin:-4px 0 6px">👕 ${esc(piecesLabel(i.pieces))}</div>` : "")).join("")}
       <div class="sumrow"><span>Discount</span><span>${money(o.discount_amount || 0)}</span></div>
       <div class="sumrow"><span>GST</span><span>${money(o.gst_amount || 0)}</span></div>
       <div class="sumrow total"><span>Total</span><span>${o.total_amount ? money(o.total_amount) : "—"}</span></div>
       <div class="sumrow"><span>Paid</span><span>${money(o.amount_paid)} <span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></span></div>
-      <hr class="hr"><b>Timeline</b>
-      ${(d.history || []).map((h) => `<div class="sumrow"><span>${statusName(h.new_status) || h.new_status}</span><span class="muted">${fmtWhen(h.changed_at)} · ${esc(h.changed_by)}</span></div>`).join("")}
+      ${d.tracking && d.tracking.delayed ? `<div class="delaynote" style="margin-top:10px">⏱ Delayed — ${esc(d.tracking.delay_reason)}</div>` : ""}
+      <hr class="hr"><b>Milestones</b>
+      ${(d.tracking ? d.tracking.milestones : []).map((m) => `<div class="sumrow">
+          <span>${esc(m.label)}<div class="muted" style="font-size:12px">${fmtWhen(m.at)} · ${esc(m.by)}</div></span>
+          <span class="${m.late ? "stagetime late" : "muted"}">${m.hours != null ? fmtHours(m.hours) + (m.limit ? ` / ${m.limit}h` : "") : ""}</span></div>`).join("")}
+      ${d.tracking ? `<div class="sumrow"><span class="muted">Total so far</span><span class="muted">${fmtHours(d.tracking.total_hours)}</span></div>` : ""}
+      ${d.tracking && d.tracking.bill_seconds ? `<div class="sumrow"><span class="muted">Bill created in</span><span class="muted">${d.tracking.bill_seconds < 60 ? d.tracking.bill_seconds + "s" : Math.floor(d.tracking.bill_seconds / 60) + "m " + (d.tracking.bill_seconds % 60) + "s"}</span></div>` : ""}
+      <hr class="hr"><b>Work</b> <span class="muted" style="font-size:12px">assigned by the agent</span>
+      ${(d.tasks || []).length ? d.tasks.map((t) => `<div class="sumrow"><span>${{ wash: "🧼 Wash & iron", pickup: "🛵 Pickup", delivery: "🚚 Delivery" }[t.kind] || "📋 Task"} <span class="muted">${t.code}</span></span>
+          <span>${esc(t.staff || "—")} <span class="pill ${t.status === "DONE" ? "PAID" : t.status === "CANCELLED" ? "UNPAID" : "PARTIAL"}">${t.status.toLowerCase()}</span></span></div>`).join("")
+        : `<p class="muted">No work assigned yet.</p>`}
       ${o.notes ? `<hr class="hr"><b>Internal notes</b><p class="muted" style="white-space:pre-wrap">${esc(o.notes)}</p>` : ""}
       <div class="btnrow" style="margin-top:14px">
         <button class="btn ghost" onclick="printReceiptFromOrder('${o.order_number}')">🖨 Print</button>
@@ -772,21 +930,40 @@ function jumpChat(phone) { go("inbox"); setTimeout(() => openThread(phone), 250)
 
 /* ============================= new bill ============================= */
 let RATES = [], CUSTOMERS_CACHE = null, LINES = [];
+// Bill ka timer pehle asli kaam (tap/likhna) se shuru — screen khuli padi
+// rehne ka samay bill mein nahi ginna chahiye
+let NB_STARTED = 0, NB_TIMER_WIRED = false;
+const STAGE_LIMIT_KEYS = [
+  ["PICKUP_ASSIGNED", "Pickup"], ["RECEIVED", "Received (not started)"], ["PICKED_UP", "Picked up"],
+  ["IN_WASH", "Washing"], ["IN_DRY", "Drying"], ["IN_IRON", "Ironing"], ["READY", "Ready (waiting delivery)"],
+  ["OUT_FOR_DELIVERY", "Out for delivery"], ["ON_HOLD", "On hold"],
+];
 
 async function initNewBill() {
+  if (!NB_TIMER_WIRED && $("sec-newbill")) {
+    NB_TIMER_WIRED = true;
+    const start = () => { if (!NB_STARTED) NB_STARTED = Date.now(); };
+    $("sec-newbill").addEventListener("input", start, true);
+    $("sec-newbill").addEventListener("click", (e) => { if (e.target.closest("button, .chip, select, input")) start(); }, true);
+  }
   try {
     [RATES, SETTINGS_CACHE] = await Promise.all([api("/admin/api/rates"), api("/admin/api/settings")]);
   } catch (e) { toast(e.message, true); }
   if (!CUSTOMERS_CACHE) loadCustomers(true);
   if ($("nb-wa-notice")) $("nb-wa-notice").style.display = waConnected() ? "none" : "";
   if (!LINES.length) addLine();
+  if ($("nb-newrate")) $("nb-newrate").style.display = canEditRates() ? "" : "none";
   renderLines();
-  const days = parseInt(SETTINGS_CACHE.turnaround_days) || 2;
-  $("nb-date").value = new Date(Date.now() + days * 864e5).toISOString().slice(0, 10);
+  const days = NB_URG.on ? urgCfg().days : (parseInt(SETTINGS_CACHE.turnaround_days) || 2);
+  $("nb-date").value = isoInDays(days);
+  nbPaintUrgent();
   $("nb-gst").checked = !!SETTINGS_CACHE.gst_default_on;
   $("nb-preset").innerHTML = '<option value="">No discount</option>' +
     (SETTINGS_CACHE.discount_presets || []).map((p, i) =>
       `<option value="${i}">${esc(p.name)} (${p.type === "percent" ? p.value + "%" : "₹" + p.value})</option>`).join("");
+  // desktop par discount/advance/date sab khule; phone par band (kam hi lagte hain)
+  $("nb-more").open = window.matchMedia("(min-width: 768px)").matches;
+  nbSetPickup(NB_PICKUP);
   calcBill();
 }
 /* Discount rules, made predictable:
@@ -804,7 +981,7 @@ function applyPreset() {
   if (!activePreset()) $("nb-disc").value = "";
   calcBill();
 }
-function addLine() { LINES.push({ service: "", garment: "", qty: 1, rate: "", amount: 0 }); renderLines(); }
+function addLine() { LINES.push({ service: "", garment: "", qty: 1, rate: "", amount: 0, pieces: [] }); renderLines(); }
 function delLine(i) { LINES.splice(i, 1); if (!LINES.length) addLine(); renderLines(); }
 const services = () => [...new Set(RATES.filter((r) => r.is_active).map((r) => r.service))];
 const garmentsFor = (svc) => RATES.filter((r) => r.is_active && r.service === svc);
@@ -813,14 +990,16 @@ function renderLines() {
   $("nb-lines").innerHTML = LINES.map((l, i) => `
     <div class="lineitem">
       <div class="lf lf-service"><span class="ll">Service</span>
-        <select aria-label="Service" onchange="LINES[${i}].service=this.value;LINES[${i}].garment='';lineRate(${i})">
+        <select aria-label="Service" onchange="svcPick(${i},this.value)">
           <option value="">Service…</option>
-          ${services().map((s) => `<option ${l.service === s ? "selected" : ""}>${esc(s)}</option>`).join("")}
+          ${services().map((s) => `<option value="${esc(s)}" ${l.service === s ? "selected" : ""}>${esc(s)}</option>`).join("")}
+          ${canEditRates() ? `<option value="${NEW_RATE}">➕ New service…</option>` : ""}
         </select></div>
       <div class="lf lf-item"><span class="ll">Item</span>
-        <select aria-label="Item" onchange="LINES[${i}].garment=this.value;lineRate(${i})">
+        <select aria-label="Item" onchange="itemPick(${i},this.value)">
           <option value="">Item…</option>
           ${garmentsFor(l.service).map((r) => `<option value="${esc(r.garment)}" ${l.garment === r.garment ? "selected" : ""}>${esc(r.garment || "(per kg)")} — ₹${r.rate}/${r.unit}</option>`).join("")}
+          ${canEditRates() && l.service ? `<option value="${NEW_RATE}">➕ New item…</option>` : ""}
         </select></div>
       <div class="lf lf-qty"><span class="ll">Qty / kg</span>
         <input type="number" min="0.1" step="0.1" value="${l.qty}" aria-label="Quantity" title="Qty / kg"
@@ -831,8 +1010,234 @@ function renderLines() {
       <div class="lf lf-amt"><span class="ll">Amount</span>
         <div class="money" id="nb-amt-${i}">${money(l.amount)}</div></div>
       <button class="btn sm ghost danger-ic del" aria-label="Remove item" title="Remove item" onclick="delLine(${i})">✕</button>
+      ${lineUnit(l) === "kg" ? `<div class="lf lf-pieces">
+        <button class="btn ghost sm" onclick="piecesModal(${i})">👕 ${piecesCount(l.pieces) ? "Edit clothes" : "+ Add clothes (count only)"}</button>
+        ${piecesCount(l.pieces) ? `<span class="muted">${esc(piecesLabel(l.pieces))}</span>` : ""}
+      </div>` : ""}
     </div>`).join("");
+  renderQuick();
   calcBill();
+}
+
+/* ---- phone par bill: tap karke jodo ----
+   Do dropdown har item par (service, phir item) phone par sabse dheema
+   kaam tha — aur har item ek bada dabba banta tha. Yahan upar service ke
+   chips, neeche us service ke kapde daam ke saath: ek tap = 1 juda, dobara
+   tap = 2. Neeche chhota cart. Data wahi LINES hai jo desktop editor
+   likhta hai, isliye hisaab aur save ek hi rasta. */
+let NB_SVC = "";
+
+/* Kapde kahan hain — dukaan par, ya grahak se lene jaana hai? Lene jaana
+   ho to pickup_date jaata hai aur order delivery wale ki list mein pickup
+   banke dikhta hai. Pehle ye sawaal sirf staff panel poochhta tha; dashboard
+   ka har bill "dukaan mein hai" maana jaata tha. */
+/* ⚡ Urgent — ek tap. Charge owner ki setting se apne aap (items ka % ya
+   fixed ₹), jab tak haath se na badla jaye; "No charge" se maaf. Delivery
+   date "urgent delivery days" par aa jaati hai. Order urgent banta hai —
+   washerman ke work order par 🔴 URGENT, staff list mein sabse upar. */
+let NB_URG = { on: false, manual: false };
+const urgCfg = () => {
+  const s = SETTINGS_CACHE || {};
+  const days = parseInt(s.urgent_delivery_days);
+  return {
+    type: s.urgent_charge_type === "flat" ? "flat" : "percent",
+    value: Math.max(0, Number(s.urgent_charge_value ?? 50) || 0),
+    days: Number.isFinite(days) ? Math.max(0, days) : 1,
+  };
+};
+const urgDefault = (sub) => {
+  const c = urgCfg();
+  const raw = c.type === "flat" ? c.value : (sub * c.value) / 100;
+  return raw > 0 ? Math.round(raw) : 0;
+};
+const isoInDays = (d) => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
+const daysWord = (d) => (d === 0 ? "today" : d === 1 ? "tomorrow" : `in ${d} days`);
+function nbToggleUrgent(force) {
+  NB_URG.on = force === undefined ? !NB_URG.on : !!force;
+  NB_URG.manual = false;
+  const c = urgCfg();
+  const normalDays = parseInt((SETTINGS_CACHE || {}).turnaround_days) || 2;
+  $("nb-date").value = isoInDays(NB_URG.on ? c.days : normalDays);
+  nbPaintUrgent();
+  calcBill();
+}
+function nbPaintUrgent() {
+  const c = urgCfg();
+  $("nb-urgent-btn").classList.toggle("on", NB_URG.on);
+  $("nb-urgent-btn").setAttribute("aria-pressed", String(NB_URG.on));
+  $("nb-urg-box").hidden = !NB_URG.on;
+  $("nb-urg-hint").textContent = (c.value ? (c.type === "flat" ? `+₹${c.value}` : `+${c.value}%`) : "no extra charge")
+    + ` · delivery ${daysWord(c.days)}`;
+}
+function nbUrgentInput() { NB_URG.manual = true; calcBill(); }
+function nbUrgentWaive() { NB_URG.manual = true; $("nb-urg-amt").value = 0; calcBill(); }
+function nbUrgentReset() { NB_URG.manual = false; calcBill(); }
+
+let NB_PICKUP = false;
+function nbSetPickup(on) {
+  NB_PICKUP = !!on;
+  $("nb-at-shop").classList.toggle("on", !NB_PICKUP);
+  $("nb-collect").classList.toggle("on", NB_PICKUP);
+  $("nb-at-shop").setAttribute("aria-checked", String(!NB_PICKUP));
+  $("nb-collect").setAttribute("aria-checked", String(NB_PICKUP));
+  $("nb-pickup-box").hidden = !NB_PICKUP;
+  $("nb-pickup-err").textContent = "";
+  if (NB_PICKUP && !$("nb-pickup-date").value) $("nb-pickup-date").value = new Date().toISOString().slice(0, 10);
+  $("nb-pick-hint").textContent = NB_PICKUP
+    ? "Goes to the delivery boy's route as a pickup."
+    : "The washing queue gets this bill.";
+  calcBill();
+}
+const realLines = () => LINES.map((l, i) => [l, i]).filter(([l]) => l.service);
+function renderQuick() {
+  if (!$("nbq-svcs")) return;
+  // piece wali services (Dry Clean, Wash & Iron…) pehle — counter par yahi
+  // zyada lagti hain; kg wali baad mein. Rate card API unit se sort karke
+  // deti hai, jisme "kg" pehle aata tha.
+  const isKg = (s) => garmentsFor(s).every((r) => r.unit === "kg");
+  const svcs = services().sort((a, b) => isKg(a) - isKg(b));
+  if (!svcs.includes(NB_SVC)) NB_SVC = svcs[0] || "";
+  $("nbq-svcs").innerHTML = svcs.map((s) =>
+    `<button type="button" role="tab" class="nbq-svc${s === NB_SVC ? " on" : ""}" aria-selected="${s === NB_SVC}"
+      onclick="nbPickSvc(this.dataset.s)" data-s="${esc(s)}">${esc(s)}</button>`).join("");
+  const items = garmentsFor(NB_SVC);
+  $("nbq-items").innerHTML = items.length
+    ? items.map((r, n) => {
+        const inCart = LINES.find((l) => l.service === r.service && l.garment === r.garment);
+        const count = inCart ? (r.unit === "kg" ? `${inCart.qty}kg` : inCart.qty) : "";
+        return `<button type="button" class="nbq-item${inCart ? " in" : ""}" onclick="nbTap(${n})">
+          <b>${esc(r.garment || "By weight")}</b><small>₹${Number(r.rate)}${r.unit === "kg" ? "/kg" : ""}</small>
+          ${inCart ? `<span class="nbq-n">${esc(String(count))}</span>` : ""}</button>`;
+      }).join("")
+    : `<div class="nbq-empty">${svcs.length ? "No items in this service." : "Your rate card is empty — add a service below."}</div>`;
+  const rows = realLines();
+  $("nb-cart").innerHTML = rows.map(([l, i]) => {
+    const kg = lineUnit(l) === "kg";
+    return `<div class="nbc-row">
+      <div class="nbc-top">
+        <span class="nbc-name">${esc(l.garment || l.service)} <small>${l.garment ? esc(l.service) : "per kg"}</small></span>
+        <span class="money" id="nbc-amt-${i}">${money(l.amount)}</span>
+        <button type="button" class="nbc-del" aria-label="Remove ${esc(l.garment || l.service)}" onclick="delLine(${i})">✕</button>
+      </div>
+      <div class="nbc-ctl">
+        ${kg
+          ? `<label class="nbc-kg"><input type="number" inputmode="decimal" min="0.1" step="0.1" value="${l.qty}" id="nbc-qty-${i}"
+               aria-label="Weight in kg" onchange="nbSetQty(${i},this.value)" oninput="nbLiveQty(${i},this.value)"> kg</label>`
+          : `<div class="nbc-step">
+               <button type="button" aria-label="One less" onclick="nbStep(${i},-1)">−</button>
+               <input type="number" inputmode="numeric" min="1" step="1" value="${l.qty}" aria-label="How many"
+                 onchange="nbSetQty(${i},this.value)" oninput="nbLiveQty(${i},this.value)">
+               <button type="button" aria-label="One more" onclick="nbStep(${i},1)">+</button>
+             </div>`}
+        <label class="nbc-rate">× ₹<input type="number" inputmode="decimal" min="0" step="0.5" value="${l.rate}" aria-label="Rate"
+          onchange="LINES[${i}].rate=parseFloat(this.value)||0;renderLines()" oninput="LINES[${i}].rate=parseFloat(this.value)||0;calcBill()"></label>
+        ${kg ? `<button type="button" class="nbc-pcs" onclick="piecesModal(${i})">👕 ${piecesCount(l.pieces) ? `Clothes: ${piecesCount(l.pieces)} pcs` : "+ Add clothes"}
+          ${piecesCount(l.pieces) ? `<small>${esc(piecesLabel(l.pieces))}</small>` : ""}</button>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+}
+function nbPickSvc(s) { NB_SVC = s; renderQuick(); }
+function nbTap(n) {
+  const r = garmentsFor(NB_SVC)[n];
+  if (!r) return;
+  // khaali placeholder line (desktop editor ka "Service…") phone par bekaar
+  LINES = LINES.filter((l) => l.service);
+  const same = LINES.find((l) => l.service === r.service && l.garment === r.garment);
+  let idx;
+  if (same) {
+    // kg par dobara tap se wazan nahi badhta — wazan likhna hota hai
+    if (r.unit !== "kg") same.qty = (parseFloat(same.qty) || 0) + 1;
+    idx = LINES.indexOf(same);
+  } else {
+    LINES.push({ service: r.service, garment: r.garment, qty: 1, rate: parseFloat(r.rate), amount: 0, pieces: [] });
+    idx = LINES.length - 1;
+  }
+  $("nb-items-err").textContent = "";
+  renderLines();
+  if (r.unit === "kg") {
+    // wazan turant likhne ke liye — tap ke baad seedha kg ka khaana
+    const box = $(`nbc-qty-${idx}`);
+    if (box) { box.focus(); box.select(); }
+  }
+}
+function nbStep(i, by) {
+  const l = LINES[i];
+  const q = (parseFloat(l.qty) || 0) + by;
+  if (q < 1) { delLine(i); return; }
+  l.qty = q;
+  renderLines();
+}
+function nbLiveQty(i, v) {
+  // likhte waqt poora re-render nahi — cursor kood jaata hai; sirf rakam
+  const q = parseFloat(v);
+  if (q > 0) { LINES[i].qty = q; calcBill(); }
+}
+function nbSetQty(i, v) {
+  const q = parseFloat(v);
+  LINES[i].qty = q > 0 ? q : 1;
+  renderLines();
+}
+
+/* ---- KG line ke kapde: sirf ginti, daam nahi ----
+   Bill wazan se banta hai (3.5 kg x ₹60). Par bore mein kya-kya hai ye
+   likhna zaroori hai — washerman ginti milata hai, aur wapas dete waqt
+   "ek kurta kam hai" ka jawab yahi list hai. */
+const lineUnit = (l) => (RATES.find((x) => x.service === l.service && x.garment === l.garment) || {}).unit;
+const piecesCount = (p) => (p || []).reduce((s, x) => s + (parseInt(x.qty) || 0), 0);
+const piecesLabel = (p) => (p || []).map((x) => `${x.type} ${x.qty}`).join(", ") + ` — ${piecesCount(p)} pcs`;
+let PC_DRAFT = [];
+function piecesModal(i) {
+  PC_DRAFT = (LINES[i].pieces || []).map((x) => ({ ...x }));
+  if (!PC_DRAFT.length) PC_DRAFT.push({ type: "", qty: 1 });
+  // naam rate card ke kapdon se sujhaav — par koi bhi likha ja sakta hai
+  const names = [...new Set(RATES.map((r) => (r.garment || "").trim()).filter(Boolean))].sort();
+  openModal(`<h3>Clothes in this ${esc(LINES[i].service || "bag")}</h3>
+    <p class="muted">Count only — the bill stays by weight. Staff and the receipt see this list.</p>
+    <datalist id="pc-names">${names.map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
+    <div id="pc-rows" style="margin-top:10px"></div>
+    <button class="btn ghost sm" onclick="pcAdd()">+ Add another cloth</button>
+    <div class="sumrow" style="margin-top:10px"><span>Total pieces</span><b id="pc-total">0</b></div>
+    <div class="btnrow" style="margin-top:12px">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="pcSave(${i})">Save clothes</button>
+    </div>`);
+  pcRender();
+  const first = $("pc-rows").querySelector("input");
+  if (first) first.focus();
+}
+function pcRender() {
+  $("pc-rows").innerHTML = PC_DRAFT.map((x, n) => `
+    <div class="pc-row">
+      <input list="pc-names" value="${esc(x.type)}" placeholder="Cloth, e.g. Shirt" maxlength="60" aria-label="Cloth name"
+        oninput="PC_DRAFT[${n}].type=this.value" onkeydown="if(event.key==='Enter'){event.preventDefault();pcAdd()}">
+      <input type="number" min="1" step="1" inputmode="numeric" value="${x.qty}" aria-label="How many"
+        oninput="PC_DRAFT[${n}].qty=parseInt(this.value)||0;pcTotal()">
+      <button class="btn sm ghost danger-ic" aria-label="Remove cloth" onclick="pcDel(${n})">✕</button>
+    </div>`).join("");
+  pcTotal();
+}
+function pcTotal() { $("pc-total").textContent = piecesCount(PC_DRAFT.filter((x) => (x.type || "").trim())); }
+function pcAdd() {
+  PC_DRAFT.push({ type: "", qty: 1 });
+  pcRender();
+  const rows = $("pc-rows").querySelectorAll(".pc-row input[list]");
+  rows[rows.length - 1].focus();
+}
+function pcDel(n) { PC_DRAFT.splice(n, 1); if (!PC_DRAFT.length) PC_DRAFT.push({ type: "", qty: 1 }); pcRender(); }
+function pcSave(i) {
+  // ek hi kapda do baar likha ho to jod do — "Shirt 2" + "shirt 3" = Shirt 5
+  const merged = [];
+  PC_DRAFT.forEach((x) => {
+    const type = (x.type || "").trim().replace(/\s+/g, " ");
+    const qty = parseInt(x.qty) || 0;
+    if (!type || qty < 1) return;
+    const same = merged.find((m) => m.type.toLowerCase() === type.toLowerCase());
+    if (same) same.qty += qty; else merged.push({ type, qty });
+  });
+  LINES[i].pieces = merged;
+  closeModal();
+  renderLines();
 }
 function lineRate(i) {
   const l = LINES[i];
@@ -840,12 +1245,99 @@ function lineRate(i) {
   if (r) l.rate = parseFloat(r.rate);
   renderLines();
 }
+
+/* Counter par grahak aisa kapda laaya jo rate card par nahi hai — bill
+   chhod kar Settings jaane ke bajaye yahin jod do. Wo rate card mein bhi
+   save hota hai, taaki agle bill par wahi daam mile.
+   Sirf owner/manager: server bhi rate card badalne ki ijazat inhi ko deta
+   hai, to option wahi dikhe jo sach mein chalega. */
+const NEW_RATE = "__new__";
+const canEditRates = () => {
+  const role = SIGNED_IN_AS?.user?.role;
+  return !role || role === "OWNER" || role === "MANAGER";   // !role = admin-key login
+};
+function svcPick(i, v) {
+  if (v === NEW_RATE) { renderLines(); newRateModal(i, ""); return; }
+  LINES[i].service = v; LINES[i].garment = ""; lineRate(i);
+}
+function itemPick(i, v) {
+  if (v === NEW_RATE) { renderLines(); newRateModal(i, LINES[i].service); return; }
+  LINES[i].garment = v; lineRate(i);
+}
+function newRateModal(i, service) {
+  const unit = (garmentsFor(service)[0] || {}).unit || "pc";
+  openModal(`<h3>${service ? "New item" : "New service"}</h3>
+    <p class="muted">Added to your rate card too, so the next bill has it.</p>
+    <div class="frm">
+      <div class="setfield"><label for="nr-svc">Service</label>
+        <input id="nr-svc" list="nr-svcs" value="${esc(service)}" placeholder="e.g. Dry Clean" maxlength="60" autocomplete="off">
+        <datalist id="nr-svcs">${services().map((s) => `<option value="${esc(s)}">`).join("")}</datalist></div>
+      <div class="setfield" id="nr-itemwrap"><label for="nr-item">Item</label>
+        <input id="nr-item" placeholder="e.g. Blazer" maxlength="60" autocomplete="off"></div>
+      <div class="split2">
+        <div class="setfield"><label for="nr-unit">Charged per</label>
+          <select id="nr-unit" onchange="nrUnit()">
+            <option value="pc">Piece</option><option value="kg">Kg</option>
+          </select></div>
+        <div class="setfield"><label for="nr-rate">Rate (₹)</label>
+          <input id="nr-rate" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0"></div>
+      </div>
+      <small class="fielderr" id="nr-err"></small>
+    </div>
+    <div class="btnrow" style="margin-top:12px">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="nr-save" onclick="saveNewRate(this,${i})">Add to bill</button>
+    </div>`);
+  $("nr-unit").value = unit;
+  nrUnit();
+  // jo pehle se pata hai use dobara mat poochho — seedha agle khaali khaane par
+  $(!service ? "nr-svc" : unit === "kg" ? "nr-rate" : "nr-item").focus();
+  $("modal-body").querySelectorAll("input").forEach((el) => {
+    el.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("nr-save").click(); } };
+  });
+}
+function nbNewRate() {
+  // khaali aakhri line ho to wahi bharo, warna nayi line
+  const last = LINES.length - 1;
+  if (last < 0 || LINES[last].service) addLine();
+  newRateModal(LINES.length - 1, "");
+}
+function nrUnit() {
+  // kg wali service ka koi "item" nahi hota — poora bora tolta hai
+  $("nr-itemwrap").style.display = $("nr-unit").value === "kg" ? "none" : "";
+}
+async function saveNewRate(btn, i) {
+  const err = $("nr-err");
+  err.textContent = "";
+  const service = $("nr-svc").value.trim();
+  const unit = $("nr-unit").value;
+  const garment = unit === "kg" ? "" : $("nr-item").value.trim();
+  const rate = parseFloat($("nr-rate").value);
+  const fail = (msg, id) => { err.textContent = msg; $(id).focus(); };
+  if (!service) return fail("Service name is required.", "nr-svc");
+  if (unit === "pc" && !garment) return fail("Item name is required.", "nr-item");
+  if (!(rate > 0)) return fail("Enter a rate above ₹0.", "nr-rate");
+  await busy(btn, async () => {
+    try {
+      await api("/admin/api/rates", { method: "POST", body: { service, garment, unit, rate } });
+    } catch (e) { err.textContent = e.message; return; }
+    RATES = await api("/admin/api/rates");
+    RM_RATES = RATES;   // Settings ka rate card bhi naya dekhe
+    closeModal();
+    toast(`${garment || service} added to the rate card`);
+    NB_SVC = service;   // phone par nayi service ka chip chuna hua dikhe
+    if (!LINES[i]) return;
+    LINES[i].service = service; LINES[i].garment = garment;
+    lineRate(i);
+  });
+}
 function calcBill() {
   let sub = 0;
   LINES.forEach((l, i) => {
     l.amount = (parseFloat(l.rate) || 0) * (parseFloat(l.qty) || 0);
     sub += l.amount;
     const el = $("nb-amt-" + i); if (el) el.textContent = money(l.amount);
+    const ph = $("nbc-amt-" + i); if (ph) ph.textContent = money(l.amount);
   });
   // preset owns the discount and tracks the subtotal live; manual otherwise
   const p = activePreset();
@@ -863,15 +1355,42 @@ function calcBill() {
   if (dnote) dnote.textContent = p
     ? `${p.name} applied${p.type === "percent" ? ` (${p.value}% of subtotal)` : ""} — manual entry is off`
     : (disc ? "Manual discount applied" : "");
+  // ⚡ Urgent charge — chhoot ke baad (chhoot kapdon par hai, jaldi ki fees par nahi)
+  let urg = 0;
+  if (NB_URG.on) {
+    if (!NB_URG.manual) $("nb-urg-amt").value = urgDefault(sub);
+    urg = Math.max(0, parseFloat($("nb-urg-amt").value) || 0);
+    $("nb-urg-note").textContent = (urg ? `${money(urg)} added to the bill` : "No urgent charge — still marked urgent")
+      + ($("nb-date").value ? ` · delivery ${fmtDate($("nb-date").value)}` : "");
+  }
+  $("nb-urg-sum").hidden = !(NB_URG.on && urg);
+  $("nb-urg-sumamt").textContent = money(urg);
   const pct = (parseFloat(SETTINGS_CACHE.gst_percent) || 18) / 100;
-  const gst = $("nb-gst").checked ? Math.round((sub - disc) * pct * 100) / 100 : 0;
-  const total = Math.max(0, sub - disc + gst);
+  const gst = $("nb-gst").checked ? Math.round((sub - disc + urg) * pct * 100) / 100 : 0;
+  const total = Math.max(0, sub - disc + urg + gst);
   const adv = parseFloat($("nb-adv").value) || 0;
   $("nb-sub").textContent = money(sub);
   $("nb-gstamt").textContent = money(gst);
   $("nb-total").textContent = money(total);
   $("nb-due").textContent = money(Math.max(0, total - adv));
-  return { sub, disc, gst, total, adv };
+  // phone ki neeche wali patti + band section ka ek-line saar
+  if ($("nb-bar-total")) {
+    const n = realLines().length;
+    $("nb-bar-total").textContent = money(total);
+    $("nb-bar-count").textContent = !n ? "No items yet"
+      : `${n} item${n > 1 ? "s" : ""}` + (adv ? ` · ${money(Math.max(0, total - adv))} due` : "")
+        + (NB_PICKUP ? " · pickup" : "") + (NB_URG.on ? " · ⚡ urgent" : "");
+  }
+  if ($("nb-more-sum")) {
+    const bits = [];
+    if (disc) bits.push(`Discount ${money(disc)}`);
+    if (gst) bits.push(`GST ${money(gst)}`);
+    if (adv) bits.push(`Advance ${money(adv)}`);
+    if ($("nb-coupon").value.trim()) bits.push(`Coupon ${$("nb-coupon").value.trim()}`);
+    if ($("nb-date").value) bits.push(`Delivery ${fmtDate($("nb-date").value)}`);
+    $("nb-more-sum").textContent = bits.join(" · ");
+  }
+  return { sub, disc, gst, total, adv, urg };
 }
 /* SECURITY: the customer's NAME comes from their WhatsApp profile — it is
    attacker-controlled text. It must never travel through an inline
@@ -959,12 +1478,28 @@ async function saveBill(btn) {
       $("nb-phone").focus();
       return;
     }
-    const items = LINES.filter((l) => l.service && (l.garment || l.service.toLowerCase().includes("kg"))).map((l) => {
+    // KG line ka item naam khali hota hai. Pehle kg ki pehchan service ke
+    // NAAM mein "kg" dhoondh kar hoti thi — "Premium Wash" (kg) jaisi line
+    // chupchaap gir jaati aur "Add at least one item" aata (BUG_006). Ab
+    // rate card ki unit se.
+    const items = LINES.filter((l) => l.service && (l.garment || lineUnit(l) === "kg")).map((l) => {
       const r = RATES.find((x) => x.service === l.service && x.garment === l.garment) || {};
-      return { type: l.garment || l.service, service: l.service, qty: l.qty, rate: l.rate, amount: l.amount, unit: r.unit || "pc" };
+      const item = { type: l.garment || l.service, service: l.service, qty: l.qty, rate: l.rate, amount: l.amount, unit: r.unit || "pc" };
+      if (r.unit === "kg" && piecesCount(l.pieces)) item.pieces = l.pieces;
+      return item;
     });
     if (!items.length) {
-      $("nb-items-err").textContent = "Add at least one item — pick a service and an item.";
+      $("nb-items-err").textContent = "Add at least one item — tap a service, then an item.";
+      $("nb-items-err").scrollIntoView({ block: "center", behavior: "smooth" });
+      return;
+    }
+    if (t.urg > 0) {
+      // jaldi ki fees bill ki apni line — receipt par "Urgent charge", kapdon mein nahi ginti
+      items.push({ type: "Urgent charge", service: "Urgent", qty: 1, rate: t.urg, amount: t.urg, unit: "pc", kind: "urgent_charge" });
+    }
+    if (NB_PICKUP && !$("nb-pickup-date").value) {
+      $("nb-pickup-err").textContent = "Pick the day to collect the clothes.";
+      $("nb-pickup-date").focus();
       return;
     }
     const body = {
@@ -973,47 +1508,80 @@ async function saveBill(btn) {
       expected_delivery: $("nb-date").value || null, notes: $("nb-notes").value.trim() || null,
       advance_amount: t.adv || null, advance_method: t.adv ? $("nb-advmode").value : null,
       coupon_code: $("nb-coupon").value.trim() || null,
+      // pickup_date bhara = kapde lene jaana hai: order delivery wale ki
+      // list mein PICKUP_ASSIGNED banke jaata hai (staff panel jaisa)
+      pickup_date: NB_PICKUP ? $("nb-pickup-date").value : null,
+      priority: NB_URG.on ? "urgent" : "normal",
+      // IMP_006: "New bill" par pehle tap se Save tak kitne second
+      bill_seconds: NB_STARTED ? Math.round((Date.now() - NB_STARTED) / 1000) : null,
     };
     const out = await api("/orders", { method: "POST", body });
+    NB_STARTED = 0;
     toast(T.billCreated + " — " + out.order_number);
     showBillSuccess(out);
     LINES = []; addLine();
     ["nb-phone", "nb-name", "nb-disc", "nb-adv", "nb-notes", "nb-coupon", "nb-preset"].forEach((id) => ($(id).value = ""));
+    nbSetPickup(false);
+    nbToggleUrgent(false);   // agla bill normal se shuru (date bhi normal)
     calcBill();   // re-enables the manual discount field after a preset
     loadDashboard();
   });
 }
 function showBillSuccess(o) {
-  const j = esc(JSON.stringify(o)).replace(/"/g, "&quot;");
+  const n = esc(o.order_number);
   const wa = waConnected();
   // Jhooth mat bolo: API juda nahi to customer ko kuch nahi gaya.
   const line = wa
     ? "Customer notified on WhatsApp; staff got the work order."
     : "WhatsApp not connected — customer has <b>not</b> been messaged. Share the bill from your phone:";
-  openModal(`<h3>✅ ${o.order_number} created</h3>
+  openModal(`<h3>✅ ${n} created</h3>
     <p class="muted">Total ${o.total_amount ? money(o.total_amount) : "—"} · ${esc(o.customer_name || o.customer_phone)}. ${line}</p>
     <div class="btnrow" style="margin-top:12px">
-      <button class="btn ghost" onclick="printReceipt(${j})">🖨 Print receipt</button>
-      ${wa ? `<button class="btn ghost" onclick="waBill(${j})">📲 Send from shop number</button>` : ""}
-      <button class="btn ${wa ? "ghost" : ""}" onclick="closeModal();shareBillModal(${j})">💬 Share on WhatsApp</button>
+      <button class="btn ghost" onclick="printReceiptFromOrder('${n}')">🖨 Print bill</button>
+      ${wa ? `<button class="btn ghost" onclick="waBill('${n}')">📲 Send from shop number</button>` : ""}
+      <button class="btn ${wa ? "ghost" : ""}" onclick="closeModal();shareBillFromOrder('${n}')">💬 Share on WhatsApp</button>
       <button class="btn ${wa ? "" : "ghost"}" onclick="closeModal()">Done</button>
     </div>`);
 }
-function receiptText(o) {
-  const s = SETTINGS_CACHE || {};
-  const lines = (o.items || []).map((i) => ` ${i.qty} x ${i.type}  ${i.amount != null ? money(i.amount) : ""}`);
-  let out = `KWIK KLIN — Laundry Pro`;
-  if (s.shop_address) out += `\n${s.shop_address}`;
-  if (s.shop_contact_phone) out += `\nPh: ${s.shop_contact_phone}`;
-  if (s.shop_gstin) out += `\nGSTIN: ${s.shop_gstin}`;
-  out += `\n------------------------------\nBill: ${o.order_number}\nCustomer: ${o.customer_name || o.customer_phone}\nDate: ${fmtDate(o.created_at || new Date().toISOString())}\n------------------------------\n${lines.join("\n")}\n------------------------------\nTotal: ${o.total_amount ? money(o.total_amount) : "—"}\nPaid: ${money(o.amount_paid || 0)}\nDue: ${o.total_amount ? money(o.total_amount - (o.amount_paid || 0)) : "—"}\nDelivery: ${fmtDate(o.expected_delivery)}\n------------------------------`;
-  if (s.upi_vpa) out += `\nPay via UPI: ${s.upi_vpa}${s.upi_payee ? " (" + s.upi_payee + ")" : ""}`;
-  out += `\n${s.invoice_footer || "Thank you! 🙏"}`;
-  return out;
+
+/* ---- bill: text server banata hai (services/receipt.py) ----
+   Staff panel aur dashboard ka ek hi bill — pehle dono apna-apna banate
+   the aur dheere-dheere alag ho gaye. `text` WhatsApp ke liye (₹),
+   `print_text` chhote thermal printer ke liye (ASCII, 32/48 akshar). */
+const billReceipt = (number) => api(`/orders/${encodeURIComponent(number)}/receipt`);
+
+/* ---- print: chhota Bluetooth thermal printer ----
+   Saste 58/80mm Bluetooth printer "classic Bluetooth" hote hain — browser
+   unse seedha baat nahi kar sakta (Web Bluetooth sirf BLE + HTTPS). India
+   ki dukaanein isliye Android par RawBT app chalati hain: ye link bill ke
+   ESC/POS bytes seedha usko de deta hai, printer pair RawBT mein ek baar.
+   Doosra rasta phone/PC ka apna print (printer ki app ya PC printer). */
+let PRINT_TEXT = "", PRINT_MM = 58;
+function rawbtUrl(text) {
+  // ESC @ (reset) + text + 4 khaali line + GS V 66 0 (kaat do, jahan cutter ho)
+  const body = "\x1b@" + text.replace(/[^\x0a\x20-\x7e]/g, "") + "\n\n\n\n" + "\x1dVB\x00";
+  return `intent:base64,${btoa(body)}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
 }
-function printReceipt(o) { $("receipt").textContent = receiptText(o); window.print(); }
 async function printReceiptFromOrder(number) {
-  try { const d = await api(`/orders/${number}`); printReceipt(d.order); } catch (e) { toast(e.message, true); }
+  let r;
+  try { r = await billReceipt(number); } catch (e) { toast(e.message, true); return; }
+  PRINT_TEXT = r.print_text; PRINT_MM = r.paper_mm;
+  const android = /Android/i.test(navigator.userAgent);
+  openModal(`<h3>🖨 Print bill ${esc(r.order_number)}</h3>
+    <p class="muted">${r.paper_mm}mm paper · change it in Settings → Business Profile.</p>
+    <pre class="sharetext receipt-preview">${esc(r.print_text)}</pre>
+    <div class="btnrow" style="margin-top:12px">
+      <a class="btn${android ? "" : " ghost"}" href="${esc(rawbtUrl(r.print_text))}" onclick="closeModal()">📲 Bluetooth printer</a>
+      <button class="btn${android ? " ghost" : ""}" onclick="closeModal();browserPrint()">🖨 Print</button>
+      <button class="btn ghost" onclick="closeModal()">Close</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:10px">Bluetooth printer: Android phone par <b>RawBT</b> app (Play Store, free) ek baar install karke printer pair kar lein — phir har bill ek tap mein.</p>`);
+}
+function browserPrint() {
+  const el = $("receipt");
+  el.textContent = PRINT_TEXT;
+  el.className = PRINT_MM === 80 ? "paper-80" : "paper-58";
+  window.print();
 }
 /* ---- bill ko WhatsApp par bhejna ----
  *
@@ -1067,11 +1635,10 @@ function shareTextModal(phone, text, title, note) {
     </div>`);
 }
 
-function shareBillModal(o, note) {
-  const who = displayName(o.customer_name, o.customer_phone);
+function shareBillModal(r, note) {
   shareTextModal(
-    o.customer_phone, receiptText(o), `Share bill ${o.order_number}`,
-    note || `WhatsApp khulega, bill pehle se likha hua — bas Send dabana hai. To: ${who}`,
+    r.phone, r.text, `Share bill ${r.order_number}`,
+    note || `WhatsApp khulega, bill pehle se likha hua — bas Send dabana hai. To: ${displayName(r.name, r.phone)}`,
   );
 }
 async function copyShareText() {
@@ -1081,18 +1648,20 @@ async function copyShareText() {
 
 /* Bill history se: order pehle server se lao, phir share modal. */
 async function shareBillFromOrder(number) {
-  try { const d = await api(`/orders/${number}`); shareBillModal(d.order); }
+  try { shareBillModal(await billReceipt(number)); }
   catch (e) { toast(e.message, true); }
 }
 
-async function waBill(o) {
-  if (!waConnected()) { shareBillModal(o); return; }   // API hai hi nahi — seedha share
+async function waBill(number) {
+  let r;
+  try { r = await billReceipt(number); } catch (e) { toast(e.message, true); return; }
+  if (!waConnected()) { shareBillModal(r); return; }   // API hai hi nahi — seedha share
   try {
-    await api("/admin/api/inbox/send", { method: "POST", body: { phone: o.customer_phone, text: receiptText(o) } });
+    await api("/admin/api/inbox/send", { method: "POST", body: { phone: r.phone, text: r.text } });
     toast(T.sent);
   } catch (e) {
     // API connect nahi hai / window band hai / send fail — kaam ruke nahi.
-    shareBillModal(o, `Shop ke number se nahi bheja ja saka (${e.message}). Apne WhatsApp se bhej dijiye:`);
+    shareBillModal(r, `Shop ke number se nahi bheja ja saka (${e.message}). Apne WhatsApp se bhej dijiye:`);
   }
 }
 
@@ -1178,6 +1747,7 @@ function billRowHtml(o, kind) {
     <div class="act"><button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
     <button class="btn sm ghost" onclick="printReceiptFromOrder('${o.order_number}')">Print</button>
     <button class="btn sm ghost" onclick="shareBillFromOrder('${o.order_number}')">Share</button>
+    <button class="btn sm ghost" onclick="messageMenu('${o.order_number}')">💬 Message</button>
     <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button>
     <button class="btn sm ghost" onclick="editBillModal('${o.order_number}')">Edit</button>
     <button class="btn sm danger" onclick="deleteBillModal('${o.order_number}')">Delete</button></div></div>`;
@@ -1202,6 +1772,10 @@ async function editBillModal(num) {
       unit: i.unit || "pc",
       qty: Number(i.qty) || 1,
       rate: i.rate != null ? Number(i.rate) : "",
+      // KG line ke kapde — edit screen inhe dikhata nahi, par save par
+      // gira dena matlab ginti hamesha ke liye gayab
+      pieces: i.pieces || null,
+      kind: i.kind || null,   // "urgent_charge" line edit ke baad bhi wahi rahe
     })),
     paid: Number(o.amount_paid || 0),
     total: o.total_amount != null ? Number(o.total_amount) : null,
@@ -1250,6 +1824,8 @@ async function editBillModal(num) {
         // edit still know which service this garment was billed under
         if (l.service) row.service = l.service;
         if (l.unit) row.unit = l.unit;
+        if (l.unit === "kg" && (l.pieces || []).length) row.pieces = l.pieces;
+        if (l.kind) row.kind = l.kind;
         return row;
       });
     if (!items.length) { $("eb-err").textContent = "Add at least one item."; return; }
@@ -1908,17 +2484,30 @@ function newTaskModal() {
 }
 
 /* ============================= expenses ============================= */
-const EXP_CATS = ["Detergent", "Electricity", "Rent", "Salary", "Transport", "Maintenance", "Other"];
+// Server ki list (built-in + owner ki apni) — staff panel aur AI agent bhi
+// yahi dekhte hain. loadExpenses bharta hai.
+let EXP_CATS = [];
+let EXP_CUSTOM = [];
 let EXPENSES = [];
 let expSort = { key: "spent_on", dir: -1 }, expQuery = "";
+function paintExpCats(keep) {
+  const cur = keep ?? $("exp-cat").value;
+  $("exp-cat").innerHTML = '<option value="">Select category…</option>'
+    + EXP_CATS.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  if (EXP_CATS.includes(cur)) $("exp-cat").value = cur;
+}
 async function loadExpenses() {
   $("exp-list").innerHTML = skeleton(4);
-  $("exp-cat").innerHTML = '<option value="">Select category…</option>'
-    + EXP_CATS.map((c) => `<option>${c}</option>`).join("");
+  paintExpCats("");
   $("exp-date").value = new Date().toISOString().slice(0, 10);
+  let cats;
   try {
-    [EXPENSES, SUMMARY] = await Promise.all([api("/admin/api/expenses"), api("/admin/api/reports/summary")]);
+    [EXPENSES, SUMMARY, cats] = await Promise.all([
+      api("/admin/api/expenses"), api("/admin/api/reports/summary"), api("/admin/api/expense-categories"),
+    ]);
   } catch (e) { $("exp-list").innerHTML = errBox(e.message, "loadExpenses"); return; }
+  EXP_CATS = cats.all; EXP_CUSTOM = cats.custom;
+  paintExpCats();
   const t = SUMMARY.today || {}, m = SUMMARY.month || {}, lm = SUMMARY.last_month || {};
   const profit = Number(m.profit || 0);
   // "vs last month" — omit when there is no baseline to compare against
@@ -1982,7 +2571,7 @@ function renderExpenses() {
     <tbody>${rows.map((e) => `
       <tr><td class="nowrap">${fmtDate(e.spent_on)}</td><td>${esc(e.category)}</td>
       <td class="money">${money(e.amount)}</td>
-      <td class="muted" style="max-width:260px" title="${esc(e.description || "")}"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.description || "")}</div></td>
+      <td class="muted" style="max-width:260px" title="${esc(e.description || "")}"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.description || "")}</div>${e.added_by ? `<div style="font-size:11.5px">by ${esc(e.added_by)}</div>` : ""}</td>
       <td><button class="btn sm ghost danger-ic" aria-label="Delete expense" title="Delete" onclick="delExpense('${e.id}')">🗑</button></td></tr>`).join("")}
     </tbody>
     <tfoot><tr class="totalrow"><td>Total</td><td class="muted">${rows.length} item${rows.length > 1 ? "s" : ""}</td>
@@ -1990,6 +2579,7 @@ function renderExpenses() {
     <div class="rowcards">${rows.map((e) => `
       <div class="rowcard"><div class="r1"><b>${esc(e.category)}</b><span class="money">${money(e.amount)}</span></div>
       <div class="kv"><span>${fmtDate(e.spent_on)}</span><span>${esc(e.description || "")}</span></div>
+      ${e.added_by ? `<div class="kv"><span>Added by</span><span>${esc(e.added_by)}</span></div>` : ""}
       <div class="act"><button class="btn sm ghost danger-ic" onclick="delExpense('${e.id}')">🗑 Delete</button></div></div>`).join("")}
       <div class="rowcard" style="background:var(--n50)"><div class="r1"><b>Total (${rows.length})</b><span class="money">${money(total)}</span></div></div>
     </div>`;
@@ -2004,6 +2594,57 @@ async function saveExpense(btn) {
     await api("/admin/api/expenses", { method: "POST", body: { category: cat, amount: amt, spent_on: $("exp-date").value, description: $("exp-desc").value.trim() || null } });
     $("exp-cat").value = ""; $("exp-amt").value = ""; $("exp-desc").value = "";
     toast(`✓ ${money(amt)} expense saved`); loadExpenses();
+  });
+}
+/* Owner ki apni categories — "Packaging", "Petrol", "Chai-paani". Staff
+   panel aur AI agent bhi isi list se chunte hain. Built-in hatti nahi;
+   apni hatane se purane kharche nahi mitte, sirf naye ki list se jaati hai. */
+function manageExpCats() {
+  const builtin = EXP_CATS.filter((c) => !EXP_CUSTOM.includes(c));
+  openModal(`<h3>Expense categories</h3>
+    <p class="muted">Your own categories show up here, in the staff panel and for the AI agent.</p>
+    <div class="frm">
+      <div class="setfield"><label for="ec-name">New category</label>
+        <div style="display:flex;gap:8px">
+          <input id="ec-name" placeholder="e.g. Packaging" maxlength="40" autocomplete="off" style="flex:1">
+          <button class="btn" id="ec-add" onclick="addExpCat(this)">Add</button>
+        </div>
+        <small class="fielderr" id="ec-err"></small></div>
+      <div class="setfield"><label>Your categories</label>
+        <div id="ec-custom">${EXP_CUSTOM.length
+          ? EXP_CUSTOM.map((c, i) => `<div class="sumrow"><span>${esc(c)}</span>
+              <button class="btn sm ghost danger-ic" aria-label="Remove ${esc(c)}" onclick="delExpCat(${i})">✕</button></div>`).join("")
+          : `<p class="muted">None yet.</p>`}</div></div>
+      <div class="setfield"><label>Built-in</label>
+        <p class="muted">${builtin.map(esc).join(" · ")}</p></div>
+    </div>
+    <div class="btnrow" style="margin-top:12px"><button class="btn ghost" onclick="closeModal()">Done</button></div>`);
+  $("ec-name").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("ec-add").click(); } };
+  $("ec-name").focus();
+}
+async function addExpCat(btn) {
+  const name = $("ec-name").value.trim();
+  $("ec-err").textContent = "";
+  if (name.length < 2) { $("ec-err").textContent = "Type a name first."; $("ec-name").focus(); return; }
+  await busy(btn, async () => {
+    let r;
+    try { r = await api("/admin/api/expense-categories", { method: "POST", body: { name } }); }
+    catch (e) { $("ec-err").textContent = e.message; return; }
+    EXP_CATS = r.all; EXP_CUSTOM = [...EXP_CUSTOM, r.name];
+    paintExpCats(r.name);   // seedha nayi category chuni hui — form bharna jaari rahe
+    toast(`"${r.name}" added`);
+    manageExpCats();
+  });
+}
+function delExpCat(i) {
+  const name = EXP_CUSTOM[i];
+  if (!name) return;
+  confirmDialog(`Remove "${name}"? Old expenses keep this category; it just won't be offered for new ones.`, async () => {
+    try {
+      const r = await api(`/admin/api/expense-categories/${encodeURIComponent(name)}`, { method: "DELETE" });
+      EXP_CATS = r.all; EXP_CUSTOM = EXP_CUSTOM.filter((c) => c !== name);
+      paintExpCats(); toast(`"${name}" removed`); manageExpCats();
+    } catch (e) { toast(e.message, true); }
   });
 }
 function delExpense(id) {
@@ -2587,18 +3228,23 @@ async function loadSettings() {
     STAFF = staff; SETTINGS_CACHE = s; RM_RATES = rates;
     renderRateMatrix(); renderStaff(); renderPresets();
     $("set-standup").value = s.standup_hour;
+    $("set-route").value = String(!!s.staff_show_route);
+    $("set-autoassign").value = String(s.agent_auto_assign !== false);
+    const lim = s.stage_limit_hours || {};
+    $("set-stagelimits").innerHTML = STAGE_LIMIT_KEYS.map(([k, label]) => `
+      <div class="setfield"><label for="sl-${k}">${label}</label>
+        <input id="sl-${k}" type="number" min="1" max="720" inputmode="numeric" value="${esc(lim[k] ?? "")}"></div>`).join("");
+    $("set-urg-type").value = s.urgent_charge_type === "flat" ? "flat" : "percent";
+    $("set-urg-value").value = s.urgent_charge_value ?? 50;
+    $("set-urg-days").value = s.urgent_delivery_days ?? 1;
     $("set-turnaround").value = s.turnaround_days;
     $("set-freqcap").value = s.marketing_freq_cap_per_month;
     $("set-budget").value = s.marketing_monthly_msg_budget;
     $("set-autonomy").value = s.marketing_autonomy;
     $("set-social").value = String(!!s.social_daily_enabled);
     $("set-socialhour").value = s.social_post_hour;
-    $("set-igid").value = s.ig_user_id || "";
-    // the API returns a mask for a saved token — the real one never reaches
-    // the browser; saving the mask back is a no-op server-side
-    $("set-igtoken").value = s.ig_access_token || "";
-    $("set-igtoken").placeholder = s.ig_access_token ? "" : "Paste token";
-    igState();
+    // token kabhi browser tak nahi aata (mask) — yahan sirf juda/nahi
+    igState(!!(s.ig_user_id && s.ig_access_token));
     const staffOpts = (sel) => '<option value="">— none —</option>' +
       staff.filter((x) => x.is_active).map((x) => `<option value="${x.phone}" ${sel === x.phone ? "selected" : ""}>${esc(x.name)}</option>`).join("");
     $("set-washer").innerHTML = staffOpts(s.default_washer_phone);
@@ -2613,10 +3259,41 @@ async function loadSettings() {
     $("bp-address").value = s.shop_address || "";
     $("bp-upi").value = s.upi_vpa || "";
     $("bp-payee").value = s.upi_payee || "";
+    $("bp-review").value = s.google_review_link || "";
+    $("bp-review2").value = s.google_review_link_2 || "";
+    // grahak ko jaane wali choti link — dikhao taaki owner khud chala kar dekh le
+    const slug = SIGNED_IN_AS?.tenant?.slug;
+    $("bp-review-short").innerHTML = s.public_base_url && slug
+      ? `Customers get the short link: <b>${esc(s.public_base_url.replace(/\/$/, ""))}/r/${esc(slug)}</b>`
+      : "Customers get this link in the “Please review us” message.";
     $("bp-footer").value = s.invoice_footer || "";
+    $("bp-terms").value = s.invoice_terms || "";
+    $("bp-paper").value = String(s.receipt_paper_mm || 58);
     $("bp-gstpct").value = s.gst_percent;
     $("bp-gstdef").checked = !!s.gst_default_on;
+    gbpLoad();
   } catch (e) { toast(e.message, true); }
+}
+
+/* Google Business Profile — saare Google reviews website par */
+async function gbpLoad() {
+  const box = $("gbp-body");
+  if (!box) return;
+  let s;
+  try { s = await api("/admin/api/google-business/status"); }
+  catch (e) { box.textContent = e.message; return; }
+  const err = s.last_error ? `<p style="color:#be123c;margin:8px 0">⚠️ ${esc(s.last_error)}</p>` : "";
+  if (!s.connected || (s.choices && s.choices.length)) {
+    box.innerHTML = `${err}<p>Not connected yet — ask the Kwik Klin team to connect your Google Business Profile.</p>`;
+    return;
+  }
+  const when = s.synced_at ? new Date(s.synced_at).toLocaleString("en-IN") : "not yet";
+  const stat = s.rating ? `<b>${Number(s.rating).toFixed(1)} ★</b> · ${s.count} reviews on Google · ${s.stored} shown on website` : "No reviews synced yet";
+  box.innerHTML = `${err}<p style="color:var(--ink,#131820)">✅ Connected: <b>${esc(s.title || "Google listing")}</b></p>
+    <p style="margin:4px 0">${stat}</p><small class="muted">Last sync: ${esc(when)} · refreshes every 6 hours</small>
+    <div class="filters" style="margin-top:10px">
+      <a class="btn ghost" href="/#reviews" target="_blank" rel="noopener">View on website</a>
+    </div>`;
 }
 
 async function saveProfile(btn) {
@@ -2628,7 +3305,11 @@ async function saveProfile(btn) {
       ["shop_address", $("bp-address").value.trim()],
       ["upi_vpa", $("bp-upi").value.trim()],
       ["upi_payee", $("bp-payee").value.trim()],
+      ["google_review_link", $("bp-review").value.trim()],
+      ["google_review_link_2", $("bp-review2").value.trim()],
       ["invoice_footer", $("bp-footer").value.trim()],
+      ["invoice_terms", $("bp-terms").value.trim()],
+      ["receipt_paper_mm", parseInt($("bp-paper").value) || 58],
       ["gst_percent", parseFloat($("bp-gstpct").value) || 18],
       ["gst_default_on", $("bp-gstdef").checked],
       ["default_delivery_phone", $("set-delivery").value],
@@ -2725,15 +3406,6 @@ function updRate(id, rate, active) {
       toast("Rate saved — applies to new bills only");
     } catch (e) { toast(e.message, true); }
   }, 500);
-}
-async function addRate(btn) {
-  await busy(btn, async () => {
-    await api("/admin/api/rates", { method: "POST", body: {
-      service: $("rt-svc").value.trim(), garment: $("rt-item").value.trim(),
-      unit: $("rt-unit").value, rate: parseFloat($("rt-rate").value),
-    }});
-    toast("Rate added"); $("rt-item").value = ""; $("rt-rate").value = ""; loadSettings();
-  });
 }
 const ROLE_LABEL = {
   WASHER: "Washer", DELIVERY: "Delivery",
@@ -3014,20 +3686,13 @@ async function addStaff(btn) {
 }
 
 /* Instagram: say plainly whether it's actually connected. */
-function igState() {
+function igState(linked) {
   const el = $("ig-status");
   if (!el) return;
-  const linked = $("set-igid").value.trim() && $("set-igtoken").value.trim();
   el.className = "connstate" + (linked ? " on" : "");
   el.innerHTML = linked
-    ? `<span class="dot"></span>Connected`
-    : "Not connected — daily posters will only be sent to you on WhatsApp.";
-}
-function igPeek() {
-  const inp = $("set-igtoken"), btn = $("ig-peek");
-  const show = inp.type === "password";
-  inp.type = show ? "text" : "password";
-  btn.textContent = show ? "Hide" : "Show";
+    ? `<span class="dot"></span>Instagram connected`
+    : "Instagram not connected — daily posters will only be sent to you on WhatsApp.";
 }
 async function saveOps(btn) {
   await busy(btn, async () => {
@@ -3035,17 +3700,21 @@ async function saveOps(btn) {
       ["standup_hour", parseInt($("set-standup").value)],
       ["turnaround_days", parseInt($("set-turnaround").value)],
       ["default_washer_phone", $("set-washer").value],
+      ["staff_show_route", $("set-route").value === "true"],
+      ["agent_auto_assign", $("set-autoassign").value === "true"],
+      ["stage_limit_hours", Object.fromEntries(STAGE_LIMIT_KEYS.map(([k]) =>
+        [k, Math.max(1, Math.min(720, parseInt($(`sl-${k}`).value, 10) || 24))]))],
+      ["urgent_charge_type", $("set-urg-type").value],
+      ["urgent_charge_value", Math.max(0, parseFloat($("set-urg-value").value) || 0)],
+      ["urgent_delivery_days", Math.max(0, Math.min(14, parseInt($("set-urg-days").value) || 0))],
       ["marketing_freq_cap_per_month", parseInt($("set-freqcap").value)],
       ["marketing_monthly_msg_budget", parseInt($("set-budget").value)],
       ["marketing_autonomy", $("set-autonomy").value],
       ["social_daily_enabled", $("set-social").value === "true"],
       ["social_post_hour", parseInt($("set-socialhour").value) || 11],
-      ["ig_user_id", $("set-igid").value.trim()],
-      ["ig_access_token", $("set-igtoken").value.trim()],
     ];
     for (const [key, value] of pairs) await api("/admin/api/settings", { method: "PUT", body: { key, value } });
     toast("Settings saved — live immediately");
-    igState();
   });
 }
 async function testStandup(btn) {

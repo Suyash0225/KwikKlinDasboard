@@ -58,8 +58,19 @@ def _in_quiet_hours(now_ist: datetime) -> bool:
     return QUIET_START <= h < QUIET_END
 
 
+_TASK_CODE_LOCK_KEY = 834713
+
+
 async def _next_code(db: AsyncSession) -> str:
-    """T-1, T-2, ... — short enough to type back on WhatsApp."""
+    """T-1, T-2, ... — short enough to type back on WhatsApp.
+
+    Transaction-scoped lock: ops agent ab har bill par kaam banata hai, aur
+    ek saath do bill bane to dono ko wahi code milta tha (uq_tasks_tenant_code).
+    Lock caller ke commit par khud chhoot jaata hai — order number jaisa.
+    """
+    from sqlalchemy import text as _text
+
+    await db.execute(_text(f"SELECT pg_advisory_xact_lock({_TASK_CODE_LOCK_KEY})"))
     n = (await db.execute(select(func.count()).select_from(Task))).scalar_one()
     for candidate in range(n + 1, n + 50):
         code = f"T-{candidate}"
@@ -114,6 +125,7 @@ async def create_task(
     urgent: bool = False,
     created_by: str = "owner",
     notify: bool = True,
+    kind: str = "general",
 ) -> Task:
     """Record the task and tell the assignee. Returns the saved Task."""
     task = Task(
@@ -123,6 +135,7 @@ async def create_task(
         order_id=order.id if order else None,
         urgent=urgent,
         created_by=created_by[:40],
+        kind=kind,
     )
     db.add(task)
     await db.commit()
@@ -143,6 +156,16 @@ async def create_task(
     log.info("task_created", code=task.code, staff=staff.name if staff else None)
     _announce(task, "created", by=created_by)
     return task
+
+
+async def send_task_to(db: AsyncSession, task: Task, staff: Staff) -> bool:
+    """Naye aadmi ko kaam bhejo (reassign ke baad)."""
+    sent = await _send_to_assignee(db, task, staff, first=True)
+    if sent:
+        task.last_ping_at = datetime.now(timezone.utc)
+        db.add(task)
+        await db.commit()
+    return sent
 
 
 async def _send_to_assignee(
@@ -218,7 +241,7 @@ _JOB = {
         "ask": "Kab tak pickup kar loge? (jaise: sham tak / kal 11 baje)",
         "done_q": "Pickup ho gaya?",
         "yes_title": "✅ Haan, ho gaya",
-        "customer_line": "Aapka pickup schedule ho gaya hai",
+        "customer_line": "Your pickup is scheduled",
         "done_reply": "👍 Shukriya! Kapde aa gaye — main aage ka dekh leta hoon.",
     },
     "delivery": {
@@ -229,7 +252,7 @@ _JOB = {
         "ask": "Kab tak deliver kar doge? (jaise: sham tak / kal 11 baje)",
         "done_q": "Delivery ho gayi?",
         "yes_title": "✅ Haan, ho gayi",
-        "customer_line": "Aapke kapde delivery ke liye nikal rahe hain",
+        "customer_line": "Your clothes are on the way",
         "done_reply": "👍 Shukriya! Delivery mark kar di — customer ko bhi bata diya.",
     },
 }
@@ -273,10 +296,20 @@ async def _create_job_task(db: AsyncSession, order, kind: str) -> Task | None:
             log.info("job_task_exists", kind=kind, code=existing.code)
             return existing
 
-        staff = await _delivery_staff(db)
+        # Ops agent: order par laga boy, warna sabse kam kaam wala; agent band
+        # ho to purana niyam (default / akela delivery boy)
+        from app.services import ops_agent
+
+        if await ops_agent.enabled(db):
+            staff = await ops_agent.pick_staff(db, "DELIVERY", order)
+        else:
+            staff = await _delivery_staff(db)
         if staff is None:
             log.info("job_task_skipped_no_delivery_staff", kind=kind, order=order.order_number)
             return None
+        if order.assigned_delivery_id is None:
+            order.assigned_delivery_id = staff.id
+            db.add(order)
         customer = await db.get(Customer, order.customer_id)
         who = (customer.name or customer.phone) if customer else "customer"
         addr = (customer.address if customer and customer.address else "").strip()
@@ -418,10 +451,10 @@ async def record_pickup_eta(db: AsyncSession, task: Task, eta_text: str) -> str:
     # the customer hears a time and a name, not "jald batayenge"
     if customer is not None:
         text = (
-            f"Namaste{' ' + customer.name if customer.name else ''} ji! 🙏\n"
+            f"Hello{' ' + customer.name if customer.name else ''}! 🙏\n"
             f"{cfg['customer_line']} — *{task.eta_text}*.\n"
-            f"{staff.name if staff else 'Hamare saathi'} aayenge, "
-            f"unka number: {staff.phone if staff else ''}\n"
+            f"{staff.name if staff else 'Our team member'} will come"
+            + (f", contact: {staff.phone}\n" if staff else ".\n") +
             f"Order: {order.order_number if order else ''}\n— Kwik Klin"
         )
         try:
@@ -536,8 +569,11 @@ async def confirm_pickup(db: AsyncSession, task: Task, *, done: bool, by: str) -
 
 
 async def complete_task(
-    db: AsyncSession, task: Task, *, reply: str | None = None, by: str = "staff"
+    db: AsyncSession, task: Task, *, reply: str | None = None, by: str = "staff",
+    advance_order: bool = True,
 ) -> Task:
+    """advance_order: wash task done = order READY (ops agent). False jab
+    order khud aage badh chuka ho aur ye band karna sirf safai hai."""
     task.status = TASK_DONE
     task.completed_at = datetime.now(timezone.utc)
     if reply:
@@ -550,6 +586,10 @@ async def complete_task(
     )
     log.info("task_completed", code=task.code, by=by)
     _announce(task, "done", by=by)
+    if advance_order:
+        from app.services import ops_agent
+
+        await ops_agent.on_task_done(db, task, by)
     return task
 
 

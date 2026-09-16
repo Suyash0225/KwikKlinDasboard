@@ -116,6 +116,9 @@ async def create_order(
     # callers record the advance AFTER create; this makes the confirmation
     # message show the right advance/due numbers anyway (display only).
     advance_hint: Decimal | None = None,
+    coupon_code: str | None = None,
+    priority: str = "normal",
+    bill_seconds: int | None = None,
 ) -> Order:
     """Create an order (upserting the customer) and log RECEIVED in history.
 
@@ -183,6 +186,23 @@ async def create_order(
     if customer_name and not customer.name:
         customer.name = customer_name
 
+    # Coupon yahin, order banne aur grahak ko message jaane se PEHLE. Pehle
+    # router ise create ke baad lagata tha: message purane (bina chhoot ke)
+    # total ke saath chala jaata tha, aur galat coupon par 400 aata tha
+    # jabki bill ban chuka hota tha.
+    coupon, coupon_discount = None, Decimal("0")
+    if coupon_code:
+        from app.services.marketing_agent import validate_coupon
+
+        coupon, coupon_discount, err = await validate_coupon(
+            db, coupon_code, customer.id, total_amount or Decimal("0")
+        )
+        if err:
+            await db.rollback()
+            raise OrderError(f"coupon: {err}")
+        total_amount = (total_amount or Decimal("0")) - coupon_discount
+        discount_amount = (discount_amount or Decimal("0")) + coupon_discount
+
     order_number = await _next_order_number(db)
 
     order = Order(
@@ -196,7 +216,11 @@ async def create_order(
         pickup_date=pickup_date,
         expected_delivery=expected_delivery,
         notes=notes,
+        priority="urgent" if priority == "urgent" else "normal",
     )
+    from app.services.turnaround import clean_bill_seconds
+
+    order.bill_seconds = clean_bill_seconds(bill_seconds)
     db.add(order)
     await db.flush()
     db.add(
@@ -220,6 +244,10 @@ async def create_order(
         items=len(items),
         created_by=created_by,
     )
+    if coupon is not None:
+        from app.services.marketing_agent import redeem_coupon
+
+        await redeem_coupon(db, coupon, order, coupon_discount)
 
     # lead -> customer (Marketing Agent pipeline; never raises)
     try:
@@ -235,10 +263,17 @@ async def create_order(
     items_text = items_summary(order)
     advance_amt = advance_hint if advance_hint is not None else (order.amount_paid or Decimal("0"))
     total_s = f"{order.total_amount}" if order.total_amount is not None else "—"
+    if order.total_amount is not None and order.discount_amount:
+        # Chhoot total ke saath hi — isse Meta ka approved template (fixed
+        # 7 params), owner ka apna format aur default copy, teeno bina
+        # badle discount dikhate hain.
+        total_s += f" (₹{order.discount_amount} discount)"
     advance_s = f"{advance_amt}"
     due = (order.total_amount or Decimal("0")) - advance_amt
     due_s = f"{max(due, 0)}" if order.total_amount is not None else "—"
-    date_s = _fmt_date(expected_delivery) if expected_delivery else "jald batayenge"
+    date_s = _fmt_date(expected_delivery) if expected_delivery else "to be confirmed soon"
+    from app.services import bill_link
+
     await _notify_customer(
         db, order,
         message_key=(
@@ -247,7 +282,7 @@ async def create_order(
         ),
         template_name="kk_bill_details",
         template_params=[
-            customer_name or "ji", order_number, items_text[:120],
+            customer_name or "there", order_number, items_text[:120],
             total_s, advance_s, due_s, date_s,
         ],
         items=items_text,
@@ -255,6 +290,8 @@ async def create_order(
         advance=advance_s,
         due=due_s,
         date=date_s,
+        # web bill + GPay/PhonePe se payment (services/bill_link.py)
+        bill_line=bill_link.message_line(await bill_link.url_for(db, order)),
     )
 
     # The owner side hears about every new order without asking — unless he
@@ -277,7 +314,13 @@ async def create_order(
     # pahunchta hi nahi tha — chahe wo phone par aaya order ho jise lene
     # jaana hai. `pickup_date` field maujood thi par sirf store hoti thi,
     # kisi cheez par asar nahi karti thi.
-    if needs_pickup:
+    # Ops agent: washerman + (pickup ho to) delivery boy chunkar order-linked
+    # kaam bana deta hai. Pickup task khud boy se "kab tak?" poochta hai,
+    # isliye tab alag work-order WhatsApp nahi — ek hi baat do baar nahi.
+    from app.services import ops_agent
+
+    assigned = await ops_agent.on_order_created(db, order)
+    if needs_pickup and not assigned["pickup"]:
         try:
             from app.services.work_orders import send_work_order
 
@@ -335,10 +378,13 @@ async def update_status(
     new_status: OrderStatus,
     *,
     changed_by: str,
+    notify: bool = True,
 ) -> Order:
     """Move an order through the state machine. Commits.
 
     Raises InvalidTransitionError on a move the machine forbids.
+    notify=False: grahak ko status wala message nahi (jab caller apna,
+    zyada saaf message bhej raha ho — jaise partial delivery).
     """
     old_status = order.status
     if not can_transition(old_status, new_status):
@@ -401,6 +447,9 @@ async def update_status(
         changed_by=changed_by,
     )
     _announce(order, "status", by=changed_by)
+    from app.services import ops_agent
+
+    await ops_agent.on_status_change(db, order, new_status, changed_by)
 
     # Kapde taiyar = ab delivery ka sawaal. Owner's rule (06 Aug): delivery
     # boy se turant pucho "kab tak?", jawab DB mein rakho, owner ko batao.
@@ -412,6 +461,9 @@ async def update_status(
             await create_delivery_task(db, order)
         except Exception:
             log.exception("delivery_task_hook_failed", order_number=order.order_number)
+
+    if not notify:
+        return order
 
     if new_status is OrderStatus.PICKED_UP:
         await _notify_customer(
@@ -434,9 +486,9 @@ async def update_status(
             template_name="kk_thankyou_rating",
             template_params=[order.order_number],
             buttons=[
-                Button("rate_good", "⭐ Bahut badhiya"),
-                Button("rate_mid", "🙂 Theek thi"),
-                Button("rate_bad", "😞 Sudhar chahiye"),
+                Button("rate_good", "⭐ Excellent"),
+                Button("rate_mid", "🙂 It was okay"),
+                Button("rate_bad", "😞 Needs work"),
             ],
         )
         return order
@@ -484,8 +536,12 @@ async def record_payment(
     method: PaymentMethod,
     recorded_by: str = "dashboard",
     note: str | None = None,
+    notify_customer: bool = True,
 ) -> Order:
     """Add a received payment; payment_status derives from the model rule.
+
+    notify_customer=False sirf booking ke advance par: wahan "order received"
+    message mein advance pehle se likha hota hai — do message nahi.
 
     Writes an append-only Payment ledger row (source of truth for reports)
     AND updates orders.amount_paid (derived cache the rest of the app reads).
@@ -548,6 +604,20 @@ async def record_payment(
         )
     except Exception:
         log.exception("payment_admin_fyi_failed", order_number=order.order_number)
+    # Grahak ko bhi — "₹300 mil gaya, baaki ₹200". Dashboard, staff collect,
+    # WhatsApp bot: paisa jahan se bhi likha jaye, grahak ko pakki raseed.
+    if notify_customer:
+        from app.services.customer_messages import balance_line, rupees
+
+        amount_s, balance = rupees(amount), balance_line(order)
+        await _notify_customer(
+            db, order,
+            message_key="payment_thanks",
+            template_name="kk_payment_received",
+            template_params=[amount_s, order.order_number, balance],
+            amount=amount_s,
+            balance_line=balance,
+        )
     _announce(order, "payment", by=recorded_by)
     return order
 
@@ -635,6 +705,15 @@ async def _notify_customer(
                 reason="opted_out_or_missing",
             )
             return
+        # Dukaan ka APNA naam — pehle .env ka SHOP_NAME jaata tha, yaani har
+        # doosri dukaan ke grahak ko "— Kwik Klin" likha message milta.
+        if "shop" not in fmt:
+            from app.models.tenant import Tenant
+
+            tenant = await db.get(Tenant, order.tenant_id) if order.tenant_id else None
+            if tenant is not None and (tenant.shop_name or "").strip():
+                fmt["shop"] = tenant.shop_name.strip()
+        fmt.setdefault("name", (customer.name or "").strip() or "there")
         text_body = get_message(message_key, order_number=order.order_number, **fmt)
         try:
             await send_message(

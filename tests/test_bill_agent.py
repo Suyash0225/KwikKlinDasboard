@@ -116,7 +116,7 @@ async def test_bill_draft_then_confirm_creates_order(monkeypatch, sent) -> None:
     assert float(order.amount_paid) == 20.0
     assert SENDER not in _PENDING
     # customer got the order_confirmed notification via the patched sender
-    assert any("mil gaya" in (c["text"] or "") for c in sent)
+    assert any("is received" in (c["text"] or "") for c in sent)
 
 
 async def test_cancel_discards_draft(monkeypatch) -> None:

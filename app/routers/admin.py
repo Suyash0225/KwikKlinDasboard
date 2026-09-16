@@ -116,11 +116,20 @@ async def dashboard_data(db: AsyncSession = Depends(get_db)) -> dict:
         )
     ).all()
 
+    # Turnaround (IMP_006) + kaam kisko (IMP_007) — har order par
+    from app.services import turnaround
+
+    tracked = await turnaround.track_many(db, [o for o, _ in active_orders])
+    staff_names = {
+        s.id: s.name for s in (await db.execute(select(Staff))).scalars().all()
+    }
+
     return {
         "counts": {
             "by_status": {s.name: c for s, c in by_status_rows},
             "active_total": sum(c for _, c in by_status_rows),
             "today_new": today_new,
+            "delayed": sum(1 for t in tracked.values() if t["delayed"]),
         },
         "active_orders": [
             {
@@ -134,6 +143,10 @@ async def dashboard_data(db: AsyncSession = Depends(get_db)) -> dict:
                 "payment_status": o.payment_status.name,
                 "expected_delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
                 "created_at": o.created_at.isoformat(),
+                "priority": o.priority,
+                "washer": staff_names.get(o.assigned_washer_id),
+                "delivery_boy": staff_names.get(o.assigned_delivery_id),
+                "tracking": {k: v for k, v in tracked[o.id].items() if k != "milestones"},
             }
             for o, cu in active_orders
         ],
@@ -581,6 +594,13 @@ async def customer_delete(
         await db.execute(
             delete(CouponRedemption).where(CouponRedemption.order_id.in_(order_ids))
         )
+        # Agent ke order-linked kaam: record rehta hai, sirf order ka link
+        # tootta hai (order delete jaisa hi niyam — orders.py)
+        from sqlalchemy import update as _update
+
+        from app.models import Task
+
+        await db.execute(_update(Task).where(Task.order_id.in_(order_ids)).values(order_id=None))
     await db.execute(delete(CouponRedemption).where(CouponRedemption.customer_id == cust.id))
     await db.execute(delete(CampaignRecipient).where(CampaignRecipient.customer_id == cust.id))
     await db.execute(delete(OpenQuestion).where(OpenQuestion.customer_id == cust.id))
@@ -619,33 +639,68 @@ class ExpenseIn(BaseModel):
 
 @router.get("/api/expenses", dependencies=[Depends(require_admin_owner)])
 async def expenses_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    from app.services import expenses as exp_svc
+
     rows = (
-        await db.execute(select(Expense).order_by(Expense.spent_on.desc()).limit(200))
+        await db.execute(
+            select(Expense).order_by(Expense.spent_on.desc(), Expense.created_at.desc()).limit(200)
+        )
     ).scalars().all()
-    return [
-        {
-            "id": str(e.id),
-            "category": e.category,
-            "amount": str(e.amount),
-            "spent_on": e.spent_on.isoformat(),
-            "description": e.description,
-        }
-        for e in rows
-    ]
+    return [exp_svc.row(e) for e in rows]
 
 
 @router.post("/api/expenses", dependencies=[Depends(require_admin_owner)], status_code=201)
 async def expense_create(body: ExpenseIn, db: AsyncSession = Depends(get_db)) -> dict:
-    exp = Expense(
-        category=body.category,
+    from app.services import expenses as exp_svc
+
+    exp = await exp_svc.record(
+        db,
+        # list wali spelling — "rent" aur "Rent" report mein do tukde na banein
+        category=await exp_svc.canonical_category(db, body.category) or body.category.strip(),
         amount=body.amount,
         spent_on=body.spent_on,
         description=body.description,
     )
-    db.add(exp)
-    await db.commit()
-    log.info("expense_recorded", category=body.category, amount=str(body.amount))
+    log.info("expense_recorded", category=exp.category, amount=str(body.amount))
     return {"id": str(exp.id)}
+
+
+class ExpenseCategoryIn(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+
+
+@router.get("/api/expense-categories", dependencies=[Depends(require_admin_owner)])
+async def expense_categories(db: AsyncSession = Depends(get_db)) -> dict:
+    from app.services import expenses as exp_svc
+
+    return {
+        "all": await exp_svc.all_categories(db),
+        "custom": await exp_svc.custom_categories(db),
+    }
+
+
+@router.post("/api/expense-categories", dependencies=[Depends(require_admin_owner)], status_code=201)
+async def expense_category_add(body: ExpenseCategoryIn, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.services import expenses as exp_svc
+
+    try:
+        name = await exp_svc.add_category(db, body.name)
+    except exp_svc.CategoryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    log.info("expense_category_added", name=name)
+    return {"name": name, "all": await exp_svc.all_categories(db)}
+
+
+@router.delete("/api/expense-categories/{name}", dependencies=[Depends(require_admin_owner)])
+async def expense_category_remove(name: str, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.services import expenses as exp_svc
+
+    try:
+        await exp_svc.remove_category(db, name)
+    except exp_svc.CategoryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    log.info("expense_category_removed", name=name)
+    return {"all": await exp_svc.all_categories(db)}
 
 
 @router.delete("/api/expenses/{expense_id}", dependencies=[Depends(require_admin_owner)])
@@ -757,15 +812,16 @@ async def rates_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
 
 @router.post("/api/rates", dependencies=[Depends(require_admin_owner)], status_code=201)
 async def rate_create(body: RateIn, db: AsyncSession = Depends(get_db)) -> dict:
-    rate = Rate(service=body.service.strip(), garment=body.garment.strip(),
-                unit=body.unit, rate=body.rate)
-    db.add(rate)
+    from app.services.rate_card import DuplicateRate, add_rate
+
     try:
-        await db.commit()
-    except Exception:
-        await db.rollback()
-        raise HTTPException(status_code=409, detail="This service + item is already on the rate card")
-    log.info("rate_created", service=body.service, garment=body.garment, rate=str(body.rate))
+        rate, revived = await add_rate(
+            db, service=body.service, garment=body.garment, unit=body.unit, rate=body.rate
+        )
+    except DuplicateRate as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    log.info("rate_created", service=rate.service, garment=rate.garment,
+             rate=str(body.rate), revived=revived)
     return {"id": str(rate.id)}
 
 
@@ -1645,7 +1701,7 @@ async def inbox_ping(body: InboxPingIn, db: AsyncSession = Depends(get_db)) -> d
     staff = (
         await db.execute(select(Staff).where(Staff.phone == to_phone))
     ).scalar_one_or_none()
-    text = "🔔 Namaste! Ek chhota sa reminder — jawab ka intezaar hai. 🙏"
+    text = "🔔 Hello! A gentle reminder — we're waiting for your reply. 🙏"
     if staff is not None:
         from app.services import tasks as task_service
 

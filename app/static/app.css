@@ -345,6 +345,13 @@ a { color: var(--brand-600); text-decoration: none; }
 .rowcard { background: var(--n0); border: 1px solid var(--n200); border-radius: 12px; padding: 13px; box-shadow: var(--shadow); }
 .card.listcard .rowcards { padding: 12px; }
 .rowcard.overdue { border-left: 3px solid var(--danger); }
+/* IMP_006: stage timer — kitni der se is stage par / hadd */
+.stagetime { display: inline-block; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink-3, #667085); white-space: nowrap; }
+.stagetime.warn { color: #b45309; }
+.stagetime.late { color: var(--danger); font-weight: 600; }
+.delaynote { background: #fef2f2; color: #b91c1c; border-radius: 8px; padding: 6px 10px; font-size: 13px; margin: 4px 0 6px; overflow-wrap: anywhere; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .delaynote { background: #3b1219; color: #fca5a5; } }
+:root[data-theme="dark"] .delaynote { background: #3b1219; color: #fca5a5; }
 .rowcard .r1 { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
 .rowcard .r1 b { font-size: 14px; }
 .rowcard .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 2px 0; color: var(--n600); }
@@ -644,6 +651,9 @@ a { color: var(--brand-600); text-decoration: none; }
 
 /* ---------- new bill ---------- */
 .billgrid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+/* grid item ka min-width "auto" hota hai — scroll hone wali chips ki row
+   card ko apni poori lambai tak khinch deti thi aur card screen se bahar */
+.billgrid > * { min-width: 0; }
 /* Item rows: stacked mini-cards until 1280px — the Service/Item selects
    get the FULL card width, so "Dry Clean" / "Kurta pajama" never truncate.
    From 1280px: one aligned 6-column row under the .lineshead labels. */
@@ -661,6 +671,11 @@ a { color: var(--brand-600); text-decoration: none; }
 .lineitem .lf-qty { grid-area: qty; }
 .lineitem .lf-rate { grid-area: rate; }
 .lineitem .lf-amt { grid-area: amt; }
+/* KG line ke kapde (sirf ginti) — poori chaudai, har layout mein apni row */
+.lineitem .lf-pieces { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.lineitem .lf-pieces .muted { font-size: .8125rem; }
+.pc-row { display: grid; grid-template-columns: 1fr 84px 40px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.pc-row input { width: 100%; }
 .lineitem .ll {
   display: block; font-size: .6875rem; font-weight: 600;
   color: var(--n500); margin-bottom: 3px;
@@ -691,6 +706,106 @@ a { color: var(--brand-600); text-decoration: none; }
 }
 .sumrow.due .money { font-size: inherit; font-weight: inherit; color: inherit; }
 /* Save bill: sticky above the tab bar on phones — thumb-zone, no hunting */
+/* ---------- new bill on a phone: tap to add ----------
+   Below 768px the row editor (two selects per item) is replaced by chips:
+   pick a service, tap an item. Total + Save ride above the tab bar. */
+.nb-quick { margin-top: 10px; }
+.nbq-svcs { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 10px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.nbq-svcs::-webkit-scrollbar { display: none; }
+.nbq-svc {
+  flex: 0 0 auto; border: 1.5px solid var(--n200); background: var(--n0); color: var(--n700);
+  border-radius: 999px; padding: 9px 14px; font: inherit; font-size: .875rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.nbq-svc.on { background: var(--n900); border-color: var(--n900); color: #fff; }
+.nbq-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.nbq-item {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 58px;
+  border: 1.5px solid var(--n200); background: var(--n0); border-radius: 12px; padding: 9px 10px;
+  font: inherit; text-align: left; cursor: pointer; color: var(--n900);
+}
+.nbq-item b { font-size: .875rem; font-weight: 600; line-height: 1.2; overflow-wrap: anywhere; }
+.nbq-item small { color: var(--n500); font-size: .75rem; }
+.nbq-item:active { transform: scale(.97); }
+.nbq-item.in { border-color: var(--brand, #c2410c); background: var(--brand-50, #fff7ed); }
+.nbq-item .nbq-n {
+  position: absolute; top: -7px; right: -7px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px;
+  background: var(--brand, #c2410c); color: #fff; font-size: .75rem; font-weight: 700; display: grid; place-items: center;
+}
+.nbq-empty { grid-column: 1 / -1; color: var(--n500); font-size: .875rem; }
+.nb-cart { margin-top: 14px; border-top: 1px solid var(--n200); }
+.nb-cart:empty { display: none; }
+.nbc-row { padding: 10px 0; border-bottom: 1px solid var(--n100, #f2f4f7); }
+.nbc-top { display: flex; align-items: baseline; gap: 8px; }
+.nbc-name { flex: 1 1 auto; min-width: 0; font-size: .9375rem; font-weight: 600; overflow-wrap: anywhere; }
+.nbc-name small { color: var(--n500); font-weight: 400; font-size: .75rem; }
+.nbc-top .money { font-weight: 700; white-space: nowrap; }
+.nbc-del { border: 0; background: none; color: var(--n500); font-size: 1rem; min-width: 32px; min-height: 32px; cursor: pointer; }
+.nbc-ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.nbc-step { display: flex; align-items: stretch; border: 1.5px solid var(--n200); border-radius: 10px; overflow: hidden; }
+.nbc-step button { border: 0; background: var(--n50); width: 40px; font-size: 1.125rem; cursor: pointer; }
+.nbc-step input { width: 52px; border: 0; border-radius: 0; text-align: center; min-height: 40px; padding: 0; }
+.nbc-kg { display: flex; align-items: center; gap: 6px; }
+.nbc-kg input { width: 78px; min-height: 40px; text-align: center; }
+.nbc-rate { display: flex; align-items: center; gap: 4px; color: var(--n500); font-size: .8125rem; }
+.nbc-rate input { width: 72px; min-height: 40px; }
+.nbc-pcs { border: 0; background: none; color: var(--brand, #c2410c); font: inherit; font-size: .8125rem; font-weight: 600; padding: 4px 0; cursor: pointer; }
+.nbc-pcs small { display: block; color: var(--n500); font-weight: 400; }
+/* delivery popup (partial) */
+.dl-list { margin-top: 10px; border: 1px solid var(--n200); border-radius: 12px; max-height: 50vh; overflow-y: auto; }
+.dl-group { padding: 8px 12px 4px; font-size: .72rem; font-weight: 700; color: var(--n500); background: var(--n50); text-transform: uppercase; letter-spacing: .03em; }
+.dl-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--n100, #f2f4f7); min-height: 52px; }
+.dl-row:first-child { border-top: 0; }
+.dl-name { flex: 1 1 auto; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.dl-name small { color: var(--n500); font-weight: 400; font-size: .75rem; }
+.dl-row input[type=checkbox] { width: 24px; height: 24px; accent-color: var(--brand); }
+.nb-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.nb-pickbtn {
+  border: 1.5px solid var(--n200); background: var(--n0); color: var(--n700); border-radius: 12px;
+  min-height: 46px; padding: 8px 10px; font: inherit; font-size: .875rem; font-weight: 600; cursor: pointer;
+}
+.nb-pickbtn.on { background: var(--n900); border-color: var(--n900); color: #fff; }
+#nb-pickup-box { margin-top: 10px; }
+/* ⚡ Urgent — ek bada toggle; on par narangi, charge ka khaana neeche */
+.nb-urgbtn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-height: 48px; padding: 10px 14px; border: 1.5px dashed var(--n300, #d0d5dd); border-radius: 12px;
+  background: var(--n0); color: var(--n800, #1d2939); font: inherit; font-weight: 700; cursor: pointer; text-align: left;
+}
+.nb-urgbtn small { font-weight: 500; color: var(--n500); font-size: .78rem; }
+.nb-urgbtn.on { border-style: solid; border-color: var(--brand); background: var(--brand-soft, #fff7ed); color: var(--brand-strong, #c2410c); }
+.nb-urgbtn.on small { color: var(--brand-strong, #c2410c); }
+#nb-urg-box { margin-top: 10px; }
+.nb-urg-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.nb-urg-row input { flex: 1 1 110px; max-width: 160px; }
+.nb-more { position: relative; margin: 6px 0 4px; border: 1px solid var(--n200); border-radius: 12px; padding: 0 12px; }
+.nb-more > summary { list-style: none; cursor: pointer; padding: 12px 22px 12px 0; font-size: .875rem; font-weight: 600; color: var(--n700); display: flex; flex-direction: column; gap: 2px; }
+.nb-more > summary::-webkit-details-marker { display: none; }
+.nb-more > summary::after { content: "▾"; position: absolute; right: 12px; top: 12px; color: var(--n500); }
+.nb-more[open] > summary::after { content: "▴"; }
+.nb-more > summary small { color: var(--n500); font-weight: 400; font-size: .75rem; }
+.nb-more[open] { padding-bottom: 12px; }
+.nb-more[open] > summary { border-bottom: 1px solid var(--n100, #f2f4f7); margin-bottom: 6px; }
+.nb-bar {
+  position: fixed; left: 12px; right: 12px; z-index: 40;
+  bottom: calc(var(--tabbar-h) + 8px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 16px;
+  background: var(--n900); color: #fff; border-radius: 16px; box-shadow: 0 10px 30px rgba(16,24,40,.28);
+}
+.nb-bar-sum { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.nb-bar-sum b { font-size: 1.25rem; line-height: 1.1; }
+.nb-bar-sum span { font-size: .75rem; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nb-bar .btn { min-height: 46px; padding-inline: 20px; }
+@media (max-width: 767.98px) {
+  .nb-rows, #sec-newbill .savebar { display: none !important; }
+  /* the fixed bar must not cover the last fields */
+  #sec-newbill { padding-bottom: 84px; }
+  #sec-newbill .pagehead p { display: none; }
+}
+@media (min-width: 768px) {
+  .nb-quick, .nb-bar { display: none !important; }
+  .nb-more { border: 0; padding: 0; }
+  .nb-more > summary { display: none; }
+}
 .savebar { position: sticky; bottom: calc(var(--tabbar-h) + 12px + env(safe-area-inset-bottom)); z-index: 5; margin-top: 10px; }
 .savebar .btn { width: 100%; min-height: 48px; box-shadow: 0 8px 22px rgba(18,183,106,.35); }
 
@@ -1332,11 +1447,21 @@ select {
 
 /* ---------- print (thermal receipt) ---------- */
 #receipt { display: none; }
+/* print preview: printer jaisa hi — monospace, barabar chaudai, seedhe khaane */
+.receipt-preview { font-family: ui-monospace, "Courier New", monospace; font-size: 12px; line-height: 1.35; max-height: 45vh; overflow: auto; white-space: pre; }
 @media print {
-  body * { visibility: hidden; }
-  #receipt, #receipt * { visibility: visible; }
-  #receipt { display: block; position: absolute; left: 0; top: 0; width: 80mm; font-size: 11px; font-family: monospace; padding: 4mm; }
-  .sidebar, .tabbar, .topbar { display: none !important; }
+  @page { margin: 0; }
+  /* visibility:hidden kaafi nahi tha — kuch buttons phir bhi chhap jaate
+     the aur page ki poori lambai kagaz kha jaati. Receipt ke siwa sab gayab. */
+  body > *:not(#receipt) { display: none !important; }
+  html, body { background: #fff !important; min-height: 0 !important; height: auto !important; }
+  /* text server par 32/48 akshar par kata hua aata hai — font utna hi chauda
+     ki ek line kagaz mein poori aaye */
+  /* Courier = 0.6em/akshar: 7.6pt par 32 akshar ~51mm (58mm kagaz),
+     48 akshar ~77mm (80mm kagaz) */
+  #receipt { display: block; position: static; margin: 0; padding: 1mm; white-space: pre; font-family: "Courier New", monospace; color: #000; font-size: 7.6pt; line-height: 1.25; }
+  #receipt.paper-58 { width: 58mm; }
+  #receipt.paper-80 { width: 80mm; }
 }
 
 /* ==========================================================================

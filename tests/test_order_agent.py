@@ -35,7 +35,7 @@ async def test_picked_up_sets_sla_and_notifies(sent) -> None:
         await update_status(db, order, OrderStatus.PICKED_UP, changed_by="Superman")
     # heavy item (blanket) -> 7 din from pickup day
     assert order.expected_delivery == date.today() + timedelta(days=7)
-    assert any("pickup ho gaye" in (c["text"] or "") for c in sent)
+    assert any("have been picked up" in (c["text"] or "") for c in sent)
 
 
 async def test_done_command_by_delivery_boy(sent) -> None:

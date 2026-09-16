@@ -72,8 +72,13 @@ def start() -> None:
     _scheduler.add_job(
         _durability_tick, CronTrigger(minute="*/5", timezone=IST), id="durability"
     )
+    # Google reviews: 6 ghante mein ek baar kaafi — reviews ghanton mein nahi
+    # badalte, aur Business Profile API ka quota chhota hai.
+    _scheduler.add_job(
+        _gbp_reviews_tick, CronTrigger(hour="*/6", minute=20, timezone=IST), id="gbp-reviews"
+    )
     _scheduler.start()
-    log.info("scheduler_started", jobs=["hourly", "nightly", "tunnel-guard", "durability"])
+    log.info("scheduler_started", jobs=["hourly", "nightly", "tunnel-guard", "durability", "gbp-reviews"])
 
 
 def shutdown() -> None:
@@ -168,6 +173,26 @@ async def _for_each_tenant(job_name: str, fn) -> None:
             log.exception("tenant_job_failed", job=job_name, tenant=slug)
 
 
+async def _gbp_reviews_tick() -> None:
+    """Jin dukaanon ne Google jodi hai, unke reviews taaza karo."""
+    from app.services import google_business as gbp
+
+    if not gbp.enabled():
+        return
+
+    async def one(_now_ist: datetime) -> None:
+        async with async_session_factory() as db:
+            conn = await gbp.get_connection(db)
+            if not (conn.get("refresh_token") and conn.get("location")):
+                return
+            try:
+                await gbp.sync(db)
+            except gbp.GBPError as exc:
+                log.warning("gbp_sync_failed", error=str(exc))
+
+    await _for_each_tenant("gbp-reviews", one)
+
+
 async def _hourly_tick() -> None:
     """One entry point, so a bad hour never skips the others silently."""
     await _for_each_tenant("hourly", _hourly_for_tenant)
@@ -242,6 +267,18 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
         await run_task_followups()
     except Exception:
         log.exception("task_followups_failed")
+    # Ops agent: hataye gaye/inactive staff ke khule kaam doosre ko; phir
+    # stage/delivery-date se aage nikle orders ka ek alert manager ko
+    try:
+        from app.services import ops_agent, turnaround
+
+        async with async_session_factory() as db:
+            await ops_agent.rebalance(db)
+        if 8 <= now_ist.hour <= 21:
+            async with async_session_factory() as db:
+                await turnaround.run_delay_alerts(db)
+    except Exception:
+        log.exception("ops_agent_hourly_failed")
     # live customer conversations that went quiet: one warm, useful nudge
     # while their window is open (engage.py decides who is actually due)
     try:
@@ -788,6 +825,8 @@ async def run_delivery_nudges() -> int:
 
 async def run_payment_reminders() -> int:
     """Polite at 3 days due, firmer at 15+ (owner's FOLLOWUP_DAYS) + admin flag."""
+    from app.services import bill_link
+
     now_ist = datetime.now(IST)
     if _in_quiet_hours(now_ist):
         return 0
@@ -833,7 +872,7 @@ async def run_payment_reminders() -> int:
                     # chalna chahiye ki kisne yaad dilaya.
                     text=get_message(
                         kind, lang="en", order_number=o.order_number, amount=f"{due}",
-                    ),
+                    ) + bill_link.message_line(await bill_link.url_for(db, o)),
                 )
                 sends += 1
             except SendError:

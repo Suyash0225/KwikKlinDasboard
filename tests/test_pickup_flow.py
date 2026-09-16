@@ -46,6 +46,9 @@ async def boy(sent):
         await app_settings.set_value(s, "default_delivery_phone", prev or "")
         await s.execute(delete(Task).where(Task.assigned_staff_id == sid))
         await s.execute(delete(Conversation).where(Conversation.staff_id == sid))
+        # ops agent order par bhi boy laga deta hai — pehle wo chhodo
+        for col in ("assigned_delivery_id", "assigned_washer_id"):
+            await s.execute(sqltext(f"UPDATE orders SET {col} = NULL WHERE {col} = :i"), {"i": str(sid)})
         await s.execute(delete(Staff).where(Staff.id == sid))
         await s.commit()
     await purge_phones(TEST_CUSTOMER_PHONE)
@@ -176,7 +179,7 @@ async def test_unpriced_order_skips_the_rupee_dashes(sent) -> None:
             )
         body = next(c["text"] for c in sent if c["to"] == TEST_CUSTOMER_PHONE)
         assert "₹—" not in body
-        assert "bill bana ke bhej denge" in body
+        assert "send the bill once the clothes reach us" in body
     finally:
         await purge_phones(TEST_CUSTOMER_PHONE)
 
@@ -246,6 +249,10 @@ async def test_delivery_ask_reaches_ajit_even_with_a_closed_window(
             await db.execute(sqltext(
                 "UPDATE tasks SET assigned_staff_id = NULL WHERE assigned_staff_id IN "
                 "(SELECT id FROM staff WHERE phone = :p)"), {"p": phone})
+            for col in ("assigned_delivery_id", "assigned_washer_id"):
+                await db.execute(sqltext(
+                    f"UPDATE orders SET {col} = NULL WHERE {col} IN "
+                    "(SELECT id FROM staff WHERE phone = :p)"), {"p": phone})
             await db.execute(sqltext("DELETE FROM staff WHERE phone = :p"), {"p": phone})
             await db.commit()
         from tests.conftest import purge_phones
@@ -290,6 +297,10 @@ async def test_delivery_ask_asks_in_his_own_words(monkeypatch, sent) -> None:
             await db.execute(sqltext(
                 "UPDATE tasks SET assigned_staff_id = NULL WHERE assigned_staff_id IN "
                 "(SELECT id FROM staff WHERE phone = :p)"), {"p": phone})
+            for col in ("assigned_delivery_id", "assigned_washer_id"):
+                await db.execute(sqltext(
+                    f"UPDATE orders SET {col} = NULL WHERE {col} IN "
+                    "(SELECT id FROM staff WHERE phone = :p)"), {"p": phone})
             await db.execute(sqltext("DELETE FROM staff WHERE phone = :p"), {"p": phone})
             await db.commit()
         from tests.conftest import purge_phones

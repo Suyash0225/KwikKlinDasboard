@@ -66,13 +66,13 @@ async def test_milestones_notify_but_wash_stages_silent(sent) -> None:
 
         await update_status(db, order, S.READY, changed_by="test")
         mine = _to_customer(sent)
-        assert len(mine) == 1 and "taiyar" in mine[0]["text"]
+        assert len(mine) == 1 and "ready" in mine[0]["text"]
 
         await update_status(db, order, S.OUT_FOR_DELIVERY, changed_by="test")
         await update_status(db, order, S.DELIVERED, changed_by="test")
         mine = _to_customer(sent)
         assert len(mine) == 3
-        assert "Dhanyawad" in mine[-1]["text"]
+        assert "Thank you" in mine[-1]["text"]
 
 
 async def test_create_notification_has_bill_details(sent) -> None:
@@ -89,6 +89,129 @@ async def test_create_notification_has_bill_details(sent) -> None:
     assert "350" in text and "100" in text and "250" in text  # total/advance/due
 
 
+async def test_create_notification_shows_the_discount(sent) -> None:
+    """BUG_002: grahak ko sirf ghata hua total jaata tha, chhoot ka zikr nahi."""
+    async with async_session_factory() as db:
+        await create_order(
+            db, customer_phone=PHONE, items=ITEMS, created_by="test",
+            total_amount=Decimal("450"), discount_amount=Decimal("50"),
+        )
+    text = _to_customer(sent)[0]["text"]
+    assert "450" in text and "₹50 discount" in text
+
+
+async def test_no_discount_line_when_there_is_no_discount(sent) -> None:
+    async with async_session_factory() as db:
+        await create_order(
+            db, customer_phone=PHONE, items=ITEMS, created_by="test",
+            total_amount=Decimal("350"),
+        )
+    assert "discount" not in _to_customer(sent)[0]["text"]
+
+
+async def _make_coupon(code: str) -> None:
+    from app.models import Coupon
+
+    async with async_session_factory() as db:
+        db.add(Coupon(code=code, discount_type="percent", value=Decimal("10")))
+        await db.commit()
+
+
+async def _drop_coupon(code: str) -> None:
+    async with async_session_factory() as s:
+        await s.execute(sqltext("DELETE FROM coupon_redemptions WHERE coupon_code = :c"), {"c": code})
+        await s.execute(sqltext("DELETE FROM coupons WHERE code = :c"), {"c": code})
+        await s.commit()
+
+
+async def test_coupon_discount_reaches_the_confirmation_message(sent) -> None:
+    """Coupon pehle message jaane KE BAAD lagta tha — grahak ko bina chhoot
+    ka total milta tha jabki bill mein chhoot lagi hoti thi."""
+    await _make_coupon("TESTBILL10")
+    try:
+        async with async_session_factory() as db:
+            order = await create_order(
+                db, customer_phone=PHONE, items=ITEMS, created_by="test",
+                total_amount=Decimal("400"), coupon_code="testbill10",
+            )
+            assert order.total_amount == Decimal("360.00")
+            assert order.discount_amount == Decimal("40.00")
+            used = (await db.execute(sqltext(
+                "SELECT count(*) FROM coupon_redemptions WHERE order_id = :o"
+            ), {"o": order.id})).scalar_one()
+            assert used == 1
+        text = _to_customer(sent)[0]["text"]
+        assert "360" in text and "₹40.00 discount" in text
+    finally:
+        await _drop_coupon("TESTBILL10")
+
+
+async def test_bad_coupon_creates_no_bill(sent) -> None:
+    """Pehle galat coupon par 400 aata tha par bill ban chuka hota tha."""
+    from app.services.order_service import OrderError
+
+    async with async_session_factory() as db:
+        with pytest.raises(OrderError, match="coupon"):
+            await create_order(
+                db, customer_phone=PHONE, items=ITEMS, created_by="test",
+                total_amount=Decimal("400"), coupon_code="NOSUCHCOUPON",
+            )
+        n = (await db.execute(sqltext(
+            "SELECT count(*) FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.phone = :p"
+        ), {"p": PHONE})).scalar_one()
+    assert n == 0
+    assert _to_customer(sent) == []
+
+
+async def test_payment_tells_the_customer_but_booking_advance_does_not_double(client, sent) -> None:
+    """Paisa aaya to grahak ko raseed. Booking ka advance "order received"
+    mein pehle se hai — us par doosra message nahi."""
+    from app.config import settings
+
+    auth = {"X-API-Key": settings.ADMIN_API_KEY}
+    r = await client.post("/orders", headers=auth, json={
+        "customer_phone": PHONE, "customer_name": "Pooja", "total_amount": "500",
+        "advance_amount": "100", "items": [{"type": "Saree", "qty": 1}],
+    })
+    assert r.status_code == 201, r.text
+    mine = _to_customer(sent)
+    assert len(mine) == 1 and "is received" in mine[0]["text"]   # sirf booking wala
+
+    sent.clear()
+    number = r.json()["order_number"]
+    r = await client.post(f"/orders/{number}/payment", headers=auth, json={"amount": "250", "method": "UPI"})
+    assert r.status_code == 200, r.text
+    mine = _to_customer(sent)
+    assert len(mine) == 1
+    assert "₹250" in mine[0]["text"] and "Balance due: ₹150" in mine[0]["text"] and "Pooja" in mine[0]["text"]
+
+    sent.clear()
+    await client.post(f"/orders/{number}/payment", headers=auth, json={"amount": "150", "method": "CASH"})
+    assert "fully paid" in _to_customer(sent)[0]["text"]
+
+
+async def test_partial_delivery_tells_what_came_and_what_is_pending(sent) -> None:
+    from app.services import delivery
+
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=PHONE, created_by="test",
+            items=[{"type": "Shirt", "qty": 12}],
+        )
+        await update_status(db, order, S.READY, changed_by="test")
+        sent.clear()
+        await delivery.deliver(db, order, [{"line": 0, "qty": 8}], by="test")
+        mine = _to_customer(sent)
+        # ek hi message — "out for delivery" nahi, saaf "8 diye, 4 baaki"
+        assert len(mine) == 1
+        assert "delivered 8 clothes" in mine[0]["text"] and "4 clothes are still with us" in mine[0]["text"]
+
+        sent.clear()
+        await delivery.deliver(db, order, None, by="test")
+        mine = _to_customer(sent)
+        assert len(mine) == 1 and "has been delivered" in mine[0]["text"]   # poora: thank you + rating
+
+
 async def test_delivered_sends_rating_buttons(sent) -> None:
     from app.models import OrderStatus as S2
 
@@ -98,7 +221,7 @@ async def test_delivered_sends_rating_buttons(sent) -> None:
         sent.clear()
         await update_status(db, order, S2.DELIVERED, changed_by="test")
     assert len(sent) == 1
-    assert "Dhanyawad" in sent[0]["text"]
+    assert "Thank you" in sent[0]["text"]
     btns = sent[0].get("buttons") or []
     assert len(btns) == 3 and btns[0].id == "rate_good"
 
@@ -120,8 +243,8 @@ async def test_rating_button_bad_pauses_and_alerts(client, sent) -> None:
     r = await client.post("/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)})
     assert r.status_code == 200
     texts = [c["text"] or "" for c in sent]
-    assert any("Maaf" in t for t in texts)          # apology to customer
-    assert any("KHARAB RATING" in t for t in texts)  # owner alerted
+    assert any("sorry" in t for t in texts)          # apology to customer (English)
+    assert any("KHARAB RATING" in t for t in texts)  # owner alert stays Hinglish
     async with async_session_factory() as s:
         from sqlalchemy import select as _sel
 
@@ -193,7 +316,7 @@ async def test_single_active_order_gets_status_reply(client, sent) -> None:
     assert r.status_code == 200
     assert len(sent) == 1
     assert order.order_number in sent[0]["text"]
-    assert status_label(S.IN_WASH) in sent[0]["text"]
+    assert status_label(S.IN_WASH, "en") in sent[0]["text"]
 
 
 async def test_order_number_in_message_wins(client, sent) -> None:

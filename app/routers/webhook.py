@@ -37,7 +37,7 @@ from app.database import get_db
 from app.models import Conversation, Customer, Direction, Staff, WebhookEvent
 from app.services.ai_agent import build_ai_reply
 from app.services.bill_agent import handle_staff_message
-from app.services.messages import get_message, status_label
+from app.services.messages import CUSTOMER_LANG, get_message, status_label
 from app.services.order_service import (
     OrderNotFoundError,
     get_active_orders_for_phone,
@@ -70,6 +70,11 @@ _RATING_MAP = {
     "rate_good": "good", "⭐ bahut badhiya": "good", "bahut badhiya": "good",
     "rate_mid": "mid", "🙂 theek thi": "mid", "theek thi": "mid",
     "rate_bad": "bad", "😞 sudhar chahiye": "bad", "sudhar chahiye": "bad",
+    # English buttons (16 Sep 2026) — purane Hinglish upar bane rahe, kyunki
+    # Meta par approved template ke quick-reply abhi wahi text bhejte hain
+    "⭐ excellent": "good", "excellent": "good",
+    "🙂 it was okay": "mid", "it was okay": "mid",
+    "😞 needs work": "bad", "needs work": "bad",
 }
 
 
@@ -89,17 +94,21 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
     if kind == "good":
         # Google review link ONLY on happy ratings (owner's spec). Two
         # listings — rotate by phone so both profiles grow.
-        from app.services import app_settings
+        from app.models.tenant import Tenant
+        from app.services import customer_messages, tenant_context
 
-        l1 = (await app_settings.get(db, "google_review_link") or "").strip()
-        l2 = (await app_settings.get(db, "google_review_link_2") or "").strip()
-        links = [l for l in (l1, l2) if l]
+        tid = tenant_context.effective_tenant_id()
+        tenant = await db.get(Tenant, tid) if tid else None
+        links = await customer_messages.review_links(db)
         if links:
-            link = links[sum(ord(c) for c in phone) % len(links)]
+            # Choti link (/r/<slug>) public URL pata ho to — wo khud dono
+            # listing mein baari-baari bhejti hai. Warna seedhi Google link.
+            short = await customer_messages.short_review_link(db, tenant)
+            link = short if short and short not in links else links[sum(ord(c) for c in phone) % len(links)]
             reply_text += (
-                "\n\nAap jaise pyare customers ki wajah se hi hum chal rahe hain 🥰 "
-                "Bas 30 second — yahan tap karke Google par 2 shabd likh dijiye, "
-                "aapka ek review hamari dukaan ke liye diwali ka bonus jaisa hai! 🎁\n"
+                "\n\nCustomers like you keep our shop going 🥰 "
+                "It takes just 30 seconds — tap here and leave us a quick Google review. "
+                "It means the world to a small shop like ours! 🎁\n"
                 f"{link}"
             )
     try:
@@ -885,13 +894,13 @@ async def _build_customer_reply(db: AsyncSession, customer: Customer, text: str)
         return _status_reply(active[0])
     if len(active) > 1:
         lines = [get_message("orders_list_header", count=str(len(active)))]
-        lines += [f"{o.order_number} — {status_label(o.status)}" for o in active]
+        lines += [f"{o.order_number} — {status_label(o.status, CUSTOMER_LANG)}" for o in active]
         return "\n".join(lines)
     return get_message("ack_received")
 
 
 def _status_reply(order) -> str:
-    label = status_label(order.status)
+    label = status_label(order.status, CUSTOMER_LANG)
     if order.expected_delivery:
         return get_message(
             "status_reply_with_date",

@@ -16,7 +16,14 @@ from app.models import OrderStatus
 
 log = structlog.get_logger()
 
+# Do bhashayein, do sunne wale:
+#   - staff / owner ka WhatsApp bot (bill draft, relay, task, standup) —
+#     Hinglish. Washerman aur delivery wale isi mein kaam karte hain.
+#   - grahak ko jaane wale saare messages — English (owner ka faisla, 16 Sep
+#     2026). "hi" copy catalogue mein bani rehti hai; wapas chahiye to bas
+#     CUSTOMER_LANG badlo.
 DEFAULT_LANG = "hi"
+CUSTOMER_LANG = "en"
 
 MESSAGES: dict[str, dict[str, str]] = {
     # --- generic ---
@@ -45,8 +52,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nWe'll send the bill once the clothes reach us.\nDelivery: {date}\n— {shop}",
     },
     "order_confirmed_bill": {
-        "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Baaki: ₹{due}\nDelivery: {date}\n— {shop}",
-        "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Due: ₹{due}\nDelivery: {date}\n— {shop}",
+        "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Baaki: ₹{due}\nDelivery: {date}{bill_line}\n— {shop}",
+        "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Due: ₹{due}\nDelivery: {date}{bill_line}\n— {shop}",
     },
     # --- lead follow-up ladder (Marketing Agent spec) ---
     "lead_day1": {
@@ -272,6 +279,26 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste! Aapke order {order_number} ka ₹{amount} baaki hai. Jab suvidha ho, de dijiyega 🙏 — {shop}",
         "en": "Hello! ₹{amount} is pending for your order {order_number}. Please pay at your convenience 🙏 — {shop}",
     },
+    # --- haath se bheje jaane wale (bill menu -> 💬 Message) ---
+    # {balance_line} server banata hai: "Poora payment ho gaya ✅" ya
+    # "Baaki: ₹200". {review_link} dukaan ki apni choti link (/r/<slug>).
+    "payment_thanks": {
+        "hi": "Namaste {name} 🙏\nAapka ₹{amount} ka payment mil gaya — order {order_number}. Bahut dhanyawad!\n{balance_line}\n— {shop}",
+        "en": "Hello {name} 🙏\nWe have received your payment of ₹{amount} for order {order_number}. Thank you!\n{balance_line}\n— {shop}",
+    },
+    # Thodi delivery — baaki kapde abhi dukaan par. Apne aap jaata hai.
+    "partial_delivery": {
+        "hi": "Namaste {name} 🙏\nOrder {order_number} ke {given} kapde aaj de diye gaye ✅\n{pending} kapde abhi hamare paas hain — jald hi pahuncha denge.\n— {shop}",
+        "en": "Hello {name} 🙏\nWe delivered {given} clothes from order {order_number} today ✅\n{pending} clothes are still with us — we will bring them to you soon.\n— {shop}",
+    },
+    "service_thanks": {
+        "hi": "Namaste {name} 🙏\n{shop} ko apne kapde saunpne ke liye dil se dhanyawad! Ummeed hai order {order_number} aapko pasand aaya ✨\nAgli baar bas WhatsApp kar dijiye — pickup ghar se ho jayega 🧺\n— {shop}",
+        "en": "Hello {name} 🙏\nThank you for trusting {shop} with your clothes! We hope you loved order {order_number} ✨\nNext time just WhatsApp us — we will pick up from your home 🧺\n— {shop}",
+    },
+    "review_request": {
+        "hi": "Namaste {name} 🙏\nUmmeed hai {shop} ki seva aapko achhi lagi. Agar haan, to Google par bas 1 minute ka review dekar hamari madad kijiye ⭐⭐⭐⭐⭐\n👉 {review_link}\nAapka ek review hamare liye bahut keemti hai. Dhanyawad!\n— {shop}",
+        "en": "Hello {name} 🙏\nWe hope you liked {shop}'s service. If you did, please help us with a 1-minute Google review ⭐⭐⭐⭐⭐\n👉 {review_link}\nYour review means a lot to us. Thank you!\n— {shop}",
+    },
     "payment_reminder_firm": {
         "hi": "Namaste, aapke order {order_number} ka ₹{amount} kaafi dino se baaki hai. Kripya jald bhugtaan karein — cash/UPI dono chalega. Dhanyawad 🙏 — {shop}",
         "en": "Hello, ₹{amount} for order {order_number} has been pending for a while. Please clear it soon — cash or UPI. Thank you 🙏 — {shop}",
@@ -385,6 +412,7 @@ EDITABLE_KEYS = [
     "payment_reminder_firm", "ack_received", "complaint_ack",
     "escalated_ack", "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
     "stop_confirmed", "start_confirmed",
+    "payment_thanks", "service_thanks", "review_request", "partial_delivery",
 ]
 
 
@@ -419,18 +447,41 @@ def get_override(key: str) -> str | None:
     return _OVERRIDES.get(key)
 
 
-def get_message(key: str, lang: str = DEFAULT_LANG, **fmt: str) -> str:
-    """Return the string for `key` in `lang`, formatted.
+# Jo keys GRAHAK ko jaati hain. Nayi customer-facing key banao to yahan jodo,
+# warna wo staff ki bhasha (Hinglish) mein chali jayegi.
+CUSTOMER_KEYS = frozenset({
+    "ack_received", "error_fallback",
+    "order_confirmed", "order_confirmed_with_date", "order_confirmed_no_price",
+    "order_confirmed_bill", "lead_day1", "lead_day3", "lead_day7",
+    "pickup_done", "pickup_confirmed_customer", "thankyou_rating",
+    "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
+    "order_ready", "order_out_for_delivery", "order_delivered", "delay_notice",
+    "status_reply", "status_reply_with_date", "orders_list_header",
+    "order_not_found", "complaint_ack", "escalated_ack",
+    "payment_reminder", "payment_reminder_firm",
+    "payment_thanks", "service_thanks", "review_request", "partial_delivery",
+    "start_confirmed", "stop_confirmed", "relay_message_customer",
+})
 
-    Owner overrides (any language) win over the built-in copy. {shop} is
-    always available. Raises KeyError for an unknown key — that is a
-    programming error we want to hear about loudly.
+
+def lang_for(key: str) -> str:
+    return CUSTOMER_LANG if key in CUSTOMER_KEYS else DEFAULT_LANG
+
+
+def get_message(key: str, lang: str | None = None, **fmt: str) -> str:
+    """Return the string for `key`, formatted.
+
+    lang na diya ho to key se tay hota hai: grahak wali keys CUSTOMER_LANG,
+    baaki (staff/owner) DEFAULT_LANG. Owner overrides (any language) win
+    over the built-in copy. {shop} is always available. Raises KeyError for
+    an unknown key — that is a programming error we want to hear about loudly.
     """
     try:
         by_lang = MESSAGES[key]
     except KeyError:
         log.error("unknown_message_key", key=key)
         raise
+    lang = lang or lang_for(key)
     text = _OVERRIDES.get(key) or by_lang.get(lang) or by_lang.get(DEFAULT_LANG) or by_lang["en"]
     fmt.setdefault("shop", settings.SHOP_NAME)
     return text.format(**fmt)

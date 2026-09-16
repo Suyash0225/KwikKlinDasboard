@@ -97,6 +97,9 @@ DEFAULTS: dict[str, Any] = {
     "ig_user_id": "",                 # Instagram Business user id (empty = off)
     "ig_access_token": "",            # token with instagram_content_publish
     "public_base_url": "",            # current tunnel URL (IG fetches images from here)
+    # Pichhli Google Business posts [{date, text}] — AI inhe dohraata nahi
+    # (Google repeat text ko spam maanta hai). Aakhri 30 rakhe jaate hain.
+    "google_post_history": [],
     # owner-edited customer message formats {message_key: text}
     "message_overrides": {},
     # business profile (Settings -> Business Profile & Invoices)
@@ -110,17 +113,61 @@ DEFAULTS: dict[str, Any] = {
     # "Kwik Klin" likha tha, yaani koi bhi nayi dukaan sign-up karti
     # aur uske bill ke neeche kisi aur ka naam chhapta.
     "invoice_footer": "Thank you for your business! 🙏",
+    # Bill ke neeche ki sharten — ek line, ek shart. Laundry ka aam chalan
+    # (check at delivery, colour/shrink, jeb khali, 10x muavza, 30 din).
+    # Owner Settings se badal sakta hai; khali = koi shart nahi chhapti.
+    # Chhoti rakhi hain jaan-boojh kar: 58mm kagaz par har shabd kagaz hai.
+    "invoice_terms": (
+        "Check clothes at delivery. Complaints within 24 hours.\n"
+        "Not responsible for colour bleed, shrinkage or damage to weak/delicate fabric, buttons or work.\n"
+        "Empty all pockets. Not responsible for items left inside.\n"
+        "Compensation is limited to 10x the service charge of the item.\n"
+        "Clothes not collected in 30 days are not our responsibility.\n"
+        "Please bring this bill at collection."
+    ),
+    # Chhote Bluetooth/thermal printer ki chaudai — 58mm (32 akshar) ya 80mm (48)
+    "receipt_paper_mm": 58,
     "upi_vpa": "",                    # scan-to-pay on bills when set
     "upi_payee": "",
     "gst_percent": 18,
     "gst_default_on": False,          # New Bill GST checkbox default
     "default_delivery_phone": "",
+    # Ops agent (services/ops_agent.py): bill bante hi washerman/delivery boy
+    # chunkar order-linked kaam banata hai, sabse kam load wale ko
+    "agent_auto_assign": True,
+    # Turnaround (services/turnaround.py): har stage ki hadd GHANTON mein —
+    # isse zyada ruka to order "delayed", dashboard par laal, manager ko alert
+    "stage_limit_hours": {
+        "RECEIVED": 6, "PICKUP_ASSIGNED": 6, "PICKED_UP": 12, "IN_WASH": 24,
+        "IN_DRY": 12, "IN_IRON": 12, "READY": 24, "OUT_FOR_DELIVERY": 6, "ON_HOLD": 48,
+    },
+    # Bill banane mein isse zyada second lage to "slow bill" (reports mein)
+    "bill_time_alert_seconds": 180,
+    # Staff panel mein grahak ka pata + "Route" (Google Maps) button. Abhi
+    # band: pata sirf haath se likha text hai, WhatsApp pin save nahi hota —
+    # galat raasta dikhane se behtar hai na dikhana. Zaroorat pade to
+    # Settings -> Operations se chalu.
+    "staff_show_route": False,
+    # Urgent kapde: bill banate waqt "⚡ Urgent" — extra charge (items ka %
+    # ya fixed ₹) jo har bill par badla/hataya ja sakta hai, aur jaldi delivery.
+    "urgent_charge_type": "percent",   # percent | flat
+    "urgent_charge_value": 50,
+    "urgent_delivery_days": 1,
     # named discount presets for New Bill [{name, type: percent|flat, value}]
     "discount_presets": [],
+    # owner ki apni expense categories (built-in list services/expenses.py
+    # mein; ye usme JUDTI hain, uski jagah nahi)
+    "expense_categories": [],
     # Order Agent SLA (owner's spec): pickup se ginke
     "sla_normal_days": 4,
     "sla_heavy_days": 7,
     "heavy_items": "blanket,kambal,razai,quilt,curtain,parda,saree,carpet,sofa,jacket,coat,sherwani,lehenga",
+    # Google Business Profile connection (services/google_business.py):
+    # {refresh_token (encrypted), account, location, title, email, choices}
+    # Credential hai — settings API isse browser ko kabhi nahi bhejti.
+    "gbp_connection": {},
+    # Aakhri sync ke reviews: {rating, count, reviews[], synced_at, error}
+    "gbp_reviews": {},
     "google_review_link": "",    # bheja jata hai sirf 4-5 star par
     "google_review_link_2": "",  # doosri listing — customers me rotate hota hai
     "tone": "friendly",               # formal | professional | friendly | casual

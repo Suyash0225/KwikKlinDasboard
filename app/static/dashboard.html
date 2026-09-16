@@ -18,9 +18,9 @@
 <!-- app.css is mobile-first and carries every breakpoint — one sheet, one cascade.
      It stays render-blocking on purpose: it IS the critical CSS (too big to inline). -->
 <link rel="stylesheet" href="/admin/static/tokens.css?v=rs1">
-<link rel="stylesheet" href="/admin/static/app.css?v=rs1">
+<link rel="stylesheet" href="/admin/static/app.css?v=rs5">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
-<script src="/admin/static/app.js?v=rs1" defer></script>
+<script src="/admin/static/app.js?v=rs5" defer></script>
 </head>
 <body>
 <div class="shell">
@@ -146,32 +146,82 @@
             </div>
           </div>
           <hr class="hr"><b>Items</b>
-          <div class="lineshead" aria-hidden="true"><span>Service</span><span>Item</span><span>Qty / kg</span><span>Rate ₹</span><span>Amount</span><span></span></div>
-          <div id="nb-lines" style="margin-top:8px"></div>
+          <!-- Phone: tap to add. Service chips, then items with their price;
+               a tap adds one, another tap makes it two. Desktop keeps the
+               row editor below. Both write the same LINES. -->
+          <div class="nb-quick">
+            <div class="nbq-svcs" id="nbq-svcs" role="tablist" aria-label="Service"></div>
+            <div class="nbq-items" id="nbq-items"></div>
+            <div class="nb-cart" id="nb-cart"></div>
+          </div>
+          <div class="nb-rows">
+            <div class="lineshead" aria-hidden="true"><span>Service</span><span>Item</span><span>Qty / kg</span><span>Rate ₹</span><span>Amount</span><span></span></div>
+            <div id="nb-lines" style="margin-top:8px"></div>
+          </div>
           <small class="fielderr" id="nb-items-err"></small>
-          <button class="btn ghost sm" onclick="addLine()">+ Add item</button>
+          <div class="nb-rowbtns" style="display:flex;flex-wrap:wrap;gap:8px">
+            <button class="btn ghost sm nb-rows" onclick="addLine()">+ Add item</button>
+            <button class="btn ghost sm" id="nb-newrate" onclick="nbNewRate()">➕ New service / item</button>
+          </div>
           <hr class="hr">
-          <div class="split2">
-            <div><label>Delivery date</label><input id="nb-date" type="date"></div>
-            <div><label>Notes (e.g. stain on collar)</label><input id="nb-notes" placeholder="Internal + staff instruction"></div>
+          <!-- Where are the clothes? Collect = the order goes to the delivery
+               boy as a pickup (PICKUP_ASSIGNED), exactly like the staff panel. -->
+          <b>Where are the clothes?</b>
+          <div class="nb-pick" role="radiogroup" aria-label="Where are the clothes">
+            <button type="button" class="nb-pickbtn on" id="nb-at-shop" role="radio" aria-checked="true" onclick="nbSetPickup(false)">🏪 At the shop</button>
+            <button type="button" class="nb-pickbtn" id="nb-collect" role="radio" aria-checked="false" onclick="nbSetPickup(true)">🛵 Collect from customer</button>
+          </div>
+          <div id="nb-pickup-box" hidden>
+            <label for="nb-pickup-date">Pickup date</label>
+            <input id="nb-pickup-date" type="date" onchange="$('nb-pickup-err').textContent='';calcBill()">
+            <small class="fielderr" id="nb-pickup-err"></small>
+          </div>
+          <p class="muted" id="nb-pick-hint" style="font-size:12px;margin-top:6px">The washing queue gets this bill.</p>
+          <hr class="hr">
+          <!-- ⚡ Urgent: one tap. Charge comes from Settings (editable / waivable
+               per bill), delivery date moves up, staff see it first. -->
+          <button type="button" class="nb-urgbtn" id="nb-urgent-btn" aria-pressed="false" onclick="nbToggleUrgent()">
+            <span>⚡ Urgent</span><small id="nb-urg-hint"></small>
+          </button>
+          <div id="nb-urg-box" hidden>
+            <label for="nb-urg-amt">Urgent charge (₹)</label>
+            <div class="nb-urg-row">
+              <input id="nb-urg-amt" type="number" min="0" step="1" inputmode="decimal" oninput="nbUrgentInput()">
+              <button type="button" class="btn ghost sm" onclick="nbUrgentWaive()">No charge</button>
+              <button type="button" class="btn ghost sm" onclick="nbUrgentReset()">Default</button>
+            </div>
+            <small class="muted" id="nb-urg-note"></small>
           </div>
         </div>
         <div class="card">
           <b>Totals</b>
           <div class="sumrow" style="margin-top:8px"><span>Subtotal</span><span class="money" id="nb-sub">₹0</span></div>
-          <div class="sumrow"><span><label for="nb-preset" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Discount preset</label></span><span style="max-width:150px"><select id="nb-preset" onchange="applyPreset()"><option value="">No discount</option></select></span></div>
-          <div class="sumrow"><span><label for="nb-disc" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Discount (₹)</label></span><span style="max-width:110px"><input id="nb-disc" type="number" min="0" aria-label="Manual discount in rupees" oninput="calcBill()"></span></div>
-          <div class="muted" id="nb-disc-note" style="font-size:11.5px;min-height:16px"></div>
-          <div class="sumrow"><span><label style="display:inline"><input type="checkbox" id="nb-gst" onchange="calcBill()"> GST 18%</label></span><span class="money" id="nb-gstamt">₹0</span></div>
-          <div class="sumrow"><span><label for="nb-coupon" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Coupon code</label></span><span style="max-width:130px"><input id="nb-coupon" placeholder="e.g. OFF10" aria-label="Coupon code"></span></div>
-          <div class="muted" style="font-size:11.5px">Coupon is checked &amp; applied when you save.</div>
+          <div class="sumrow" id="nb-urg-sum" hidden><span>⚡ Urgent charge</span><span class="money" id="nb-urg-sumamt">₹0</span></div>
+          <!-- Most bills need none of these. On a phone they stay folded;
+               desktop opens them (initNewBill). -->
+          <details class="nb-more" id="nb-more">
+            <summary><span>Discount, advance, delivery date &amp; notes</span><small id="nb-more-sum"></small></summary>
+            <div class="sumrow"><span><label for="nb-preset" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Discount preset</label></span><span style="max-width:150px"><select id="nb-preset" onchange="applyPreset()"><option value="">No discount</option></select></span></div>
+            <div class="sumrow"><span><label for="nb-disc" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Discount (₹)</label></span><span style="max-width:110px"><input id="nb-disc" type="number" min="0" aria-label="Manual discount in rupees" oninput="calcBill()"></span></div>
+            <div class="muted" id="nb-disc-note" style="font-size:11.5px;min-height:16px"></div>
+            <div class="sumrow"><span><label style="display:inline"><input type="checkbox" id="nb-gst" onchange="calcBill()"> GST 18%</label></span><span class="money" id="nb-gstamt">₹0</span></div>
+            <div class="sumrow"><span><label for="nb-coupon" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Coupon code</label></span><span style="max-width:130px"><input id="nb-coupon" placeholder="e.g. OFF10" aria-label="Coupon code"></span></div>
+            <div class="muted" style="font-size:11.5px">Coupon is checked &amp; applied when you save.</div>
+            <div class="sumrow"><span><label for="nb-adv" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Advance (₹)</label></span><span style="max-width:110px"><input id="nb-adv" type="number" min="0" inputmode="decimal" oninput="calcBill()"></span></div>
+            <div class="sumrow"><span>Advance mode</span><span style="max-width:110px"><select id="nb-advmode"><option value="CASH">Cash</option><option value="UPI">UPI</option></select></span></div>
+            <div style="margin-top:8px"><label for="nb-date">Delivery date</label><input id="nb-date" type="date" onchange="calcBill()"></div>
+            <div style="margin-top:8px"><label for="nb-notes">Notes (e.g. stain on collar)</label><input id="nb-notes" placeholder="Internal + staff instruction"></div>
+          </details>
           <div class="sumrow total"><span>Total</span><span id="nb-total">₹0</span></div>
-          <div class="sumrow"><span>Advance (₹)</span><span style="max-width:110px"><input id="nb-adv" type="number" min="0" oninput="calcBill()"></span></div>
-          <div class="sumrow"><span>Advance mode</span><span style="max-width:110px"><select id="nb-advmode"><option value="CASH">Cash</option><option value="UPI">UPI</option></select></span></div>
           <div class="sumrow due"><span>Due</span><span class="money" id="nb-due">₹0</span></div>
           <div class="savebar"><button class="btn" onclick="saveBill(this)">💾 Save bill</button></div>
           <p class="muted" style="margin-top:8px">Saving notifies the customer on WhatsApp and sends the work order to staff.</p>
         </div>
+      </div>
+      <!-- phone: total + Save always in reach, above the tab bar -->
+      <div class="nb-bar" id="nb-bar">
+        <div class="nb-bar-sum"><b id="nb-bar-total">₹0</b><span id="nb-bar-count">No items yet</span></div>
+        <button class="btn" onclick="saveBill(this)">💾 Save bill</button>
       </div>
     </section>
 
@@ -215,7 +265,8 @@
         <b>Add expense</b>
         <div class="expform">
           <div class="ef-field">
-            <label for="exp-cat">Category</label>
+            <label for="exp-cat">Category
+              <a href="#" onclick="event.preventDefault();manageExpCats()" style="float:right;text-transform:none;letter-spacing:0;font-weight:600">+ New / manage</a></label>
             <select id="exp-cat"></select>
             <small class="fielderr" id="exp-cat-err"></small>
           </div>
@@ -287,8 +338,7 @@
 
       <div class="card" style="margin-top:14px">
         <b>📑 Template Studio — pre-approved WhatsApp templates</b>
-        <p class="muted" style="margin-top:4px">Build here, submit to Meta, track approval. Approved templates can be sent outside the 24h window.</p>
-        <div class="split2" style="margin-top:10px">
+        <p class="muted" style="margin-top:4px">Build here, submit to Meta, track approval. Approved templates can be sent outside the 24h window.</p>        <div class="split2" style="margin-top:10px">
           <div class="frm">
             <div class="split2">
               <div><label>Template name</label><input id="tpl-name" placeholder="diwali_offer" oninput="tplPreview()"></div>
@@ -453,14 +503,36 @@
             <div><label>UPI VPA ID (scan-to-pay on bills)</label><input id="bp-upi" placeholder="yourname@okaxis"></div>
             <div><label>UPI payee name</label><input id="bp-payee" placeholder="Kwik Klin"></div>
           </div>
+          <div class="split2" style="margin-top:10px">
+            <div><label>Google review link</label>
+              <input id="bp-review" type="url" placeholder="https://search.google.com/local/writereview?placeid=…"></div>
+            <div><label>Second listing review link <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
+              <input id="bp-review2" type="url" placeholder="https://g.page/r/…/review"></div>
+          </div>
+          <small class="muted" id="bp-review-short"></small>
           <div style="margin-top:10px"><label>Invoice footer banner message</label>
             <input id="bp-footer" placeholder="Thank you for choosing Kwik Klin!"></div>
+          <div style="margin-top:10px"><label>Terms &amp; conditions on bills <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">(one per line · leave empty for none)</span></label>
+            <textarea id="bp-terms" rows="6" placeholder="Check clothes at delivery. Complaints within 24 hours."></textarea>
+            <small class="muted">Kg bills also get: “Kg services: the clothes count at drop-off is final.”</small></div>
+          <div style="margin-top:10px"><label for="bp-paper">Bill printer paper width</label>
+            <select id="bp-paper" style="max-width:260px">
+              <option value="58">58 mm — small Bluetooth printer</option>
+              <option value="80">80 mm — counter printer</option>
+            </select></div>
           <div class="filters" style="margin-top:10px">
             <div><label>Standard GST (%)</label><input id="bp-gstpct" type="number" min="0" max="28" style="width:90px"></div>
             <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:13px;margin-top:14px">
               <input type="checkbox" id="bp-gstdef"> Enable GST by default on new bills</label>
           </div>
           <button class="btn" style="margin-top:12px" onclick="saveProfile(this)">Save profile configurations</button>
+        </div>
+
+        <div class="card" style="margin-bottom:14px" id="gbp-card">
+          <b>⭐ Google reviews on your website</b>
+          <p class="muted" style="margin:6px 0 10px">Once the Kwik Klin team connects your Business Profile,
+            all your Google reviews — name, stars, text and your replies — show on your website and refresh every 6 hours.</p>
+          <div id="gbp-body" class="muted">Loading…</div>
         </div>
         <div class="card">
           <b>🏷️ Discount offers setup</b>
@@ -508,7 +580,43 @@
             <select id="set-washer"></select>
             <small>New orders go to this person unless you assign someone else.</small>
           </div>
+          <div class="setfield">
+            <label for="set-urg-type">⚡ Urgent charge</label>
+            <div style="display:flex;gap:8px">
+              <select id="set-urg-type" style="max-width:150px">
+                <option value="percent">% of items</option>
+                <option value="flat">₹ fixed</option>
+              </select>
+              <input id="set-urg-value" type="number" min="0" step="1" style="max-width:100px">
+            </div>
+            <small>Filled in when a bill is marked Urgent — can be changed or waived on each bill. 0 = no charge.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-urg-days">⚡ Urgent delivery (days)</label>
+            <input id="set-urg-days" type="number" min="0" max="14">
+            <small>0 = same day, 1 = next day. Urgent bills get this delivery date.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-route">Customer address &amp; Route in staff panel</label>
+            <select id="set-route">
+              <option value="false">Off — hide address and Route button</option>
+              <option value="true">On — show address and open Google Maps</option>
+            </select>
+            <small>Uses the address typed on the customer. Keep off until addresses are reliable.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-autoassign">Agent assigns work automatically</label>
+            <select id="set-autoassign">
+              <option value="true">On — every bill gets washer + pickup/delivery tasks</option>
+              <option value="false">Off — only the default washer gets a WhatsApp</option>
+            </select>
+            <small>The agent picks the staff member with the fewest open tasks, closes tasks as the order moves, and hands work from inactive staff to someone else.</small>
+          </div>
         </div>
+        <hr class="hr">
+        <b class="subhead">⏱ Delay alerts — hours allowed per stage</b>
+        <p class="muted" style="margin-top:4px">An order waiting longer than this is marked <b>Delayed</b> on the dashboard, and you get one WhatsApp alert.</p>
+        <div class="setgrid" id="set-stagelimits"></div>
         <div class="act" style="margin-top:12px">
           <button class="btn" onclick="saveOps(this)">Save changes</button>
           <button class="btn ghost" onclick="testStandup(this)">▶ Send standup now</button>
@@ -553,21 +661,9 @@
             <input id="set-socialhour" type="number" min="0" max="23">
             <small>Time of day the poster is made and posted.</small>
           </div>
-          <div class="setfield">
-            <label for="set-igid">Instagram user ID</label>
-            <input id="set-igid" oninput="igState()">
-            <small>From your Instagram Business account — needed to post automatically.</small>
-          </div>
-          <div class="setfield">
-            <label for="set-igtoken">Instagram access token</label>
-            <div class="inputwrap">
-              <input id="set-igtoken" type="password" oninput="igState()">
-              <button type="button" class="peek" id="ig-peek" onclick="igPeek()">Show</button>
-            </div>
-            <small>Stored privately — never shown back in full.</small>
-          </div>
         </div>
         <p id="ig-status" class="connstate"></p>
+        <small class="muted">Instagram is connected securely by the Kwik Klin team — contact us to link or change it.</small>
         <div class="act" style="margin-top:12px">
           <button class="btn" onclick="saveOps(this)">Save changes</button>
         </div>

@@ -8,6 +8,26 @@ from pydantic import BaseModel, Field, field_validator
 from app.models import PaymentMethod
 
 
+class PieceIn(BaseModel):
+    """KG wali line ke andar ke kapde — sirf ginti, daam nahi.
+
+    Bill wazan se banta hai (3.5 kg x ₹60), par counter par likhna zaroori
+    hai ki bore mein kya-kya hai: wapas dete waqt "mera ek kurta kam hai"
+    ka jawab yahi list hai.
+    """
+
+    type: str = Field(min_length=1, max_length=60)
+    qty: int = Field(default=1, ge=1, le=999)
+
+    @field_validator("type")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if not v:
+            raise ValueError("cloth name is empty")
+        return v
+
+
 class OrderItemIn(BaseModel):
     # extra="allow": billing fields (rate, amount, unit, weight_kg...) ride
     # along into the items JSONB without schema churn.
@@ -24,6 +44,9 @@ class OrderItemIn(BaseModel):
     def _whole_qty_as_int(cls, v):
         return int(v) if isinstance(v, float) and v.is_integer() else v
     service: str | None = Field(default=None, max_length=60)
+    # KG line ke kapde (ginti) — extra="allow" ke bharose nahi chhoda, taaki
+    # ulta-seedha JSON items mein na baith jaye
+    pieces: list[PieceIn] | None = Field(default=None, max_length=50)
 
 
 class OrderCreateIn(BaseModel):
@@ -41,6 +64,22 @@ class OrderCreateIn(BaseModel):
     notes: str | None = None
     # marketing coupon — validated + redeemed server-side
     coupon_code: str | None = None
+    # ⚡ Urgent: order sabse pehle, work order par URGENT. Extra charge (agar
+    # ho) items mein ek line banke aata hai — kind="urgent_charge".
+    priority: str = Field(default="normal", pattern="^(normal|urgent)$")
+    # "New bill" kholne se Save tak kitne second (turnaround tracking)
+    bill_seconds: int | None = None
+
+
+class DeliverPickIn(BaseModel):
+    line: int = Field(ge=0, le=200)
+    piece: int | None = Field(default=None, ge=0, le=200)
+    qty: int = Field(ge=0, le=9999)
+
+
+class DeliverIn(BaseModel):
+    # None = saare kapde. Warna har line/kapde ki ginti (12 mein se 8).
+    items: list[DeliverPickIn] | None = Field(default=None, max_length=200)
 
 
 class StatusUpdateIn(BaseModel):

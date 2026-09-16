@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Customer, Order, Staff
 from app.services import app_settings
 from app.services.messages import get_message
+from app.services.urgent import KIND as URGENT_KIND
 from app.services.whatsapp import (
     MAX_LIST_ROWS,
     Button,
@@ -107,13 +108,29 @@ async def work_rows(db: AsyncSession, orders, tasks=()) -> list[ListRow]:
     return rows
 
 
+def pieces_text(item: dict) -> str:
+    """KG line ke kapde: 'Shirt 5, Pant 3 — 8 pcs'. Na hon to ''."""
+    pieces = [p for p in (item.get("pieces") or []) if isinstance(p, dict) and p.get("type")]
+    if not pieces:
+        return ""
+    total = sum(int(p.get("qty") or 0) for p in pieces)
+    return ", ".join(f"{p['type']} {int(p.get('qty') or 0)}" for p in pieces) + f" — {total} pcs"
+
+
 def items_summary(order: Order) -> str:
-    """'3 x Shirt, 2 x Pant' from the items JSON."""
+    """'3 x Shirt, 2 x Pant' from the items JSON.
+
+    KG line ke andar ke kapde bracket mein — washerman ko bore kholte hi
+    ginti milani hai, aur grahak ko wapas lete waqt."""
     parts = []
     for it in order.items or []:
+        if it.get("kind") == URGENT_KIND:
+            continue   # paise ki line hai, kapda nahi — washerman ko "1 x Urgent charge" bekaar
         qty = it.get("qty", 1)
         qty = int(qty) if float(qty).is_integer() else qty
-        parts.append(f"{qty} x {it.get('type') or it.get('garment') or it.get('service', '?')}")
+        part = f"{qty} x {it.get('type') or it.get('garment') or it.get('service', '?')}"
+        inside = pieces_text(it)
+        parts.append(f"{part} ({inside})" if inside else part)
     return ", ".join(parts) or "items dashboard par"
 
 

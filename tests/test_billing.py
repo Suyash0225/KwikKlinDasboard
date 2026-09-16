@@ -116,6 +116,28 @@ async def test_rate_card_crud(client) -> None:
             await s.commit()
 
 
+async def test_re_adding_a_disabled_rate_brings_it_back(client) -> None:
+    """New Bill se "➕ New item" — band kiya hua kapda dobara jodne par 409
+    nahi, wahi row naye rate ke saath chalu ho (unique key use rokti thi)."""
+    body = {"service": "TEST Readd", "garment": "TEST Kapda", "unit": "pc", "rate": "40"}
+    r = await client.post("/admin/api/rates", json=body, headers=AUTH)
+    assert r.status_code == 201
+    rid = r.json()["id"]
+    try:
+        await client.put(f"/admin/api/rates/{rid}", json={"is_active": False}, headers=AUTH)
+        again = await client.post("/admin/api/rates", json={**body, "rate": "55"}, headers=AUTH)
+        assert again.status_code == 201 and again.json()["id"] == rid
+        mine = [x for x in (await client.get("/admin/api/rates", headers=AUTH)).json() if x["id"] == rid][0]
+        assert mine["is_active"] is True and mine["rate"] == "55.00"
+        # chalu row ab bhi duplicate hi hai
+        dup = await client.post("/admin/api/rates", json=body, headers=AUTH)
+        assert dup.status_code == 409
+    finally:
+        async with async_session_factory() as s:
+            await s.execute(sqltext("DELETE FROM rate_card WHERE service = 'TEST Readd'"))
+            await s.commit()
+
+
 async def test_staff_settings_crud(client) -> None:
     r = await client.post(
         "/admin/api/staff",

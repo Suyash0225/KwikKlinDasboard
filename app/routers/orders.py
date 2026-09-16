@@ -7,7 +7,6 @@ This API is internal — it is NOT exposed to customers or staff.
 
 import hmac
 import time
-from collections import defaultdict, deque
 from datetime import date
 from decimal import Decimal
 
@@ -32,7 +31,9 @@ from app.models import (
     Task,
 )
 from app.services import audit
+from app.utils.throttle import IPThrottle
 from app.schemas.orders import (
+    DeliverIn,
     DeliveryDateIn,
     OrderCreateIn,
     OrderOut,
@@ -55,17 +56,21 @@ log = structlog.get_logger()
 # Brute-force throttle: per-IP sliding window of failed key attempts.
 # In-memory is fine — a restart resets it, but so does it reset the attacker's
 # progress, and the key itself is 40+ random chars.
-_FAILED_AUTH: dict[str, deque] = defaultdict(lambda: deque(maxlen=32))
+#
+# Pehle ye `defaultdict` par tha aur `_auth_throttled()` `_FAILED_AUTH[ip]`
+# se padhta tha — yaani HAR admin request par, chahe key sahi ho, us IP ka
+# ek row ban jaata tha jo kabhi delete nahi hota. Normal traffic hi memory
+# badhata rehta tha. IPThrottle padhne par entry nahi banata aur purani IP
+# khud saaf karta hai.
 _AUTH_WINDOW_SECS = 600
 _AUTH_MAX_FAILURES = 10
+_auth_throttle = IPThrottle(
+    max_failures=_AUTH_MAX_FAILURES, window_secs=_AUTH_WINDOW_SECS, name="admin_key"
+)
 
 
 def _auth_throttled(ip: str) -> bool:
-    now = time.monotonic()
-    attempts = _FAILED_AUTH[ip]
-    while attempts and now - attempts[0] > _AUTH_WINDOW_SECS:
-        attempts.popleft()
-    return len(attempts) >= _AUTH_MAX_FAILURES
+    return _auth_throttle.throttled(ip)
 
 
 async def require_admin_key(
@@ -113,7 +118,7 @@ async def require_admin_key(
     # 2. API key
     if not _key_matches(x_api_key):
         if x_api_key:  # galat key = attempt; khali = bas logged-out request
-            _FAILED_AUTH[ip].append(time.monotonic())
+            _auth_throttle.note_failure(ip)
             log.warning("admin_api_bad_key", ip=ip, path=request.url.path)
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
     # Key = owner's own tooling — full access (home tenant par).
@@ -375,7 +380,7 @@ async def require_vendor_key(
         # ka pehla load, logged-out tab) attack nahi hai — use ginne se panel
         # aur dashboard dono 429 mein chale jaate the (dono ka counter ek hai).
         if x_api_key:
-            _FAILED_AUTH[ip].append(time.monotonic())
+            _auth_throttle.note_failure(ip)
             log.warning("vendor_api_bad_key", ip=ip, path=request.url.path)
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
 
@@ -455,21 +460,12 @@ async def create_order(body: OrderCreateIn, db: AsyncSession = Depends(get_db)) 
             notes=body.notes,
             created_by="manager",
             advance_hint=body.advance_amount,
+            # coupon create ke andar lagta hai, taaki grahak ke message mein
+            # chhoot wala total jaaye
+            coupon_code=body.coupon_code,
+            priority=body.priority,
+            bill_seconds=body.bill_seconds,
         )
-        # Coupon: validate against the order total, redeem, adjust amounts.
-        if body.coupon_code:
-            from app.services.marketing_agent import redeem_coupon, validate_coupon
-
-            coupon, discount, err = await validate_coupon(
-                db, body.coupon_code, order.customer_id, order.total_amount or 0
-            )
-            if err:
-                raise HTTPException(status_code=400, detail=f"coupon: {err}")
-            order.total_amount = (order.total_amount or 0) - discount
-            order.discount_amount = (order.discount_amount or 0) + discount
-            order.recalculate_payment_status()
-            await db.commit()
-            await redeem_coupon(db, coupon, order, discount)
         # Advance taken at the counter -> record as a real payment.
         if body.advance_amount and body.advance_amount > 0:
             from app.models import PaymentMethod as PM
@@ -478,6 +474,8 @@ async def create_order(body: OrderCreateIn, db: AsyncSession = Depends(get_db)) 
                 db, order,
                 amount=body.advance_amount,
                 method=body.advance_method or PM.CASH,
+                # "order received" message mein advance pehle se hai
+                notify_customer=False,
             )
     except PlanLimitError as exc:
         # Limit khatam = 402, taaki dashboard Upgrade prompt dikhaye
@@ -517,6 +515,79 @@ async def list_orders(
     return [await _order_out(db, o, customer=c) for o, c in rows]
 
 
+@router.get("/{order_number}/receipt", dependencies=[Depends(require_admin_key)])
+async def order_receipt(order_number: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Dashboard ka bill — WhatsApp text + chhote printer ka text.
+
+    Staff panel wala hi builder (services/receipt.py): pehle dashboard apna
+    bill JS mein banata tha aur dono dheere-dheere alag ho gaye the.
+    """
+    from app.models.tenant import Tenant
+    from app.routers.staff_panel import customer_outstanding
+    from app.services import app_settings, receipt, tenant_context
+
+    try:
+        order = await order_service.get_order(db, order_number)
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    cust = await db.get(Customer, order.customer_id)
+    if cust is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    tid = tenant_context.effective_tenant_id()
+    tenant = await db.get(Tenant, tid) if tid else None
+    prev_due, prev_bills = await customer_outstanding(db, cust.id, exclude_order_id=order.id)
+    out = receipt.payload(
+        order, cust, tenant, await app_settings.all_settings(db), prev_due, prev_bills
+    )
+    return {"order_number": order.order_number, "phone": cust.phone,
+            "name": cust.name or "Customer", **out}
+
+
+@router.post("/{order_number}/deliver", dependencies=[Depends(require_admin_key), Depends(require_feature("billing"))])
+async def deliver_order(order_number: str, body: DeliverIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Dashboard se delivery — sab kapde (items=None) ya kuch (12 mein se 8)."""
+    from app.services import delivery
+
+    try:
+        order = await order_service.get_order(db, order_number)
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    try:
+        return await delivery.deliver(
+            db, order, [pk.model_dump() for pk in body.items] if body.items is not None else None,
+            by="dashboard",
+        )
+    except delivery.DeliveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.get("/{order_number}/message", dependencies=[Depends(require_admin_key)])
+async def order_message(
+    order_number: str,
+    kind: str = Query(pattern="^(payment_thanks|service_thanks|review_request)$"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Bill menu ka 💬 Message — thank you / payment mila / review. Sirf text;
+    bhejna dashboard karta hai (API ya wa.me)."""
+    from app.models.tenant import Tenant
+    from app.services import customer_messages, tenant_context
+
+    try:
+        order = await order_service.get_order(db, order_number)
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    cust = await db.get(Customer, order.customer_id)
+    if cust is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    tid = tenant_context.effective_tenant_id()
+    tenant = await db.get(Tenant, tid) if tid else None
+    try:
+        text = await customer_messages.compose(db, kind=kind, order=order, customer=cust, tenant=tenant)
+    except customer_messages.MessageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"kind": kind, "text": text, "phone": cust.phone, "name": cust.name or "Customer"}
+
+
 @router.get("/{order_number}", dependencies=[Depends(require_admin_key)])
 async def get_order(order_number: str, db: AsyncSession = Depends(get_db)) -> dict:
     try:
@@ -531,7 +602,26 @@ async def get_order(order_number: str, db: AsyncSession = Depends(get_db)) -> di
         )
     ).scalars().all()
     out = await _order_out(db, order, include_notes=True)
+    from app.models import Staff, Task
+    from app.services import delivery, turnaround
+
+    tasks = (
+        await db.execute(select(Task).where(Task.order_id == order.id).order_by(Task.created_at))
+    ).scalars().all()
+    names = {s.id: s.name for s in (await db.execute(select(Staff))).scalars().all()}
     return {
+        # IMP_006: milestones + stage ka time + deri; IMP_007: agent ke kaam
+        "tracking": turnaround.track(order, list(history), await turnaround.limits(db)),
+        "tasks": [
+            {"code": t.code, "kind": t.kind, "status": t.status, "staff": names.get(t.assigned_staff_id),
+             "eta": t.eta_text, "created_by": t.created_by}
+            for t in tasks
+        ],
+        "washer": names.get(order.assigned_washer_id),
+        "delivery_boy": names.get(order.assigned_delivery_id),
+        # har kapda: kitne, kitne diye, kitne baaki — partial delivery popup ke liye
+        "lines": delivery.lines(order),
+        "clothes": delivery.counts(order),
         "order": out.model_dump(),
         "history": [
             StatusHistoryOut(

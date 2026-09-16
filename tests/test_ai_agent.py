@@ -72,7 +72,7 @@ async def test_markers_and_empty_skip_ai(monkeypatch) -> None:
         cust = await _seed_customer()
         # a photo is acknowledged from a fixed string, not composed by the LLM
         ack = await build_ai_reply(db, cust, "[image:/admin/media/x.jpg]")
-        assert ack and "Photo" in ack
+        assert ack and "photo" in ack
         # our own button tap is never chatted back at
         assert await build_ai_reply(db, cust, "[button:rate_good] Good") is None
         assert await build_ai_reply(db, cust, "") is None
@@ -244,7 +244,7 @@ async def test_webhook_prefers_ai_reply(client, sent, monkeypatch) -> None:
         "/webhook", content=body2, headers={"X-Hub-Signature-256": sign_body(body2)}
     )
     assert r.status_code == 200
-    assert "message mil gaya" in sent[-1]["text"]
+    assert "received your message" in sent[-1]["text"]
 
 
 async def test_escalation_alert_failure_is_swallowed(monkeypatch) -> None:

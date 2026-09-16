@@ -24,7 +24,7 @@ from app.services import llm_client
 from app.services.escalation import raise_escalation
 from app.services.intent import classify_intent
 from app.services.llm_client import LLMError
-from app.services.messages import get_message, status_label
+from app.services.messages import CUSTOMER_LANG, get_message, status_label
 from app.services.order_service import get_active_orders_for_phone
 from app.services.tenant_context import manager_phone
 
@@ -118,13 +118,13 @@ def _media_ack(marker: str) -> str | None:
     """
     kind = marker[1:].split(":", 1)[0].split("]", 1)[0].strip().lower()
     return {
-        "image": "Photo mil gayi 📷 Dekh kar bata denge.",
-        "audio": "Voice note mil gaya 🎧 Sun kar jawab denge — jaldi chahiye to likh bhi dijiye.",
-        "voice": "Voice note mil gaya 🎧 Sun kar jawab denge — jaldi chahiye to likh bhi dijiye.",
-        "video": "Video mil gaya 🎥 Dekh kar bata denge.",
-        "document": "File mil gayi 📄 Dekh kar bata denge.",
-        "location": "Location mil gaya 📍 Pickup ke liye note kar liya.",
-        "contact": "Number mil gaya 📇 Note kar liya.",
+        "image": "Got your photo 📷 We'll take a look and get back to you.",
+        "audio": "Got your voice note 🎧 We'll listen and reply — if it's urgent, please type it too.",
+        "voice": "Got your voice note 🎧 We'll listen and reply — if it's urgent, please type it too.",
+        "video": "Got your video 🎥 We'll take a look and get back to you.",
+        "document": "Got your file 📄 We'll take a look and get back to you.",
+        "location": "Got your location 📍 Noted for the pickup.",
+        "contact": "Got the number 📇 Noted.",
         # a tap on our own button is handled elsewhere; never chat back at it
         "button": None,
         "interactive": None,
@@ -344,7 +344,7 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
         if existing is not None:
             return get_message(
                 "status_reply", order_number=existing.order_number,
-                status_label=status_label(existing.status),
+                status_label=status_label(existing.status, CUSTOMER_LANG),
             )
 
         if not customer.address:

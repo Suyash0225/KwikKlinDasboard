@@ -20,6 +20,15 @@ async def _cleanup():
         await s.commit()
 
 
+def test_customers_get_english_and_staff_get_hinglish() -> None:
+    """Grahak ko English (owner ka faisla), staff/owner bot Hinglish."""
+    from app.services.messages import CUSTOMER_KEYS, MESSAGES
+
+    assert get_message("order_delivered", order_number="KK-1").startswith("Your order KK-1")
+    assert "nahi mila" in get_message("task_unknown_code", code="T-1")
+    assert all("en" in MESSAGES[k] for k in CUSTOMER_KEYS)
+
+
 async def test_edit_applies_immediately_and_persists(client) -> None:
     r = await client.put("/admin/api/message-formats", headers=AUTH, json={
         "key": "order_ready",
@@ -33,7 +42,7 @@ async def test_edit_applies_immediately_and_persists(client) -> None:
     from app.services import app_settings
 
     load_overrides({})
-    assert "Khushkhabri" in get_message("order_ready", order_number="KK-1")
+    assert "Good news" in get_message("order_ready", order_number="KK-1")
     async with async_session_factory() as db:
         load_overrides(await app_settings.get(db, "message_overrides"))
     assert get_message("order_ready", order_number="KK-1").startswith("Ho gaya taiyar")
@@ -60,7 +69,7 @@ async def test_reset_restores_default(client) -> None:
         "key": "order_ready", "text": "",
     })
     assert r.status_code == 200 and r.json()["overridden"] is False
-    assert "Khushkhabri" in get_message("order_ready", order_number="KK-1")
+    assert "Good news" in get_message("order_ready", order_number="KK-1")
 
 
 async def test_non_editable_key_rejected(client) -> None:

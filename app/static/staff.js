@@ -15,7 +15,7 @@
 
 const $ = (id) => document.getElementById(id);
 let ME = null;
-let NAV = "work";        // work | bills | new | team | me
+let NAV = "work";        // work | bills | new | exp | team | me
 let FILTER = "all";      // chips ki chuni hui value (har screen ki apni)
 let WORK = [];           // kaam ki poori list (server se milaya hua)
 let UNREAD = 0;
@@ -32,7 +32,10 @@ async function api(path, opts = {}) {
   let data = null;
   try { data = await res.json(); } catch (e) { /* khali body */ }
   if (!res.ok) {
-    const err = new Error((data && data.detail) || `Error ${res.status}`);
+    // 422 par detail ek list hoti hai — "[object Object]" nahi, pehla sandesh
+    let detail = data && data.detail;
+    if (Array.isArray(detail)) detail = (detail[0] && detail[0].msg || "").replace(/^Value error, /, "");
+    const err = new Error(detail || `Error ${res.status}`);
     err.status = res.status;
     throw err;
   }
@@ -76,6 +79,8 @@ const ACTIONS = {
   close: () => closeModal(),
   share: (n) => { closeModal(); shareBill(n); },
   thread: (c) => { closeModal(); openThread(c); },
+  detail: (n) => { closeModal(); orderDetailModal(n); },
+  jobdone: (c) => { closeModal(); askDone(c); },
   decide: (c) => { closeModal(); decideCancel(c); },
   photo: (n) => { closeModal(); askPhoto(n); },
   cancel: (c) => { closeModal(); askCancel(c); },
@@ -184,6 +189,7 @@ function navItems() {
   if (canBill()) {
     out.push(["bills", "🧾", "Bills"], ["new", "＋", "New"]);
   }
+  if (ME.can_expense) out.push(["exp", "💸", "Expense"]);
   if (ME.is_manager && ME.features.includes("staff_reports")) out.push(["team", "👥", "Team"]);
   out.push(["me", "👤", "You"]);
   return out;
@@ -207,6 +213,7 @@ function go(nav) {
   if (nav === "work") loadWork();
   else if (nav === "bills") loadBills();
   else if (nav === "new") showNewBill();
+  else if (nav === "exp") showExpenses();
   else if (nav === "team") showTeam();
   else showMe();
 }
@@ -377,6 +384,7 @@ async function loadWork(opts = {}) {
       type: "stop", chip: k.chip, spine: w.late ? "late" : k.spine, kindLabel: k.label,
       number: s.number, who: s.customer, items: s.items, due: s.due,
       address: s.address, urgent: s.urgent, when: w, late: w.late, tasks: [],
+      hasOrder: true, status: s.status, clothes: s.clothes,
     };
     byOrder.set(s.number, item);
     page.push(item);
@@ -395,6 +403,7 @@ async function loadWork(opts = {}) {
       // Bina order wale kaam par paisa hota hi nahi — na rakam dikhani hai
       // na "chukta" ka ✓, warna aadmi samajhta hai ki paisa aa gaya.
       noMoney: !t.order,
+      hasOrder: !!t.order, status: t.order ? t.order.status : null, clothes: t.order ? t.order.clothes : null,
       // Title upar bold mein aa chuka hai; dobara neeche likhna sirf
       // shor hai. Neeche wahi jab order ka naam upar ho.
       urgent: t.urgent, when: w, late: !!w.late, tasks: [t],
@@ -470,13 +479,39 @@ function moreBar(shown, total, fn) {
   </div>`;
 }
 
+/* Har row ka ek hi mukhya kaam — order ki haalat aur aadmi ke role se.
+   Pehle "Done" sirf un rows par tha jin par task bana tha: kisi par Call,
+   kisi par Done, kisi par sirf collect — delivery boy samajh nahi paata tha
+   ki kis row par kya dabana hai. Ab kram hamesha: Call · kaam · ₹ · ⋯ */
+const DELIVERY_ROLES = ["DELIVERY", "MANAGER", "SUPERVISOR", "ADMIN"];
+const WASH_ROLES = ["WASHER", "MANAGER", "SUPERVISOR", "ADMIN"];
+function primaryAction(w) {
+  const t = w.tasks && w.tasks[0];
+  const s = w.status;
+  const pend = w.clothes && w.clothes.delivered > 0 ? w.clothes.pending : 0;
+  if (s && ["READY", "OUT_FOR_DELIVERY"].includes(s) && DELIVERY_ROLES.includes(ME.role)) {
+    return { act: "deliver", label: pend ? `Deliver rest (${pend})` : "Deliver" };
+  }
+  if (s && ["PICKUP_ASSIGNED"].includes(s) && DELIVERY_ROLES.includes(ME.role)) {
+    return { act: "pickup", label: "Picked up" };
+  }
+  if (s && ["RECEIVED", "PICKED_UP", "IN_WASH", "IN_DRY", "IN_IRON"].includes(s) && WASH_ROLES.includes(ME.role)
+      && ME.role !== "DELIVERY") {
+    return { act: "ready", label: "Ready" };
+  }
+  if (t) return { act: "done", label: "Done", code: t.code };
+  return null;
+}
+
 function workRow(w) {
   const t = w.tasks[0];
   const asked = t && t.cancel_requested;
   const due = w.noMoney ? ""
     : w.due > 0 ? `<span class="amt due">${money(w.due)}</span>`
     : `<span class="amt paid-tick">✓</span>`;
-  return `<article class="row" data-num="${esc(w.number)}">
+  const main = primaryAction(w);
+  const partial = w.clothes && w.clothes.delivered > 0 && w.clothes.pending > 0;
+  return `<article class="row tappable" data-num="${esc(w.number)}" data-open="1">
     <div class="spine ${w.spine}"></div>
     <div class="when ${w.late ? "late" : ""}">
       <b>${esc(w.when.top)}</b>${w.when.sub ? `<span>${esc(w.when.sub)}</span>` : ""}
@@ -486,36 +521,232 @@ function workRow(w) {
       <div class="sub">
         <span class="tag ${w.chip === "task" ? "task" : w.spine || "wash"}">${esc(w.kindLabel)}</span>${esc(w.number)}${w.items ? " · " + esc(w.items) : ""}
       </div>
+      ${partial ? `<div class="sub mt-xs"><span class="tag late">${w.clothes.pending} pending</span>${w.clothes.delivered} of ${w.clothes.total} delivered</div>` : ""}
       ${w.title && w.type === "task" ? `<div class="sub note">${esc(w.title)}</div>` : ""}
       ${asked ? `<div class="sub mt-xs"><span class="tag late">Cancel maanga</span>${esc(t.cancel_reason || "")}</div>` : ""}
-      ${w.address ? `<div class="sub mt-xs">📍 ${esc(w.address)}</div>` : ""}
+      ${ME.show_route && w.address ? `<div class="sub mt-xs">📍 ${esc(w.address)}</div>` : ""}
       <div class="acts">
-        ${w.type === "stop" ? `<button class="btn ghost sm" data-do="call">Call</button>` : ""}
-        ${w.address ? `<button class="btn ghost sm" data-do="map" data-addr="${esc(w.address)}">Route</button>` : ""}
-        ${t ? `<button class="btn go sm" data-do="done" data-code="${esc(t.code)}">Done</button>` : ""}
-        ${t ? `<button class="btn ghost sm" data-do="ask" data-code="${esc(t.code)}">Ask</button>` : ""}
+        ${w.hasOrder ? `<button class="btn ghost sm" data-do="call">Call</button>` : ""}
+        ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}>${esc(main.label)}</button>` : ""}
+        ${ME.show_route && w.address ? `<button class="btn ghost sm" data-do="map" data-addr="${esc(w.address)}">Route</button>` : ""}
         ${ME.features.includes("cod_collection") && w.due > 0
           ? `<button class="btn money sm" data-do="pay" data-due="${w.due}">${money(w.due)} collect</button>` : ""}
-        <button class="btn ghost sm" data-do="more">⋯</button>
+        <button class="btn ghost sm" data-do="more" aria-label="More">⋯</button>
       </div>
     </div>
   </article>`;
 }
 
+function runAction(act, num, d = {}) {
+  if (act === "call") return callCustomer(num);
+  if (act === "map") return window.open(
+    "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(d.addr),
+    "_blank", "noopener");
+  if (act === "done") return askDone(d.code);
+  if (act === "ask") return openThread(d.code);
+  if (act === "pay") return askCollect(num, parseFloat(d.due));
+  if (act === "more") return moreMenu(num);
+  if (act === "deliver") return deliverModal(num);
+  if (act === "pickup") return confirmStep(num, "picked-up", "Picked up the clothes?", "Yes, picked up");
+  if (act === "ready") return confirmStep(num, "ready", "Clothes washed and ready?", "Yes, ready");
+}
+
 function wireRows() {
   $("list").querySelectorAll("[data-do]").forEach((b) => {
-    b.onclick = () => {
-      const num = b.closest("[data-num]").dataset.num;
-      const d = b.dataset;
-      if (d.do === "call") return callCustomer(num);
-      if (d.do === "map") return window.open(
-        "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(d.addr),
-        "_blank", "noopener");
-      if (d.do === "done") return askDone(d.code);
-      if (d.do === "ask") return openThread(d.code);
-      if (d.do === "pay") return askCollect(num, parseFloat(d.due));
-      if (d.do === "more") return moreMenu(num);
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      runAction(b.dataset.do, b.closest("[data-num]").dataset.num, b.dataset);
     };
+  });
+  // Row par kahin bhi tap = poori detail. Delivery boy ko pata hona chahiye
+  // ki is order mein kya-kya kapde hain, kitne dene hain, kitna paisa.
+  $("list").querySelectorAll("[data-open]").forEach((row) => {
+    row.onclick = () => {
+      const w = WORK.find((x) => x.number === row.dataset.num);
+      if (w && w.hasOrder) return orderDetailModal(w.number);
+      if (w && w.tasks[0]) return askDone(w.tasks[0].code);
+    };
+  });
+}
+
+/* ─── order ki poori detail ─────────────────────────────────────────── */
+const STATUS_WORD = {
+  RECEIVED: "Received", PICKUP_ASSIGNED: "To pick up", PICKED_UP: "Picked up", IN_WASH: "Washing",
+  IN_DRY: "Drying", IN_IRON: "Ironing", READY: "Ready", OUT_FOR_DELIVERY: "Out for delivery",
+  DELIVERED: "Delivered", ON_HOLD: "On hold", CANCELLED: "Cancelled",
+};
+/* IMP_006: "Washing for 30h (limit 24h)" — deri ho to laal patti, warna
+   halki line. Milestones sirf un plans mein jahan timeline khuli hai. */
+const hrs = (h) => h < 1 ? `${Math.round(h * 60)}m` : h < 48 ? `${Math.round(h)}h` : `${Math.round(h / 24)}d`;
+function stageLine(t) {
+  if (!t) return "";
+  const head = t.delayed
+    ? `<div class="delay-bar">⏱ Delayed — ${esc(t.delay_reason)}</div>`
+    : `<p class="said">⏱ ${esc(t.stage_label)} for ${hrs(t.stage_hours)}${t.stage_limit ? ` · limit ${t.stage_limit}h` : ""}</p>`;
+  const ms = (t.milestones || []).map((m) => `<div class="od-sub"><span>${esc(m.label)}</span>
+      <span class="${m.late ? "late-t" : ""}">${m.hours != null ? hrs(m.hours) : ""}</span></div>`).join("");
+  return head + (ms ? `<div class="od-block"><div class="od-head"><b>Progress</b></div>${ms}</div>` : "");
+}
+
+async function orderDetailModal(number) {
+  let o;
+  try { o = await api(`/orders/${encodeURIComponent(number)}`); }
+  catch (e) { toast(e.message, true); return; }
+  const w = WORK.find((x) => x.number === number) || { tasks: [], hasOrder: true };
+  const main = primaryAction({ ...w, status: o.status, clothes: o.clothes });
+  const c = o.clothes || { total: 0, delivered: 0, pending: 0 };
+  const lineHtml = (o.lines || []).map((l) => {
+    const tag = (d, q) => d >= q ? `<span class="dl-tag ok">✓ delivered</span>`
+      : d > 0 ? `<span class="dl-tag part">${q - d} pending</span>` : "";
+    if (l.pieces) {
+      return `<div class="od-line"><div class="od-top"><b>${esc(l.name)}</b><span>${esc(String(l.weight))} kg</span></div>
+        ${l.pieces.map((p) => `<div class="od-sub"><span>${esc(p.type)}</span><span>× ${p.qty} ${tag(p.delivered, p.qty)}</span></div>`).join("")}
+      </div>`;
+    }
+    return `<div class="od-line"><div class="od-top"><b>${esc(l.name)}${l.service && l.service !== l.name ? ` <small>${esc(l.service)}</small>` : ""}</b>
+      <span>${l.bag ? `${esc(String(l.weight))} kg` : `× ${l.qty}`} ${tag(l.delivered, l.qty)}</span></div></div>`;
+  }).join("") || `<p class="said">No items on this bill.</p>`;
+  openModal(`<h3>${o.urgent ? "🔴 " : ""}${esc(o.customer)}</h3>
+    <p class="said">${esc(o.number)} · ${esc(STATUS_WORD[o.status] || o.status)}${o.delivery ? ` · delivery ${esc(whenParts(o.delivery).top)}` : ""}${o.urgent ? " · ⚡ URGENT" : ""}</p>
+    ${stageLine(o.tracking)}
+    <div class="od-block">
+      <div class="od-head"><b>Clothes</b><span>${c.total} total${c.delivered ? ` · ${c.delivered} delivered · <b class="late-t">${c.pending} pending</b>` : ""}</span></div>
+      ${lineHtml}
+    </div>
+    <div class="od-block">
+      <div class="kv"><span>Bill</span><b>${money(o.total)}</b></div>
+      ${o.urgent_charge ? `<div class="kv"><span>incl. urgent charge</span><b>${money(o.urgent_charge)}</b></div>` : ""}
+      <div class="kv"><span>Paid</span><b>${money(o.paid)}</b></div>
+      <div class="kv"><span>Due</span><b class="${o.due > 0 ? "late-t" : ""}">${money(Math.max(0, o.due))}</b></div>
+    </div>
+    ${o.notes ? `<div class="od-block"><b>Notes</b><p class="note">${esc(o.notes)}</p></div>` : ""}
+    <div class="btnrow">
+      <button class="btn ghost" data-od="call">📞 Call</button>
+      ${main ? `<button class="btn go" data-od="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}>${esc(main.label)}</button>` : ""}
+      ${o.can_collect && o.due > 0 ? `<button class="btn money" data-od="pay" data-due="${o.due}">${money(o.due)} collect</button>` : ""}
+    </div>
+    <div class="btnrow">
+      <button class="btn ghost" data-od="share">🧾 Send bill</button>
+      <button class="btn ghost" data-act="close">Close</button>
+    </div>`);
+  $("modal-body").querySelectorAll("[data-od]").forEach((b) => {
+    b.onclick = () => {
+      closeModal();
+      if (b.dataset.od === "share") return shareBill(number);
+      return runAction(b.dataset.od, number, b.dataset);
+    };
+  });
+}
+
+/* ─── delivery: sab ya kuch kapde (BUG_008) ─────────────────────────── */
+/* 12 mein se 8 shirt diye — baaki 4 pending rehte hain aur agli baar
+   "Deliver rest (4)" dikhta hai. Default: sab chune hue (aam haalat). */
+async function deliverModal(number) {
+  let o;
+  try { o = await api(`/orders/${encodeURIComponent(number)}`); }
+  catch (e) { toast(e.message, true); return; }
+  // har chunne layak cheez ek "slot": {line, piece?, max, name, bag?}
+  const slots = [];
+  (o.lines || []).forEach((l) => {
+    if (l.pieces) {
+      l.pieces.forEach((p) => { if (p.pending > 0) slots.push({ line: l.line, piece: p.piece, max: p.pending, name: p.type, group: `${l.name} · ${l.weight} kg` }); });
+    } else if (l.pending > 0) {
+      slots.push({ line: l.line, max: l.pending, name: l.name, sub: l.service !== l.name ? l.service : "", bag: !!l.bag, weight: l.weight });
+    }
+  });
+  if (!slots.length) { toast("Nothing left to deliver on this bill", true); return; }
+  const pick = slots.map((s) => s.max);   // default: sab
+  const totalPending = slots.reduce((a, s) => a + s.max, 0);
+  let lastGroup = "";
+  openModal(`<h3>Deliver — ${esc(o.number)}</h3>
+    <p class="said">${esc(o.customer)} · ${totalPending} to deliver${o.clothes.delivered ? ` (${o.clothes.delivered} already delivered)` : ""}</p>
+    <div class="btnrow mt0">
+      <button type="button" class="btn ghost sm" id="dl-all">Select all</button>
+      <button type="button" class="btn ghost sm" id="dl-none">Clear</button>
+    </div>
+    <div class="dl-list">${slots.map((s, i) => {
+      const head = s.group && s.group !== lastGroup ? `<div class="dl-group">${esc(s.group)}</div>` : "";
+      lastGroup = s.group || "";
+      return head + (s.bag
+        ? `<label class="dl-row"><span class="dl-name">${esc(s.name)} <small>${esc(String(s.weight))} kg bag</small></span>
+             <input type="checkbox" data-bag="${i}" checked aria-label="Deliver the whole bag"></label>`
+        : `<div class="dl-row"><span class="dl-name">${esc(s.name)}${s.sub ? ` <small>${esc(s.sub)}</small>` : ""}</span>
+             <div class="stepper sm">
+               <button type="button" class="step" data-dl="${i}" data-by="-1" aria-label="One less">−</button>
+               <input type="number" inputmode="numeric" min="0" max="${s.max}" value="${s.max}" data-dlq="${i}" aria-label="How many">
+               <button type="button" class="step" data-dl="${i}" data-by="1" aria-label="One more">+</button>
+             </div>
+             <small class="dl-of">of ${s.max}</small></div>`);
+    }).join("")}</div>
+    <p class="dl-sum" id="dl-sum"></p>
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Cancel</button>
+      <button class="btn go" id="dl-go">Deliver</button>
+    </div>`);
+  const body = $("modal-body");
+  const paint = () => {
+    const n = pick.reduce((a, v) => a + v, 0);
+    const left = totalPending - n;
+    $("dl-sum").innerHTML = n === 0 ? "Pick the clothes you are handing over."
+      : left === 0 ? `<b>All ${n}</b> — the order will be marked <b>delivered</b>.`
+      : `Delivering <b>${n}</b> · <b class="late-t">${left} will stay pending</b>`;
+    $("dl-go").textContent = n === 0 ? "Deliver" : left === 0 ? `✅ Deliver all ${n}` : `✅ Deliver ${n}`;
+    $("dl-go").disabled = n === 0;
+    slots.forEach((s, i) => {
+      const q = body.querySelector(`[data-dlq="${i}"]`);
+      if (q && document.activeElement !== q) q.value = String(pick[i]);
+      const cb = body.querySelector(`[data-bag="${i}"]`);
+      if (cb) cb.checked = pick[i] > 0;
+    });
+  };
+  body.querySelectorAll("[data-dl]").forEach((b) => {
+    b.onclick = () => {
+      const i = +b.dataset.dl;
+      pick[i] = Math.max(0, Math.min(slots[i].max, pick[i] + parseInt(b.dataset.by, 10)));
+      paint();
+    };
+  });
+  body.querySelectorAll("[data-dlq]").forEach((inp) => {
+    inp.oninput = () => {
+      const i = +inp.dataset.dlq;
+      pick[i] = Math.max(0, Math.min(slots[i].max, parseInt(inp.value, 10) || 0));
+      paint();
+    };
+    inp.onblur = () => { inp.value = String(pick[+inp.dataset.dlq]); };
+  });
+  body.querySelectorAll("[data-bag]").forEach((cb) => {
+    cb.onchange = () => { pick[+cb.dataset.bag] = cb.checked ? 1 : 0; paint(); };
+  });
+  $("dl-all").onclick = () => { slots.forEach((s, i) => { pick[i] = s.max; }); paint(); };
+  $("dl-none").onclick = () => { pick.fill(0); paint(); };
+  $("dl-go").onclick = (e) => busy(e.currentTarget, async () => {
+    const n = pick.reduce((a, v) => a + v, 0);
+    const all = n === totalPending;
+    const items = all ? null : slots.map((s, i) => ({ line: s.line, ...(s.piece != null ? { piece: s.piece } : {}), qty: pick[i] }))
+      .filter((x) => x.qty > 0);
+    const r = await api(`/orders/${encodeURIComponent(number)}/deliver`, { method: "POST", body: { items } });
+    closeModal();
+    toast(r.pending ? `${r.delivered_now} delivered — ${r.pending} still pending` : `${number} delivered ✅`, false, 3500);
+    loadToday(); refreshCurrent({ quiet: true });
+    // paisa baaki ho to seedha collect — darwaze par wahi agla kaam hai
+    if (o.can_collect && o.due > 0) askCollect(number, o.due);
+  });
+  paint();
+}
+
+function confirmStep(number, path, question, yes) {
+  const w = WORK.find((x) => x.number === number) || {};
+  openModal(`<h3>${esc(question)}</h3>
+    <p class="said">${esc(w.who || "")} · ${esc(number)}${w.items ? ` · ${esc(w.items)}` : ""}</p>
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Not now</button>
+      <button class="btn go" id="m-step">${esc(yes)}</button>
+    </div>`);
+  $("m-step").onclick = (e) => busy(e.currentTarget, async () => {
+    await api(`/orders/${encodeURIComponent(number)}/${path}`, { method: "POST" });
+    closeModal();
+    toast(`${number} — ${yes.replace(/^Yes, /, "")} ✅`);
+    loadToday(); refreshCurrent({ quiet: true });
   });
 }
 
@@ -525,6 +756,9 @@ function moreMenu(number) {
   openModal(`<h3>${esc(number)}</h3>
     <p class="said">${esc(w.who || "")}</p>
     <div class="btnrow stack">
+      ${w.hasOrder ? `<button class="btn ghost" data-act="detail" data-arg="${esc(number)}">👁 Full details</button>` : ""}
+      ${t ? `<button class="btn ghost" data-act="jobdone" data-arg="${esc(t.code)}">✅ Mark job ${esc(t.code)} done</button>` : ""}
+      ${t && ME.can_ask ? `<button class="btn ghost" data-act="thread" data-arg="${esc(t.code)}">❓ Ask the owner</button>` : ""}
       <button class="btn ghost" data-act="share" data-arg="${esc(number)}">🧾 Send bill on WhatsApp</button>
       <button class="btn ghost" data-act="photo" data-arg="${esc(number)}">📷 Add a photo</button>
       ${t && ME.features.includes("cancel_approval") && !t.cancel_requested
@@ -565,12 +799,14 @@ async function openThread(code) {
   openModal(`<h3>${esc(th.title)}</h3>
     <p class="said">${esc(code)}</p>
     ${msgs}
-    <label for="m-q">Ask the owner</label>
-    <textarea id="m-q" placeholder="e.g. is the address right? how many items?"></textarea>
+    ${ME.can_ask ? `<label for="m-q">Ask the owner</label>
+    <textarea id="m-q" placeholder="e.g. how many items? when to deliver?"></textarea>` : ""}
     <div class="btnrow">
       <button class="btn ghost" data-act="close">Close</button>
-      <button class="btn go" id="m-send">Send</button>
+      ${ME.can_ask ? `<button class="btn go" id="m-send">Send</button>` : ""}
     </div>`);
+  // WhatsApp juda nahi — sawaal owner tak jaata hi nahi, to poochhne ka rasta bhi nahi
+  if (!ME.can_ask) return;
   $("m-send").onclick = (e) => {
     const text = $("m-q").value.trim();
     if (text.length < 2) { toast("Write your question first", true); return; }
@@ -669,6 +905,9 @@ async function askCollect(order, due) {
         + (older ? ` · ${older} purana bill chukta` : ""),
       );
       loadToday(); refreshCurrent({ quiet: true });
+      // Dukaan ka WhatsApp API juda ho (can_ask) to server khud grahak ko
+      // "payment mila" bhejta hai. Nahi to preview — apne WhatsApp se bhejo.
+      if (!ME.can_ask && canBill()) composeMessage(order, "payment_thanks");
     });
   };
   $("m-cash").onclick = (e) => send(e, "cash");
@@ -743,6 +982,7 @@ async function loadBills(opts = {}) {
     b.onclick = () => {
       const num = b.closest("[data-num]").dataset.num;
       if (b.dataset.bill === "share") return shareBill(num);
+      if (b.dataset.bill === "msg") return messageMenu(num, parseFloat(b.closest("[data-num]").dataset.due || "0"));
       if (b.dataset.bill === "remind") return remindBill(num, b);
       if (b.dataset.bill === "pay") return askCollect(num, parseFloat(b.dataset.due));
     };
@@ -752,7 +992,7 @@ async function loadBills(opts = {}) {
 function billRow(b) {
   const w = whenParts(b.delivery);
   const paid = !(b.due > 0);
-  return `<article class="row" data-num="${esc(b.number)}">
+  return `<article class="row" data-num="${esc(b.number)}" data-due="${Number(b.due) || 0}">
     <div class="spine ${paid ? "ready" : w.late ? "late" : "deliver"}"></div>
     <div class="when ${w.late && !paid ? "late" : ""}">
       <b>${esc(w.top)}</b>${w.sub ? `<span>${esc(w.sub)}</span>` : ""}
@@ -765,6 +1005,7 @@ function billRow(b) {
       <div class="sub">${esc(b.number)} · ${esc(b.created)}${b.items ? " · " + esc(b.items) : ""}</div>
       <div class="acts">
         <button class="btn ghost sm" data-bill="share">🧾 Send</button>
+        <button class="btn ghost sm" data-bill="msg">💬 Message</button>
         ${b.due > 0 && ME.is_manager ? `<button class="btn ghost sm" data-bill="remind">Remind</button>` : ""}
         ${ME.features.includes("cod_collection") && b.due > 0
           ? `<button class="btn money sm" data-bill="pay" data-due="${b.due}">Collect</button>` : ""}
@@ -793,6 +1034,72 @@ async function shareBill(number) {
   SHARE_TEXT = r.text;
   openModal(`<h3>Send the bill</h3>
     <p class="said">WhatsApp opens with the bill already written — just press send. To ${esc(r.name)}.</p>
+    <pre class="sharetext">${esc(r.text)}</pre>
+    <div class="btnrow">
+      <a class="btn go" href="${esc(waUrl(r.phone, r.text))}" target="_blank" rel="noopener" data-act="close">📲 Open WhatsApp</a>
+      <button class="btn ghost" id="m-copy">Copy</button>
+    </div>
+    <div class="btnrow">
+      <a class="btn ghost" href="${esc(rawbtUrl(r.print_text))}" data-act="close">🖨 Bluetooth printer</a>
+      <button class="btn ghost" id="m-print">🖨 Print</button>
+    </div>
+    <p class="hint">Bluetooth printer: install the free <b>RawBT</b> app on this Android phone once and pair the printer in it.</p>
+    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
+  $("m-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied"); }
+    catch (e) { toast("Could not copy — select the text above", true); }
+  };
+  $("m-print").onclick = () => {
+    closeModal();
+    const el = $("receipt");
+    el.textContent = r.print_text;
+    el.className = r.paper_mm === 80 ? "paper-80" : "paper-58";
+    window.print();
+  };
+}
+
+/* Chhota Bluetooth thermal printer. Saste 58/80mm printer "classic
+   Bluetooth" hote hain — browser unse seedha baat nahi kar sakta (Web
+   Bluetooth sirf BLE aur HTTPS). Dukaanein Android par RawBT app chalati
+   hain: ye link bill ke ESC/POS bytes seedha usko deta hai. Text server se
+   ASCII aur 32/48 akshar par kata hua aata hai (₹ ki jagah Rs.). */
+function rawbtUrl(text) {
+  // ESC @ (reset) + bill + khaali lines + GS V 66 0 (cutter ho to kaat do)
+  const body = "\x1b@" + String(text || "").replace(/[^\x0a\x20-\x7e]/g, "") + "\n\n\n\n" + "\x1dVB\x00";
+  return `intent:base64,${btoa(body)}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
+}
+
+/* ─── grahak ko message: thank you, payment mila, review ────────────── */
+/* Text server banata hai (owner ka apna format bhi). Staff pehle padhta
+   hai, phir apne phone ka WhatsApp — wa.me link, number aur text bhara hua.
+   Paise ki yaad sirf manager (neeche remindBill), isliye wo yahan tabhi
+   jab manager ho aur paisa baaki ho. */
+const MSG_KINDS = [
+  ["payment_thanks", "💚", "Payment received — thank you"],
+  ["service_thanks", "🙏", "Thank you for the service"],
+  ["review_request", "⭐", "Please review us on Google"],
+];
+function messageMenu(number, due) {
+  const kinds = (ME.is_manager && due > 0 ? [["remind", "💰", "Payment reminder"]] : []).concat(MSG_KINDS);
+  openModal(`<h3>💬 Message — ${esc(number)}</h3>
+    <p class="said">You see the message before it goes.</p>
+    ${kinds.map(([k, ico, label]) => `<button class="btn ghost wide" data-msg="${k}">${ico} ${label}</button>`).join("")}
+    <div class="btnrow"><button class="btn ghost" data-act="close">Cancel</button></div>`);
+  $("modal-body").querySelectorAll("[data-msg]").forEach((b) => {
+    b.onclick = () => {
+      if (b.dataset.msg === "remind") { closeModal(); return remindBill(number, null); }
+      return busy(b, () => composeMessage(number, b.dataset.msg));
+    };
+  });
+}
+async function composeMessage(number, kind) {
+  let r;
+  try { r = await api(`/orders/${encodeURIComponent(number)}/message?kind=${kind}`); }
+  catch (e) { toast(e.message, true); return; }
+  const label = (MSG_KINDS.find((x) => x[0] === kind) || [])[2] || "Message";
+  SHARE_TEXT = r.text;
+  openModal(`<h3>${esc(label)}</h3>
+    <p class="said">To ${esc(r.name)}</p>
     <pre class="sharetext">${esc(r.text)}</pre>
     <div class="btnrow">
       <a class="btn go" href="${esc(waUrl(r.phone, r.text))}" target="_blank" rel="noopener" data-act="close">📲 Open WhatsApp</a>
@@ -843,8 +1150,19 @@ let RATES = null, CART = [], PICKED = "", NEEDS_PICKUP = false;
 // Chhoot: mode "amt" ya "pct", aur ek value. Do alag field rakhne par log
 // dono bhar dete hain aur phir poochte hain ki kaunsa laga.
 let DISC = { mode: "amt", value: 0 };
+// ⚡ Urgent: on, haath se badla?, badli hui rakam. Server bhi yahi hisaab lagata hai.
+let URG = { on: false, manual: false, amt: 0 };
 // Chune hue purane grahak ka baaki. Naye grahak par 0.
 let PREV_DUE = 0, PREV_BILLS = 0;
+// Bill ka timer (IMP_006): bill form par pehle asli tap/likhne se Save tak.
+// Ek hi document listener — #list doosre tab bhi dikhata hai, isliye
+// sirf tab ginte hain jab bill form (b-phone) screen par ho.
+let BILL_STARTED = 0;
+const startBillTimer = (e) => {
+  if (!BILL_STARTED && $("b-phone") && e.target.closest && e.target.closest("#list")) BILL_STARTED = Date.now();
+};
+document.addEventListener("input", startBillTimer, true);
+document.addEventListener("click", startBillTimer, true);
 
 async function showNewBill() {
   $("chips").innerHTML = "";
@@ -883,27 +1201,11 @@ async function showNewBill() {
 
     <div class="card">
       <h3>Items</h3>
-      <div class="frow">
-        <div>
-          <label for="b-svc">Service</label>
-          <select id="b-svc">${services.map((s) => `<option>${esc(s)}</option>`).join("")}</select>
-        </div>
-        <div>
-          <label for="b-item">Item</label>
-          <select id="b-item"></select>
-        </div>
-      </div>
-      <div class="addrow">
-        <div class="qty">
-          <label for="b-qty">Qty</label>
-          <div class="stepper">
-            <button type="button" class="step" data-step="-1" aria-label="One less">−</button>
-            <input id="b-qty" type="number" inputmode="decimal" value="1" min="0.1" step="0.5">
-            <button type="button" class="step" data-step="1" aria-label="One more">+</button>
-          </div>
-        </div>
-        <button class="btn go" id="b-add">Add</button>
-      </div>
+      <label for="b-svc">Service</label>
+      <select id="b-svc"></select>
+      <label for="b-q" id="b-qlabel">Item</label>
+      <input id="b-q" type="search" placeholder="Search item — e.g. shirt" autocomplete="off" enterkeyhint="done">
+      <div class="item-list" id="b-items" aria-live="polite"></div>
       <div id="b-cart"></div>
     </div>
 
@@ -915,14 +1217,28 @@ async function showNewBill() {
       </div>
       <p class="hint" id="b-pickhint">The washing queue gets this bill.</p>
 
-      <h3 class="mt-lg">Discount</h3>
-      <div class="discrow">
-        <div class="pick sm">
-          <button type="button" class="pickbtn on" data-disc="amt">₹</button>
-          <button type="button" class="pickbtn" data-disc="pct">%</button>
+      <button type="button" class="urgbtn mt-lg" id="b-urg" aria-pressed="false">
+        <span>⚡ Urgent</span><small id="b-urghint"></small>
+      </button>
+      <div id="b-urgbox" hidden>
+        <label for="b-urgamt">Urgent charge (₹)</label>
+        <div class="discrow">
+          <input id="b-urgamt" type="number" inputmode="decimal" min="0" step="1">
+          <button type="button" class="btn ghost sm" id="b-urgnone">No charge</button>
         </div>
-        <input id="b-disc" type="number" inputmode="decimal" value="0" min="0" placeholder="0">
+        <p class="hint mt-xs" id="b-urgnote"></p>
       </div>
+
+      <details class="fold mt-lg">
+        <summary>Discount <small id="b-discsum">none</small></summary>
+        <div class="discrow">
+          <div class="pick sm">
+            <button type="button" class="pickbtn on" data-disc="amt">₹</button>
+            <button type="button" class="pickbtn" data-disc="pct">%</button>
+          </div>
+          <input id="b-disc" type="number" inputmode="decimal" value="0" min="0" placeholder="0">
+        </div>
+      </details>
 
       <h3 class="mt-lg">Payment</h3>
       <label for="b-adv">Received now (₹)</label>
@@ -936,38 +1252,6 @@ async function showNewBill() {
       <button class="btn go" id="b-save">Create bill</button>
     </div>`;
 
-  const fillItems = () => {
-    const svc = $("b-svc").value;
-    $("b-item").innerHTML = RATES.filter((r) => r.service === svc)
-      .map((r) => `<option value="${esc(r.garment)}">${esc(r.garment)} — ₹${r.rate}${r.unit === "kg" ? "/kg" : ""}</option>`)
-      .join("");
-  };
-  fillItems();
-  $("b-svc").onchange = fillItems;
-
-  // Geele haath, dhoop, ek haath — 0.5 badhane ke liye keyboard kholna
-  // sazaa hai. Stepper se ek tap.
-  $("list").querySelectorAll("[data-step]").forEach((b) => {
-    b.onclick = () => {
-      const cur = parseFloat($("b-qty").value) || 0;
-      const next = Math.round((cur + parseFloat(b.dataset.step)) * 10) / 10;
-      $("b-qty").value = String(Math.max(0.5, next));
-    };
-  });
-
-  $("b-add").onclick = () => {
-    const svc = $("b-svc").value, item = $("b-item").value;
-    const qty = parseFloat($("b-qty").value);
-    if (!(qty > 0)) return toast("Enter how many", true);
-    const card = (RATES.find((r) => r.service === svc && r.garment === item) || {}).rate || 0;
-    const same = CART.find((x) => x.service === svc && x.garment === item);
-    // Wahi cheez dobara jodi to sirf ginti badhti hai — par uska badla hua
-    // rate waisa ka waisa rehta hai, warna mol-bhav har baar mit jaata.
-    if (same) same.qty = Math.round((same.qty + qty) * 100) / 100;
-    else CART.push({ service: svc, garment: item, qty, rate: card, card });
-    $("b-qty").value = "1";
-    renderCart();
-  };
 
   // Chhoot ka mode. ₹ se % par jaate hi value ka matlab badal jaata hai,
   // isliye value shunya kar dete hain — "50" ka 50% ban jaana chori hai.
@@ -985,6 +1269,39 @@ async function showNewBill() {
     DISC.value = Math.max(0, parseFloat($("b-disc").value) || 0);
     renderCart();
   };
+  // ⚡ Urgent — ek tap; charge owner ki setting se, badlo ya "No charge"
+  URG = { on: false, manual: false, amt: 0 };
+  const cfg = ME.urgent || { type: "percent", value: 50, days: 1 };
+  const when = cfg.days === 0 ? "today" : cfg.days === 1 ? "tomorrow" : `in ${cfg.days} days`;
+  $("b-urghint").textContent = (cfg.value ? (cfg.type === "flat" ? `+${money(cfg.value)}` : `+${cfg.value}%`) : "no extra charge")
+    + ` · delivery ${when}`;
+  $("b-urg").onclick = () => {
+    URG = { on: !URG.on, manual: false, amt: 0 };
+    $("b-urg").classList.toggle("on", URG.on);
+    $("b-urg").setAttribute("aria-pressed", String(URG.on));
+    $("b-urgbox").hidden = !URG.on;
+    renderCart();
+  };
+  $("b-urgamt").oninput = () => {
+    URG.manual = true;
+    URG.amt = Math.max(0, parseFloat($("b-urgamt").value) || 0);
+    renderCart();
+  };
+  $("b-urgamt").onfocus = () => $("b-urgamt").select();
+  $("b-urgnone").onclick = () => { URG.manual = true; URG.amt = 0; $("b-urgamt").value = "0"; renderCart(); };
+  $("b-svc").onchange = () => { PICK_SVC = $("b-svc").value; renderPicker(); };
+  $("b-q").oninput = renderPicker;
+  $("b-q").onkeydown = (ev) => {
+    // Enter = pehla nateeja jod do (ya naya banao, agar kuch na mila)
+    if (ev.key !== "Enter") return;
+    ev.preventDefault();
+    // kg mein Enter = pehla kapda bore mein (weight wali line nahi)
+    const first = $("b-items").querySelector("[data-piece], [data-addpiece]")
+      || $("b-items").querySelector("[data-tile], [data-create]");
+    if (first) first.click();
+  };
+  $("b-disc").onfocus = () => $("b-disc").select();
+  $("b-adv").onfocus = () => $("b-adv").select();
   $("b-adv").oninput = renderCart;
   // Kapde kahan hain — yahi tay karta hai ki bill washer ki kataar mein
   // jayega ya delivery wale ke raaste mein. Pehle ye sawaal poocha hi
@@ -1005,21 +1322,341 @@ async function showNewBill() {
   renderCart();
 }
 
+/* ─── kapde jodna: service dropdown + item search ───────────────────── */
+/* Pehle: Service dropdown → Item dropdown → Qty → Add, har kapde par.
+   Phir tiles aaye — tez the, par chhoti screen par 20-30 kapdon ke tiles
+   mein dhoondhna padta tha. Ab: service chuno, item ka naam likhna shuru
+   karo ("shi" → Shirt), neeche patli list — tap = jud gaya, dobara = 2.
+   Na mile to wahin "＋ Create" — naam pehle se bhara hua. Doosri service
+   mein mile to wo bhi dikhta hai. */
+let PICK_SVC = "";
+function pickerServices() {
+  const all = [...new Set(RATES.map((r) => r.service))];
+  // piece wali services pehle — counter par wahi zyada lagti hain
+  return all.sort((a, b) => isKgService(a) - isKgService(b));
+}
+function renderPicker() {
+  const box = $("b-items");
+  if (!box || !RATES) return;
+  const svcs = pickerServices();
+  if (!svcs.includes(PICK_SVC)) PICK_SVC = svcs[0] || "";
+  const sel = $("b-svc");
+  const sig = svcs.join("");
+  if (sel.dataset.sig !== sig) {
+    // sirf tab dobara bharo jab list badli — warna khula dropdown band ho jaata
+    sel.innerHTML = svcs.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+    sel.dataset.sig = sig;
+  }
+  sel.value = PICK_SVC;
+
+  const raw = ($("b-q").value || "").trim().replace(/\s+/g, " ");
+  const q = raw.toLowerCase();
+  const kgMode = isKgService(PICK_SVC);
+  $("b-q").placeholder = kgMode ? "Search clothes in the bag — e.g. shirt" : "Search item — e.g. shirt";
+  $("b-qlabel").textContent = kgMode ? "Clothes in the bag (count only, no rate)" : "Item";
+  if (kgMode) { renderKgPicker(box, raw, q); return; }
+  const hit = (r) => !q || (r.garment || "by weight").toLowerCase().includes(q);
+  const here = RATES.filter((r) => r.service === PICK_SVC && hit(r));
+  const elsewhere = q ? RATES.filter((r) => r.service !== PICK_SVC && hit(r)).slice(0, 8) : [];
+  const rows = here.concat(elsewhere);
+  const line = (r, n, showSvc) => {
+    const inCart = CART.find((x) => x.service === r.service && x.garment === r.garment);
+    const badge = inCart ? (r.unit === "kg" ? `${inCart.qty} kg` : `× ${inCart.qty}`) : "";
+    return `<button type="button" class="item-row${inCart ? " in" : ""}" data-tile="${n}">
+      <span class="ir-name">${esc(r.garment || "By weight")}${showSvc ? ` <small>${esc(r.service)}</small>` : ""}</span>
+      <span class="ir-price">${money(r.rate)}${r.unit === "kg" ? "/kg" : ""}</span>
+      <span class="ir-add${badge ? " n" : ""}">${badge ? esc(badge) : "＋"}</span>
+    </button>`;
+  };
+  let html = here.map((r, n) => line(r, n, false)).join("");
+  if (q && !here.length) html += `<p class="ir-none">No “${esc(raw)}” in ${esc(PICK_SVC)}.</p>`;
+  if (elsewhere.length) {
+    html += `<div class="ir-head">In other services</div>`
+      + elsewhere.map((r, k) => line(r, here.length + k, true)).join("");
+  }
+  // "shi" par Shirt mil gaya to "Create shi" sirf bheed hai — Create tabhi
+  // jab is service mein kuch na mile (ya search khaali ho)
+  if (!q || !here.length) {
+    html += `<button type="button" class="item-row create" data-create="1">${q
+      ? `＋ Create “${esc(raw)}” in ${esc(PICK_SVC)}`
+      : "＋ New item — not on the list"}</button>`;
+  }
+  box.innerHTML = html;
+  box.querySelectorAll("[data-tile]").forEach((b) => {
+    b.onclick = () => tapItem(rows[parseInt(b.dataset.tile, 10)]);
+  });
+  const create = box.querySelector("[data-create]");
+  if (create) create.onclick = () => newRateModal(PICK_SVC, raw);
+}
+/* ─── KG service: bore ke kapde, sirf ginti ─────────────────────────── */
+/* KG service ka rate card par ek hi row hota hai ("By weight"). Pehle yahan
+   kapde ka naam likhkar "Create" dabane par wo rate card mein jaane ki
+   koshish karta aur 409 aata ("already on the rate card") — kyunki kg mein
+   kapde ka koi alag daam hota hi nahi. Ab kg service chunne par search
+   kapdon ke NAAM dhoondhta hai; tap = bore mein ek aur (ginti), daam nahi.
+   Naam na mile to wahin "＋ Add to the bag" — rate card ko chhuta nahi. */
+const COMMON_CLOTHES = [
+  "Shirt", "T-shirt", "Pant", "Jeans", "Lower", "Shorts", "Kurta", "Pajama", "Saree",
+  "Salwar", "Dupatta", "Frock", "Top", "Jacket", "Sweater", "Towel", "Bedsheet",
+  "Pillow cover", "Curtain", "Blanket", "Undergarments", "Socks", "Handkerchief",
+];
+function isKgService(svc) {
+  const rows = (RATES || []).filter((r) => r.service === svc);
+  return rows.length > 0 && rows.every((r) => r.unit === "kg");
+}
+function kgLineFor(svc) {
+  let idx = CART.findIndex((x) => x.service === svc && x.unit === "kg");
+  if (idx >= 0) return idx;
+  const r = RATES.find((x) => x.service === svc && x.unit === "kg");
+  if (!r) return -1;
+  CART.push({ service: r.service, garment: r.garment, qty: 1, rate: r.rate, card: r.rate, unit: "kg", pieces: [] });
+  toast(`${r.service} added — enter the weight in kg below`, false, 2200);
+  return CART.length - 1;
+}
+function renderKgPicker(box, raw, q) {
+  const rate = RATES.find((x) => x.service === PICK_SVC && x.unit === "kg");
+  const line = CART.find((x) => x.service === PICK_SVC && x.unit === "kg");
+  const inBag = new Map((line ? line.pieces : []).map((p) => [p.type.toLowerCase(), p.qty]));
+  // bore mein pehle se pade kapde upar, phir rate card ke naam, phir aam kapde
+  const seen = new Set();
+  const names = [];
+  [...(line ? line.pieces.map((p) => p.type) : []),
+   ...RATES.map((r) => (r.garment || "").trim()),
+   ...COMMON_CLOTHES].forEach((n) => {
+    const k = n.toLowerCase();
+    if (n && !seen.has(k)) { seen.add(k); names.push(n); }
+  });
+  const matches = names.filter((n) => !q || n.toLowerCase().includes(q)).slice(0, q ? 12 : 40);
+  const count = line ? line.pieces.reduce((s, p) => s + p.qty, 0) : 0;
+  let html = `<button type="button" class="item-row kgrow${line ? " in" : ""}" data-weight="1">
+      <span class="ir-name">⚖️ By weight <small>${line ? `${count} clothes in the bag` : "tap, then enter the kg"}</small></span>
+      <span class="ir-price">${rate ? money(rate.rate) + "/kg" : ""}</span>
+      <span class="ir-add${line ? " n" : ""}">${line ? esc(`${line.qty} kg`) : "＋"}</span>
+    </button>
+    <div class="ir-head">Clothes in the bag — count only</div>`;
+  html += matches.map((n, i) => {
+    const c = inBag.get(n.toLowerCase());
+    return `<button type="button" class="item-row${c ? " in" : ""}" data-piece="${i}">
+      <span class="ir-name">${esc(n)}</span>
+      <span class="ir-add${c ? " n" : ""}">${c ? esc(`× ${c}`) : "＋"}</span>
+    </button>`;
+  }).join("");
+  // milte-julte naam mil gaye to "Add shi" sirf bheed — tabhi jab kuch na mile
+  if (q && !matches.length) {
+    html += `<button type="button" class="item-row create" data-addpiece="1">＋ Add “${esc(raw)}” to the bag</button>`;
+  }
+  box.innerHTML = html;
+  box.querySelector("[data-weight]").onclick = () => {
+    const idx = kgLineFor(PICK_SVC);
+    renderCart();
+    const inp = $("b-cart").querySelector(`[data-qty="${idx}"]`);
+    if (inp) { inp.focus(); inp.select(); }
+  };
+  box.querySelectorAll("[data-piece]").forEach((b) => {
+    b.onclick = () => addPiece(matches[parseInt(b.dataset.piece, 10)]);
+  });
+  const add = box.querySelector("[data-addpiece]");
+  if (add) add.onclick = () => addPiece(raw);
+}
+function addPiece(name) {
+  let type = String(name || "").trim().replace(/\s+/g, " ").slice(0, 60);
+  if (!type) return;
+  type = type[0].toUpperCase() + type.slice(1);   // "pillow cover" -> "Pillow cover"
+  const idx = kgLineFor(PICK_SVC);
+  if (idx < 0) return;
+  const line = CART[idx];
+  const p = line.pieces.find((x) => x.type.toLowerCase() === type.toLowerCase());
+  if (p) p.qty += 1; else line.pieces.push({ type, qty: 1 });
+  const searched = $("b-q").value.trim();
+  $("b-q").value = "";
+  renderCart();
+  if (navigator.vibrate) navigator.vibrate(12);
+  if (searched) $("b-q").focus();
+}
+
+function tapItem(r) {
+  if (!r) return;
+  let idx = CART.findIndex((x) => x.service === r.service && x.garment === r.garment);
+  if (idx >= 0) {
+    // wahi kapda dobara: ginti badhti hai, badla hua rate waisa hi rehta hai.
+    // KG par dobara tap se wazan nahi badhta — wazan likhna hota hai.
+    if (r.unit !== "kg") CART[idx].qty = Math.round((CART[idx].qty + 1) * 100) / 100;
+  } else {
+    CART.push({ service: r.service, garment: r.garment, qty: 1, rate: r.rate, card: r.rate, unit: r.unit || "pc", pieces: [] });
+    idx = CART.length - 1;
+  }
+  // search se joda tha to khaana saaf karke wahin focus — agla kapda seedha
+  // likho. Bina search ke tap kiya ho to keyboard zabardasti nahi kholte.
+  const searched = $("b-q") && $("b-q").value.trim();
+  if (searched) $("b-q").value = "";
+  renderCart();
+  if (navigator.vibrate) navigator.vibrate(12);   // haath ko pata chale ki juda
+  if (r.unit === "kg") {
+    const inp = $("b-cart").querySelector(`[data-qty="${idx}"]`);
+    if (inp) { inp.focus(); inp.select(); }
+  } else if (searched) {
+    $("b-q").focus();
+  }
+  toast(`${r.garment || r.service} added`, false, 1200);
+}
+
+/* Grahak aisa kapda laaya jo rate card par nahi. Bill chhod kar owner ko
+   phone karne ke bajaye yahin jod do — rate card mein bhi judta hai, taaki
+   agla bill wahi daam le. Server har jod audit karta hai.
+   showNewBill() dobara NAHI chalate: wo naam/number ke bhare khaane mita
+   deta. Sirf dono dropdown naye sire se bharte hain aur item cart mein. */
+function newRateModal(service, itemName = "") {
+  const services = [...new Set(RATES.map((r) => r.service))];
+  openModal(`<h3>Add to rate card</h3>
+    <p class="said">It is added to this bill and saved for the next bills too.</p>
+    <label for="nr-svc">Service</label>
+    <input id="nr-svc" list="nr-svcs" value="${esc(service || "")}" placeholder="e.g. Dry Clean" maxlength="60" autocomplete="off">
+    <datalist id="nr-svcs">${services.map((s) => `<option value="${esc(s)}">`).join("")}</datalist>
+    <div id="nr-itemwrap">
+      <label for="nr-item">Item</label>
+      <input id="nr-item" value="${esc(itemName)}" placeholder="e.g. Blazer" maxlength="60" autocomplete="off">
+    </div>
+    <div class="frow">
+      <div>
+        <label for="nr-unit">Charged per</label>
+        <select id="nr-unit"><option value="pc">Piece</option><option value="kg">Kg</option></select>
+      </div>
+      <div>
+        <label for="nr-rate">Rate (₹)</label>
+        <input id="nr-rate" type="number" inputmode="decimal" min="0" step="0.5" placeholder="0">
+      </div>
+    </div>
+    <div class="err" id="nr-err"></div>
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Cancel</button>
+      <button class="btn go" id="nr-save">Add to bill</button>
+    </div>`);
+  // KG service mein item nahi hota — poora bora tulta hai (dashboard jaisa)
+  const paintUnit = () => { $("nr-itemwrap").hidden = $("nr-unit").value === "kg"; };
+  $("nr-unit").onchange = paintUnit;
+  const known = RATES.find((r) => r.service === service);
+  if (known && known.unit === "kg") $("nr-unit").value = "kg";
+  paintUnit();
+  // jo pehle se pata hai (service, search ka naam) wo dobara nahi poochhte
+  $(!service ? "nr-svc" : ($("nr-unit").value === "kg" || itemName) ? "nr-rate" : "nr-item").focus();
+  $("nr-save").onclick = (e) => {
+    const unit = $("nr-unit").value, rate = parseFloat($("nr-rate").value);
+    const svc = $("nr-svc").value.trim(), item = unit === "kg" ? "" : $("nr-item").value.trim();
+    const fail = (msg, id) => { $("nr-err").textContent = msg; $(id).focus(); };
+    if (!svc) return fail("Write the service name.", "nr-svc");
+    if (unit === "pc" && !item) return fail("Write the item name.", "nr-item");
+    if (!(rate > 0)) return fail("Enter a rate above ₹0.", "nr-rate");
+    $("nr-err").textContent = "";
+    return busy(e.currentTarget, async () => {
+      let row;
+      try { row = await api("/rates", { method: "POST", body: { service: svc, garment: item, unit, rate } }); }
+      catch (err) { $("nr-err").textContent = err.message; return; }
+      RATES = RATES.filter((r) => !(r.service === row.service && r.garment === row.garment)).concat(row);
+      closeModal();
+      if (!$("b-items")) return;        // screen badal gayi — rate card to ban hi gaya
+      PICK_SVC = row.service;
+      tapItem(row);
+      toast(`${row.garment || row.service} added — ${money(row.rate)}${row.unit === "kg" ? "/kg" : ""}`);
+    });
+  };
+  $("modal-body").querySelectorAll("input").forEach((el) => {
+    el.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); $("nr-save").click(); } });
+  });
+}
+
+/* ─── kharcha ───────────────────────────────────────────────────────── */
+/* Petrol, detergent, chai-paani — jo paisa dukaan ke liye nikla, wahi
+   likh do. Owner ke dashboard mein naam ke saath dikhta hai. Yahan sirf
+   apna daala hua dikhta hai; galti ho to owner hatata hai. */
+async function showExpenses(opts = {}) {
+  $("chips").innerHTML = "";
+  if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
+  let d;
+  try { d = await api("/expenses"); }
+  catch (e) { $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (NAV !== "exp") return;
+  const today = new Date();
+  const iso = (dt) => new Date(dt.getTime() - dt.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+  const min = new Date(today); min.setDate(min.getDate() - d.backdate_days);
+  $("list").innerHTML = `
+    <div class="card">
+      <h3>Add expense</h3>
+      <label for="x-cat">Category</label>
+      <select id="x-cat"><option value="">Pick one…</option>${d.categories.map((c) => `<option>${esc(c)}</option>`).join("")}</select>
+      <div class="frow">
+        <div>
+          <label for="x-amt">Amount (₹)</label>
+          <input id="x-amt" type="number" inputmode="decimal" min="1" step="1" placeholder="0">
+        </div>
+        <div>
+          <label for="x-date">Date</label>
+          <input id="x-date" type="date" value="${iso(today)}" min="${iso(min)}" max="${iso(today)}">
+        </div>
+      </div>
+      <label for="x-desc">What for? (optional)</label>
+      <input id="x-desc" maxlength="300" placeholder="e.g. petrol for pickups">
+      <div class="err" id="x-err"></div>
+      <button class="btn go wide" id="x-save">Save expense</button>
+      <p class="hint">The owner sees it with your name. Older than ${d.backdate_days} days? Ask the owner.</p>
+    </div>
+    <div class="card">
+      <h3>My expenses <small class="said">last 30 days · ${money(d.total)}</small></h3>
+      ${d.expenses.length
+        ? d.expenses.map((x) => `
+          <div class="kv"><span>${esc(whenParts(x.spent_on).top)} · ${esc(x.category)}${x.description ? ` — ${esc(x.description)}` : ""}</span><b>${money(x.amount)}</b></div>`).join("")
+        : `<p class="hint mt0">Nothing yet.</p>`}
+    </div>`;
+  $("x-save").onclick = (e) => {
+    const category = $("x-cat").value, amount = parseFloat($("x-amt").value);
+    const fail = (msg, id) => { $("x-err").textContent = msg; $(id).focus(); };
+    if (!category) return fail("Pick a category.", "x-cat");
+    if (!(amount > 0)) return fail("Enter the amount.", "x-amt");
+    $("x-err").textContent = "";
+    return busy(e.currentTarget, async () => {
+      try {
+        await api("/expenses", { method: "POST", body: {
+          category, amount, spent_on: $("x-date").value || null, description: $("x-desc").value.trim(),
+        }});
+      } catch (err) { $("x-err").textContent = err.message; return; }
+      toast(`${money(amount)} ${category} saved ✅`);
+      showExpenses({ quiet: true });
+    });
+  };
+}
+
 /* Ek hisaab, ek jagah. UI aur server dono yahi kram lagate hain:
    gross -> chhoot -> total -> advance -> is bill ka due -> + purana. */
 function billMath() {
   const gross = CART.reduce((s, i) => s + i.qty * i.rate, 0);
   const raw = DISC.mode === "pct" ? (gross * DISC.value) / 100 : DISC.value;
   const discount = Math.min(Math.round(raw * 100) / 100, gross);
-  const total = Math.round((gross - discount) * 100) / 100;
+  // ⚡ Urgent charge chhoot ke baad — server (services/urgent.py) ka hi niyam:
+  // default = items ka % (ya fixed ₹), poore rupaye mein
+  let urg = 0;
+  if (URG.on) {
+    const c = ME.urgent || { type: "percent", value: 50 };
+    urg = URG.manual ? URG.amt : Math.max(0, Math.round(c.type === "flat" ? c.value : (gross * c.value) / 100));
+  }
+  const total = Math.round((gross - discount + urg) * 100) / 100;
   const adv = Math.min(Math.max(0, parseFloat(($("b-adv") || {}).value) || 0), total);
   const due = Math.round((total - adv) * 100) / 100;
-  return { gross, discount, total, adv, due, grand: Math.round((due + PREV_DUE) * 100) / 100 };
+  return { gross, discount, urg, total, adv, due, grand: Math.round((due + PREV_DUE) * 100) / 100 };
 }
 
+let CART_PAINTING = false;
+let EDIT_RATE = -1;   // kis line ka daam-khaana khula hai (-1 = koi nahi)
 function renderCart() {
   const box = $("b-cart");
   if (!box) return;
+  // Focus wala qty/wazan ka khaana hatate hi browser uska blur/change
+  // chalata hai, jo phir renderCart bulata — aadhe bane DOM par dobara
+  // innerHTML ("node to be removed is no longer a child"). Ek baar mein ek.
+  if (CART_PAINTING) return;
+  CART_PAINTING = true;
+  try { paintCart(box); } finally { CART_PAINTING = false; }
+}
+function paintCart(box) {
+  renderPicker();   // tiles par ginti ka badge cart ke saath chale
   const empty = CART.length === 0;
   $("b-pay").hidden = empty;
   $("b-bar").hidden = empty;
@@ -1029,44 +1666,75 @@ function renderCart() {
   // Har line ka daam badla ja sakta hai. Rate card ka daam saath dikhta
   // rehta hai — bina uske do din baad kisi ko yaad nahi rehta ki chhoot
   // di gayi thi ya galti hui thi.
-  box.innerHTML = `<div class="cart">${CART.map((i, n) => `
+  // Ek kapda = ek line: naam, − qty +, rakam, ✕. Daam ka khaana tabhi
+  // khulta hai jab "₹63 each ✎" dabaya jaye — mol-bhav kabhi-kabhi hota
+  // hai, aur har line par bada rate box cart ko do guna lamba karta tha.
+  box.innerHTML = `<div class="cart">${CART.map((i, n) => {
+    const kg = i.unit === "kg";
+    const changed = i.rate !== i.card;
+    return `
     <div class="cartrow">
-      <div class="ci-top">
-        <span class="ci-name">${esc(i.garment)} <small>${esc(i.service)}</small></span>
+      <div class="ci-line">
+        <div class="ci-name">${kg
+          ? `${esc(i.garment || i.service)} <small>${i.garment ? esc(i.service) + " · " : ""}kg</small>`
+          : `${esc(i.garment)} <small>${esc(i.service)}</small>`}
+          <button type="button" class="ci-rate${changed ? " changed" : ""}" data-editrate="${n}">${
+            money(i.rate)}${kg ? "/kg" : " each"}${changed ? ` · card ${money(i.card)}` : ""} ✎</button>
+        </div>
+        <div class="stepper sm">
+          <button type="button" class="step" data-q="${n}" data-by="${kg ? -0.5 : -1}" aria-label="${kg ? "Half kg less" : "One less"}">−</button>
+          <input type="number" inputmode="decimal" data-qty="${n}" value="${i.qty}" min="0.1" step="${kg ? 0.1 : 1}" aria-label="${kg ? "Weight in kg" : "How many"}">
+          <button type="button" class="step" data-q="${n}" data-by="${kg ? 0.5 : 1}" aria-label="${kg ? "Half kg more" : "One more"}">+</button>
+        </div>
         <b class="ci-amt">${money(i.qty * i.rate)}</b>
         <button class="rm" data-rm="${n}" aria-label="Remove">✕</button>
       </div>
-      <div class="ci-edit">
-        <div class="stepper sm">
-          <button type="button" class="step" data-q="${n}" data-by="-1" aria-label="One less">−</button>
-          <input type="number" inputmode="decimal" data-qty="${n}" value="${i.qty}" min="0.1" step="0.5">
-          <button type="button" class="step" data-q="${n}" data-by="1" aria-label="One more">+</button>
-        </div>
-        <div class="ratebox">
-          <span class="cur">₹</span>
-          <input type="number" inputmode="decimal" data-rate="${n}" value="${i.rate}" min="0" aria-label="Rate">
-          <small>${i.rate === i.card ? "rate card" : "card ₹" + i.card}</small>
-        </div>
+      <div class="ratebox" ${EDIT_RATE === n ? "" : "hidden"}>
+        <span class="cur">₹</span>
+        <input type="number" inputmode="decimal" data-rate="${n}" value="${i.rate}" min="0" aria-label="Rate">
+        <small>${changed ? "card ₹" + i.card : "rate card"}</small>
       </div>
-    </div>`).join("")}
+      ${i.unit === "kg" ? `<div class="ci-pieces">
+        <button type="button" class="linkbtn" data-pieces="${n}">👕 ${piecesCount(i.pieces) ? "Edit clothes" : "+ Add clothes (count only)"}</button>
+        ${piecesCount(i.pieces) ? `<small>${esc(piecesLabel(i.pieces))}</small>` : ""}
+      </div>` : ""}
+    </div>`;
+  }).join("")}
     <div class="sums">
       <div class="s-row"><span>Subtotal</span><span>${money(m.gross)}</span></div>
       ${m.discount > 0 ? `<div class="s-row off"><span>Discount${
         DISC.mode === "pct" ? ` (${DISC.value}%)` : ""
       }</span><span>−${money(m.discount)}</span></div>` : ""}
+      ${m.urg > 0 ? `<div class="s-row urg"><span>⚡ Urgent charge</span><span>+${money(m.urg)}</span></div>` : ""}
       <div class="s-row big"><span>Total</span><span>${money(m.total)}</span></div>
       ${m.adv > 0 ? `<div class="s-row"><span>Received now</span><span>−${money(m.adv)}</span></div>` : ""}
       ${PREV_DUE > 0 ? `<div class="s-row warn"><span>Pichhla baaki (${PREV_BILLS})</span><span>${money(PREV_DUE)}</span></div>` : ""}
     </div></div>`;
 
   box.querySelectorAll("[data-rm]").forEach((b) => {
-    b.onclick = () => { CART.splice(parseInt(b.dataset.rm, 10), 1); renderCart(); };
+    b.onclick = () => { CART.splice(parseInt(b.dataset.rm, 10), 1); EDIT_RATE = -1; renderCart(); };
+  });
+  box.querySelectorAll("[data-pieces]").forEach((b) => {
+    b.onclick = () => piecesModal(parseInt(b.dataset.pieces, 10));
   });
   box.querySelectorAll("[data-q]").forEach((b) => {
     b.onclick = () => {
-      const i = CART[parseInt(b.dataset.q, 10)];
-      i.qty = Math.max(0.5, Math.round((i.qty + parseFloat(b.dataset.by)) * 10) / 10);
+      const n = parseInt(b.dataset.q, 10);
+      const i = CART[n];
+      const next = Math.round((i.qty + parseFloat(b.dataset.by)) * 10) / 10;
+      // kapda 1 se − kiya = hata do (ek tap mein galti theek). kg 0.5 se neeche nahi.
+      if (i.unit !== "kg" && next < 1) { CART.splice(n, 1); EDIT_RATE = -1; }
+      else i.qty = Math.max(i.unit === "kg" ? 0.5 : 1, next);
       renderCart();
+    };
+  });
+  box.querySelectorAll("[data-editrate]").forEach((b) => {
+    b.onclick = () => {
+      const n = parseInt(b.dataset.editrate, 10);
+      EDIT_RATE = EDIT_RATE === n ? -1 : n;
+      renderCart();
+      const inp = box.querySelector(`[data-rate="${n}"]`);
+      if (EDIT_RATE === n && inp) { inp.focus(); inp.select(); }
     };
   });
   // input par re-render nahi karte: har akshar par DOM badalne se cursor
@@ -1089,15 +1757,107 @@ function renderCart() {
   paintBar();
 }
 
+/* ─── KG line ke kapde: sirf ginti ─────────────────────────────────── */
+/* Bill wazan se (3.5 kg x ₹60). Par bore mein kya hai ye likhna zaroori
+   hai — washerman ko ginti milani hai, aur wapas dete waqt "ek kurta kam
+   hai" ka jawab yahi list hai. Daam kisi kapde ka nahi lagta. */
+const piecesCount = (p) => (p || []).reduce((s, x) => s + (parseInt(x.qty, 10) || 0), 0);
+const piecesLabel = (p) => (p || []).map((x) => `${x.type} ${x.qty}`).join(", ") + ` — ${piecesCount(p)} pcs`;
+
+function piecesModal(idx) {
+  const line = CART[idx];
+  if (!line) return;
+  let draft = (line.pieces || []).map((x) => ({ ...x }));
+  if (!draft.length) draft.push({ type: "", qty: 1 });
+  const names = [...new Set((RATES || []).map((r) => (r.garment || "").trim()).filter(Boolean))].sort();
+  openModal(`<h3>Clothes in ${esc(line.garment || line.service)}</h3>
+    <p class="said">Count only — the bill stays by weight.</p>
+    <datalist id="pc-names">${names.map((x) => `<option value="${esc(x)}">`).join("")}</datalist>
+    <div id="pc-rows"></div>
+    <button type="button" class="btn ghost wide" id="pc-add">+ Add another cloth</button>
+    <div class="s-row big"><span>Total pieces</span><span id="pc-total">0</span></div>
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Cancel</button>
+      <button class="btn go" id="pc-save">Save clothes</button>
+    </div>`);
+  const total = () => {
+    $("pc-total").textContent = piecesCount(draft.filter((x) => (x.type || "").trim()));
+  };
+  const paint = (focusLast) => {
+    $("pc-rows").innerHTML = draft.map((x, n) => `
+      <div class="frow pc-row">
+        <input list="pc-names" data-pc-name="${n}" value="${esc(x.type)}" placeholder="Cloth, e.g. Shirt" maxlength="60" aria-label="Cloth name">
+        <div class="stepper sm">
+          <button type="button" class="step" data-pc-step="${n}" data-by="-1" aria-label="One less">−</button>
+          <input type="number" inputmode="numeric" data-pc-qty="${n}" value="${x.qty}" min="1" step="1" aria-label="How many">
+          <button type="button" class="step" data-pc-step="${n}" data-by="1" aria-label="One more">+</button>
+          <button type="button" class="rm" data-pc-rm="${n}" aria-label="Remove cloth">✕</button>
+        </div>
+      </div>`).join("");
+    const rows = $("pc-rows");
+    rows.querySelectorAll("[data-pc-name]").forEach((el) => {
+      el.oninput = () => { draft[+el.dataset.pcName].type = el.value; total(); };
+      el.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); $("pc-add").click(); } };
+    });
+    rows.querySelectorAll("[data-pc-qty]").forEach((el) => {
+      el.oninput = () => { draft[+el.dataset.pcQty].qty = parseInt(el.value, 10) || 0; total(); };
+    });
+    rows.querySelectorAll("[data-pc-step]").forEach((b) => {
+      b.onclick = () => {
+        const x = draft[+b.dataset.pcStep];
+        x.qty = Math.max(1, (parseInt(x.qty, 10) || 0) + parseInt(b.dataset.by, 10));
+        paint();
+      };
+    });
+    rows.querySelectorAll("[data-pc-rm]").forEach((b) => {
+      b.onclick = () => {
+        draft.splice(+b.dataset.pcRm, 1);
+        if (!draft.length) draft.push({ type: "", qty: 1 });
+        paint();
+      };
+    });
+    total();
+    if (focusLast) {
+      const names = rows.querySelectorAll("[data-pc-name]");
+      names[names.length - 1].focus();
+    }
+  };
+  paint(true);
+  $("pc-add").onclick = () => { draft.push({ type: "", qty: 1 }); paint(true); };
+  $("pc-save").onclick = () => {
+    // ek hi kapda do baar likha ho to jod do — "Shirt 2" + "shirt 3" = Shirt 5
+    const merged = [];
+    draft.forEach((x) => {
+      const type = (x.type || "").trim().replace(/\s+/g, " ");
+      const qty = parseInt(x.qty, 10) || 0;
+      if (!type || qty < 1) return;
+      const same = merged.find((m) => m.type.toLowerCase() === type.toLowerCase());
+      if (same) same.qty += qty; else merged.push({ type, qty });
+    });
+    line.pieces = merged;
+    closeModal();
+    renderCart();
+  };
+}
+
 /* Neeche chipki hui patti — kul rakam aur ek button. */
 function paintBar() {
   const bar = $("b-barsum");
   if (!bar) return;
   const m = billMath();
+  if ($("b-urgamt") && URG.on) {
+    // default rakam khaane mein dikhti rahe — jab tak haath se na badli ho
+    if (!URG.manual && document.activeElement !== $("b-urgamt")) $("b-urgamt").value = String(m.urg);
+    $("b-urgnote").textContent = m.urg > 0 ? `${money(m.urg)} added to the bill` : "No urgent charge — still marked urgent";
+  }
+  if ($("b-discsum")) {
+    $("b-discsum").textContent = m.discount > 0
+      ? `−${money(m.discount)}${DISC.mode === "pct" ? ` (${DISC.value}%)` : ""}` : "none";
+  }
   bar.innerHTML = PREV_DUE > 0
     ? `<b>${money(m.grand)}</b><span>${money(m.due)} is bill ka + ${money(PREV_DUE)} purana</span>`
     : `<b>${money(m.due)}</b><span>${CART.length} item${CART.length > 1 ? "s" : ""}${
-        m.discount > 0 ? " · " + money(m.discount) + " chhoot" : ""}</span>`;
+        m.discount > 0 ? " · " + money(m.discount) + " chhoot" : ""}${URG.on ? " · ⚡ urgent" : ""}</span>`;
 }
 
 /* Naam likhte hi purana grahak. Counter par sabse badi galti yahi hoti
@@ -1174,16 +1934,22 @@ async function saveBill(btn) {
         discount_amount: DISC.mode === "amt" ? DISC.value : 0,
         discount_percent: DISC.mode === "pct" ? DISC.value : 0,
         needs_pickup: NEEDS_PICKUP,
+        // ⚡ jo rakam screen par dikh rahi thi wahi jaati hai (0 = maaf)
+        urgent: URG.on,
+        urgent_charge: URG.on ? m.urg : null,
+        bill_seconds: BILL_STARTED ? Math.round((Date.now() - BILL_STARTED) / 1000) : null,
         items: CART.map((i) => ({
           service: i.service, garment: i.garment, qty: i.qty,
           // Card ka daam hi hai to rate bhejte hi nahi — server card se
           // lagayega. Sirf sach mein badla hua daam override banta hai.
           ...(i.rate !== i.card ? { rate: i.rate } : {}),
+          ...(i.unit === "kg" && piecesCount(i.pieces) ? { pieces: i.pieces } : {}),
         })),
       },
     });
-    CART = []; PICKED = ""; PREV_DUE = 0; PREV_BILLS = 0;
+    CART = []; PICKED = ""; PREV_DUE = 0; PREV_BILLS = 0; BILL_STARTED = 0;
     DISC = { mode: "amt", value: 0 };
+    URG = { on: false, manual: false, amt: 0 };
     toast(
       r.previous_due > 0
         ? `${r.order_number} — ${money(r.grand_total)} lena hai (${money(r.previous_due)} purana)`

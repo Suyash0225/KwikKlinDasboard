@@ -17,7 +17,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy import Date as SADate
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -86,6 +86,8 @@ class Order(Base, TenantScoped):
     # message unless it is already written here.
     expected_delivery: Mapped[date | None] = mapped_column(SADate, index=True)
     actual_delivery: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # "New bill" kholne se Save tak kitne second (services/turnaround.py)
+    bill_seconds: Mapped[int | None] = mapped_column(Integer)
 
     # 'normal' | 'urgent' — set by the admin ("Sharma ji ka urgent hai")
     priority: Mapped[str] = mapped_column(
@@ -94,10 +96,10 @@ class Order(Base, TenantScoped):
 
     # --- Assignment ---
     assigned_washer_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("staff.id"), index=True
+        UUID(as_uuid=True), ForeignKey("staff.id", ondelete="SET NULL"), index=True
     )
     assigned_delivery_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("staff.id"), index=True
+        UUID(as_uuid=True), ForeignKey("staff.id", ondelete="SET NULL"), index=True
     )
 
     # INTERNAL ONLY. Delay reasons ("paani nahi aaya") live here for the

@@ -1128,7 +1128,7 @@ async def test_receipt_gives_bill_text_only_for_your_own_order(
 ) -> None:
     """Delivery wala apne phone se bill WhatsApp kar sake — text + poora
     number, par sirf apne order ka, aur /call ki tarah audit ke saath."""
-    mine = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A)
+    mine = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A, total=250)
     theirs = await _order_for(two_shops["b"], two_shops["b_wash"], CUST_B)
 
     await _login(client, A_PHONE)
@@ -1364,8 +1364,8 @@ async def test_rate_override_prices_the_line_and_leaves_an_audit_trail(
 
         async with async_session_factory() as db:
             row = (await db.execute(
-                sqltext("SELECT items, total_amount FROM orders WHERE order_number = :n"),
-                {"n": number},
+                sqltext("SELECT items, total_amount FROM orders WHERE order_number = :n AND tenant_id = :t"),
+                {"n": number, "t": str(two_shops["a"])},
             )).one()
             line = row[0][0]
             assert line["rate"] == 25.0
@@ -1373,7 +1373,8 @@ async def test_rate_override_prices_the_line_and_leaves_an_audit_trail(
 
             # Rate card chhua nahi gaya
             card = (await db.execute(
-                sqltext("SELECT rate FROM rate_card WHERE service='DiscSvc' AND garment='Kurta'")
+                sqltext("SELECT rate FROM rate_card WHERE service='DiscSvc' AND garment='Kurta'"
+                        " AND tenant_id = :t"), {"t": str(two_shops["a"])},
             )).scalar_one()
             assert float(card) == 40.0
 
@@ -1420,8 +1421,8 @@ async def test_previous_dues_ride_along_but_never_join_the_new_total(
 
         async with async_session_factory() as db:
             stored = (await db.execute(
-                sqltext("SELECT total_amount FROM orders WHERE order_number = :n"),
-                {"n": second["order_number"]},
+                sqltext("SELECT total_amount FROM orders WHERE order_number = :n AND tenant_id = :t"),
+                {"n": second["order_number"], "t": str(two_shops["a"])},
             )).scalar_one()
             assert float(stored) == 40.0, "DB mein purana udhaar kabhi nahi judna chahiye"
     finally:
@@ -1466,8 +1467,8 @@ async def test_collecting_the_grand_total_settles_the_oldest_bill_first(
         async with async_session_factory() as db:
             for number, paid in ((old["order_number"], 80.0), (new["order_number"], 40.0)):
                 got = (await db.execute(
-                    sqltext("SELECT amount_paid FROM orders WHERE order_number = :n"),
-                    {"n": number},
+                    sqltext("SELECT amount_paid FROM orders WHERE order_number = :n AND tenant_id = :t"),
+                    {"n": number, "t": str(two_shops["a"])},
                 )).scalar_one()
                 assert float(got) == paid, f"{number} par {paid} lagna chahiye"
     finally:
@@ -1497,8 +1498,8 @@ async def test_the_shared_bill_shows_discount_and_the_old_balance(
         assert "Subtotal: ₹200" in text
         assert "Discount: -₹20" in text
         assert "Total: ₹180" in text
-        assert "Pichhla baaki (1 bill): ₹80" in text
-        assert "KUL DENA HAI: ₹260" in text
+        assert "Previous due (1 bill): ₹80" in text
+        assert "TOTAL TO PAY: ₹260" in text
     finally:
         await _drop_rate()
 

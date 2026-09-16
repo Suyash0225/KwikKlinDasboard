@@ -267,11 +267,6 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
 /* ─── naya bill ──────────────────────────────────────────────────────── */
 .frow { display: grid; gap: 9px; grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); }
 .frow .qty { max-width: 120px; }
-/* Kitne + Jodein ek hi kaam ke do hisse hain — isliye ek hi line par */
-.addrow { display: flex; gap: 9px; align-items: flex-end; margin-top: 9px; }
-.addrow .qty { flex: 0 0 100px; }
-.addrow .qty label { margin-top: 0; }
-.addrow .btn { flex: 1 1 auto; min-width: auto; }
 .cart { border-top: 1px solid var(--rule); margin-top: 12px; padding-top: 8px; }
 
 /* Cart ki har line ab do manzil hai: upar naam+rakam, neeche ginti aur
@@ -279,7 +274,6 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
    par rate ka box teen akshar ka bachta hai. */
 .cartrow { padding: 9px 0; border-bottom: 1px solid var(--rule-2); }
 .cartrow:last-of-type { border-bottom: 0; }
-.ci-top { display: flex; align-items: baseline; gap: 8px; }
 .ci-name { flex: 1 1 auto; min-width: 0; font-size: 13.5px; overflow-wrap: anywhere; }
 .ci-name small { color: var(--ink-3); font-size: 11.5px; }
 .ci-amt { font-size: 14px; font-weight: 700; white-space: nowrap; }
@@ -287,7 +281,116 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
   background: none; border: 0; color: var(--late); font-size: 15px;
   min-height: 32px; min-width: 32px; cursor: pointer; flex: 0 0 auto;
 }
-.ci-edit { display: flex; gap: 10px; align-items: center; margin-top: 7px; }
+/* Bill print — chhota thermal printer. Text server par 32/48 akshar par
+   kata aata hai; Courier 0.6em/akshar, 7.6pt par 58mm/80mm mein poora. */
+#receipt { display: none; }
+@media print {
+  @page { margin: 0; }
+  body > *:not(#receipt) { display: none !important; }
+  html, body { background: #fff !important; min-height: 0 !important; height: auto !important; padding: 0 !important; }
+  #receipt { display: block; position: static; margin: 0; padding: 1mm; white-space: pre; font-family: "Courier New", monospace; color: #000; font-size: 7.6pt; line-height: 1.25; }
+  #receipt.paper-58 { width: 58mm; }
+  #receipt.paper-80 { width: 80mm; }
+}
+
+/* ─── kaam ki row: tap = detail; order detail + delivery popup ─────── */
+.row.tappable { cursor: pointer; }
+.row.tappable:active { background: var(--rule-2); }
+.od-block { border: 1px solid var(--rule); border-radius: 12px; padding: 10px 12px; margin-top: 10px; }
+.od-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; color: var(--ink-3); margin-bottom: 4px; }
+.od-head b { color: var(--ink); font-size: 15px; }
+.od-line { padding: 7px 0; border-top: 1px solid var(--rule-2); }
+.od-line:first-of-type { border-top: 0; }
+.od-top, .od-sub { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 14.5px; }
+.od-top small { color: var(--ink-3); font-weight: 400; font-size: 12px; }
+.od-sub { padding: 3px 0 0 12px; color: var(--ink-2); font-size: 14px; }
+.dl-tag { font-size: 11.5px; font-weight: 700; border-radius: 6px; padding: 1px 6px; margin-left: 4px; white-space: nowrap; }
+.dl-tag.ok { background: var(--ok-bg, #ecfdf3); color: #067647; }
+.dl-tag.part { background: #fef3f2; color: var(--late); }
+.late-t { color: var(--late); }
+/* IMP_006: order popup — stage mein deri */
+.delay-bar { background: #fef3f2; color: var(--late); border-radius: 10px; padding: 8px 12px; font-size: 14px; font-weight: 600; margin: 6px 0 10px; overflow-wrap: anywhere; }
+.dl-list { margin-top: 10px; border: 1px solid var(--rule); border-radius: 12px; max-height: 48vh; overflow-y: auto; }
+.dl-group { padding: 8px 12px 4px; font-size: 12px; font-weight: 700; color: var(--ink-3); background: var(--rule-2); text-transform: uppercase; letter-spacing: .03em; }
+.dl-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--rule-2); min-height: 52px; }
+.dl-row:first-child { border-top: 0; }
+.dl-name { flex: 1 1 auto; min-width: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.dl-name small { color: var(--ink-3); font-weight: 400; font-size: 12px; }
+.dl-of { color: var(--ink-3); font-size: 12.5px; min-width: 34px; }
+.dl-row input[type=checkbox] { width: 26px; height: 26px; accent-color: var(--brand); }
+.dl-sum { margin: 10px 0 0; font-size: 14px; color: var(--ink-2); }
+
+/* ⚡ Urgent toggle — band par dashed, on par narangi */
+.urgbtn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-height: var(--tap, 48px); padding: 10px 14px; border: 1.5px dashed var(--rule); border-radius: 12px;
+  background: var(--sheet); color: var(--ink); font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; text-align: left;
+}
+.urgbtn small { font-weight: 500; color: var(--ink-3); font-size: 12.5px; }
+.urgbtn.on { border-style: solid; border-color: var(--brand); background: var(--brand-soft, #fff7ed); color: var(--brand-ink, #9a3412); }
+.urgbtn.on small { color: var(--brand-ink, #9a3412); }
+#b-urgbox { margin-top: 8px; }
+.s-row.urg { color: var(--brand-ink, #9a3412); }
+
+/* cart: ek kapda = ek line (naam | − qty + | rakam | ✕) */
+.ci-line { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 8px; }
+.ci-line .ci-name { font-size: 14px; font-weight: 600; line-height: 1.25; }
+.ci-line .ci-name small { color: var(--ink-3); font-weight: 400; font-size: 12px; }
+.ci-rate {
+  display: block; border: 0; background: none; padding: 3px 0 0; font: inherit; font-size: 12.5px; font-weight: 500;
+  color: var(--ink-3); cursor: pointer; text-align: left;
+}
+.ci-rate.changed { color: var(--brand-ink, #9a3412); font-weight: 600; }
+.ci-line .stepper.sm .step { width: 34px; }
+.ci-line .stepper.sm input { width: 46px; }
+.ci-line .ci-amt { min-width: 52px; text-align: right; }
+.cartrow .ratebox { margin-top: 8px; max-width: 220px; }
+
+/* ─── kapde jodna: service dropdown + item search + patli list ────────
+   Ek line = ek kapda: naam · daam · ＋ (ya kitne jude). Poori line tap
+   hoti hai — chhoti screen par 8-10 kapde ek nazar mein. */
+.item-list {
+  margin-top: 10px; border: 1px solid var(--rule); border-radius: 12px; overflow: hidden;
+  max-height: 46vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+}
+.item-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 8px 12px;
+  border: 0; border-bottom: 1px solid var(--rule-2); background: var(--sheet); color: var(--ink);
+  font: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.item-row:last-child { border-bottom: 0; }
+.item-row:active { background: var(--rule-2); }
+.item-row.in { background: var(--brand-soft, #fff7ed); }
+.ir-name { flex: 1 1 auto; min-width: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.ir-name small { color: var(--ink-3); font-weight: 400; font-size: 12px; }
+.ir-price { color: var(--ink-3); font-size: 13.5px; white-space: nowrap; }
+.ir-add {
+  flex: 0 0 auto; min-width: 34px; height: 30px; padding: 0 8px; border-radius: 15px; display: grid; place-items: center;
+  border: 1.5px solid var(--brand); color: var(--brand-ink, #9a3412); font-weight: 700; font-size: 15px;
+}
+.ir-add.n { background: var(--brand); border-color: var(--brand); color: #fff; font-size: 13px; }
+.item-row.create { color: var(--brand-ink, #9a3412); font-weight: 700; justify-content: flex-start; background: var(--sheet); }
+.ir-head { padding: 8px 12px 4px; font-size: 12px; font-weight: 700; color: var(--ink-3); background: var(--rule-2); text-transform: uppercase; letter-spacing: .04em; }
+.ir-none { padding: 12px; margin: 0; color: var(--ink-3); font-size: 14px; }
+.item-row.kgrow { min-height: 54px; }
+.item-row.kgrow .ir-name { font-size: 15.5px; }
+details.fold { border: 1px solid var(--rule); border-radius: 12px; padding: 0 12px; }
+details.fold > summary {
+  list-style: none; cursor: pointer; padding: 12px 0; font-size: 15px; font-weight: 700;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary small { color: var(--ink-3); font-weight: 500; font-size: 13px; }
+details.fold > summary::after { content: "▾"; color: var(--ink-3); }
+details.fold[open] > summary::after { content: "▴"; }
+details.fold[open] { padding-bottom: 12px; }
+
+/* KG line ke kapde (ginti) */
+.ci-pieces { margin-top: 6px; }
+.ci-pieces .linkbtn { padding: 4px 0; }
+.ci-pieces small { display: block; color: var(--ink-3); font-size: 12.5px; overflow-wrap: anywhere; }
+.pc-row { grid-template-columns: 1fr auto; align-items: center; margin-bottom: 8px; }
+.pc-row .stepper .rm { margin-left: 6px; }
 
 /* − 2 + : geele haath aur ek angootha. Keyboard tabhi khule jab sach
    mein koi anokhi ginti bharni ho. */
@@ -437,8 +540,6 @@ input[type=file] { padding: 9px; }
    adjustment yahan class banta hai. */
 .mt0 { margin-top: 0; }
 .mt-xs { margin-top: 4px; }
-.gap-t { margin-top: 8px; }
-.wrap-text { white-space: normal; }
 .note { white-space: normal; color: var(--ink-2); margin-top: 3px; }
 .paid-tick { color: var(--ready); }
 .stack { flex-direction: column; }

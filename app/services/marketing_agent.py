@@ -81,7 +81,7 @@ _SEASONS = {
 
 _COPY_SYSTEM = (
     "You write ONE short WhatsApp marketing message (max 3 lines) for Kwik "
-    "Klin laundry, Varanasi, in warm Hinglish. Use {name} as the customer "
+    "Klin laundry, Varanasi, in warm, simple English. Use {name} as the customer "
     "name placeholder. Mention the offer EXACTLY as given — never invent "
     "discounts, prices or dates. End with '— Kwik Klin'. No links."
 )
@@ -256,8 +256,8 @@ def _rationale(pick: dict) -> str:
 
 async def _draft_copy(segment: str, offer: str) -> str:
     fallback = (
-        "Namaste {name} ji! Kaafi din ho gaye — kapdon ki dhulai ya dry clean "
-        f"ki zaroorat ho to yaad kijiyega. {offer}. — Kwik Klin"
+        "Hello {name}! It's been a while — whenever you need washing or dry "
+        f"cleaning, remember us. {offer}. — Kwik Klin"
     )
     # owner's style rules from AI training (hot-reloaded, optional)
     extra = ""

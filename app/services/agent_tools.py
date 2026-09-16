@@ -559,11 +559,8 @@ async def _task_list(db: AsyncSession, args: str) -> str:
     return "\n".join(out)
 
 
-# The dashboard's own category list — an expense the agent writes must land
-# in the same buckets the Expenses page and the reports already chart.
-EXPENSE_CATEGORIES = (
-    "Detergent", "Electricity", "Rent", "Salary", "Transport", "Maintenance", "Other",
-)
+# An expense the agent writes must land in the same buckets the Expenses
+# page and the reports already chart — services/expenses.py owns that list.
 _CATEGORY_HINTS = (
     ("Transport", ("petrol", "diesel", "fuel", "gaadi", "gadi", "bike", "scooty",
                    "auto", "rickshaw", "tempo", "transport", "delivery", "van")),
@@ -608,10 +605,10 @@ async def _add_expense(db: AsyncSession, args: str) -> str:
     if amount <= 0:
         return "Kharcha 0 se zyada hona chahiye."
 
-    cat = next(
-        (c for c in EXPENSE_CATEGORIES if c.lower() == note.lower().strip()),
-        _guess_category(note or args),
-    )
+    from app.services.expenses import canonical_category
+
+    # owner ki apni categories bhi — "packaging | 200" seedha usi khaane mein
+    cat = await canonical_category(db, note) or _guess_category(note or args)
     today = datetime.now(IST).date()
     exp = Expense(
         category=cat,

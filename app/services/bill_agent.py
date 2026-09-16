@@ -1296,6 +1296,7 @@ async def _finalize_bill(
         await record_payment(
             db, order, amount=Decimal(str(d["advance"])), method=PaymentMethod.CASH,
             recorded_by=sender_label, note="advance at booking",
+            notify_customer=False,   # "order received" message mein advance pehle se hai
         )
     _PENDING.pop(sender_phone, None)
 
