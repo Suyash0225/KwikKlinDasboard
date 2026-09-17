@@ -47,7 +47,10 @@ $PY -m scripts.secure_setup
 ok "keys / DB role / tokens"
 
 echo "6/6 restart"
-if command -v systemctl >/dev/null && systemctl list-unit-files | grep -q "^$SERVICE.service"; then
+# list-unit-files har unit nahi dikhata (linked/generated unit chhoot jaati
+# thi aur restart skip ho jaata tha — purana code chalta rehta tha). Unit
+# maujood hai ya nahi, ye `systemctl cat` se seedha poochho.
+if command -v systemctl >/dev/null && systemctl cat "$SERVICE.service" >/dev/null 2>&1; then
   sudo systemctl restart "$SERVICE"
 else
   echo "  ! systemd unit '$SERVICE' nahi — app khud restart karo (docker/pm2)"
