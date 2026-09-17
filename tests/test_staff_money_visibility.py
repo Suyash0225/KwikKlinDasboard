@@ -3,8 +3,11 @@
 Delivery boy / manager ko total, due, collect, bill share sab pehle jaisa.
 """
 
+from sqlalchemy import select
+
+from app.database import async_session_factory
 from tests.test_staff_panel import (  # noqa: F401 (two_shops fixture yahin se aata hai)
-    A_DEL_PHONE, A_PHONE, CUST_A, _login, _order_for, two_shops,
+    A_DEL_PHONE, A_MGR_PHONE, A_PHONE, CUST_A, _login, _order_for, two_shops,
 )
 
 MONEY = ("/receipt", "/dues")
@@ -91,3 +94,24 @@ async def test_boot_returns_everything_the_panel_needs_in_one_call(client, two_s
     assert "due" not in next(s for s in b["route"]["stops"] if s["number"] == num)
     await client.post("/staff/api/logout")
     assert (await client.get("/staff/api/boot")).status_code == 401
+
+
+async def test_manager_sees_ready_orders_to_deliver_washer_does_not(client, two_shops, sent) -> None:
+    """Ready order manager/owner ke panel mein 'Delivery' ban kar aaye (partial
+    delivery yahin se hoti hai); washerman ki kataar mein nahi."""
+    from app.models import Order, OrderStatus
+    from app.services import order_service, tenant_context
+
+    num = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A, total=200)
+    async with tenant_context.as_tenant(two_shops["a"]):
+        async with async_session_factory() as db:
+            o = (await db.execute(select(Order).where(Order.order_number == num))).scalar_one()
+            await order_service.update_status(db, o, OrderStatus.READY, changed_by="test", notify=False)
+
+    await _login(client, A_MGR_PHONE)
+    stop = next((s for s in (await client.get("/staff/api/route")).json()["stops"] if s["number"] == num), None)
+    assert stop is not None and stop["kind"] == "Delivery" and stop["status"] == "READY"
+    assert stop["due"] == 200.0 and stop["clothes"]["pending"] > 0
+
+    await _login(client, A_PHONE)
+    assert num not in [s["number"] for s in (await client.get("/staff/api/route")).json()["stops"]]

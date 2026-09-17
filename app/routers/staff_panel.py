@@ -1954,14 +1954,19 @@ async def _route_query(db: AsyncSession, p: StaffPrincipal, tab: str = "todo"):
     deta hai.
     """
     is_delivery = p.staff.role is StaffRole.DELIVERY
-    stages = (
-        (OrderStatus.PICKUP_ASSIGNED, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)
-        if is_delivery
-        else (
-            OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
-            OrderStatus.IN_DRY, OrderStatus.IN_IRON,
-        )
+    wash_stages = (
+        OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
+        OrderStatus.IN_DRY, OrderStatus.IN_IRON,
     )
+    road_stages = (OrderStatus.PICKUP_ASSIGNED, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)
+    if p.is_manager:
+        # Manager/owner/supervisor ko dukaan ka POORA chalta kaam — dhulai bhi,
+        # aur jo Ready/nikla hua hai wo bhi. Pehle unhe sirf dhulai wali kataar
+        # dikhti thi, isliye Ready order (jise deliver karna hai — poora ya
+        # kuch kapde) unke panel mein aata hi nahi tha.
+        stages = wash_stages + road_stages
+    else:
+        stages = road_stages if is_delivery else wash_stages
     col = Order.assigned_delivery_id if is_delivery else Order.assigned_washer_id
     if tab == "done":
         from datetime import timedelta
@@ -2041,7 +2046,8 @@ async def my_route(
         kind = (
             "Done" if tab == "done"
             else "Pickup" if o.status is OrderStatus.PICKUP_ASSIGNED
-            else ("Delivery" if is_delivery else "Dhulai")
+            else "Delivery" if o.status in (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)
+            else "Dhulai"
         )
         stops.append(
             {
