@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en-IN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Your bills · {{SHOP}}</title>
+<meta name="theme-color" content="{{THEME}}">
+<link rel="icon" href="/site/assets/img/logo-180.png" type="image/png">
+<link rel="apple-touch-icon" href="/site/assets/img/logo-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all';this.onload=null">
+<link rel="stylesheet" href="/site/assets/css/bill.css?v={{ASSET_V}}">
+</head>
+<body class="mood-{{MOOD}}">
+<main class="bill">
+
+  <section class="hero">
+    <p class="hero-shop">{{SHOP}}</p>
+    <div class="hero-emoji" aria-hidden="true">{{HERO_EMOJI}}</div>
+    <h1>{{HERO_TITLE}}</h1>
+    <p class="hero-sub">{{HERO_SUB}}</p>
+  </section>
+
+  <section class="card">
+    <div class="row"><span class="label">Customer</span><span>{{CUSTOMER}}</span></div>
+    <div class="row"><span class="label">Pending bills</span><b>{{COUNT}}</b></div>
+    <div class="row due-row"><span class="label"><b>Total payable</b></span><b>{{TOTAL}}</b></div>
+  </section>
+
+  <section class="card">
+    <h2>Your bills <small class="label">tap a bill to see the clothes</small></h2>
+    {{BILLS}}
+  </section>
+
+  {{PAY_BLOCK}}
+
+  {{TERMS}}
+
+  <section class="card shopcard">
+    <b>{{SHOP}}</b>
+    {{CONTACT_BTN}}
+  </section>
+
+  <p class="foot"><span>Powered by <a href="https://kwikklin.online/join" rel="noopener">Kwik Klin</a></span></p>
+</main>
+<script src="/site/assets/js/bill.js?v={{ASSET_V}}" defer></script>
+</body>
+</html>

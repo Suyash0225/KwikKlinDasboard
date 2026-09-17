@@ -96,6 +96,30 @@ server {
 }
 ```
 
+Phone par panel tez rakhne ke liye (ek round trip India se ~0.3-0.9 s hai,
+isliye har request bachana matlab seconds bachana):
+
+```nginx
+    # certbot ke baad `listen 443 ssl;` mein http2 jodo — ek connection par
+    # sab requests, har asset ke liye naya TLS handshake nahi
+    listen 443 ssl http2;
+
+    # Static files nginx khud de — app (uvicorn) ko chhoo kar nahi.
+    # Path wahi jahan repo hai (deploy.sh wala folder).
+    location /admin/static/ {
+        alias /home/ec2-user/kwikKlinDasboard/app/static/;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        gzip on; gzip_types text/css application/javascript image/svg+xml; gzip_min_length 1024;
+    }
+    location /site/assets/ {
+        alias /home/ec2-user/kwikKlinDasboard/app/site/assets/;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        gzip on; gzip_types text/css application/javascript image/svg+xml; gzip_min_length 1024;
+    }
+```
+
 ```bash
 sudo ln -s /etc/nginx/sites-available/kwikklin /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx

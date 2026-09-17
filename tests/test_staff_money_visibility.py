@@ -78,3 +78,16 @@ async def test_washer_cannot_reach_the_customer_but_can_move_the_wash(client, tw
     # Delivery wale ko number/pata pehle jaisa
     await _login(client, A_DEL_PHONE)
     assert (await client.get("/staff/api/me")).json()["can_contact"] is True
+
+
+async def test_boot_returns_everything_the_panel_needs_in_one_call(client, two_shops, sent) -> None:
+    """Panel khulte hi ek request: me + route + tasks + today + notifications."""
+    num = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A, total=300)
+    await _login(client, A_PHONE)
+    b = (await client.get("/staff/api/boot")).json()
+    assert b["me"]["role"] == "WASHER" and b["me"]["can_money"] is False
+    assert num in [s["number"] for s in b["route"]["stops"]]
+    assert "tasks" in b["tasks"] and "pending" in b["today"] and "unread" in b["notifications"]
+    assert "due" not in next(s for s in b["route"]["stops"] if s["number"] == num)
+    await client.post("/staff/api/logout")
+    assert (await client.get("/staff/api/boot")).status_code == 401

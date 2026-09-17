@@ -68,6 +68,44 @@ def parse(token: str, now: float | None = None) -> tuple[uuid.UUID, uuid.UUID] |
         return None
 
 
+# ---- grahak ke SAARE baaki bill ek page par (/b/c/<token>) ----
+# Payment reminder mein pehle /pay/<amount> link jaata tha jo kholte hi UPI app
+# khol deta tha — grahak ko kapde, bill, rakam kuch dekhne ka mauka nahi.
+# Ab link is page par: har baaki bill kholkar dekho, phir kul rakam ek tap.
+_CUST_TAG = b"c"
+
+
+def make_customer(tenant_id: uuid.UUID, customer_id: uuid.UUID, now: float | None = None) -> str:
+    exp = int((now if now is not None else time.time()) + TTL_SECONDS)
+    body = _CUST_TAG + tenant_id.bytes + customer_id.bytes + exp.to_bytes(5, "big")
+    sig = hmac.new(_key(), body, hashlib.sha256).digest()[:12]
+    return _b64(body) + _SEP + _b64(sig)
+
+
+def parse_customer(token: str, now: float | None = None) -> tuple[uuid.UUID, uuid.UUID] | None:
+    """(tenant_id, customer_id) — ya None. Order wala token yahan nahi chalta (lambai alag)."""
+    try:
+        body_b64, sig_b64 = token.split(_SEP)
+        body = _unb64(body_b64)
+        if len(body) != 38 or body[:1] != _CUST_TAG:
+            return None
+        want = hmac.new(_key(), body, hashlib.sha256).digest()[:12]
+        if not hmac.compare_digest(want, _unb64(sig_b64)):
+            return None
+        if (now if now is not None else time.time()) > int.from_bytes(body[33:], "big"):
+            return None
+        return uuid.UUID(bytes=body[1:17]), uuid.UUID(bytes=body[17:33])
+    except Exception:
+        return None
+
+
+async def customer_url_for(db, tenant_id: uuid.UUID, customer_id: uuid.UUID) -> str:
+    from app.services.google_auth import public_base as _pb
+
+    base = (await _pb(db) or "").rstrip("/")
+    return f"{base}/b/c/{make_customer(tenant_id, customer_id)}" if base else ""
+
+
 def public_base(app_settings_dict: dict | None = None) -> str:
     """Link ka domain: SITE_URL (production), warna dukaan ki public_base_url."""
     if settings.SITE_URL:

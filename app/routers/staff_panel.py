@@ -230,6 +230,33 @@ async def me(
     }
 
 
+@router.get("/boot")
+async def boot(
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Panel khulte hi jo paanch cheezein chahiye, ek hi request mein.
+
+    Phone se server tak ek round trip 300-900 ms ka hai (server door hai,
+    signal kamzor). Pehle panel /me, /route, /tasks, /today, /notifications
+    alag-alag maangta tha — paanch round trips, 3-4 second sirf khulne mein.
+    Ab ek. Koi ek hissa fail ho to baaki phir bhi aaye (panel khali na rahe).
+    """
+    out: dict = {"me": await me(p, db)}
+    for key, fn in (
+        ("route", lambda: my_route(limit=30, offset=0, tab="todo", p=p, db=db)),
+        ("tasks", lambda: my_tasks(tab="mine", limit=30, offset=0, p=p, db=db)),
+        ("today", lambda: today_summary(p, db)),
+        ("notifications", lambda: notifications(p, db)),
+    ):
+        try:
+            out[key] = await fn()
+        except Exception:
+            log.exception("staff_boot_part_failed", part=key, staff=p.staff.name)
+            out[key] = None
+    return out
+
+
 @router.get("/events")
 async def staff_events(request: Request, kk_staff: str = Cookie(default="")):
     """Staff ke phone par live updates — manager ne kuch kiya to turant dikhe.

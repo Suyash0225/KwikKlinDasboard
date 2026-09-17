@@ -626,28 +626,8 @@ async def bill_page(token: str):
     pay_block = ""
     if r["has_total"] and due <= 0 and r["total"] > 0:
         pay_block = ""   # hero khud "Paid in full" bolta hai
-    elif r["has_total"] and due > 0 and r["upi"]:
-        params = bill_link.upi_params(r["upi"], r["upi_payee"] or shop, due, f"Bill {order.order_number}")
-        links = bill_link.app_links(params)
-        buttons = "".join(
-            f"<a class='mobile-only{' primary' if key == 'gpay' else ''}' href='{e(links['upi'])}' "
-            f"data-android='{e(links[key]['android'])}' data-ios='{e(links[key]['ios'])}'>Pay with {e(label)}</a>"
-            for key, label, _, _ in bill_link.UPI_APPS
-        )
-        buttons += f"<a class='mobile-only' href='{e(links['upi'])}'>Other UPI app</a>"
-        pay_block = (
-            "<section class='card pay'>"
-            f"<div class='due'>Amount due</div><div class='amount'>{money(float(due))}</div>"
-            f"<div class='apps'>{buttons}</div>"
-            f"<div class='qr desktop-only' role='img' aria-label='UPI QR code'>{bill_link.qr_svg(links['upi'])}</div>"
-            "<p class='desktop-only note'>Scan with any UPI app on your phone.</p>"
-            f"<p class='vpa'>UPI ID: <b>{e(r['upi'])}</b><button type='button' id='copy-vpa' data-vpa='{e(r['upi'])}'>Copy</button></p>"
-            "<p class='note'>After paying, the shop confirms it on your bill. Keep the payment screenshot until then.</p>"
-            "</section>"
-        )
     elif r["has_total"] and due > 0:
-        pay_block = (f"<section class='card pay'><div class='due'>Amount due</div>"
-                     f"<div class='amount'>{money(float(due))}</div><p class='note'>Please pay at the shop or at delivery.</p></section>")
+        pay_block = _upi_pay_block(r["upi"], r["upi_payee"], shop, due, f"Bill {order.order_number}")
 
     terms = ""
     if r["terms"]:
@@ -770,6 +750,159 @@ def _esc(s: str) -> str:
     import html as _html
 
     return _html.escape(str(s), quote=True)
+
+
+def _money(v) -> str:
+    return f"₹{float(v):,.0f}" if float(v).is_integer() else f"₹{float(v):,.2f}"
+
+
+def _upi_pay_block(vpa: str, payee: str, shop: str, amount, note: str, label: str = "Amount due") -> str:
+    """GPay/PhonePe/Paytm ke ek-tap button (phone), QR (desktop), VPA copy —
+    bill page aur saare-bill wale statement page, dono par yahi."""
+    from decimal import Decimal
+
+    from app.services import bill_link
+
+    e = _esc
+    amount = Decimal(str(amount)).quantize(Decimal("0.01"))
+    if not vpa:
+        return (f"<section class='card pay'><div class='due'>{e(label)}</div>"
+                f"<div class='amount'>{_money(amount)}</div><p class='note'>Please pay at the shop or at delivery.</p></section>")
+    params = bill_link.upi_params(vpa, payee or shop, amount, note)
+    links = bill_link.app_links(params)
+    buttons = "".join(
+        f"<a class='mobile-only{' primary' if key == 'gpay' else ''}' href='{e(links['upi'])}' "
+        f"data-android='{e(links[key]['android'])}' data-ios='{e(links[key]['ios'])}'>Pay with {e(label_)}</a>"
+        for key, label_, _, _ in bill_link.UPI_APPS
+    )
+    buttons += f"<a class='mobile-only' href='{e(links['upi'])}'>Other UPI app</a>"
+    return (
+        "<section class='card pay'>"
+        f"<div class='due'>{e(label)}</div><div class='amount'>{_money(amount)}</div>"
+        f"<div class='apps'>{buttons}</div>"
+        f"<div class='qr desktop-only' role='img' aria-label='UPI QR code'>{bill_link.qr_svg(links['upi'])}</div>"
+        "<p class='desktop-only note'>Scan with any UPI app on your phone.</p>"
+        f"<p class='vpa'>UPI ID: <b>{e(vpa)}</b><button type='button' id='copy-vpa' data-vpa='{e(vpa)}'>Copy</button></p>"
+        "<p class='note'>After paying, the shop confirms it on your bill. Keep the payment screenshot until then.</p>"
+        "</section>"
+    )
+
+
+@app.get("/b/c/{token}", include_in_schema=False)
+async def customer_statement_page(token: str):
+    """Grahak ke SAARE baaki bill ek page par — pehle dekho, phir ek tap mein sab ka paisa.
+
+    Payment reminder ka link yahin aata hai. Har bill kholkar kapde, rakam,
+    status dikhta hai (apne bill page ka link bhi), neeche kul rakam ke
+    GPay/PhonePe/Paytm button. Token grahak+dukaan ka, signed, 1 saal.
+    Rakam hamesha LIVE: dukaan par cash de diya to yahan bhi kat jaata hai.
+    """
+    from decimal import Decimal
+
+    from fastapi.responses import Response as _Resp
+    from sqlalchemy import select
+
+    from app.models import Customer, Order, OrderStatus
+    from app.models.tenant import Tenant
+    from app.services import app_settings, bill_link, integrations, receipt
+
+    def _fail() -> _Resp:
+        return _Resp(
+            content="<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
+                    "<title>Link not valid</title><p style='font:16px system-ui;padding:2rem'>"
+                    "This link is not valid. Please ask the shop to send it again.</p>",
+            media_type="text/html", status_code=404,
+            headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"},
+        )
+
+    parsed = bill_link.parse_customer(token)
+    if parsed is None:
+        return _fail()
+    tid, cid = parsed
+    e = _esc
+    async with integrations.tenant_db(tid) as db:
+        cust = await db.get(Customer, cid)
+        if cust is None or cust.tenant_id != tid:
+            return _fail()
+        tenant = await db.get(Tenant, tid)
+        s = await app_settings.all_settings(db)
+        rows = (
+            await db.execute(
+                select(Order).where(
+                    Order.customer_id == cid,
+                    Order.status != OrderStatus.CANCELLED,
+                    Order.total_amount.isnot(None),
+                    Order.total_amount > Order.amount_paid,
+                ).order_by(Order.created_at.desc())
+            )
+        ).scalars().all()
+        shop = (tenant.shop_name if tenant else "") or "Laundry"
+        bills = []
+        total_due = Decimal("0")
+        for o in rows:
+            r = receipt.build(order=o, customer_name=cust.name, customer_phone=None, shop_name=shop, settings=s)
+            due = Decimal(str(r["due"])).quantize(Decimal("0.01"))
+            total_due += due
+            items = "".join(
+                f"<li><span><span class='name'>{e(it['title'])}</span><small>{e(str(it['qty']) + (' kg' if it['kg'] else ''))}"
+                f"{' × ' + _money(it['rate']) if it['rate'] is not None else ''}</small></span>"
+                f"<span class='amt'>{_money(it['amount']) if it['amount'] is not None else ''}</span></li>"
+                for it in r["items"]
+            )
+            status_word, status_cls = _STATUS_WORD.get(o.status.name, (o.status.name.title(), ""))
+            c = r["clothes"]
+            dl = (f" · {c['delivered']} of {c['total']} delivered" if r["partial"] else "")
+            bills.append(
+                f"<details class='billacc'><summary><span class='b-meta'><b>{e(o.order_number)}</b>"
+                f"<small>{e(r['date'])} · <span class='status {status_cls}'>{e(status_word)}</span>{e(dl)}</small></span>"
+                f"<span class='b-due'><b>{_money(due)}</b><small>of {_money(r['total'])}</small></span></summary>"
+                f"<div class='inner'><ul class='items'>{items}</ul>"
+                f"<div class='totals'><div class='row'><span>Total</span><span>{_money(r['total'])}</span></div>"
+                f"<div class='row'><span>Paid</span><span>{_money(r['paid'])}</span></div>"
+                f"<div class='row due-row'><span><b>Balance due</b></span><span><b>{_money(due)}</b></span></div></div>"
+                f"<a class='open' href='/b/{bill_link.make(tid, o.id)}'>Open this bill →</a></div></details>"
+            )
+        upi = str(s.get("upi_vpa") or "").strip()
+        payee = str(s.get("upi_payee") or "").strip()
+        terms = receipt.terms_list(s.get("invoice_terms"))
+        shop_phone = str(s.get("shop_contact_phone") or "").strip()
+
+    first_name = ((cust.name or "").strip().split() or ["there"])[0]
+    n = len(bills)
+    if n == 0:
+        mood, emoji, title, sub = "paid", "✨", "All clear!", f"{first_name}, you have no pending bills. Thank you!"
+        pay_block = ""
+    else:
+        mood, emoji = "due", "🧾"
+        title = f"Hi {first_name}, {n} bill{'s' if n > 1 else ''} pending"
+        sub = f"Total payable {_money(total_due)} · open each bill below to see the clothes and amounts."
+        pay_block = _upi_pay_block(upi, payee, shop, total_due, f"{n} bills", label="Total payable")
+    terms_html = ""
+    if terms:
+        terms_html = ("<section class='card'><details class='terms'><summary>Terms &amp; conditions</summary><ol>"
+                      + "".join(f"<li>{e(t)}</li>" for t in terms) + "</ol></details></section>")
+    digits = "".join(ch for ch in shop_phone if ch.isdigit())
+    contact_btn = ""
+    if digits:
+        wa = digits if digits.startswith("91") or len(digits) != 10 else "91" + digits
+        contact_btn = f"<a class='contact-btn' href='https://wa.me/{wa}'>💬 WhatsApp the shop</a>"
+    phone = "".join(ch for ch in (cust.phone or "") if ch.isdigit())
+    customer = e((cust.name or "").strip() or "Customer") + (f" <span class='label'>· ••••{e(phone[-4:])}</span>" if phone else "")
+    theme = {"paid": "#059669", "due": "#f97316"}.get(mood, "#1f2937")
+
+    fills = {
+        "{{SHOP}}": e(shop), "{{MOOD}}": mood, "{{THEME}}": theme, "{{HERO_EMOJI}}": emoji,
+        "{{HERO_TITLE}}": e(title), "{{HERO_SUB}}": e(sub), "{{CUSTOMER}}": customer,
+        "{{PAY_BLOCK}}": pay_block,
+        "{{BILLS}}": "".join(bills) if bills else "<p class='note'>No pending bills.</p>",
+        "{{COUNT}}": str(n), "{{TOTAL}}": _money(total_due),
+        "{{TERMS}}": terms_html, "{{CONTACT_BTN}}": contact_btn, "{{ASSET_V}}": _SITE_ASSET_V,
+    }
+    html = (_SITE_DIR / "templates" / "statement.html").read_text(encoding="utf-8")
+    for k, v in fills.items():
+        html = html.replace(k, v)
+    return _Resp(content=html, media_type="text/html",
+                 headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
 
 
 def _json(s: str) -> str:

@@ -203,6 +203,11 @@ async def test_the_reminder_carries_a_tappable_https_link(client, shop_upi) -> N
 
     assert rem.status_code == 200
     text = rem.json()["text"]
-    assert "https://shop.example/pay/" in text
+    # Link statement page par: grahak pehle apne saare bill (kapde, rakam)
+    # dekhta hai, phir kul rakam ek tap — seedha UPI app nahi khulta.
+    assert "https://shop.example/b/c/" in text and "/pay/" not in text
+    from app.services import bill_link
+    tok = text.split("https://shop.example/b/c/")[1].split()[0]
+    assert bill_link.parse_customer(tok) is not None
     assert "upi://" not in text, "WhatsApp isko link nahi banata"
     assert VPA in text, "link fail ho to VPA hi aakhri sahara hai"

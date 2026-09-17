@@ -55,7 +55,7 @@ from app.models import (
     Staff,
     StaffRole,
 )
-from app.services import audit, pay_link, tenant_context
+from app.services import audit, tenant_context
 from app.utils.phone import normalize_phone as _norm_phone
 from app.routers.orders import require_admin_key, require_admin_owner, require_feature
 from app.services.order_service import ACTIVE_STATUSES, get_active_orders_for_phone
@@ -420,13 +420,14 @@ async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)
         # /pay wala page upi:// fire karta hai aur GPay/PhonePe/Paytm khulta
         # hai, amount bhara hua. Paisa seedha dukaan ke VPA mein — beech
         # mein koi gateway nahi.
-        from app.services.google_auth import public_base
+        from app.services import bill_link
 
-        base = await public_base(db)
         tid = tenant_context.current_tenant_id.get() or tenant_context.cached_home_tenant_id()
-        if base and tid is not None:
-            link = f"{base}/pay/{pay_link.make(tid, total)}"
-            lines.append(f"Pay {rupees(total)}: {link}")
+        link = await bill_link.customer_url_for(db, tid, cust.id) if tid is not None else ""
+        if link:
+            # Statement page: har bill ke kapde/rakam dekho, phir kul rakam ek tap.
+            # (Pehle /pay link seedha UPI app khol deta tha — grahak kuch dekh nahi paata tha.)
+            lines.append(f"View your bills & pay {rupees(total)}: {link}")
         # VPA hamesha saath mein. Link kaam na kare — public URL badla ho,
         # ya iPhone par UPI app na khule — to grahak phir bhi paisa bhej
         # sakta hai. Yahi wo halat hai jismein wo abhi tak kaam chalata tha.

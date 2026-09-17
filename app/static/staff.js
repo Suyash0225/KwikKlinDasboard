@@ -151,9 +151,11 @@ $("lg-pass").addEventListener("keydown", (e) => { if (e.key === "Enter") $("lg-g
 
 /* ─── boot ──────────────────────────────────────────────────────────── */
 
+let BOOT = null;          // /boot ka jawab — pehla loadWork/loadToday/loadBell isi se, bina naye request ke
 async function start() {
   try {
-    ME = await api("/me");
+    BOOT = await api("/boot");
+    ME = BOOT.me;
   } catch (e) {
     // Server ne SAAF mana kiya (401/402) tabhi login. Network hichki par
     // aadmi ko bahar nahi phenkte — wo bas dobara koshish kar sake.
@@ -238,7 +240,8 @@ function refreshCurrent(opts = {}) {
 
 async function loadToday() {
   try {
-    const t = await api("/today");
+    const t = (BOOT && BOOT.today) || await api("/today");
+    if (BOOT) BOOT.today = null;
     const cell = (label, value, cls = "") => `<div class="${cls}"><b>${value}</b>${label}</div>`;
     $("today").innerHTML =
       cell("to do", t.pending, "left") +
@@ -291,7 +294,8 @@ $("latebar").onclick = () => {
 
 async function loadBell() {
   try {
-    const n = await api("/notifications");
+    const n = (BOOT && BOOT.notifications) || await api("/notifications");
+    if (BOOT) BOOT.notifications = null;
     UNREAD = n.unread || 0;
   } catch (e) { UNREAD = 0; }
   $("bellN").hidden = UNREAD === 0;
@@ -363,7 +367,9 @@ async function loadWork(opts = {}) {
   const mine = ++WORK_SEQ;
   const skip = opts.more ? WORK.length : 0;
   let route = { stops: [], total: 0 }, tasks = { tasks: [], total: 0 };
-  try {
+  const pre = BOOT && BOOT.route && !opts.more && !inDone() ? BOOT : null;
+  if (pre) { route = pre.route || route; tasks = pre.tasks || tasks; BOOT.route = BOOT.tasks = null; }
+  else try {
     [route, tasks] = await Promise.all([
       api(`/route?tab=${inDone() ? "done" : "todo"}&limit=${PAGE}&offset=${skip}`).catch(() => ({ stops: [], total: 0 })),
       inDone() ? { tasks: [], total: 0 }

@@ -98,6 +98,57 @@ async def test_bill_page_shows_partial_delivery(client, order_with_upi) -> None:
     assert "Still with us" in html and "2 more coming soon" in html
 
 
+async def test_customer_statement_lists_every_pending_bill_and_reconciles(client, order_with_upi) -> None:
+    """Reminder ka link: saare baaki bill (kapde, rakam, status), kul rakam ka
+    UPI. Paid bill list mein nahi; cancelled bhi nahi. Rows ka jod == total."""
+    import re
+
+    from app.models import OrderStatus
+
+    home, o = order_with_upi
+    async with tenant_context.as_tenant(home):
+        async with async_session_factory() as db:
+            order = await db.get(Order, o.id)
+            cust = await db.get(Customer, order.customer_id)
+            second = await order_service.create_order(
+                db, customer_phone=cust.phone, items=[{"type": "Kurta", "service": "Wash", "qty": 2, "rate": 50, "amount": 100}],
+                total_amount=Decimal("100"), created_by="test")
+            paid = await order_service.create_order(
+                db, customer_phone=cust.phone, items=[{"type": "Towel", "qty": 1, "rate": 30, "amount": 30}],
+                total_amount=Decimal("30"), created_by="test")
+            await order_service.record_payment(db, paid, amount=Decimal("30"), method=PaymentMethod.CASH,
+                                               recorded_by="test", notify_customer=False)
+            gone = await order_service.create_order(
+                db, customer_phone=cust.phone, items=[{"type": "Cap", "qty": 1, "rate": 20, "amount": 20}],
+                total_amount=Decimal("20"), created_by="test")
+            await order_service.update_status(db, gone, OrderStatus.CANCELLED, changed_by="test", notify=False)
+            tok = bill_link.make_customer(home, cust.id)
+            link = await bill_link.customer_url_for(db, home, cust.id)
+    assert link.endswith(f"/b/c/{tok}") and bill_link.parse_customer(tok) == (home, cust.id)
+    assert bill_link.parse(tok) is None and bill_link.parse_customer(bill_link.make(home, o.id)) is None
+
+    html = (await client.get(f"/b/c/{tok}")).text
+    assert "2 bills pending" in html and "Total payable" in html
+    assert o.order_number in html and second.order_number in html
+    assert paid.order_number not in html and gone.order_number not in html
+    assert "Kurta" in html and "Saree" in html                          # kapde dikhte hain
+    assert "am=370.00" in html and "Pay with Google Pay" in html         # 270 + 100, ek tap
+    dues = [float(x) for x in re.findall(r"<span class='b-due'><b>₹([\d,.]+)</b>", html)]
+    assert sum(dues) == 370.0
+    assert f"/b/{bill_link.make(home, o.id)[:20]}" in html               # har bill ka apna page
+    assert (await client.get("/b/c/nonsense")).status_code == 404
+    assert (await client.get(f"/b/c/{bill_link.make_customer(uuid.uuid4(), cust.id)}")).status_code == 404
+
+    async with tenant_context.as_tenant(home):
+        async with async_session_factory() as db:
+            for od in (second, o):
+                order = await db.get(Order, od.id)
+                await order_service.record_payment(db, order, amount=Decimal(str(order.total_amount)),
+                                                   method=PaymentMethod.CASH, recorded_by="test", notify_customer=False)
+    html = (await client.get(f"/b/c/{tok}")).text
+    assert "All clear" in html and "Pay with" not in html
+
+
 async def test_bad_or_foreign_token_is_404(client, order_with_upi) -> None:
     home, o = order_with_upi
     assert (await client.get("/b/nonsense")).status_code == 404

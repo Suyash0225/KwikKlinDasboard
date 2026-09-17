@@ -124,6 +124,9 @@ async def tenant_id_for_session(token: str) -> uuid.UUID | None:
     return user.tenant_id if user is not None else None
 
 
+_STAFF_TID_CACHE: dict[str, tuple] = {}     # token hash -> (tenant_id, expires monotonic)
+
+
 async def tenant_id_for_staff_token(token: str) -> uuid.UUID | None:
     """kk_staff cookie -> us staff ki DUKAAN ka tenant_id.
 
@@ -135,6 +138,7 @@ async def tenant_id_for_staff_token(token: str) -> uuid.UUID | None:
     if not token:
         return None
     import hashlib
+    import time as _t
     from datetime import datetime, timezone
 
     from sqlalchemy import select
@@ -142,21 +146,32 @@ async def tenant_id_for_staff_token(token: str) -> uuid.UUID | None:
     from app.database import async_session_factory
     from app.models import StaffSession
 
+    # Har staff request par ye lookup alag session (= pool checkout + pre-ping
+    # + query) leta tha, aur uske baad current_staff wahi row phir padhta hai.
+    # 60 s ka in-process cache: ek phone ke lagataar requests par ek hi baar.
+    # Logout/revoke par 60 s tak middleware tenant set kar dega, par asli
+    # darwaza current_staff hai jo har baar DB dekhta hai — wo 401 dega.
+    h = hashlib.sha256(token.encode()).hexdigest()
+    now = _t.monotonic()
+    hit = _STAFF_TID_CACHE.get(h)
+    if hit and hit[1] > now:
+        return hit[0]
+
     prev = current_tenant_id.set(None)          # system context
     try:
         async with async_session_factory() as db:
             row = (
                 await db.execute(
-                    select(StaffSession).where(
-                        StaffSession.token_hash
-                        == hashlib.sha256(token.encode()).hexdigest()
-                    )
+                    select(StaffSession).where(StaffSession.token_hash == h)
                 )
             ).scalar_one_or_none()
         if row is None or row.revoked_at is not None:
             return None
         if row.expires_at <= datetime.now(timezone.utc):
             return None
+        if len(_STAFF_TID_CACHE) > 2000:
+            _STAFF_TID_CACHE.clear()
+        _STAFF_TID_CACHE[h] = (row.tenant_id, now + 60)
         return row.tenant_id
     except Exception:
         log.exception("tenant_context_staff_lookup_failed")
