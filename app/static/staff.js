@@ -506,7 +506,8 @@ function primaryAction(w) {
 function workRow(w) {
   const t = w.tasks[0];
   const asked = t && t.cancel_requested;
-  const due = w.noMoney ? ""
+  // Paisa sirf billing roles ko — server washerman ko due bhejta hi nahi
+  const due = (w.noMoney || !ME.can_money || w.due === undefined) ? ""
     : w.due > 0 ? `<span class="amt due">${money(w.due)}</span>`
     : `<span class="amt paid-tick">✓</span>`;
   const main = primaryAction(w);
@@ -529,7 +530,7 @@ function workRow(w) {
         ${w.hasOrder ? `<button class="btn ghost sm" data-do="call">Call</button>` : ""}
         ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}>${esc(main.label)}</button>` : ""}
         ${ME.show_route && w.address ? `<button class="btn ghost sm" data-do="map" data-addr="${esc(w.address)}">Route</button>` : ""}
-        ${ME.features.includes("cod_collection") && w.due > 0
+        ${ME.can_money && ME.features.includes("cod_collection") && w.due > 0
           ? `<button class="btn money sm" data-do="pay" data-due="${w.due}">${money(w.due)} collect</button>` : ""}
         <button class="btn ghost sm" data-do="more" aria-label="More">⋯</button>
       </div>
@@ -613,12 +614,12 @@ async function orderDetailModal(number) {
       <div class="od-head"><b>Clothes</b><span>${c.total} total${c.delivered ? ` · ${c.delivered} delivered · <b class="late-t">${c.pending} pending</b>` : ""}</span></div>
       ${lineHtml}
     </div>
-    <div class="od-block">
+    ${ME.can_money && o.total !== undefined ? `<div class="od-block">
       <div class="kv"><span>Bill</span><b>${money(o.total)}</b></div>
       ${o.urgent_charge ? `<div class="kv"><span>incl. urgent charge</span><b>${money(o.urgent_charge)}</b></div>` : ""}
       <div class="kv"><span>Paid</span><b>${money(o.paid)}</b></div>
       <div class="kv"><span>Due</span><b class="${o.due > 0 ? "late-t" : ""}">${money(Math.max(0, o.due))}</b></div>
-    </div>
+    </div>` : ""}
     ${o.notes ? `<div class="od-block"><b>Notes</b><p class="note">${esc(o.notes)}</p></div>` : ""}
     <div class="btnrow">
       <button class="btn ghost" data-od="call">📞 Call</button>
@@ -626,7 +627,7 @@ async function orderDetailModal(number) {
       ${o.can_collect && o.due > 0 ? `<button class="btn money" data-od="pay" data-due="${o.due}">${money(o.due)} collect</button>` : ""}
     </div>
     <div class="btnrow">
-      <button class="btn ghost" data-od="share">🧾 Send bill</button>
+      ${ME.can_money ? `<button class="btn ghost" data-od="share">🧾 Send bill</button>` : ""}
       <button class="btn ghost" data-act="close">Close</button>
     </div>`);
   $("modal-body").querySelectorAll("[data-od]").forEach((b) => {
@@ -759,7 +760,7 @@ function moreMenu(number) {
       ${w.hasOrder ? `<button class="btn ghost" data-act="detail" data-arg="${esc(number)}">👁 Full details</button>` : ""}
       ${t ? `<button class="btn ghost" data-act="jobdone" data-arg="${esc(t.code)}">✅ Mark job ${esc(t.code)} done</button>` : ""}
       ${t && ME.can_ask ? `<button class="btn ghost" data-act="thread" data-arg="${esc(t.code)}">❓ Ask the owner</button>` : ""}
-      <button class="btn ghost" data-act="share" data-arg="${esc(number)}">🧾 Send bill on WhatsApp</button>
+      ${ME.can_money ? `<button class="btn ghost" data-act="share" data-arg="${esc(number)}">🧾 Send bill on WhatsApp</button>` : ""}
       <button class="btn ghost" data-act="photo" data-arg="${esc(number)}">📷 Add a photo</button>
       ${t && ME.features.includes("cancel_approval") && !t.cancel_requested
         ? `<button class="btn ghost" data-act="cancel" data-arg="${esc(t.code)}">🛑 Request cancel</button>` : ""}

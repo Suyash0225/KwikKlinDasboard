@@ -140,7 +140,9 @@ def _ascii(s: str) -> str:
     return "".join(ch for ch in s if 32 <= ord(ch) < 127).strip()
 
 
-def render(r: dict, width: int | None = None) -> str:
+def render(r: dict, width: int | None = None, *, terms: bool = True) -> str:
+    """terms=False: WhatsApp wala chhota text — sharten web bill par (details)
+    aur kagaz par rehti hain; message mein wo 6-8 line bahut lambi ho jaati thi."""
     printing = width is not None
     cur = "Rs." if printing else "₹"
 
@@ -244,7 +246,7 @@ def render(r: dict, width: int | None = None) -> str:
     if r["upi"]:
         out.append(rule)
         text(f"Pay via UPI: {r['upi']}" + (f" ({r['upi_payee']})" if r["upi_payee"] else ""))
-    if r["terms"]:
+    if r["terms"] and terms:
         out.append(rule)
         text("Terms & conditions:")
         for n, t in enumerate(r["terms"], 1):
@@ -271,5 +273,5 @@ def payload(order, cust, tenant, settings: dict, prev_due: float, prev_bills: in
     # WhatsApp wale text mein web bill ka link (dekho + GPay/PhonePe se pay);
     # printer wale kagaz par nahi. Public domain pata na ho to link hi nahi.
     url = bill_link.url(order, settings)
-    text = render(r) + (f"\n\n🧾 View bill & pay online:\n{url}" if url else "")
+    text = render(r, terms=False) + (f"\n\n🧾 View bill & pay online:\n{url}" if url else "")
     return {"text": text, "print_text": render(r, width=PAPER_CHARS[mm]), "paper_mm": mm, "bill_url": url}

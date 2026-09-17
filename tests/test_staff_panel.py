@@ -328,7 +328,7 @@ async def test_cod_collection_updates_the_ledger(client, two_shops, sent) -> Non
                 created_by="test",
             )
             number = order.order_number
-            st = await db.get(Staff, two_shops["a_wash"])
+            st = await db.get(Staff, two_shops["a_del"])      # paisa delivery wala leta hai
             from app.services import tasks as task_service
 
             await task_service.create_task(
@@ -337,7 +337,7 @@ async def test_cod_collection_updates_the_ledger(client, two_shops, sent) -> Non
     finally:
         tenant_context.current_tenant_id.reset(token)
 
-    await _login(client, A_PHONE)
+    await _login(client, A_DEL_PHONE)
     r = await client.post(
         f"/staff/api/orders/{number}/collect", json={"amount": 300, "method": "cash"}
     )
@@ -1128,10 +1128,10 @@ async def test_receipt_gives_bill_text_only_for_your_own_order(
 ) -> None:
     """Delivery wala apne phone se bill WhatsApp kar sake — text + poora
     number, par sirf apne order ka, aur /call ki tarah audit ke saath."""
-    mine = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A, total=250)
+    mine = await _order_for(two_shops["a"], two_shops["a_del"], CUST_A, delivery=True, total=250)
     theirs = await _order_for(two_shops["b"], two_shops["b_wash"], CUST_B)
 
-    await _login(client, A_PHONE)
+    await _login(client, A_DEL_PHONE)           # paisa delivery wala sambhalta hai, washer nahi
     r = await client.get(f"/staff/api/orders/{mine}/receipt")
     assert r.status_code == 200, r.text
     body = r.json()

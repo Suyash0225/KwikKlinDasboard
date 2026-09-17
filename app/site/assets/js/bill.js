@@ -21,4 +21,24 @@
   } else if (btn) {
     btn.hidden = true;
   }
+
+  /* Live: the shop moves the order (picked up, washing, ready, delivered)
+     or records a payment -> this open page refreshes itself. Tiny poll,
+     only while the tab is visible; also re-checks when the customer
+     comes back to the tab. */
+  var body = document.body, live = body.getAttribute("data-live"), v = body.getAttribute("data-v");
+  if (live && v && window.fetch) {
+    var busy = false;
+    var check = function () {
+      if (busy || document.hidden) return;
+      busy = true;
+      fetch(live, { cache: "no-store", credentials: "omit" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) { if (j && j.v && j.v !== v) location.reload(); })
+        .catch(function () {})
+        .then(function () { busy = false; });
+    };
+    setInterval(check, 15000);
+    document.addEventListener("visibilitychange", function () { if (!document.hidden) check(); });
+  }
 })();

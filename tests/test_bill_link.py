@@ -82,8 +82,30 @@ async def test_bill_page_shows_bill_and_upi_apps_with_live_due(client, order_wit
 async def test_bad_or_foreign_token_is_404(client, order_with_upi) -> None:
     home, o = order_with_upi
     assert (await client.get("/b/nonsense")).status_code == 404
+    assert (await client.get("/b/nonsense/live")).status_code == 404
     wrong_shop = bill_link.make(uuid.uuid4(), o.id)
     assert (await client.get(f"/b/{wrong_shop}")).status_code == 404
+    assert (await client.get(f"/b/{wrong_shop}/live")).status_code == 404
+
+
+async def test_open_bill_page_learns_about_status_and_payment_changes(client, order_with_upi) -> None:
+    """Dukaan status badle ya paisa likhe -> grahak ka khula page khud reload
+    kare. Page /live se sirf ek version string poochta hai (koi rakam nahi)."""
+    from app.models import OrderStatus
+
+    home, o = order_with_upi
+    tok = bill_link.make(home, o.id)
+    html = (await client.get(f"/b/{tok}")).text
+    assert f'data-live="/b/{tok}/live"' in html and "bill.js" in html
+    v0 = (await client.get(f"/b/{tok}/live")).json()["v"]
+    assert f'data-v="{v0}"' in html and "270" in v0 and "@" not in v0
+
+    async with tenant_context.as_tenant(home):
+        async with async_session_factory() as db:
+            order = await db.get(Order, o.id)
+            await order_service.update_status(db, order, OrderStatus.IN_WASH, changed_by="test", notify=False)
+    v1 = (await client.get(f"/b/{tok}/live")).json()["v"]
+    assert v1 != v0 and v1.startswith("IN_WASH|")
 
 
 async def test_link_goes_into_shared_bill_text(order_with_upi, monkeypatch) -> None:
@@ -97,4 +119,6 @@ async def test_link_goes_into_shared_bill_text(order_with_upi, monkeypatch) -> N
     assert out["bill_url"].startswith("https://kwikklin.online/b/")
     assert out["bill_url"] in out["text"] and "View bill & pay online" in out["text"]
     assert "kwikklin.online/b/" not in out["print_text"]
+    # Sharten WhatsApp mein nahi (bahut lamba ho jaata tha) — kagaz aur web bill par hain
+    assert "Terms" not in out["text"] and "Terms & conditions" in out["print_text"]
     assert bill_link.parse(out["bill_url"].rsplit("/", 1)[1]) == (home, o.id)

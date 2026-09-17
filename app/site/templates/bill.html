@@ -7,13 +7,14 @@
 <meta name="referrer" content="no-referrer">
 <title>Bill {{NUMBER}} · {{SHOP}}</title>
 <meta name="theme-color" content="{{THEME}}">
-<link rel="icon" href="/site/assets/img/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/site/assets/img/logo-180.png" type="image/png">
+<link rel="apple-touch-icon" href="/site/assets/img/logo-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all';this.onload=null">
 <link rel="stylesheet" href="/site/assets/css/bill.css?v={{ASSET_V}}">
 </head>
-<body class="mood-{{MOOD}}">
+<body class="mood-{{MOOD}}" data-live="{{LIVE_URL}}" data-v="{{LIVE_V}}">
 <main class="bill">
 
   <section class="hero">
@@ -55,6 +56,6 @@
 
   <p class="foot"><span>Powered by <a href="https://kwikklin.online/join" rel="noopener">Kwik Klin</a></span></p>
 </main>
-{{PAY_SCRIPT}}
+<script src="/site/assets/js/bill.js?v={{ASSET_V}}" defer></script>
 </body>
 </html>

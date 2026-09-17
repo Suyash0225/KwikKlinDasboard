@@ -84,6 +84,12 @@ def can_bill(p: StaffPrincipal) -> bool:
     return p.staff.role in BILLING_ROLES
 
 
+# Paisa (bill ka total, baaki, collect, bill share) sirf unhe jo paisa
+# sambhalte hain — washerman ko kapde dikhte hain, rakam nahi. Server yahin
+# rok deta hai; UI mein chhupana kaafi nahi tha (API se sab aa jaata tha).
+can_money = can_bill
+
+
 def require_biller(feature: str = "billing"):
     """Plan ka pehra + role ka pehra, ek hi jagah.
 
@@ -210,6 +216,7 @@ async def me(
         # Panel isi ek jhande se Bill/New tab dikhata hai — do jagah do
         # hisaab rakhne par hi "dikh raha hai par chalta nahi" hota hai.
         "can_bill": can_bill(p),
+        "can_money": can_money(p),
         "can_expense": can_expense(p),
         "must_change_password": p.staff.must_change_password,
         "shop": p.tenant.shop_name if p.tenant else "",
@@ -352,10 +359,11 @@ def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
             "delivery": order.expected_delivery.isoformat() if order.expected_delivery else None,
             "status": order.status.name,
             "notes": order.notes,
-            "total": float(order.total_amount or 0),
-            "due": float((order.total_amount or 0) - (order.amount_paid or 0)),
             "clothes": delivery.counts(order),
         }
+        if can_money(p):
+            card["order"]["total"] = float(order.total_amount or 0)
+            card["order"]["due"] = float((order.total_amount or 0) - (order.amount_paid or 0))
     return card
 
 
@@ -683,17 +691,20 @@ async def order_detail(
         "lines": delivery.lines(order),
         "clothes": delivery.counts(order),
         "urgent": order.priority == "urgent",
-        "urgent_charge": sum(
-            float(i.get("amount") or 0) for i in (order.items or []) if urgent_svc.is_charge_line(i)
-        ),
         "status": order.status.name,
         "delivery": order.expected_delivery.isoformat() if order.expected_delivery else None,
         "notes": order.notes,
-        "total": float(order.total_amount or 0),
-        "paid": float(order.amount_paid or 0),
-        "due": float((order.total_amount or 0) - (order.amount_paid or 0)),
-        "can_collect": p.has("cod_collection"),
     }
+    if can_money(p):
+        out.update({
+            "urgent_charge": sum(
+                float(i.get("amount") or 0) for i in (order.items or []) if urgent_svc.is_charge_line(i)
+            ),
+            "total": float(order.total_amount or 0),
+            "paid": float(order.amount_paid or 0),
+            "due": float((order.total_amount or 0) - (order.amount_paid or 0)),
+            "can_collect": p.has("cod_collection"),
+        })
     # Kitni der se is stage par, aur deri hai to kyon (milestones sirf
     # order_timeline wale plan mein — neeche timeline ke saath)
     from app.services import turnaround
@@ -789,7 +800,7 @@ async def order_ready(
 @router.get("/orders/{number}/dues")
 async def order_dues(
     number: str,
-    p: StaffPrincipal = Depends(current_staff),
+    p: StaffPrincipal = Depends(require_biller()),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Is order ka due + us grahak ka purana baaki.
@@ -820,11 +831,11 @@ class CollectIn(BaseModel):
     settle_previous: bool = False
 
 
-@router.post("/orders/{number}/collect", dependencies=[Depends(require_staff_feature("cod_collection"))])
+@router.post("/orders/{number}/collect")
 async def collect_payment(
     number: str,
     body: CollectIn,
-    p: StaffPrincipal = Depends(current_staff),
+    p: StaffPrincipal = Depends(require_biller("cod_collection")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Delivery wale ne paisa liya — ledger turant update.
@@ -1601,7 +1612,7 @@ async def call_customer(
 @router.get("/orders/{number}/receipt")
 async def order_receipt(
     number: str,
-    p: StaffPrincipal = Depends(current_staff),
+    p: StaffPrincipal = Depends(require_biller()),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Bill ka text + customer ka poora number — WhatsApp par share ke liye.
@@ -1858,7 +1869,7 @@ async def today_summary(
             ).scalar_one()
             or 0
         ),
-        "can_collect": p.has("cod_collection"),
+        "can_collect": can_money(p) and p.has("cod_collection"),
     }
     # Late kaam ki GINTI server se, list se nahi. Panel ke paas sirf pehla
     # page hota hai (30 rows), to wahan gin kar banner banate to badi dukaan
@@ -1976,7 +1987,7 @@ async def my_route(
                 "items": items_summary(o),
                 "status": o.status.name,
                 "urgent": o.priority == "urgent",
-                "due": float((o.total_amount or 0) - (o.amount_paid or 0)),
+                **({"due": float((o.total_amount or 0) - (o.amount_paid or 0))} if can_money(p) else {}),
                 "delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
                 # kitne kapde, kitne diye — thodi delivery ho chuki ho to row par "4 pending"
                 "clothes": delivery.counts(o),

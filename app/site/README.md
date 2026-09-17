@@ -15,7 +15,7 @@ app/site/
 └── assets/               served at /site/assets/… (1-year immutable cache)
     ├── css/site.css
     ├── js/site.js        loaded with `defer`
-    └── img/              icon.svg, og-laundry.jpg (1200×630 social preview)
+    └── img/              logo.png (round brand logo), logo-180.png (favicon/apple icon), og-laundry.jpg (1200×630 social preview)
 ```
 
 ## How rendering works

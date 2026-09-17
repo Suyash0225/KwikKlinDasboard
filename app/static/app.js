@@ -646,7 +646,8 @@ function renderOrders() {
         <td><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span><div class="muted">${money(o.amount_paid)} / ${o.total_amount ? money(o.total_amount) : "—"}</div></td>
         <td>${fmtDate(o.expected_delivery)}</td>
         <td><div class="act">
-          <button class="btn sm ghost" title="Update status" aria-label="Update status" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>
+          ${nextStepBtn(o)}
+          <button class="btn sm ghost" title="All statuses" aria-label="All statuses" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>
           <button class="btn sm ghost" title="Collect payment" aria-label="Collect payment" onclick="paymentModal('${o.order_number}')">₹</button>
           <button class="btn sm ghost" title="More actions" aria-label="More actions" onclick="orderMenu('${o.order_number}')">⋯</button>
         </div></td>
@@ -662,8 +663,9 @@ function renderOrders() {
         <div class="kv"><span>Paid ${money(o.amount_paid)} of ${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
         <div class="kv"><span>Delivery</span><span>${fmtDate(o.expected_delivery)}${isOverdue(o) ? " ⚠️" : ""}</span></div>
         <div class="act">
-          <button class="btn sm" onclick="statusModal('${o.order_number}','${o.status}')">Status</button>
-          <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">Payment</button>
+          ${nextStepBtn(o) || `<button class="btn sm" onclick="statusModal('${o.order_number}','${o.status}')">Status</button>`}
+          <button class="btn sm ghost" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>
+          <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">₹</button>
           <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
           <button class="btn sm ghost" onclick="jumpChat('${o.phone}')">Chat</button>
         </div>
@@ -683,6 +685,7 @@ function orderMenu(num) {
   const o = ((DASH && DASH.active_orders) || []).find((x) => x.order_number === num);
   openModal(`<h3>${num}</h3>
     <div class="frm">
+      ${o ? `<button class="btn ghost" onclick="closeModal();statusModal('${num}','${o.status}')">🔄 Change status</button>` : ""}
       <button class="btn ghost" onclick="closeModal();dateModal('${num}')">📅 Delivery date</button>
       <button class="btn ghost" onclick="closeModal();orderDetail('${num}')">👁 Details</button>
       ${o ? `<button class="btn ghost" onclick="closeModal();jumpChat('${o.phone}')">💬 Open chat</button>` : ""}
@@ -755,25 +758,58 @@ async function sendComposed(btn) {
   });
 }
 
+/* Ek order, ek agla kadam. Row par yahi ek bada button — dropdown khol kar
+   sahi status dhoondhna phone par mushkil tha. Poori list (hold/cancel bhi)
+   🔄 se, bade buttons mein. */
+const NEXT_STEP = {
+  PICKUP_ASSIGNED: ["PICKED_UP", "🛵 Picked up"],
+  RECEIVED: ["IN_WASH", "🧼 Start wash"],
+  PICKED_UP: ["IN_WASH", "🧼 Start wash"],
+  IN_WASH: ["READY", "✨ Ready"],
+  IN_DRY: ["READY", "✨ Ready"],
+  IN_IRON: ["READY", "✨ Ready"],
+  READY: ["DELIVERED", "🚚 Deliver"],
+  OUT_FOR_DELIVERY: ["DELIVERED", "✅ Delivered"],
+  ON_HOLD: ["IN_WASH", "▶ Resume"],
+};
+const STEP_LABEL = {
+  PICKED_UP: "🛵 Picked up", IN_WASH: "🧼 Washing", IN_DRY: "💨 Drying", IN_IRON: "🔥 Ironing",
+  READY: "✨ Ready", OUT_FOR_DELIVERY: "🚚 Out for delivery", DELIVERED: "✅ Delivered",
+  ON_HOLD: "⏸ On hold", CANCELLED: "🚫 Cancel order",
+};
+function nextStepBtn(o, cls = "btn sm") {
+  const n = NEXT_STEP[o.status];
+  return n ? `<button class="${cls}" onclick="setStatus('${o.order_number}','${o.status}','${n[0]}')">${n[1]}</button>` : "";
+}
+async function setStatus(number, current, next) {
+  // Delivered = kapde grahak ko — sab ya kuch (12 mein se 8). Seedha status
+  // nahi badalte; popup mein kapde chune jaate hain, baaki pending rehte hain.
+  if (next === "DELIVERED" && ["READY", "OUT_FOR_DELIVERY"].includes(current)) {
+    closeModal(); return dashDeliverModal(number);
+  }
+  if (next === "CANCELLED" && !confirm(`Cancel order ${number}? The customer's open work stops.`)) return;
+  try {
+    await api(`/orders/${number}/status`, { method: "POST", body: { status: next, changed_by: "dashboard" } });
+  } catch (e) { toast(e.message, true); return; }
+  closeModal(); toast(`${number} → ${statusName(next)}`); loadDashboard();
+  if (typeof loadBills === "function" && $("bills-list")) loadBills();
+}
 function statusModal(number, current) {
-  const nexts = STATUS_SEQ.slice(STATUS_SEQ.indexOf(current) + 1).concat(["ON_HOLD", "CANCELLED"]);
-  openModal(`<h3>Update status — ${number}</h3>
-    <p class="muted">Current: ${statusName(current)}. Customer is notified automatically on Ready / Out for delivery / Delivered.</p>
-    <div class="frm" style="margin-top:10px">
-      <select id="st-new">${nexts.map((s) => `<option value="${s}">${statusName(s)}</option>`).join("")}</select>
+  const flow = ["PICKED_UP", "IN_WASH", "IN_DRY", "IN_IRON", "READY", "OUT_FOR_DELIVERY", "DELIVERED"];
+  const seq = ["PICKUP_ASSIGNED", "RECEIVED", ...flow];
+  const i = seq.indexOf(current);
+  const nexts = flow.filter((st) => seq.indexOf(st) > i);
+  const n = NEXT_STEP[current];
+  openModal(`<h3>${number}</h3>
+    <p class="muted">Now: <b>${statusName(current)}</b>. Customer is told automatically on Ready / Out for delivery / Delivered.</p>
+    <div class="frm steplist" style="margin-top:10px">
+      ${nexts.map((st) => `<button class="btn ${n && n[0] === st ? "" : "ghost"}" onclick="setStatus('${number}','${current}','${st}')">${STEP_LABEL[st]}</button>`).join("")}
     </div>
-    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
-    <button class="btn" id="st-go">Update</button></div>`);
-  $("st-go").onclick = (e) => busy(e.target, async () => {
-    // Delivered = kapde grahak ko — sab ya kuch (12 mein se 8). Seedha status
-    // nahi badalte; popup mein kapde chune jaate hain, baaki pending rehte hain.
-    if ($("st-new").value === "DELIVERED" && ["READY", "OUT_FOR_DELIVERY"].includes(current)) {
-      closeModal(); return dashDeliverModal(number);
-    }
-    await api(`/orders/${number}/status`, { method: "POST", body: { status: $("st-new").value, changed_by: "dashboard" } });
-    closeModal(); toast(T.statusUpdated); loadDashboard();
-    if (typeof loadBills === "function" && $("bills-list")) loadBills();
-  });
+    <div class="btnrow" style="margin-top:12px">
+      ${current !== "ON_HOLD" ? `<button class="btn ghost sm" onclick="setStatus('${number}','${current}','ON_HOLD')">${STEP_LABEL.ON_HOLD}</button>` : ""}
+      <button class="btn ghost sm danger-ic" onclick="setStatus('${number}','${current}','CANCELLED')">${STEP_LABEL.CANCELLED}</button>
+      <button class="btn ghost sm" onclick="closeModal()">Close</button>
+    </div>`);
 }
 
 /* ---- delivery: sab ya kuch kapde (BUG_008) — staff panel jaisa hi ---- */

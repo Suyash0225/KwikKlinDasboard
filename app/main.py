@@ -603,7 +603,7 @@ async def bill_page(token: str):
 
     status_word, status_cls = _STATUS_WORD.get(order.status.name, (order.status.name.title(), ""))
     due = Decimal(str(r["due"])).quantize(Decimal("0.01"))
-    pay_block, pay_script = "", ""
+    pay_block = ""
     if r["has_total"] and due <= 0 and r["total"] > 0:
         pay_block = ""   # hero khud "Paid in full" bolta hai
     elif r["has_total"] and due > 0 and r["upi"]:
@@ -625,7 +625,6 @@ async def bill_page(token: str):
             "<p class='note'>After paying, the shop confirms it on your bill. Keep the payment screenshot until then.</p>"
             "</section>"
         )
-        pay_script = f"<script src='/site/assets/js/bill.js?v={_SITE_ASSET_V}' defer></script>"
     elif r["has_total"] and due > 0:
         pay_block = (f"<section class='card pay'><div class='due'>Amount due</div>"
                      f"<div class='amount'>{money(float(due))}</div><p class='note'>Please pay at the shop or at delivery.</p></section>")
@@ -700,16 +699,45 @@ async def bill_page(token: str):
                              if r["delivery"] else ""),
         "{{STATUS_CLASS}}": status_cls, "{{STATUS}}": e(status_word),
         "{{PAY_BLOCK}}": pay_block, "{{ITEMS}}": "".join(items), "{{TOTALS}}": totals,
-        "{{TERMS}}": terms, "{{CONTACT_BTN}}": contact_btn, "{{PAY_SCRIPT}}": pay_script,
+        "{{TERMS}}": terms, "{{CONTACT_BTN}}": contact_btn,
         "{{MOOD}}": mood, "{{THEME}}": theme, "{{HERO_ART}}": art, "{{HERO_EMOJI}}": emoji,
         "{{HERO_TITLE}}": e(title), "{{HERO_SUB}}": e(sub), "{{HERO_BADGE}}": badge, "{{PROGRESS}}": progress,
         "{{ASSET_V}}": _SITE_ASSET_V, "{{SHOP}}": e(shop),
     }
+    fills["{{LIVE_URL}}"] = f"/b/{e(token)}/live"
+    fills["{{LIVE_V}}"] = e(_bill_live_version(order))
     html = (_SITE_DIR / "templates" / "bill.html").read_text(encoding="utf-8")
     for k, v in fills.items():
         html = html.replace(k, v)
     return _Resp(content=html, media_type="text/html",
                  headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
+def _bill_live_version(order) -> str:
+    """Jo badle to grahak ka khula hua bill page khud refresh ho: status, paisa."""
+    return f"{order.status.name}|{order.amount_paid or 0}|{order.total_amount or 0}"
+
+
+@app.get("/b/{token}/live", include_in_schema=False)
+async def bill_live(token: str):
+    """Bill page har kuch second yahan poochta hai — status/payment badla?
+
+    Sirf ek chhota sa version string, koi rakam/naam nahi: page reload karke
+    poora bill le leta hai. Galat token par wahi 404 jo page par."""
+    from fastapi.responses import JSONResponse
+
+    from app.models import Order
+    from app.services import bill_link, integrations
+
+    parsed = bill_link.parse(token)
+    if parsed is None:
+        return JSONResponse({"detail": "not found"}, status_code=404)
+    tid, oid = parsed
+    async with integrations.tenant_db(tid) as db:
+        order = await db.get(Order, oid)
+        if order is None or order.tenant_id != tid:
+            return JSONResponse({"detail": "not found"}, status_code=404)
+        return JSONResponse({"v": _bill_live_version(order)}, headers={"Cache-Control": "no-store"})
 
 
 def _esc(s: str) -> str:
