@@ -745,6 +745,15 @@ def _earlier_bills_card(prev: dict, statement_link: str) -> str:
     return f"<section class='card'><h2>Earlier bills</h2>{rows}{still}{link}</section>"
 
 
+def _rw_progress_text(p: dict) -> str:
+    """Ek rule ki progress ka text. Alag function — 3.11 mein nested f-string nahi chalti."""
+    if p["done"]:
+        return "\u2713 done"
+    if p["kind"] == "bills":
+        return f"{int(p['have'])} of {int(p['need'])}"
+    return f"{_money(p['have'])} of {_money(p['need'])}"
+
+
 def _rewards_card(rw: dict) -> str:
     """🎁 Mile hue reward (code) + har niyam par progress bar. Sirf grahak ka apna."""
     e = _esc
@@ -757,7 +766,7 @@ def _rewards_card(rw: dict) -> str:
     )
     prog = "".join(
         f"<div class='rw-prog'><div class='row'><span>{e(p['condition'])} → <b>{e(p['reward'])}</b></span>"
-        f"<span>{'✓ done' if p['done'] else (f'{int(p['have'])} of {int(p['need'])}' if p['kind'] == 'bills' else f'{_money(p['have'])} of {_money(p['need'])}')}</span></div>"
+        f"<span>{_rw_progress_text(p)}</span></div>"
         f"<div class='bar'><i style='width:{p['pct']}%'></i></div></div>"
         for p in rw.get("progress", [])
     )
