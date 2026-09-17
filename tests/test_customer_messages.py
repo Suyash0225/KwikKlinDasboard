@@ -34,6 +34,49 @@ async def _home_slug() -> str:
         return (await db.execute(sqltext("SELECT slug FROM tenants WHERE id = :t"), {"t": str(tid)})).scalar_one()
 
 
+async def test_delivery_update_message_says_full_or_partial_with_bill_link(client, sent, monkeypatch) -> None:
+    """Send message -> Delivery update: kuch nahi diya to mana; kuch diya to
+    'X diye, Y baaki'; sab diya to 'sabhi N kapde' — har baar web bill link."""
+    from app.models import Order, OrderStatus
+    from app.services import delivery
+
+    monkeypatch.setattr(settings, "SITE_URL", "https://kwikklin.online")
+    async with async_session_factory() as db:
+        o = await order_service.create_order(
+            db, customer_phone=PHONE, customer_name="Pooja", created_by="test",
+            items=[{"type": "Shirt", "qty": 3}, {"type": "Kurta", "qty": 1}], total_amount=Decimal("200"),
+        )
+        number = o.order_number
+    try:
+        r = await client.get(f"/orders/{number}/message?kind=delivery_update", headers=AUTH)
+        assert r.status_code == 400 and "Nothing delivered" in r.json()["detail"]
+        async with async_session_factory() as db:
+            order = await order_service.get_order(db, number)
+            await order_service.update_status(db, order, OrderStatus.READY, changed_by="test", notify=False)
+            await delivery.deliver(db, order, [{"line": 0, "qty": 2}], by="test")
+        t = (await client.get(f"/orders/{number}/message?kind=delivery_update", headers=AUTH)).json()["text"]
+        assert "delivered 2 clothes" in t and "2 clothes are still with us" in t and "kwikklin.online/b/" in t
+        async with async_session_factory() as db:
+            order = await order_service.get_order(db, number)
+            await delivery.deliver(db, order, None, by="test")
+        t = (await client.get(f"/orders/{number}/message?kind=delivery_update", headers=AUTH)).json()["text"]
+        assert "All 4 clothes" in t and "delivered" in t and "kwikklin.online/b/" in t
+        # status se seedha Delivered (bina kapde chune) = poora
+        async with async_session_factory() as db:
+            o2 = await order_service.create_order(db, customer_phone=PHONE, created_by="test",
+                                                  items=[{"type": "Towel", "qty": 2}], total_amount=Decimal("40"))
+            await order_service.update_status(db, o2, OrderStatus.DELIVERED, changed_by="test", notify=False)
+        t = (await client.get(f"/orders/{o2.order_number}/message?kind=delivery_update", headers=AUTH)).json()["text"]
+        assert "All 2 clothes" in t
+        # customers page: grahak ke phone se uska naya bill
+        r2 = await client.get("/orders", params={"customer_phone": PHONE, "limit": 1}, headers=AUTH)
+        assert r2.status_code == 200, r2.text
+        rows = r2.json()
+        assert rows and rows[0]["order_number"] == o2.order_number, (PHONE, r2.text[:300])
+    finally:
+        await purge_phones(PHONE)
+
+
 async def test_thank_you_messages_are_built_on_the_server(client, sent) -> None:
     old_link = old_base = None
     async with async_session_factory() as db:

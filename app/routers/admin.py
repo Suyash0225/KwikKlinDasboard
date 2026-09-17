@@ -106,6 +106,23 @@ async def dashboard_data(db: AsyncSession = Depends(get_db)) -> dict:
         )
     ).all()
 
+    # Delivered par paisa baaki: kaam khatam, hisaab nahi. Ye dashboard se
+    # gayab ho jaate the (sirf Bill history mein) — owner ko lagta tha bill
+    # "hat gaya". Ab alag chip "Unpaid" mein, collect/message ke saath.
+    unpaid_delivered = (
+        await db.execute(
+            select(Order, Customer)
+            .join(Customer, Customer.id == Order.customer_id)
+            .where(
+                Order.status == OrderStatus.DELIVERED,
+                Order.total_amount.isnot(None),
+                Order.total_amount > Order.amount_paid,
+            )
+            .order_by(Order.created_at.desc())
+            .limit(100)
+        )
+    ).all()
+
     convs = (
         await db.execute(
             select(Conversation, Customer, Staff)
@@ -124,32 +141,34 @@ async def dashboard_data(db: AsyncSession = Depends(get_db)) -> dict:
         s.id: s.name for s in (await db.execute(select(Staff))).scalars().all()
     }
 
+    def _row(o, cu, tr=None):
+        return {
+            "order_number": o.order_number,
+            "status": o.status.name,
+            "customer": cu.name or cu.phone,
+            "phone": cu.phone,
+            "items": o.items,
+            "total_amount": str(o.total_amount) if o.total_amount is not None else None,
+            "amount_paid": str(o.amount_paid),
+            "payment_status": o.payment_status.name,
+            "expected_delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
+            "created_at": o.created_at.isoformat(),
+            "priority": o.priority,
+            "washer": staff_names.get(o.assigned_washer_id),
+            "delivery_boy": staff_names.get(o.assigned_delivery_id),
+            "tracking": {k: v for k, v in tr.items() if k != "milestones"} if tr else None,
+        }
+
     return {
         "counts": {
             "by_status": {s.name: c for s, c in by_status_rows},
             "active_total": sum(c for _, c in by_status_rows),
             "today_new": today_new,
             "delayed": sum(1 for t in tracked.values() if t["delayed"]),
+            "unpaid_delivered": len(unpaid_delivered),
         },
-        "active_orders": [
-            {
-                "order_number": o.order_number,
-                "status": o.status.name,
-                "customer": cu.name or cu.phone,
-                "phone": cu.phone,
-                "items": o.items,
-                "total_amount": str(o.total_amount) if o.total_amount is not None else None,
-                "amount_paid": str(o.amount_paid),
-                "payment_status": o.payment_status.name,
-                "expected_delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
-                "created_at": o.created_at.isoformat(),
-                "priority": o.priority,
-                "washer": staff_names.get(o.assigned_washer_id),
-                "delivery_boy": staff_names.get(o.assigned_delivery_id),
-                "tracking": {k: v for k, v in tracked[o.id].items() if k != "milestones"},
-            }
-            for o, cu in active_orders
-        ],
+        "active_orders": [_row(o, cu, tracked[o.id]) for o, cu in active_orders],
+        "unpaid_orders": [_row(o, cu) for o, cu in unpaid_delivered],
         "conversations": [
             {
                 "who": (st.name if st else (cu.name or cu.phone if cu else "?")),

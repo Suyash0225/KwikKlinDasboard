@@ -495,6 +495,7 @@ async def list_orders(
     status: str | None = Query(default=None, description="status NAME, e.g. IN_WASH"),
     active: bool = Query(default=False, description="only not-finished orders"),
     limit: int = Query(default=50, ge=1, le=200),
+    customer_phone: str | None = Query(default=None, description="only this customer's orders"),
 ) -> list[OrderOut]:
     # one JOIN instead of a customer lookup per order (N+1 killed the p95
     # under load testing)
@@ -511,6 +512,8 @@ async def list_orders(
             raise HTTPException(status_code=400, detail=f"unknown status {status!r}")
     elif active:
         q = q.where(Order.status.in_(order_service.ACTIVE_STATUSES))
+    if customer_phone:
+        q = q.where(Customer.phone == customer_phone.strip())
     rows = (await db.execute(q)).all()
     return [await _order_out(db, o, customer=c) for o, c in rows]
 
@@ -564,7 +567,7 @@ async def deliver_order(order_number: str, body: DeliverIn, db: AsyncSession = D
 @router.get("/{order_number}/message", dependencies=[Depends(require_admin_key)])
 async def order_message(
     order_number: str,
-    kind: str = Query(pattern="^(payment_thanks|service_thanks|review_request)$"),
+    kind: str = Query(pattern="^(payment_thanks|service_thanks|review_request|delivery_update)$"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Bill menu ka 💬 Message — thank you / payment mila / review. Sirf text;

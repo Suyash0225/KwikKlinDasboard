@@ -1701,7 +1701,7 @@ async def order_receipt(
 @router.get("/orders/{number}/message")
 async def order_message(
     number: str,
-    kind: str = Query(pattern="^(payment_thanks|service_thanks|review_request)$"),
+    kind: str = Query(pattern="^(payment_thanks|service_thanks|review_request|delivery_update)$"),
     p: StaffPrincipal = Depends(require_biller()),
     db: AsyncSession = Depends(get_db),
 ) -> dict:

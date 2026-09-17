@@ -278,6 +278,12 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste {name} 🙏\nAapka ₹{amount} ka payment mil gaya — order {order_number}. Bahut dhanyawad!\n{balance_line}{bill_line}\n— {shop}",
         "en": "Hello {name} 🙏\nWe have received your payment of ₹{amount} for order {order_number}. Thank you!\n{balance_line}{bill_line}\n— {shop}",
     },
+    # Haath se bheja "Delivery update": poora order de diya (partial wala
+    # upar 'partial_delivery' hi jaata hai). Web bill ka link saath.
+    "delivery_update_full": {
+        "hi": "Namaste {name} 🙏\nAapke order {order_number} ke sabhi {count} kapde deliver ho gaye ✅{bill_line}\nDhanyawad, {shop} ko mauka dene ke liye!\n— {shop}",
+        "en": "Hello {name} 🙏\nAll {count} clothes from your order {order_number} have been delivered ✅{bill_line}\nThank you for choosing {shop}!\n— {shop}",
+    },
     # Thodi delivery — baaki kapde abhi dukaan par. Apne aap jaata hai.
     "partial_delivery": {
         "hi": "Namaste {name} 🙏\nOrder {order_number} ke {given} kapde aaj de diye gaye ✅\n{pending} kapde abhi hamare paas hain — jald hi pahuncha denge.{bill_line}\n— {shop}",
@@ -405,6 +411,7 @@ EDITABLE_KEYS = [
     "escalated_ack", "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
     "stop_confirmed", "start_confirmed",
     "payment_thanks", "service_thanks", "review_request", "partial_delivery",
+    "delivery_update_full",
 ]
 
 
@@ -452,6 +459,7 @@ CUSTOMER_KEYS = frozenset({
     "order_not_found", "complaint_ack", "escalated_ack",
     "payment_reminder", "payment_reminder_firm",
     "payment_thanks", "service_thanks", "review_request", "partial_delivery",
+    "delivery_update_full",
     "start_confirmed", "stop_confirmed", "relay_message_customer",
 })
 

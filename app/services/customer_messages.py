@@ -20,7 +20,7 @@ from app.models import Order, Payment
 from app.services import app_settings
 from app.services.messages import get_message
 
-KINDS = ("payment_thanks", "service_thanks", "review_request")
+KINDS = ("payment_thanks", "service_thanks", "review_request", "delivery_update")
 
 
 class MessageError(ValueError):
@@ -88,6 +88,26 @@ async def compose(db: AsyncSession, *, kind: str, order: Order, customer, tenant
             raise MessageError("No payment recorded on this bill yet")
         fmt["amount"] = rupees(last.amount)
         fmt["balance_line"] = balance_line(order)
+    elif kind == "delivery_update":
+        # Poora de diya -> "sab X kapde deliver"; kuch -> "X diye, Y baaki".
+        # Dono mein web bill ka link (wahi page jo bill banate waqt gaya tha),
+        # jahan har kapde par gaya/baaki dikhta hai.
+        from app.models import OrderStatus
+        from app.services import delivery
+
+        c = delivery.counts(order)
+        # Status se seedha "Delivered" kiya ho (kapde chune bina) to har line
+        # par delivered ka nishaan nahi hota — order ka status hi sach hai.
+        if order.status is OrderStatus.DELIVERED:
+            c = {"total": c["total"], "delivered": c["total"], "pending": 0}
+        if c["delivered"] == 0:
+            raise MessageError("Nothing delivered on this bill yet — mark the delivery first")
+        if c["pending"] == 0:
+            fmt["count"] = str(c["total"])
+            kind = "delivery_update_full"
+        else:
+            fmt["given"], fmt["pending"] = str(c["delivered"]), str(c["pending"])
+            kind = "partial_delivery"
     elif kind == "review_request":
         link = await short_review_link(db, tenant)
         if not link:

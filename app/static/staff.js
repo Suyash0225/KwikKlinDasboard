@@ -1102,6 +1102,7 @@ function rawbtUrl(text) {
    Paise ki yaad sirf manager (neeche remindBill), isliye wo yahan tabhi
    jab manager ho aur paisa baaki ho. */
 const MSG_KINDS = [
+  ["delivery_update", "🚚", "Delivery update — delivered / pending, with bill link"],
   ["payment_thanks", "💚", "Payment received — thank you"],
   ["service_thanks", "🙏", "Thank you for the service"],
   ["review_request", "⭐", "Please review us on Google"],

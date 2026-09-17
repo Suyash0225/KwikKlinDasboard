@@ -583,7 +583,7 @@ function renderKpis() {
     ${kpi("Revenue this month", money(m.revenue || 0), "", "go('reports')", "📈", "blue")}
     ${kpi("Expenses this month", money(m.expenses || 0), "", "go('expenses')", "💸", "amber")}
     ${kpi("Profit this month", money(m.profit || 0), "revenue − expenses", "go('reports')", "💰", "teal")}
-    ${kpi("Total outstanding", outstanding === null ? "…" : money(outstanding), "tap for the list", "go('customers')", "🏦", "red")}
+    ${kpi("Total outstanding", outstanding === null ? "…" : money(outstanding), "tap for the list", "dashFilter.status='UNPAID';dashFilter.page=1;renderChips();renderOrders();document.getElementById('dash-orders').scrollIntoView({behavior:'smooth'})", "🏦", "red")}
   `;
   if (outstanding === null) loadCustomers(true).then(renderKpis);
 }
@@ -600,14 +600,22 @@ function renderChips() {
     // IMP_006: stage ki hadd ya delivery date nikal gayi — sabse pehle yahi dikhe
     .concat((DASH.counts.delayed || 0) ? [["DELAYED", `⏱ Delayed${cnt(DASH.counts.delayed)}`]] : [])
     .concat(STATUS_SEQ.filter((s) => s !== "DELIVERED")
-      .map((s) => [s, `${statusName(s)}${cnt(by[s] || 0)}`]));
+      .map((s) => [s, `${statusName(s)}${cnt(by[s] || 0)}`]))
+    // Delivered par paisa baaki — kaam khatam par hisaab nahi; yahin se collect/message
+    .concat([["UNPAID", `💰 Delivered, unpaid${cnt(DASH.counts.unpaid_delivered || 0)}`]]);
   $("dash-chips").innerHTML = chips
     .map(([v, h]) => `<span class="chip ${dashFilter.status === v ? "on" : ""}" onclick="dashFilter.status='${v}';dashFilter.page=1;renderChips();renderOrders()">${h}</span>`)
     .join("");
 }
 
+/* Dashboard ki dono listein (chalta kaam + delivered-unpaid) mein se order */
+function dashOrder(num) {
+  const d = DASH || {};
+  return ((d.active_orders || []).concat(d.unpaid_orders || [])).find((x) => x.order_number === num);
+}
 function orderMatches(o) {
   if (dashFilter.status === "DELAYED") { if (!(o.tracking && o.tracking.delayed)) return false; }
+  else if (dashFilter.status === "UNPAID") { /* alag list, sab rows */ }
   else if (dashFilter.status && o.status !== dashFilter.status) return false;
   if (dashFilter.pay && o.payment_status !== dashFilter.pay) return false;
   const q = dashFilter.q.toLowerCase();
@@ -629,7 +637,8 @@ const itemsText = (items) => (items || []).filter((i) => i.kind !== "urgent_char
     ? ` (${piecesCount(i.pieces)} pcs)` : "")).join(", ");
 
 function renderOrders() {
-  const all = (DASH.active_orders || []).filter(orderMatches);
+  const src = dashFilter.status === "UNPAID" ? (DASH.unpaid_orders || []) : (DASH.active_orders || []);
+  const all = src.filter(orderMatches);
   const pages = Math.max(1, Math.ceil(all.length / PAGE));
   dashFilter.page = Math.min(dashFilter.page, pages);
   const rows = all.slice((dashFilter.page - 1) * PAGE, dashFilter.page * PAGE);
@@ -647,7 +656,7 @@ function renderOrders() {
         <td>${fmtDate(o.expected_delivery)}</td>
         <td><div class="act">
           ${nextStepBtn(o)}
-          <button class="btn sm ghost" title="All statuses" aria-label="All statuses" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>
+          ${o.status !== "DELIVERED" ? `<button class="btn sm ghost" title="All statuses" aria-label="All statuses" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>` : ""}
           <button class="btn sm ghost" title="Collect payment" aria-label="Collect payment" onclick="paymentModal('${o.order_number}')">₹</button>
           <button class="btn sm ghost" title="More actions" aria-label="More actions" onclick="orderMenu('${o.order_number}')">⋯</button>
         </div></td>
@@ -663,8 +672,8 @@ function renderOrders() {
         <div class="kv"><span>Paid ${money(o.amount_paid)} of ${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
         <div class="kv"><span>Delivery</span><span>${fmtDate(o.expected_delivery)}${isOverdue(o) ? " ⚠️" : ""}</span></div>
         <div class="act">
-          ${nextStepBtn(o) || `<button class="btn sm" onclick="statusModal('${o.order_number}','${o.status}')">Status</button>`}
-          <button class="btn sm ghost" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>
+          ${nextStepBtn(o) || (o.status !== "DELIVERED" ? `<button class="btn sm" onclick="statusModal('${o.order_number}','${o.status}')">Status</button>` : "")}
+          ${o.status !== "DELIVERED" ? `<button class="btn sm ghost" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>` : ""}
           <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">₹</button>
           <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
           <button class="btn sm ghost" onclick="jumpChat('${o.phone}')">Chat</button>
@@ -682,18 +691,20 @@ function renderOrders() {
    the card at common laptop widths, pushing it behind a horizontal scroll
    nobody discovers. Two primary actions stay inline; the rest live here. */
 function orderMenu(num) {
-  const o = ((DASH && DASH.active_orders) || []).find((x) => x.order_number === num);
+  const o = dashOrder(num);
   openModal(`<h3>${num}</h3>
     <div class="frm">
-      ${o ? `<button class="btn ghost" onclick="closeModal();statusModal('${num}','${o.status}')">🔄 Change status</button>` : ""}
-      <button class="btn ghost" onclick="closeModal();dateModal('${num}')">📅 Delivery date</button>
+      ${o && !["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn ghost" onclick="closeModal();statusModal('${num}','${o.status}')">🔄 Change status</button>` : ""}
+      <button class="btn ghost" onclick="closeModal();messageMenu('${num}')">💬 Send a message</button>
+      <button class="btn ghost" onclick="closeModal();shareBillFromOrder('${num}')">📲 Share bill on WhatsApp</button>
+      ${o && !["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn ghost" onclick="closeModal();dateModal('${num}')">📅 Delivery date</button>` : ""}
       <button class="btn ghost" onclick="closeModal();orderDetail('${num}')">👁 Details</button>
       ${o ? `<button class="btn ghost" onclick="closeModal();jumpChat('${o.phone}')">💬 Open chat</button>` : ""}
     </div>
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
 }
 function billMenu(num) {
-  const o = BILLS.find((x) => x.order_number === num) || ((DASH && DASH.active_orders) || []).find((x) => x.order_number === num);
+  const o = BILLS.find((x) => x.order_number === num) || dashOrder(num);
   const step = o && NEXT_STEP[o.status];
   openModal(`<h3>${num}</h3>
     <div class="frm">
@@ -713,10 +724,19 @@ function billMenu(num) {
    phir dukaan ke number se ya apne WhatsApp se. */
 const MSG_KINDS = [
   ["payment_reminder", "💰", "Payment reminder"],
+  ["delivery_update", "🚚", "Delivery update — delivered / pending, with bill link"],
   ["payment_thanks", "💚", "Payment received — thank you"],
   ["service_thanks", "🙏", "Thank you for the service"],
   ["review_request", "⭐", "Please review us on Google"],
 ];
+/* Customers page: grahak ka sabse naya bill chunkar wahi message menu */
+async function customerMessageMenu(phone) {
+  let rows;
+  try { rows = await api(`/orders?customer_phone=${encodeURIComponent(phone)}&limit=1`); }
+  catch (e) { toast(e.message, true); return; }
+  if (!rows.length) { toast("No bill for this customer yet", true); return; }
+  messageMenu(rows[0].order_number);
+}
 async function messageMenu(num) {
   // Chukta bill par "Payment reminder" dikhana galat hai — manager ne abhi
   // paisa liya aur menu phir se paisa maangne ko keh raha tha. Baaki ho tabhi.
@@ -2057,6 +2077,7 @@ function renderCustomers() {
       <td class="muted">${c.last_message_at ? fmtWhen(c.last_message_at) : "—"}</td>
       <td><div class="act">
         ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
+        <button class="btn sm ghost" title="Send a message" onclick="customerMessageMenu('${c.phone}')">✉️ Message</button>
         <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">💬</button>
         <button class="btn sm ghost" onclick="editCustomerModal('${c.phone}')">Edit</button>
         <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button>
@@ -2067,6 +2088,7 @@ function renderCustomers() {
       <div class="kv"><span>${c.phone}</span><span>${c.total_orders} orders</span></div>
       <div class="kv"><span>Business ${money(c.business)}</span><span>Paid ${money(c.paid)}</span></div>
       <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
+      <button class="btn sm ghost" onclick="customerMessageMenu('${c.phone}')">✉️ Message</button>
       <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">Chat</button>
       <button class="btn sm ghost" onclick="editCustomerModal('${c.phone}')">Edit</button>
       <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button></div></div>`).join("")}</div>${moreBtn}`;

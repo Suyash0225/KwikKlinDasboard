@@ -68,6 +68,30 @@ async def test_list_filters(client) -> None:
     assert (await client.get("/orders", params={"status": "nakli"}, headers=AUTH)).status_code == 400
 
 
+async def test_dashboard_lists_delivered_but_unpaid_bills(client, sent) -> None:
+    """Delivered + paisa baaki = dashboard ki 'Unpaid' list mein (gayab nahi)."""
+    from decimal import Decimal
+
+    from app.models import OrderStatus
+    from app.services import order_service
+    from tests.conftest import purge_phones
+
+    ph = "+919999900779"
+    async with async_session_factory() as db:
+        o = await order_service.create_order(db, customer_phone=ph, created_by="test",
+                                             items=[{"type": "Shirt", "qty": 1}], total_amount=Decimal("90"))
+        await order_service.update_status(db, o, OrderStatus.DELIVERED, changed_by="test", notify=False)
+        num = o.order_number
+    try:
+        d = (await client.get("/admin/api/dashboard", headers=AUTH)).json()
+        assert num not in [x["order_number"] for x in d["active_orders"]]
+        row = next(x for x in d["unpaid_orders"] if x["order_number"] == num)
+        assert row["status"] == "DELIVERED" and row["payment_status"] == "UNPAID"
+        assert d["counts"]["unpaid_delivered"] >= 1
+    finally:
+        await purge_phones(ph)
+
+
 async def test_dashboard_data_shape(client) -> None:
     await client.post("/orders", json=ORDER_BODY, headers=AUTH)
     r = await client.get("/admin/api/dashboard", headers=AUTH)
