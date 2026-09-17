@@ -11,7 +11,15 @@ Adding a template later:
 
 import structlog
 
+from app.config import settings
+
 log = structlog.get_logger()
+
+# Template ke "View bill" button ka domain. Meta ko template banate waqt
+# pakka URL chahiye; sirf aakhri hissa (bill token) har message mein badalta
+# hai. Yahi domain bill_link.url() bhi deta hai (SITE_URL).
+BILL_URL_BASE = (settings.SITE_URL or "https://kwikklin.online").rstrip("/")
+BILL_BUTTON = {"type": "URL", "text": "View bill", "url": f"{BILL_URL_BASE}/b/{{{{1}}}}", "sample": "AbCdEf.GhIjKl"}
 
 # name -> {language code, number of body parameters}
 # The kk_* templates must be created + approved in WhatsApp Manager with
@@ -22,15 +30,18 @@ TEMPLATES: dict[str, dict] = {
     # Meta's built-in sample template on every test number. Zero params.
     "hello_world": {"language": "en_US", "param_count": 0},
     # {{1}} = order number
-    "kk_order_ready": {"language": "en_US", "param_count": 1},
+    "kk_order_ready": {"language": "en_US", "param_count": 1, "url_button": True},
     "kk_order_out_for_delivery": {"language": "en_US", "param_count": 1},
     "kk_order_delivered": {"language": "en_US", "param_count": 1},
     # {{1}} = order number, {{2}} = new date
     "kk_delay_notice": {"language": "en_US", "param_count": 2},
     # {{1}} = the update text (staff/manager alerts outside the 24h window)
     "kk_staff_alert": {"language": "en_US", "param_count": 1},
+    # url_button: template par "View bill" button, jiska aakhri hissa (bill
+    # token) har message mein alag — order_service._notify_customer khud
+    # bharta hai. Grahak ko bill/pay page ek tap par, template se bhi.
     # {{1}} name {{2}} order {{3}} items {{4}} total {{5}} advance {{6}} due {{7}} delivery
-    "kk_bill_details": {"language": "en_US", "param_count": 7},
+    "kk_bill_details": {"language": "en_US", "param_count": 7, "url_button": True},
     # {{1}} = order number (has rating quick-reply buttons)
     "kk_thankyou_rating": {"language": "en_US", "param_count": 1},
     # {{1}} order {{2}} delivery date
@@ -38,9 +49,9 @@ TEMPLATES: dict[str, dict] = {
     # 24h window band hone par in do ke liye bhi Meta template chahiye —
     # approve hone tak bhejna fail hota hai aur sirf log hota hai.
     # {{1}} amount {{2}} order {{3}} balance line ("Balance due: ₹200" / "fully paid")
-    "kk_payment_received": {"language": "en_US", "param_count": 3},
+    "kk_payment_received": {"language": "en_US", "param_count": 3, "url_button": True},
     # {{1}} order {{2}} delivered now {{3}} still pending
-    "kk_partial_delivery": {"language": "en_US", "param_count": 3},
+    "kk_partial_delivery": {"language": "en_US", "param_count": 3, "url_button": True},
 }
 
 
@@ -60,6 +71,7 @@ STANDARD_SPECS: dict[str, dict] = {
             "Expected delivery: {{7}}\n\nThank you for choosing us."
         ),
         "samples": ["Rahul", "KK-20260916-01", "3 Shirt, 2 Trouser", "250", "100", "150", "18 Sep"],
+        "buttons": [BILL_BUTTON],
     },
     "kk_picked_up": {
         "purpose": "Clothes picked up",
@@ -73,6 +85,7 @@ STANDARD_SPECS: dict[str, dict] = {
         "purpose": "Order ready",
         "body": "Good news! Your laundry order {{1}} is ready. Reply to this message to schedule delivery.",
         "samples": ["KK-20260916-01"],
+        "buttons": [BILL_BUTTON],
     },
     "kk_order_out_for_delivery": {
         "purpose": "Out for delivery",
@@ -91,6 +104,7 @@ STANDARD_SPECS: dict[str, dict] = {
         "purpose": "Payment received",
         "body": "Thank you! We received ₹{{1}} for order {{2}}.\n{{3}}\nWe appreciate your business.",
         "samples": ["150", "KK-20260916-01", "Your bill is fully paid"],
+        "buttons": [BILL_BUTTON],
     },
     "kk_partial_delivery": {
         "purpose": "Part of the order delivered",
@@ -99,6 +113,7 @@ STANDARD_SPECS: dict[str, dict] = {
             "The remaining {{3}} pieces will be delivered soon."
         ),
         "samples": ["KK-20260916-01", "4", "2"],
+        "buttons": [BILL_BUTTON],
     },
     "kk_thankyou_rating": {
         "purpose": "Delivered + rating buttons",
@@ -140,9 +155,11 @@ def register_dynamic(name: str, language: str, param_count: int) -> None:
         _DYNAMIC[name] = {"language": language, "param_count": param_count}
 
 
-def build_template(name: str, params: list[str] | None = None) -> dict:
+def build_template(name: str, params: list[str] | None = None, url_param: str | None = None) -> dict:
     """Build the `template` object for the Graph API send payload.
 
+    url_param: "View bill" button ka badalne wala hissa (bill token) — sirf
+    un templates par jinke registry mein url_button hai.
     Raises ValueError for unknown template or wrong parameter count.
     """
     registry = {**_DYNAMIC, **TEMPLATES}
@@ -158,11 +175,17 @@ def build_template(name: str, params: list[str] | None = None) -> dict:
         )
 
     payload: dict = {"name": name, "language": {"code": spec["language"]}}
+    components: list[dict] = []
     if params:
-        payload["components"] = [
-            {
-                "type": "body",
-                "parameters": [{"type": "text", "text": clean_param(p)} for p in params],
-            }
-        ]
+        components.append({
+            "type": "body",
+            "parameters": [{"type": "text", "text": clean_param(p)} for p in params],
+        })
+    if spec.get("url_button") and url_param:
+        components.append({
+            "type": "button", "sub_type": "url", "index": "0",
+            "parameters": [{"type": "text", "text": url_param}],
+        })
+    if components:
+        payload["components"] = components
     return payload

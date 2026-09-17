@@ -126,7 +126,11 @@ async def create(
         elif kind == "URL":
             if not b.get("url"):
                 raise TemplateError(f"Button '{text}' needs a URL")
-            btns.append({"type": kind, "text": text, "url": b["url"]})
+            btn = {"type": kind, "text": text, "url": b["url"]}
+            if "{{1}}" in b["url"]:
+                # Badalne wala URL: Meta ko review ke liye ek poora example chahiye
+                btn["example"] = [b["url"].replace("{{1}}", b.get("sample") or "sample")]
+            btns.append(btn)
         else:
             if not b.get("phone_number"):
                 raise TemplateError(f"Button '{text}' needs a phone number")
@@ -153,6 +157,19 @@ async def delete(creds: Creds | None, name: str) -> None:
         raise TemplateError(str(data)[:250])
 
 
+def _status_vs_spec(remote_t: dict | None, spec: dict, state: str) -> str:
+    """Meta par jo hai wo spec se mel khata hai? Purana approved template jisme
+    "View bill" button nahi, usse bheja to Meta send reject karta hai — isliye
+    NEEDS_UPDATE: Control se delete karke dobara submit karo."""
+    if not remote_t:
+        return "NOT_SUBMITTED" if state == "ok" else "UNKNOWN"
+    want = [b["text"] for b in spec.get("buttons", [])]
+    have = [b.get("text") for b in remote_t.get("buttons") or []]
+    if remote_t.get("status") == "APPROVED" and want != have:
+        return "NEEDS_UPDATE"
+    return remote_t.get("status") or "UNKNOWN"
+
+
 async def standard_status(creds: Creds | None) -> dict:
     """App ke apne templates (STANDARD_SPECS) + is dukaan ke WABA par unka haal."""
     from app.services.templates import STANDARD_SPECS
@@ -171,8 +188,7 @@ async def standard_status(creds: Creds | None) -> dict:
             {
                 "name": name, "purpose": spec["purpose"], "body": spec["body"],
                 "buttons": [b["text"] for b in spec.get("buttons", [])],
-                "status": (remote.get(name) or {}).get("status")
-                or ("NOT_SUBMITTED" if state == "ok" else "UNKNOWN"),
+                "status": _status_vs_spec(remote.get(name), spec, state),
                 "rejected_reason": (remote.get(name) or {}).get("rejected_reason"),
             }
             for name, spec in STANDARD_SPECS.items()

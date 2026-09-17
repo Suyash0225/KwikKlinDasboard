@@ -1098,6 +1098,7 @@ async function waTemplates(box, slug) {
       const item = el("div", "tl-item");
       item.appendChild(el("b", null, `${t.purpose} `));
       item.appendChild(el("span", "muted", `${t.name} · ${t.status}` +
+        (t.status === "NEEDS_UPDATE" ? " · approved on Meta without the View bill button — delete it in WhatsApp Manager, then Submit again" : "") +
         (t.rejected_reason && t.rejected_reason !== "NONE" ? ` · ${t.rejected_reason}` : "")));
       list.appendChild(item);
     }

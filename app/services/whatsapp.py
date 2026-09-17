@@ -226,6 +226,7 @@ async def send_message(
     list_title: str = "",
     template_name: str | None = None,
     template_params: list[str] | None = None,
+    template_url_param: str | None = None,
     sent_by: str = "bot",
     enqueue_on_fail: bool = True,
     reply_to: str | None = None,
@@ -321,7 +322,7 @@ async def send_message(
             raise SendError("DotPe provider does not support interactive buttons")
         try:
             if template_name:
-                build_template(template_name, template_params)  # validates
+                build_template(template_name, template_params, template_url_param)  # validates
                 wa_message_id = await dotpe.send_template(
                     to_phone,
                     template_name,
@@ -350,7 +351,7 @@ async def send_message(
         payload["context"] = {"message_id": reply_to}
     if template_name:
         payload["type"] = "template"
-        payload["template"] = build_template(template_name, template_params)
+        payload["template"] = build_template(template_name, template_params, template_url_param)
         logged_text = _template_log(template_name, template_params)
     elif buttons:
         payload["type"] = "interactive"
@@ -404,6 +405,7 @@ async def send_message(
                     "buttons": [[b.id, b.title] for b in buttons] if buttons else None,
                     "template_name": template_name,
                     "template_params": template_params,
+                    "template_url_param": template_url_param,
                     "sent_by": sent_by,
                 },
             )
@@ -753,6 +755,7 @@ async def drain_outbound_queue() -> int:
                     buttons=buttons,
                     template_name=p.get("template_name"),
                     template_params=p.get("template_params"),
+                    template_url_param=p.get("template_url_param"),
                     sent_by=p.get("sent_by") or "bot",
                     enqueue_on_fail=False,
                 )

@@ -33,8 +33,14 @@ def graph(monkeypatch):
                 {"name": "kk_dyn_ready", "status": "APPROVED", "category": "UTILITY",
                  "language": "en_US",
                  "components": [{"type": "BODY", "text": "Order {{1}} ready hai"}]},
+                # Meta par approved, "View bill" button ke saath (spec jaisa)
                 {"name": "kk_order_ready", "status": "APPROVED", "category": "UTILITY",
-                 "language": "en_US", "components": [{"type": "BODY", "text": "x {{1}} y"}]},
+                 "language": "en_US", "components": [
+                     {"type": "BODY", "text": "x {{1}} y"},
+                     {"type": "BUTTONS", "buttons": [{"type": "URL", "text": "View bill", "url": "https://kwikklin.online/b/{{1}}"}]}]},
+                # Purana approved template bina button ke -> NEEDS_UPDATE
+                {"name": "kk_partial_delivery", "status": "APPROVED", "category": "UTILITY",
+                 "language": "en_US", "components": [{"type": "BODY", "text": "p {{1}} {{2}} {{3}}"}]},
                 {"name": "kk_rejected_one", "status": "REJECTED", "category": "MARKETING",
                  "language": "en_US", "rejected_reason": "INVALID_FORMAT",
                  "components": [{"type": "BODY", "text": "Offer!"}]},
@@ -89,7 +95,7 @@ async def test_list_registers_approved_for_sending(client, graph) -> None:
     assert r.status_code == 200
     rows = r.json()
     assert rows[0]["name"] == "kk_dyn_ready" and rows[0]["status"] == "APPROVED"
-    assert rows[2]["rejected_reason"] == "INVALID_FORMAT"
+    assert next(x for x in rows if x["name"] == "kk_rejected_one")["rejected_reason"] == "INVALID_FORMAT"
     from app.services.templates import build_template
 
     assert build_template("kk_dyn_ready", ["KK-20260803-01"])["name"] == "kk_dyn_ready"
@@ -149,6 +155,7 @@ async def test_control_submits_standard_templates_per_shop(client, graph, shops)
     assert r.status_code == 200
     by_name = {t["name"]: t["status"] for t in r.json()["templates"]}
     assert by_name["kk_order_ready"] == "APPROVED" and by_name["kk_picked_up"] == "NOT_SUBMITTED"
+    assert by_name["kk_partial_delivery"] == "NEEDS_UPDATE"      # button ke bina purana approved
 
     r = await client.post(f"/control/api/tenants/{E_SLUG}/whatsapp/templates", headers=CTL)
     assert r.status_code == 200, r.text

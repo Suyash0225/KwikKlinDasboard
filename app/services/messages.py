@@ -89,8 +89,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "😞 BAD RATING: {customer_name} ({phone}) rated '{rating}'. Please reach out — via Inbox.",
     },
     "order_ready": {
-        "hi": "Khushkhabri! Aapka order {order_number} taiyar hai ✨ Jald hi delivery hogi. — {shop}",
-        "en": "Good news! Your order {order_number} is ready ✨ Delivery soon. — {shop}",
+        "hi": "Khushkhabri! Aapka order {order_number} taiyar hai ✨ Jald hi delivery hogi.{bill_line}\n— {shop}",
+        "en": "Good news! Your order {order_number} is ready ✨ Delivery soon.{bill_line}\n— {shop}",
     },
     "order_out_for_delivery": {
         "hi": "Aapka order {order_number} delivery ke liye nikal chuka hai 🛵 — {shop}",
@@ -275,13 +275,13 @@ MESSAGES: dict[str, dict[str, str]] = {
     # {balance_line} server banata hai: "Poora payment ho gaya ✅" ya
     # "Baaki: ₹200". {review_link} dukaan ki apni choti link (/r/<slug>).
     "payment_thanks": {
-        "hi": "Namaste {name} 🙏\nAapka ₹{amount} ka payment mil gaya — order {order_number}. Bahut dhanyawad!\n{balance_line}\n— {shop}",
-        "en": "Hello {name} 🙏\nWe have received your payment of ₹{amount} for order {order_number}. Thank you!\n{balance_line}\n— {shop}",
+        "hi": "Namaste {name} 🙏\nAapka ₹{amount} ka payment mil gaya — order {order_number}. Bahut dhanyawad!\n{balance_line}{bill_line}\n— {shop}",
+        "en": "Hello {name} 🙏\nWe have received your payment of ₹{amount} for order {order_number}. Thank you!\n{balance_line}{bill_line}\n— {shop}",
     },
     # Thodi delivery — baaki kapde abhi dukaan par. Apne aap jaata hai.
     "partial_delivery": {
-        "hi": "Namaste {name} 🙏\nOrder {order_number} ke {given} kapde aaj de diye gaye ✅\n{pending} kapde abhi hamare paas hain — jald hi pahuncha denge.\n— {shop}",
-        "en": "Hello {name} 🙏\nWe delivered {given} clothes from order {order_number} today ✅\n{pending} clothes are still with us — we will bring them to you soon.\n— {shop}",
+        "hi": "Namaste {name} 🙏\nOrder {order_number} ke {given} kapde aaj de diye gaye ✅\n{pending} kapde abhi hamare paas hain — jald hi pahuncha denge.{bill_line}\n— {shop}",
+        "en": "Hello {name} 🙏\nWe delivered {given} clothes from order {order_number} today ✅\n{pending} clothes are still with us — we will bring them to you soon.{bill_line}\n— {shop}",
     },
     "service_thanks": {
         "hi": "Namaste {name} 🙏\n{shop} ko apne kapde saunpne ke liye dil se dhanyawad! Ummeed hai order {order_number} aapko pasand aaya ✨\nAgli baar bas WhatsApp kar dijiye — pickup ghar se ho jayega 🧺\n— {shop}",

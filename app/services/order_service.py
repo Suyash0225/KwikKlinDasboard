@@ -714,6 +714,17 @@ async def _notify_customer(
             if tenant is not None and (tenant.shop_name or "").strip():
                 fmt["shop"] = tenant.shop_name.strip()
         fmt.setdefault("name", (customer.name or "").strip() or "there")
+        # Bill ka link har grahak-message mein: free text mein {bill_line},
+        # template par "View bill" button (registry mein url_button). Grahak
+        # ko har baar wahi page — status, partial delivery, paid — sab live.
+        from app.services import bill_link
+        from app.services.templates import TEMPLATES
+
+        if "bill_line" not in fmt:
+            fmt["bill_line"] = bill_link.message_line(await bill_link.url_for(db, order))
+        url_param = None
+        if TEMPLATES.get(template_name, {}).get("url_button") and order.tenant_id:
+            url_param = bill_link.make(order.tenant_id, order.id)
         text_body = get_message(message_key, order_number=order.order_number, **fmt)
         try:
             await send_message(
@@ -725,6 +736,7 @@ async def _notify_customer(
                 to_phone=customer.phone,
                 template_name=template_name,
                 template_params=template_params,
+                template_url_param=url_param,
             )
     except SendError as exc:
         # Template not approved yet / Meta down — logged, business goes on.

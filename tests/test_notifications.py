@@ -423,3 +423,44 @@ async def test_paused_thread_auto_resumes_after_the_window(client, sent) -> None
             assert c.agent_paused is False and c.agent_paused_at is None
     finally:
         await purge_phones(PHONE)
+
+
+async def test_customer_messages_carry_the_bill_link_and_template_button(sent, monkeypatch) -> None:
+    """Bill, ready, partial delivery, payment — har automatic message mein
+    bill ka link (free text), aur window band ho to template par 'View bill'
+    button ka token. Grahak ko hamesha wahi live page."""
+    from app.config import settings
+    from app.models import PaymentMethod
+    from app.services import bill_link, delivery
+    from app.services.order_service import record_payment
+
+    monkeypatch.setattr(settings, "SITE_URL", "https://kwikklin.online")
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=PHONE, created_by="test",
+            items=[{"type": "Shirt", "qty": 3}], total_amount=Decimal("120"),
+        )
+        assert "kwikklin.online/b/" in _to_customer(sent)[-1]["text"]          # naya bill
+        await update_status(db, order, OrderStatus.READY, changed_by="test")
+        assert "kwikklin.online/b/" in _to_customer(sent)[-1]["text"]          # ready
+
+        # 24h window band: template jaaye, "View bill" button ke token ke saath
+        calls: list[dict] = []
+
+        async def closed(db, *, to_phone, text=None, **kw):
+            calls.append({"to": to_phone, "text": text, **kw})
+            if text is not None:
+                raise WindowClosedError("window closed")
+            return "wamid.T"
+
+        monkeypatch.setattr(order_service_module, "send_message", closed)
+        await delivery.deliver(db, order, [{"line": 0, "qty": 1}], by="test")
+        tpl = [c for c in calls if c.get("template_name")]
+        assert tpl and tpl[-1]["template_name"] == "kk_partial_delivery"
+        assert bill_link.parse(tpl[-1]["template_url_param"]) is not None
+        assert "kwikklin.online/b/" in [c for c in calls if c["text"]][-1]["text"]   # free text bhi link ke saath
+
+        calls.clear()
+        await record_payment(db, order, amount=Decimal("120"), method=PaymentMethod.CASH, recorded_by="test")
+        tpl = [c for c in calls if c.get("template_name")]
+        assert tpl[-1]["template_name"] == "kk_payment_received" and tpl[-1]["template_url_param"]

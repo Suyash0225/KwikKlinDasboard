@@ -72,7 +72,10 @@ async def compose(db: AsyncSession, *, kind: str, order: Order, customer, tenant
         raise MessageError("Unknown message")
     shop = ((tenant.shop_name if tenant else "") or "").strip() or "Laundry"
     name = (customer.name or "").strip() or "there"   # "Hello there" — messages ab English mein
-    fmt = {"name": name, "order_number": order.order_number, "shop": shop}
+    from app.services import bill_link
+
+    fmt = {"name": name, "order_number": order.order_number, "shop": shop,
+           "bill_line": bill_link.message_line(await bill_link.url_for(db, order))}
 
     if kind == "payment_thanks":
         last = (
