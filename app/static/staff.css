@@ -585,3 +585,8 @@ h3.mt-lg { margin-top: 20px; }
 /* Chhaant lagi hui ho to patti ulat jaati hai — ab ye "wapas jaao" hai,
    aur khabar dobara chillane ki zaroorat nahi. */
 .latebar.on { background: var(--ink); color: #fff; border-bottom-color: var(--ink); }
+
+/* 🎁 reward chip on New bill */
+.rwchip { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:8px 0; padding:9px 11px; border-radius:12px; background:#fff7ed; border:1px solid #fed7aa; font-size:14px; }
+.rwchip.on { background:#ecfdf5; border-color:#10b981; }
+.rwchip .btn { margin-left:auto; }

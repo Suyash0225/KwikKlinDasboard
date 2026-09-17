@@ -360,6 +360,9 @@ async def validate_coupon(
     coupon = await get_coupon(db, code)
     if coupon is None or not coupon.active:
         return None, Decimal("0"), "coupon nahi mila ya band hai"
+    # Reward coupon kisi ek grahak ka hai — doosre par lage to inaam ka matlab nahi
+    if coupon.customer_id is not None and coupon.customer_id != customer_id:
+        return None, Decimal("0"), "ye coupon kisi aur grahak ke naam ka hai"
     today = date.today()
     if coupon.valid_from and today < coupon.valid_from:
         return None, Decimal("0"), "coupon abhi shuru nahi hua"
@@ -393,9 +396,26 @@ async def validate_coupon(
             return None, Decimal("0"), "coupon ki limit khatam"
     if coupon.discount_type == "percent":
         discount = (order_total * coupon.value / 100).quantize(Decimal("0.01"))
+        # Reward rule ka "max ₹300" cap — coupon par rule se aata hai
+        cap = await _reward_cap(db, coupon)
+        if cap is not None:
+            discount = min(discount, cap)
     else:
         discount = min(coupon.value, order_total)
     return coupon, discount, ""
+
+
+async def _reward_cap(db, coupon: Coupon) -> Decimal | None:
+    from app.models import CustomerReward, RewardRule
+
+    row = (
+        await db.execute(
+            select(RewardRule.max_discount)
+            .join(CustomerReward, CustomerReward.rule_id == RewardRule.id)
+            .where(CustomerReward.coupon_code == coupon.code)
+        )
+    ).first()
+    return Decimal(str(row[0])) if row and row[0] is not None else None
 
 
 async def redeem_coupon(db, coupon: Coupon, order: Order, discount: Decimal) -> None:

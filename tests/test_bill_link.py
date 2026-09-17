@@ -130,7 +130,9 @@ async def test_customer_statement_lists_every_pending_bill_and_reconciles(client
     html = (await client.get(f"/b/c/{tok}")).text
     assert "2 bills pending" in html and "Total payable" in html
     assert o.order_number in html and second.order_number in html
-    assert paid.order_number not in html and gone.order_number not in html
+    # paid bill pending mein nahi — history ("Last 90 days") mein Paid ✓ ke saath; cancelled kahin nahi
+    assert html.index(paid.order_number) > html.index("Last 90 days") and "Paid ✓" in html
+    assert gone.order_number not in html
     assert "Kurta" in html and "Saree" in html                          # kapde dikhte hain
     assert "am=370.00" in html and "Pay with Google Pay" in html         # 270 + 100, ek tap
     dues = [float(x) for x in re.findall(r"<span class='b-due'><b>₹([\d,.]+)</b>", html)]

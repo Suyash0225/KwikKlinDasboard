@@ -558,6 +558,11 @@ async def bill_page(token: str):
         tenant = await db.get(Tenant, tid)
         cust = await db.get(Customer, order.customer_id)
         s = await app_settings.all_settings(db)
+        from app.services import customer_balance, rewards as _rw
+
+        prev = await customer_balance.previous(db, cust.id, exclude_order_id=order.id) if cust else {"due": 0, "bills": 0, "clothes": [], "clothes_total": 0}
+        rw = await _rw.for_bill_page(db, cust.id) if cust else {"available": [], "progress": []}
+        statement_link = f"/b/c/{bill_link.make_customer(tid, cust.id)}" if cust else ""
 
     e = _esc
     shop = (tenant.shop_name if tenant else "") or "Laundry"
@@ -592,6 +597,8 @@ async def bill_page(token: str):
             f"<span class='amt'>{money(it['amount']) if it['amount'] is not None else ''}</span></li>"
         )
     clothes = r.get("clothes") or {}
+    earlier_card = _earlier_bills_card(prev, statement_link)
+    rewards_card = _rewards_card(rw)
     delivery_card = ""
     if partial:
         still = "".join(f"<li><span>{e(n)}</span><b>× {k}</b></li>" for n, k in r["still"])
@@ -704,7 +711,7 @@ async def bill_page(token: str):
         "{{DELIVERY_ROW}}": (f"<div class='row'><span class='label'>Delivery</span><span>{e(r['delivery'])}</span></div>"
                              if r["delivery"] else ""),
         "{{STATUS_CLASS}}": status_cls, "{{STATUS}}": e(status_word),
-        "{{PAY_BLOCK}}": pay_block + delivery_card, "{{ITEMS}}": "".join(items), "{{TOTALS}}": totals,
+        "{{PAY_BLOCK}}": pay_block + delivery_card + earlier_card + rewards_card, "{{ITEMS}}": "".join(items), "{{TOTALS}}": totals,
         "{{TERMS}}": terms, "{{CONTACT_BTN}}": contact_btn,
         "{{MOOD}}": mood, "{{THEME}}": theme, "{{HERO_ART}}": art, "{{HERO_EMOJI}}": emoji,
         "{{HERO_TITLE}}": e(title), "{{HERO_SUB}}": e(sub), "{{HERO_BADGE}}": badge, "{{PROGRESS}}": progress,
@@ -717,6 +724,44 @@ async def bill_page(token: str):
         html = html.replace(k, v)
     return _Resp(content=html, media_type="text/html",
                  headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
+def _earlier_bills_card(prev: dict, statement_link: str) -> str:
+    """Pichhle bills ka baaki: paisa + jo kapde abhi dukaan par hain."""
+    e = _esc
+    if not prev or (prev.get("due", 0) <= 0 and not prev.get("clothes")):
+        return ""
+    rows = ""
+    if prev.get("due", 0) > 0:
+        rows += (f"<div class='row'><span class='label'>Pending amount</span>"
+                 f"<b class='status wait'>{_money(prev['due'])} · {prev['bills']} bill{'s' if prev['bills'] != 1 else ''}</b></div>")
+    still = ""
+    if prev.get("clothes"):
+        rows += f"<div class='row'><span class='label'>Still with us</span><b>{prev['clothes_total']} clothes</b></div>"
+        still = "<ul class='still'>" + "".join(
+            f"<li><span>{e(c['order'])} · {e(c['name'])}</span><b>× {c['qty']}</b></li>" for c in prev["clothes"][:12]
+        ) + "</ul>"
+    link = f"<a class='open' href='{e(statement_link)}'>See all bills &amp; pay together →</a>" if statement_link else ""
+    return f"<section class='card'><h2>Earlier bills</h2>{rows}{still}{link}</section>"
+
+
+def _rewards_card(rw: dict) -> str:
+    """🎁 Mile hue reward (code) + har niyam par progress bar. Sirf grahak ka apna."""
+    e = _esc
+    if not rw or (not rw.get("available") and not rw.get("progress")):
+        return ""
+    have = "".join(
+        f"<div class='rw-have'><b>🎁 {e(a['reward'])}</b> on your next bill · code <code>{e(a['code'])}</code>"
+        + (f" · valid till {e(a['expires_at'][:10])}" if a.get("expires_at") else "") + "</div>"
+        for a in rw.get("available", [])
+    )
+    prog = "".join(
+        f"<div class='rw-prog'><div class='row'><span>{e(p['condition'])} → <b>{e(p['reward'])}</b></span>"
+        f"<span>{'✓ done' if p['done'] else (f'{int(p['have'])} of {int(p['need'])}' if p['kind'] == 'bills' else f'{_money(p['have'])} of {_money(p['need'])}')}</span></div>"
+        f"<div class='bar'><i style='width:{p['pct']}%'></i></div></div>"
+        for p in rw.get("progress", [])
+    )
+    return f"<section class='card rewards'><h2>Your rewards</h2>{have}{prog}</section>"
 
 
 def _bill_live_version(order) -> str:
@@ -836,9 +881,60 @@ async def customer_statement_page(token: str):
                 ).order_by(Order.created_at.desc())
             )
         ).scalars().all()
+        # Pichhle N din ke baaki bill (paid/cancelled bhi) — dropdown mein
+        from datetime import datetime, timedelta as _td, timezone
+
+        from app.services import rewards as _rw
+
+        try:
+            hist_days = int(s.get("bill_history_days") or 90)
+        except (TypeError, ValueError):
+            hist_days = 90
+        pending_ids = {o.id for o in rows}
+        history = [
+            o for o in (
+                await db.execute(
+                    select(Order).where(
+                        Order.customer_id == cid,
+                        Order.created_at >= datetime.now(timezone.utc) - _td(days=hist_days),
+                    ).order_by(Order.created_at.desc()).limit(60)
+                )
+            ).scalars().all() if o.id not in pending_ids
+        ]
+        rw = await _rw.for_bill_page(db, cid)
         shop = (tenant.shop_name if tenant else "") or "Laundry"
         bills = []
+        hist_html = []
         total_due = Decimal("0")
+
+        def _acc(o, r, due, paid_full: bool) -> str:
+            items = "".join(
+                f"<li><span><span class='name'>{e(it['title'])}</span><small>{e(str(it['qty']) + (' kg' if it['kg'] else ''))}"
+                f"{' × ' + _money(it['rate']) if it['rate'] is not None else ''}</small></span>"
+                f"<span class='amt'>{_money(it['amount']) if it['amount'] is not None else ''}</span></li>"
+                for it in r["items"]
+            )
+            status_word, status_cls = _STATUS_WORD.get(o.status.name, (o.status.name.title(), ""))
+            c = r["clothes"]
+            dl = (f" · {c['delivered']} of {c['total']} delivered" if r["partial"] else "")
+            right = (f"<b class='ok'>Paid ✓</b><small>{_money(r['total'])}</small>" if paid_full
+                     else f"<b>{_money(due)}</b><small>of {_money(r['total'])}</small>")
+            return (
+                f"<details class='billacc'><summary><span class='b-meta'><b>{e(o.order_number)}</b>"
+                f"<small>{e(r['date'])} · <span class='status {status_cls}'>{e(status_word)}</span>{e(dl)}</small></span>"
+                f"<span class='b-due'>{right}</span></summary>"
+                f"<div class='inner'><ul class='items'>{items}</ul>"
+                f"<div class='totals'><div class='row'><span>Total</span><span>{_money(r['total'])}</span></div>"
+                f"<div class='row'><span>Paid</span><span>{_money(r['paid'])}</span></div>"
+                f"<div class='row due-row'><span><b>Balance due</b></span><span><b>{_money(due)}</b></span></div></div>"
+                f"<a class='open' href='/b/{bill_link.make(tid, o.id)}'>Open this bill →</a></div></details>"
+            )
+
+        for o in history:
+            r = receipt.build(order=o, customer_name=cust.name, customer_phone=None, shop_name=shop, settings=s)
+            if o.status.name == "CANCELLED":
+                continue
+            hist_html.append(_acc(o, r, Decimal(str(r["due"])).quantize(Decimal("0.01")), r["has_total"] and r["due"] <= 0))
         for o in rows:
             r = receipt.build(order=o, customer_name=cust.name, customer_phone=None, shop_name=shop, settings=s)
             due = Decimal(str(r["due"])).quantize(Decimal("0.01"))
@@ -852,16 +948,7 @@ async def customer_statement_page(token: str):
             status_word, status_cls = _STATUS_WORD.get(o.status.name, (o.status.name.title(), ""))
             c = r["clothes"]
             dl = (f" · {c['delivered']} of {c['total']} delivered" if r["partial"] else "")
-            bills.append(
-                f"<details class='billacc'><summary><span class='b-meta'><b>{e(o.order_number)}</b>"
-                f"<small>{e(r['date'])} · <span class='status {status_cls}'>{e(status_word)}</span>{e(dl)}</small></span>"
-                f"<span class='b-due'><b>{_money(due)}</b><small>of {_money(r['total'])}</small></span></summary>"
-                f"<div class='inner'><ul class='items'>{items}</ul>"
-                f"<div class='totals'><div class='row'><span>Total</span><span>{_money(r['total'])}</span></div>"
-                f"<div class='row'><span>Paid</span><span>{_money(r['paid'])}</span></div>"
-                f"<div class='row due-row'><span><b>Balance due</b></span><span><b>{_money(due)}</b></span></div></div>"
-                f"<a class='open' href='/b/{bill_link.make(tid, o.id)}'>Open this bill →</a></div></details>"
-            )
+            bills.append(_acc(o, r, due, False))
         upi = str(s.get("upi_vpa") or "").strip()
         payee = str(s.get("upi_payee") or "").strip()
         terms = receipt.terms_list(s.get("invoice_terms"))
@@ -897,6 +984,9 @@ async def customer_statement_page(token: str):
         "{{BILLS}}": "".join(bills) if bills else "<p class='note'>No pending bills.</p>",
         "{{COUNT}}": str(n), "{{TOTAL}}": _money(total_due),
         "{{TERMS}}": terms_html, "{{CONTACT_BTN}}": contact_btn, "{{ASSET_V}}": _SITE_ASSET_V,
+        "{{HISTORY}}": ("<section class='card'><h2>Last " + str(hist_days) + " days <small class='label'>paid &amp; delivered bills</small></h2>"
+                        + "".join(hist_html) + "</section>") if hist_html else "",
+        "{{REWARDS}}": _rewards_card(rw),
     }
     html = (_SITE_DIR / "templates" / "statement.html").read_text(encoding="utf-8")
     for k, v in fills.items():

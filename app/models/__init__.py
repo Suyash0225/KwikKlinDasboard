@@ -28,6 +28,7 @@ from app.models.escalation import Escalation
 from app.models.event import OutboundMessage, WebhookEvent
 from app.models.expense import Expense
 from app.models.marketing import Campaign, Lead, CampaignRecipient, Coupon, CouponRedemption
+from app.models.rewards import CustomerReward, RewardRule
 from app.models.order import Order, OrderStatusHistory, derive_payment_status
 from app.models.payment import Payment
 from app.models.rate import Rate
@@ -70,6 +71,8 @@ __all__ = [
     "Correction",
     "Coupon",
     "CouponRedemption",
+    "RewardRule",
+    "CustomerReward",
     "Customer",
     "Direction",
     "DocChunk",

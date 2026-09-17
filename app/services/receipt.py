@@ -63,6 +63,7 @@ def build(
     settings: dict,
     prev_due: float = 0.0,
     prev_bills: int = 0,
+    prev_clothes: list | None = None,
 ) -> dict:
     """Order + settings -> bill ka dhaancha (render se alag, taaki test ho sake)."""
     from app.services import delivery as _dl
@@ -149,6 +150,8 @@ def build(
         "due": max(total - paid, 0.0),
         "prev_due": prev_due,
         "prev_bills": prev_bills,
+        # pichhle bills ke kapde jo abhi dukaan par hain: [{"order","name","qty"}]
+        "prev_clothes": list(prev_clothes or []),
         "upi": str(settings.get("upi_vpa") or "").strip(),
         "upi_payee": str(settings.get("upi_payee") or "").strip(),
         "terms": terms,
@@ -286,6 +289,12 @@ def render(r: dict, width: int | None = None, *, terms: bool = True) -> str:
         bills = "bill" if r["prev_bills"] == 1 else "bills"
         row(f"Previous due ({r['prev_bills']} {bills})", money(r["prev_due"]))
         row("TOTAL TO PAY", money(r["due"] + r["prev_due"]))
+    if r.get("prev_clothes"):
+        n = sum(int(c["qty"]) for c in r["prev_clothes"])
+        out.append(rule)
+        text(f"Still with us from earlier bills ({n}):")
+        for c in r["prev_clothes"]:
+            row(f"{c['order']} {c['name']}", str(c["qty"]), indent=2)
     if r["upi"] and (r["due"] > 0 or r["prev_due"] > 0 or not r["has_total"]):
         out.append(rule)
         text(f"Pay via UPI: {r['upi']}" + (f" ({r['upi_payee']})" if r["upi_payee"] else ""))
@@ -299,12 +308,13 @@ def render(r: dict, width: int | None = None, *, terms: bool = True) -> str:
     return "\n".join(out)
 
 
-def payload(order, cust, tenant, settings: dict, prev_due: float, prev_bills: int) -> dict:
+def payload(order, cust, tenant, settings: dict, prev_due: float, prev_bills: int,
+            prev_clothes: list | None = None) -> dict:
     """WhatsApp text + printer text — staff panel aur dashboard dono ka ek jawab."""
     r = build(
         order=order, customer_name=cust.name, customer_phone=cust.phone,
         shop_name=(tenant.shop_name if tenant and tenant.shop_name else "Kwik Klin"),
-        settings=settings, prev_due=prev_due, prev_bills=prev_bills,
+        settings=settings, prev_due=prev_due, prev_bills=prev_bills, prev_clothes=prev_clothes,
     )
     try:
         mm = int(settings.get("receipt_paper_mm") or 58)

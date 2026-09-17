@@ -538,9 +538,11 @@ async def order_receipt(order_number: str, db: AsyncSession = Depends(get_db)) -
         raise HTTPException(status_code=404, detail="Customer not found")
     tid = tenant_context.effective_tenant_id()
     tenant = await db.get(Tenant, tid) if tid else None
-    prev_due, prev_bills = await customer_outstanding(db, cust.id, exclude_order_id=order.id)
+    from app.services import customer_balance
+
+    prev = await customer_balance.previous(db, cust.id, exclude_order_id=order.id)
     out = receipt.payload(
-        order, cust, tenant, await app_settings.all_settings(db), prev_due, prev_bills
+        order, cust, tenant, await app_settings.all_settings(db), prev["due"], prev["bills"], prev["clothes"]
     )
     return {"order_number": order.order_number, "phone": cust.phone,
             "name": cust.name or "Customer", **out}

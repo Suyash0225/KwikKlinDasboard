@@ -334,6 +334,10 @@ async def create_order(
             # Kaam panel mein to dikh hi jayega — WhatsApp na jaana order
             # banne se nahi rok sakta.
             log.exception("pickup_work_order_failed", order_number=order_number)
+    # Loyalty: laga hua reward "used", aur naya inaam bana to grahak ko khabar
+    from app.services import rewards
+
+    await rewards.on_order_created(db, order, customer, coupon)
     _announce(order, "created", by=created_by)
     return order
 

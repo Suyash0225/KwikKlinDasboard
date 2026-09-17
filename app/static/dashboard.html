@@ -205,7 +205,8 @@
             <div class="sumrow"><span><label for="nb-disc" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Discount (₹)</label></span><span style="max-width:110px"><input id="nb-disc" type="number" min="0" aria-label="Manual discount in rupees" oninput="calcBill()"></span></div>
             <div class="muted" id="nb-disc-note" style="font-size:11.5px;min-height:16px"></div>
             <div class="sumrow"><span><label style="display:inline"><input type="checkbox" id="nb-gst" onchange="calcBill()"> GST 18%</label></span><span class="money" id="nb-gstamt">₹0</span></div>
-            <div class="sumrow"><span><label for="nb-coupon" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Coupon code</label></span><span style="max-width:130px"><input id="nb-coupon" placeholder="e.g. OFF10" aria-label="Coupon code"></span></div>
+            <div class="sumrow"><span><label for="nb-coupon" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Coupon code</label></span><span style="max-width:130px"><input id="nb-coupon" placeholder="e.g. OFF10" aria-label="Coupon code" onchange="nbRewardPaint()"></span></div>
+            <div id="nb-reward" hidden></div>
             <div class="muted" style="font-size:11.5px">Coupon is checked &amp; applied when you save.</div>
             <div class="sumrow"><span><label for="nb-adv" style="display:inline;margin:0;font-size:inherit;color:inherit;font-weight:inherit">Advance (₹)</label></span><span style="max-width:110px"><input id="nb-adv" type="number" min="0" inputmode="decimal" oninput="calcBill()"></span></div>
             <div class="sumrow"><span>Advance mode</span><span style="max-width:110px"><select id="nb-advmode"><option value="CASH">Cash</option><option value="UPI">UPI</option></select></span></div>
@@ -484,6 +485,7 @@
         <span class="chip" data-st="pricing" onclick="stTab('pricing')">🔥 Pricing rates matrix</span>
         <span class="chip" data-st="messages" onclick="stTab('messages')">✉️ Message formats</span>
         <span class="chip" data-st="ops" onclick="stTab('ops')">⚙️ Operations & Agents</span>
+        <span class="chip" data-st="rewards" onclick="stTab('rewards')">🎁 Rewards</span>
       </div>
 
       <div id="st-profile">
@@ -561,6 +563,29 @@
         <div class="card"><b>⚖️ Weight-based (per kg) rates</b><div id="rate-kg" style="margin-top:10px"></div></div>
       </div>
 
+      <div id="st-rewards" style="display:none">
+        <div class="card" style="margin-bottom:14px">
+          <b>🎁 Loyalty rewards</b>
+          <p class="muted" style="margin-top:4px">A rule is checked on every new bill. When a customer qualifies they get a one-time coupon (WhatsApp message goes automatically when the API is connected), it shows on their bill page, and it applies with one tap on their next bill. You can cancel any reward below.</p>
+          <div id="rw-rules" style="margin-top:10px"></div>
+          <div id="rw-suggest" style="margin-top:8px"></div>
+          <details style="margin-top:12px"><summary style="cursor:pointer;font-weight:600">＋ Add a custom rule</summary>
+            <div class="filters" style="margin-top:8px">
+              <input id="rw-name" placeholder="Rule name" aria-label="Rule name" style="min-width:150px">
+              <select id="rw-kind" aria-label="Condition"><option value="bills">N bills in window</option><option value="spend">₹ spent in window</option></select>
+              <input id="rw-threshold" type="number" min="1" placeholder="3 or 3000" aria-label="Threshold" style="width:110px">
+              <input id="rw-window" type="number" min="1" value="30" placeholder="days" aria-label="Window days" style="width:90px">
+              <select id="rw-type" aria-label="Reward type"><option value="flat">₹ off</option><option value="percent">% off</option></select>
+              <input id="rw-value" type="number" min="1" placeholder="100 or 10" aria-label="Reward value" style="width:100px">
+              <input id="rw-cap" type="number" min="1" placeholder="max ₹ (for %)" aria-label="Max discount" style="width:120px">
+              <input id="rw-min" type="number" min="0" placeholder="min bill ₹" aria-label="Minimum order" style="width:110px">
+              <input id="rw-valid" type="number" min="1" value="30" placeholder="valid days" aria-label="Valid days" style="width:100px">
+              <button class="btn sm orange" onclick="rwAdd()">Add rule</button>
+            </div>
+          </details>
+        </div>
+        <div class="card"><b>Rewards given</b><p class="muted" style="margin-top:4px">Earned = waiting to be used. Cancel disables the coupon.</p><div id="rw-earned" style="margin-top:10px"></div></div>
+      </div>
       <div id="st-ops" style="display:none">
       <div class="card" style="margin-bottom:14px">
         <b>🏪 Daily operations</b>

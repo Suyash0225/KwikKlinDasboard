@@ -99,6 +99,21 @@ body { font:16px/1.55 var(--font); background:var(--bg); color:var(--ink); -webk
 .billacc .inner { padding:0 0 14px; }
 .billacc .open { display:inline-block; margin-top:10px; font-size:13.5px; font-weight:700; color:var(--brand); text-decoration:none; }
 .card h2 small { font-weight:500; margin-left:6px; }
+.billacc .b-due b.ok { color:var(--ok); }
+/* rewards: mila hua inaam + progress bar */
+.rewards { background:linear-gradient(135deg, #fff7ed, #fefce8); }
+.rw-have { padding:10px 12px; border-radius:12px; background:rgba(255,255,255,.7); margin:6px 0 10px; font-size:14.5px; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) body .rewards { background:linear-gradient(135deg, #2a1f14, #262112); }
+  :root:not([data-theme="light"]) body .rw-have { background:rgba(255,255,255,.08); }
+}
+:root[data-theme="dark"] body .rewards { background:linear-gradient(135deg, #2a1f14, #262112); }
+:root[data-theme="dark"] body .rw-have { background:rgba(255,255,255,.08); }
+.rw-have code { font-weight:800; letter-spacing:.06em; }
+.rw-prog { margin-top:8px; font-size:13.5px; }
+.rw-prog .row { padding:4px 0; border:0; }
+.rw-prog .bar { height:8px; border-radius:999px; background:var(--line); overflow:hidden; }
+.rw-prog .bar i { display:block; height:100%; background:var(--accent, #c2410c); border-radius:999px; transition:width .4s; }
 .items .name { font-weight:700; }
 .items small { display:block; color:var(--ink-3); font-size:13px; font-weight:500; }
 .items .amt { font-weight:700; white-space:nowrap; font-variant-numeric:tabular-nums; }

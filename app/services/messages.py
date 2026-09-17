@@ -278,6 +278,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste {name} 🙏\nAapka ₹{amount} ka payment mil gaya — order {order_number}. Bahut dhanyawad!\n{balance_line}{bill_line}\n— {shop}",
         "en": "Hello {name} 🙏\nWe have received your payment of ₹{amount} for order {order_number}. Thank you!\n{balance_line}{bill_line}\n— {shop}",
     },
+    # Loyalty reward mila (services/rewards.py) — apne aap jaata hai
+    "reward_earned": {
+        "hi": "🎁 Namaste {name}! {condition} — aapko mila *{reward}* agle bill par.\nCode: *{code}* (valid till {valid_to}). Agle bill par bas ye code bata dijiye.\n— {shop}",
+        "en": "🎁 Hello {name}! {condition} — you have earned *{reward}* on your next bill.\nCode: *{code}* (valid till {valid_to}). Just mention this code on your next bill.\n— {shop}",
+    },
     # Haath se bheja "Delivery update": poora order de diya (partial wala
     # upar 'partial_delivery' hi jaata hai). Web bill ka link saath.
     "delivery_update_full": {
@@ -411,7 +416,7 @@ EDITABLE_KEYS = [
     "escalated_ack", "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
     "stop_confirmed", "start_confirmed",
     "payment_thanks", "service_thanks", "review_request", "partial_delivery",
-    "delivery_update_full",
+    "delivery_update_full", "reward_earned",
 ]
 
 
@@ -459,7 +464,7 @@ CUSTOMER_KEYS = frozenset({
     "order_not_found", "complaint_ack", "escalated_ack",
     "payment_reminder", "payment_reminder_firm",
     "payment_thanks", "service_thanks", "review_request", "partial_delivery",
-    "delivery_update_full",
+    "delivery_update_full", "reward_earned",
     "start_confirmed", "stop_confirmed", "relay_message_customer",
 })
 

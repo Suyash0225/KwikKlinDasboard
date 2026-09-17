@@ -126,6 +126,8 @@ DEFAULTS: dict[str, Any] = {
     ),
     # Chhote Bluetooth/thermal printer ki chaudai — 58mm (32 akshar) ya 80mm (48)
     "receipt_paper_mm": 58,
+    # Grahak ke statement page (/b/c/) par pichhle kitne din ke bill dikhein
+    "bill_history_days": 90,
     "upi_vpa": "",                    # scan-to-pay on bills when set
     "upi_payee": "",
     "gst_percent": 18,

@@ -1231,6 +1231,23 @@ class BillIn(BaseModel):
     # "New bill" kholne se Save tak (turnaround tracking)
     bill_seconds: int | None = None
     urgent_charge: float | None = Field(default=None, ge=0, le=100000)
+    # Reward/coupon code — server validate karta hai (grahak-locked bhi)
+    coupon_code: str = Field(default="", max_length=30)
+
+
+@router.get("/customers/{ref}/rewards", dependencies=[Depends(require_biller())])
+async def customer_rewards(ref: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Bill banate waqt: is grahak ke jo reward lag sakte hain (ek tap Apply)."""
+    from app.services import rewards
+
+    try:
+        cid = uuid_module.UUID(ref)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad ref")
+    cust = await db.get(Customer, cid)
+    if cust is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return {"available": await rewards.available(db, cid)}
 
 
 @router.post("/bills", dependencies=[Depends(require_biller())], status_code=201)
@@ -1368,6 +1385,7 @@ async def create_bill(
         needs_pickup=body.needs_pickup,
         priority="urgent" if body.urgent else "normal",
         bill_seconds=body.bill_seconds,
+        coupon_code=body.coupon_code.strip() or None,
     )
     # Advance ko paisa maankar ledger mein likhte hain — create ke baad,
     # wahi rasta jo dashboard ke New Bill par hai.
@@ -1687,8 +1705,10 @@ async def order_receipt(
     # Pichhle bilon ka baaki. Grahak ko ek hi number chahiye — "kitna dena
     # hai" — isliye kul bill par jodkar likhte hain. Order ka apna total
     # waisa ka waisa rehta hai; ye sirf padhne wali line hai.
-    prev_due, prev_bills = await customer_outstanding(db, cust.id, exclude_order_id=order.id)
-    out = receipt.payload(order, cust, tenant, s, prev_due, prev_bills)
+    from app.services import customer_balance
+
+    prev = await customer_balance.previous(db, cust.id, exclude_order_id=order.id)
+    out = receipt.payload(order, cust, tenant, s, prev["due"], prev["bills"], prev["clothes"])
 
     await audit.record(
         actor_role="staff", actor=p.staff.name, action="customer_number_viewed",

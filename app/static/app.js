@@ -1523,6 +1523,92 @@ function pickCust(i) {
   $("nb-ac").innerHTML = "";
   const nameBox = $("nb-ac-name");
   if (nameBox) nameBox.innerHTML = "";
+  nbRewards(c.phone);
+}
+
+/* ---- 🎁 reward on New bill: grahak chunte hi dikhe, ek tap mein lage, ✕ se hate ---- */
+let NB_REWARDS = [], NB_REWARD_PHONE = "";
+async function nbRewards(phone) {
+  phone = (phone || "").trim();
+  if (!phone || phone === NB_REWARD_PHONE) return;
+  NB_REWARD_PHONE = phone; NB_REWARDS = [];
+  try { NB_REWARDS = (await api(`/admin/api/customers/rewards?phone=${encodeURIComponent(phone)}`)).available || []; }
+  catch (e) { NB_REWARDS = []; }
+  nbRewardPaint();
+}
+function nbRewardPaint() {
+  const box = $("nb-reward");
+  if (!box) return;
+  const cur = ($("nb-coupon").value || "").trim().toUpperCase();
+  if (!NB_REWARDS.length) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  box.innerHTML = NB_REWARDS.map((r) => r.code === cur
+    ? `<div class="rwchip on">🎁 <b>${esc(r.reward)}</b> applied · ${esc(r.code)} <button type="button" class="btn sm ghost" onclick="nbRewardClear()">✕ Remove</button></div>`
+    : `<div class="rwchip">🎁 Customer has <b>${esc(r.reward)}</b> earned${r.expires_at ? ` · valid till ${esc(r.expires_at.slice(0, 10))}` : ""} <button type="button" class="btn sm" onclick="nbRewardApply('${esc(r.code)}')">Apply</button></div>`).join("");
+}
+function nbRewardApply(code) { $("nb-coupon").value = code; nbRewardPaint(); toast("Reward applied — discount shows on save"); }
+function nbRewardClear() { $("nb-coupon").value = ""; nbRewardPaint(); }
+document.addEventListener("change", (e) => { if (e.target && e.target.id === "nb-phone") nbRewards(e.target.value); });
+
+/* ---- Settings → Rewards ---- */
+let RW_RULES = [];
+async function loadRewards() {
+  let rules = { rules: [], suggested: [] }, earned = { rewards: [] };
+  try { [rules, earned] = await Promise.all([api("/admin/api/rewards/rules"), api("/admin/api/rewards/earned")]); }
+  catch (e) { $("rw-rules").innerHTML = errBox(e.message); return; }
+  RW_RULES = rules.rules;
+  $("rw-rules").innerHTML = RW_RULES.length ? `<div class="stafflist">${RW_RULES.map((r) => `
+    <div class="staffrow ${r.active ? "" : "off"}">
+      <div class="who"><div class="nm">${esc(r.name)}</div>
+        <div class="meta"><span class="badge">${esc(r.condition)}</span><span class="badge role">${esc(r.reward)}</span>
+          ${r.min_order ? `<span class="badge">min bill ${money(r.min_order)}</span>` : ""}<span class="badge">coupon valid ${r.valid_days} days</span>
+          <span class="statuspill ${r.active ? "on" : "off"}">${r.active ? "Active" : "Paused"}</span></div></div>
+      <div class="acts">
+        <button class="btn sm ghost" onclick="rwToggle('${r.id}')">${r.active ? "Pause" : "Resume"}</button>
+        <button class="btn sm danger" onclick="rwDelete('${r.id}')">Delete</button>
+      </div></div>`).join("")}</div>`
+    : `<div class="emptystate">No reward rules yet. Start with the suggested ones below.</div>`;
+  const have = new Set(RW_RULES.map((r) => r.name));
+  const sug = (rules.suggested || []).filter((s) => !have.has(s.name));
+  $("rw-suggest").innerHTML = sug.length ? `<div class="muted" style="margin-bottom:6px">Suggested (laundry industry standard):</div>` + sug.map((s, i) =>
+    `<button class="btn sm ghost" style="margin:0 6px 6px 0" onclick="rwAddSuggested(${i})">＋ ${esc(s.name)} → ${s.reward_type === "percent" ? s.value + "% off" + (s.max_discount ? " (max ₹" + s.max_discount + ")" : "") : "₹" + s.value + " off"}</button>`).join("") : "";
+  window.RW_SUG = sug;
+  const list = earned.rewards || [];
+  $("rw-earned").innerHTML = list.length ? `<table class="tbl keep"><thead><tr><th>Customer</th><th>Reward</th><th>Code</th><th>Status</th><th>Earned</th><th></th></tr></thead><tbody>${list.map((x) => `
+    <tr><td>${esc(x.customer || "")}<div class="muted">${esc(x.customer_phone || "")}</div></td><td>${esc(x.reward)}<div class="muted">${esc(x.rule || "")}</div></td>
+    <td><b>${esc(x.code)}</b></td><td><span class="pill ${x.status === "used" ? "PAID" : x.status === "earned" ? "PARTIAL" : "UNPAID"}">${x.status}</span>${x.note ? `<div class="muted">${esc(x.note)}</div>` : ""}</td>
+    <td class="muted">${fmtDate(x.earned_at)}${x.expires_at ? `<div>till ${fmtDate(x.expires_at)}</div>` : ""}</td>
+    <td>${x.status === "earned" ? `<button class="btn sm danger" onclick="rwCancel('${x.id}')">Cancel</button>` : ""}</td></tr>`).join("")}</tbody></table>`
+    : `<p class="muted">No rewards given yet.</p>`;
+}
+async function rwPost(body) {
+  try { await api("/admin/api/rewards/rules", { method: "POST", body }); toast("Rule added"); loadRewards(); }
+  catch (e) { toast(e.message, true); }
+}
+function rwAddSuggested(i) { const s = (window.RW_SUG || [])[i]; if (s) rwPost({ ...s, active: true }); }
+function rwAdd() {
+  const num = (id) => { const v = parseFloat($(id).value); return isNaN(v) ? null : v; };
+  const body = {
+    name: $("rw-name").value.trim(), kind: $("rw-kind").value, threshold: num("rw-threshold"),
+    window_days: num("rw-window") || 30, reward_type: $("rw-type").value, value: num("rw-value"),
+    max_discount: num("rw-cap"), min_order: num("rw-min"), valid_days: num("rw-valid") || 30, active: true,
+  };
+  if (!body.name || !body.threshold || !body.value) { toast("Name, condition value and reward value are required", true); return; }
+  rwPost(body);
+}
+async function rwToggle(id) {
+  const r = RW_RULES.find((x) => x.id === id); if (!r) return;
+  const body = { name: r.name, kind: r.kind, window_days: r.window_days, threshold: r.threshold, reward_type: r.reward_type,
+    value: r.value, max_discount: r.max_discount, min_order: r.min_order, valid_days: r.valid_days, active: !r.active };
+  try { await api(`/admin/api/rewards/rules/${id}`, { method: "PUT", body }); loadRewards(); } catch (e) { toast(e.message, true); }
+}
+async function rwDelete(id) {
+  if (!confirm("Delete this rule? Rewards already given stay valid.")) return;
+  try { await api(`/admin/api/rewards/rules/${id}`, { method: "DELETE" }); loadRewards(); } catch (e) { toast(e.message, true); }
+}
+async function rwCancel(id) {
+  if (!confirm("Cancel this reward? The coupon stops working.")) return;
+  try { await api(`/admin/api/rewards/earned/${id}/cancel`, { method: "POST" }); toast("Reward cancelled"); loadRewards(); } catch (e) { toast(e.message, true); }
 }
 
 /* Bahar tap karte hi sujhaav band — warna wo doosre field ke upar chipka
@@ -3284,7 +3370,8 @@ async function loadActivity(reset = true) {
 let STAFF = [], SETTINGS_CACHE = {}, RM_RATES = [], RM_EXTRA_G = [], RM_EXTRA_S = [];
 
 function stTab(t) {
-  ["profile", "pricing", "messages", "ops"].forEach((x) => {
+  if (t === "rewards") loadRewards();
+  ["profile", "pricing", "messages", "ops", "rewards"].forEach((x) => {
     const el = $("st-" + x); if (el) el.style.display = x === t ? "" : "none";
   });
   document.querySelectorAll("[data-st]").forEach((el) => el.classList.toggle("on", el.dataset.st === t));

@@ -806,6 +806,117 @@ async def reports_summary(db: AsyncSession = Depends(get_db)) -> dict:
     }
 
 
+# ---------- Settings: Rewards (loyalty) ----------
+
+class RewardRuleIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    kind: str = Field(pattern="^(bills|spend)$")
+    window_days: int = Field(ge=1, le=365)
+    threshold: Decimal = Field(gt=0)
+    reward_type: str = Field(pattern="^(flat|percent)$")
+    value: Decimal = Field(gt=0)
+    max_discount: Decimal | None = Field(default=None, gt=0)
+    min_order: Decimal | None = Field(default=None, ge=0)
+    valid_days: int = Field(default=30, ge=1, le=365)
+    active: bool = True
+
+
+@router.get("/api/rewards/rules", dependencies=[Depends(require_admin_key)])
+async def reward_rules(db: AsyncSession = Depends(get_db)) -> dict:
+    from app.models import RewardRule
+    from app.services import rewards
+
+    rows = (await db.execute(select(RewardRule).order_by(RewardRule.created_at))).scalars().all()
+    return {"rules": [rewards.rule_dict(r) for r in rows], "suggested": rewards.SUGGESTED_RULES}
+
+
+@router.post("/api/rewards/rules", dependencies=[Depends(require_admin_owner)], status_code=201)
+async def reward_rule_create(body: RewardRuleIn, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.models import RewardRule
+    from app.services import rewards
+
+    if body.reward_type == "percent" and body.value > 100:
+        raise HTTPException(status_code=400, detail="percent 100 se zyada nahi")
+    r = RewardRule(**body.model_dump())
+    db.add(r)
+    await db.commit()
+    await audit.record(actor_role="admin", actor="dashboard", action="reward_rule_created",
+                       args=body.model_dump(mode="json"), result=r.name)
+    return rewards.rule_dict(r)
+
+
+@router.put("/api/rewards/rules/{rule_id}", dependencies=[Depends(require_admin_owner)])
+async def reward_rule_update(rule_id: str, body: RewardRuleIn, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.models import RewardRule
+    from app.services import rewards
+
+    r = await db.get(RewardRule, uuid_module.UUID(rule_id))
+    if r is None:
+        raise HTTPException(status_code=404, detail="rule not found")
+    for k, v in body.model_dump().items():
+        setattr(r, k, v)
+    await db.commit()
+    return rewards.rule_dict(r)
+
+
+@router.delete("/api/rewards/rules/{rule_id}", dependencies=[Depends(require_admin_owner)])
+async def reward_rule_delete(rule_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.models import RewardRule
+
+    r = await db.get(RewardRule, uuid_module.UUID(rule_id))
+    if r is None:
+        raise HTTPException(status_code=404, detail="rule not found")
+    await db.delete(r)          # mile hue reward rehte hain (rule_id NULL ho jaata hai)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/api/rewards/earned", dependencies=[Depends(require_admin_key)])
+async def rewards_earned(
+    status: str | None = Query(default=None, pattern="^(earned|used|cancelled|expired)$"),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.models import CustomerReward, RewardRule
+    from app.services import rewards
+
+    q = (
+        select(CustomerReward, RewardRule, Customer)
+        .outerjoin(RewardRule, RewardRule.id == CustomerReward.rule_id)
+        .join(Customer, Customer.id == CustomerReward.customer_id)
+        .order_by(CustomerReward.earned_at.desc()).limit(limit)
+    )
+    if status:
+        q = q.where(CustomerReward.status == status)
+    rows = (await db.execute(q)).all()
+    return {"rewards": [rewards.reward_dict(cr, rule, cu) for cr, rule, cu in rows]}
+
+
+@router.post("/api/rewards/earned/{reward_id}/cancel", dependencies=[Depends(require_admin_owner)])
+async def reward_cancel(reward_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.services import rewards
+
+    cr = await rewards.cancel(db, uuid_module.UUID(reward_id), by="dashboard")
+    if cr is None:
+        raise HTTPException(status_code=404, detail="reward not found")
+    await audit.record(actor_role="admin", actor="dashboard", action="reward_cancelled",
+                       args={"code": cr.coupon_code}, result=cr.status)
+    return {"ok": True, "status": cr.status}
+
+
+@router.get("/api/customers/rewards", dependencies=[Depends(require_admin_key)])
+async def customer_rewards_for_bill(phone: str = Query(min_length=6), db: AsyncSession = Depends(get_db)) -> dict:
+    """New bill: grahak ka number bharte hi — reward hai to dikhao, ek tap mein lage."""
+    from app.services import rewards
+
+    cust = (
+        await db.execute(select(Customer).where(Customer.phone == normalize_phone(phone.strip())))
+    ).scalar_one_or_none()
+    if cust is None:
+        return {"available": [], "progress": []}
+    return await rewards.for_bill_page(db, cust.id)
+
+
 # ---------- Settings: Rate Card ----------
 
 class RateIn(BaseModel):

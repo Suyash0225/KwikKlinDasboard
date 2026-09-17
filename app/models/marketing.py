@@ -127,6 +127,10 @@ class Coupon(Base, TenantScoped):
         UUID(as_uuid=True), ForeignKey("campaigns.id")
     )
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # Reward coupon: sirf is grahak ka (services/rewards.py). NULL = sabke liye.
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

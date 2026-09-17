@@ -1182,6 +1182,7 @@ let DISC = { mode: "amt", value: 0 };
 let URG = { on: false, manual: false, amt: 0 };
 // Chune hue purane grahak ka baaki. Naye grahak par 0.
 let PREV_DUE = 0, PREV_BILLS = 0;
+let REWARDS = [], REWARD_CODE = "";      // 🎁 grahak ke reward, aur jo laga hai
 // Bill ka timer (IMP_006): bill form par pehle asli tap/likhne se Save tak.
 // Ek hi document listener — #list doosre tab bhi dikhata hai, isliye
 // sirf tab ginte hain jab bill form (b-phone) screen par ho.
@@ -1223,6 +1224,7 @@ async function showNewBill() {
         <div class="acp" id="b-ac"></div>
       </div>
       <div id="b-picked" class="picked" hidden></div>
+      <div id="b-reward" hidden></div>
       <label for="b-phone">Mobile number</label>
       <input id="b-phone" type="tel" inputmode="numeric" placeholder="98xxxxxxxx" maxlength="15">
     </div>
@@ -1898,7 +1900,7 @@ function wireCustomerSearch() {
   const input = $("b-name"), box = $("b-ac");
   if (!input || !box) return;
   input.oninput = () => {
-    PICKED = ""; PREV_DUE = 0; PREV_BILLS = 0;
+    PICKED = ""; PREV_DUE = 0; PREV_BILLS = 0; REWARDS = []; REWARD_CODE = ""; paintReward();
     $("b-picked").hidden = true; $("b-phone").disabled = false;
     renderCart();
     const q = input.value.trim();
@@ -1932,6 +1934,7 @@ function wireCustomerSearch() {
             ? `⚠ ${c.name || "Customer"} · ${money(PREV_DUE)} pichhla baaki (${PREV_BILLS} bill)`
             : `✓ ${c.name || "Customer"} · ${c.phone_masked}`;
           renderCart();
+          loadRewards(c.ref);
         };
       });
     }, 250);
@@ -1943,6 +1946,24 @@ document.addEventListener("click", (e) => {
   const box = $("b-ac");
   if (box && !e.target.closest(".ac-wrap")) box.innerHTML = "";
 });
+
+/* 🎁 Reward: grahak chunte hi server se — hai to chip, Apply ek tap, ✕ se hata do */
+async function loadRewards(ref) {
+  REWARDS = []; REWARD_CODE = "";
+  try { REWARDS = (await api(`/customers/${encodeURIComponent(ref)}/rewards`)).available || []; }
+  catch (e) { REWARDS = []; }
+  paintReward();
+}
+function paintReward() {
+  const box = $("b-reward");
+  if (!box) return;
+  if (!REWARDS.length) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  box.innerHTML = REWARDS.map((r) => r.code === REWARD_CODE
+    ? `<div class="rwchip on">🎁 <b>${esc(r.reward)}</b> applied · ${esc(r.code)}<button type="button" class="btn ghost sm" data-rw="">✕ Remove</button></div>`
+    : `<div class="rwchip">🎁 Reward: <b>${esc(r.reward)}</b>${r.expires_at ? ` · till ${esc(r.expires_at.slice(0, 10))}` : ""}<button type="button" class="btn go sm" data-rw="${esc(r.code)}">Apply</button></div>`).join("");
+  box.querySelectorAll("[data-rw]").forEach((b) => { b.onclick = () => { REWARD_CODE = b.dataset.rw; paintReward(); }; });
+}
 
 async function saveBill(btn) {
   const phone = $("b-phone").value.trim();
@@ -1961,6 +1982,7 @@ async function saveBill(btn) {
         // doosra hamesha 0. Warna "kaunsa laga" ka jawab do jagah se aata.
         discount_amount: DISC.mode === "amt" ? DISC.value : 0,
         discount_percent: DISC.mode === "pct" ? DISC.value : 0,
+        coupon_code: REWARD_CODE || "",
         needs_pickup: NEEDS_PICKUP,
         // ⚡ jo rakam screen par dikh rahi thi wahi jaati hai (0 = maaf)
         urgent: URG.on,
@@ -1975,7 +1997,7 @@ async function saveBill(btn) {
         })),
       },
     });
-    CART = []; PICKED = ""; PREV_DUE = 0; PREV_BILLS = 0; BILL_STARTED = 0;
+    CART = []; PICKED = ""; PREV_DUE = 0; PREV_BILLS = 0; BILL_STARTED = 0; REWARDS = []; REWARD_CODE = "";
     DISC = { mode: "amt", value: 0 };
     URG = { on: false, manual: false, amt: 0 };
     toast(
