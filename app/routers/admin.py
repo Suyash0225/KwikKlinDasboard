@@ -845,6 +845,40 @@ async def rate_update(rate_id: str, body: RateUpdateIn, db: AsyncSession = Depen
     return {"ok": True}
 
 
+@router.delete("/api/rates/{rate_id}", dependencies=[Depends(require_admin_owner)])
+async def rate_delete(rate_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Galti se bana daam hatao. Purane bill par asar nahi — bill apni line
+    mein daam copy rakhta hai, rate card se nahi padhta."""
+    try:
+        rid = uuid_module.UUID(rate_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid rate id")
+    rate = await db.get(Rate, rid)
+    if rate is None:
+        raise HTTPException(status_code=404, detail="rate not found")
+    await db.delete(rate)
+    await db.commit()
+    log.info("rate_deleted", rate_id=rate_id, service=rate.service, garment=rate.garment)
+    return {"ok": True}
+
+
+@router.delete("/api/rates", dependencies=[Depends(require_admin_owner)])
+async def rates_delete_group(
+    service: str | None = Query(default=None, max_length=60),
+    garment: str | None = Query(default=None, max_length=60),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Matrix ka poora column (service) ya poori row (garment) ek baar mein.
+    Sirf per-piece; per-kg service ki apni list hai."""
+    if bool(service) == bool(garment):
+        raise HTTPException(status_code=400, detail="give exactly one of service or garment")
+    where = [Rate.unit == "pc", (Rate.service == service.strip()) if service else (Rate.garment == garment.strip())]
+    res = await db.execute(delete(Rate).where(*where))
+    await db.commit()
+    log.info("rates_deleted", service=service, garment=garment, count=res.rowcount)
+    return {"deleted": res.rowcount}
+
+
 # ---------- Settings: Staff ----------
 
 class StaffIn(BaseModel):

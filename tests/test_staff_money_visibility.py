@@ -45,3 +45,28 @@ async def test_delivery_boy_still_sees_money(client, two_shops, sent) -> None:
     assert d["total"] == 300.0 and d["due"] == 300.0
     assert (await client.get(f"/staff/api/orders/{num}/receipt")).status_code == 200
     assert (await client.get(f"/staff/api/orders/{num}/dues")).status_code == 200
+
+
+async def test_washer_cannot_reach_the_customer_but_can_move_the_wash(client, two_shops, sent) -> None:
+    """Washerman ko grahak ka number/pata nahi (call bhi nahi) — use sirf
+    kapde, status (Start wash -> Ready) aur photo chahiye."""
+    num = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A, total=300)
+    await _login(client, A_PHONE)
+    me = (await client.get("/staff/api/me")).json()
+    assert me["can_contact"] is False
+
+    assert (await client.get(f"/staff/api/orders/{num}/call")).status_code == 403
+    d = (await client.get(f"/staff/api/orders/{num}")).json()
+    assert "phone_masked" not in d
+    stop = next(s for s in (await client.get("/staff/api/route")).json()["stops"] if s["number"] == num)
+    assert "phone_masked" not in stop and stop["address"] == ""
+
+    r = await client.post(f"/staff/api/orders/{num}/washing")
+    assert r.status_code == 200 and r.json()["status"] == "IN_WASH", r.text
+    assert (await client.post(f"/staff/api/orders/{num}/washing")).status_code == 409   # dobara nahi
+    r = await client.post(f"/staff/api/orders/{num}/ready")
+    assert r.status_code == 200 and r.json()["status"] == "READY", r.text
+
+    # Delivery wale ko number/pata pehle jaisa
+    await _login(client, A_DEL_PHONE)
+    assert (await client.get("/staff/api/me")).json()["can_contact"] is True

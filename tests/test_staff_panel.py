@@ -929,10 +929,10 @@ async def test_call_gives_the_real_number_only_for_your_own_order(
     """List mein number masked rehta hai — poora tabhi jab kaam ke liye
     maanga jaye, aur har baar audit hota hai. Warna kisi bhi phone se
     poori customer list nikaal lena sabse aasan leak hai."""
-    mine = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A)
+    mine = await _order_for(two_shops["a"], two_shops["a_del"], CUST_A, delivery=True)
     theirs = await _order_for(two_shops["b"], two_shops["b_wash"], CUST_B)
 
-    await _login(client, A_PHONE)
+    await _login(client, A_DEL_PHONE)           # grahak se baat delivery wala karta hai, washer nahi
     r = await client.get(f"/staff/api/orders/{mine}/call")
     assert r.status_code == 200 and r.json()["phone"] == CUST_A
 

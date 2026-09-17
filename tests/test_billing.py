@@ -116,6 +116,29 @@ async def test_rate_card_crud(client) -> None:
             await s.commit()
 
 
+async def test_matrix_can_delete_a_rate_a_whole_service_or_a_whole_garment(client) -> None:
+    """Galti se bani service/kapda matrix se hat sake — ek cell, poora column,
+    poori row. Purane bill apni line mein daam rakhte hain, unpar asar nahi."""
+    mk = lambda svc, g: client.post("/admin/api/rates", json={"service": svc, "garment": g, "unit": "pc", "rate": "10"}, headers=AUTH)
+    ids = [(await mk(svc, g)).json()["id"] for svc in ("TEST DelSvc", "TEST KeepSvc") for g in ("TEST DelKapda", "TEST KeepKapda")]
+    try:
+        assert (await client.delete(f"/admin/api/rates/{ids[0]}")).status_code == 401           # bina key nahi
+        assert (await client.delete(f"/admin/api/rates/{ids[0]}", headers=AUTH)).status_code == 200
+        assert (await client.delete(f"/admin/api/rates/{ids[0]}", headers=AUTH)).status_code == 404
+        assert (await client.delete("/admin/api/rates", headers=AUTH)).status_code == 400        # service YA garment
+        r = await client.delete("/admin/api/rates?service=TEST%20DelSvc", headers=AUTH)
+        assert r.status_code == 200 and r.json()["deleted"] == 1                                  # baaki ek cell
+        r = await client.delete("/admin/api/rates?garment=TEST%20DelKapda", headers=AUTH)
+        assert r.status_code == 200 and r.json()["deleted"] == 1
+        left = {(x["service"], x["garment"]) for x in (await client.get("/admin/api/rates", headers=AUTH)).json()
+                if x["service"].startswith("TEST ")}
+        assert left == {("TEST KeepSvc", "TEST KeepKapda")}
+    finally:
+        async with async_session_factory() as s:
+            await s.execute(sqltext("DELETE FROM rate_card WHERE service IN ('TEST DelSvc', 'TEST KeepSvc')"))
+            await s.commit()
+
+
 async def test_re_adding_a_disabled_rate_brings_it_back(client) -> None:
     """New Bill se "➕ New item" — band kiya hua kapda dobara jodne par 409
     nahi, wahi row naye rate ke saath chalu ho (unique key use rokti thi)."""

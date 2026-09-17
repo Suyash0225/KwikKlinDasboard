@@ -344,6 +344,26 @@ a { color: var(--brand-600); text-decoration: none; }
 .rowcard { background: var(--n0); border: 1px solid var(--n200); border-radius: 12px; padding: 13px; box-shadow: var(--shadow); }
 .card.listcard .rowcards { padding: 12px; }
 .rowcard.overdue { border-left: 3px solid var(--danger); }
+/* Rate matrix: apne box mein scroll — header (services) upar chipka, kapde
+   ka naam baayein chipka. Bina iske neeche scroll par service ke naam gayab
+   ho jaate the aur aadmi bhool jaata tha ki kaunsa daam kis service ka hai. */
+#rate-matrix { max-height: 70vh; overflow: auto; border: 1px solid var(--line-soft); border-radius: 10px; }
+#rate-matrix .tbl.keep th { top: 0; z-index: 3; }
+#rate-matrix .tbl.keep th:first-child, #rate-matrix .tbl.keep td:first-child {
+  position: sticky; left: 0; background: var(--n0); z-index: 2;
+  box-shadow: 8px 0 8px -8px rgba(16, 24, 40, .15);
+}
+#rate-matrix .tbl.keep th:first-child { z-index: 4; }
+#rate-matrix .tbl.keep th:last-child, #rate-matrix .tbl.keep td:last-child {
+  position: static; text-align: left; box-shadow: none; width: auto; white-space: normal;
+}
+#rate-matrix .tbl.keep td { padding: 8px 10px; }
+.rm-h { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.rm-x {
+  border: 0; background: transparent; color: var(--n400, #98a2b3); cursor: pointer;
+  font-size: 11px; line-height: 1; padding: 3px 4px; border-radius: 6px;
+}
+.rm-x:hover { color: var(--danger); background: var(--danger-50); }
 /* IMP_006: stage timer — kitni der se is stage par / hadd */
 .stagetime { display: inline-block; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink-3, #667085); white-space: nowrap; }
 .stagetime.warn { color: #b45309; }

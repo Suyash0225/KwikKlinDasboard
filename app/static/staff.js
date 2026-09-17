@@ -495,8 +495,10 @@ function primaryAction(w) {
   if (s && ["PICKUP_ASSIGNED"].includes(s) && DELIVERY_ROLES.includes(ME.role)) {
     return { act: "pickup", label: "Picked up" };
   }
-  if (s && ["RECEIVED", "PICKED_UP", "IN_WASH", "IN_DRY", "IN_IRON"].includes(s) && WASH_ROLES.includes(ME.role)
-      && ME.role !== "DELIVERY") {
+  if (s && ["RECEIVED", "PICKED_UP"].includes(s) && WASH_ROLES.includes(ME.role)) {
+    return { act: "washing", label: "Start wash" };
+  }
+  if (s && ["IN_WASH", "IN_DRY", "IN_IRON"].includes(s) && WASH_ROLES.includes(ME.role)) {
     return { act: "ready", label: "Ready" };
   }
   if (t) return { act: "done", label: "Done", code: t.code };
@@ -527,7 +529,7 @@ function workRow(w) {
       ${asked ? `<div class="sub mt-xs"><span class="tag late">Cancel maanga</span>${esc(t.cancel_reason || "")}</div>` : ""}
       ${ME.show_route && w.address ? `<div class="sub mt-xs">📍 ${esc(w.address)}</div>` : ""}
       <div class="acts">
-        ${w.hasOrder ? `<button class="btn ghost sm" data-do="call">Call</button>` : ""}
+        ${w.hasOrder && ME.can_contact ? `<button class="btn ghost sm" data-do="call">Call</button>` : ""}
         ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}>${esc(main.label)}</button>` : ""}
         ${ME.show_route && w.address ? `<button class="btn ghost sm" data-do="map" data-addr="${esc(w.address)}">Route</button>` : ""}
         ${ME.can_money && ME.features.includes("cod_collection") && w.due > 0
@@ -549,6 +551,7 @@ function runAction(act, num, d = {}) {
   if (act === "more") return moreMenu(num);
   if (act === "deliver") return deliverModal(num);
   if (act === "pickup") return confirmStep(num, "picked-up", "Picked up the clothes?", "Yes, picked up");
+  if (act === "washing") return confirmStep(num, "washing", "Started washing these clothes?", "Yes, washing");
   if (act === "ready") return confirmStep(num, "ready", "Clothes washed and ready?", "Yes, ready");
 }
 
@@ -622,7 +625,7 @@ async function orderDetailModal(number) {
     </div>` : ""}
     ${o.notes ? `<div class="od-block"><b>Notes</b><p class="note">${esc(o.notes)}</p></div>` : ""}
     <div class="btnrow">
-      <button class="btn ghost" data-od="call">📞 Call</button>
+      ${ME.can_contact ? `<button class="btn ghost" data-od="call">📞 Call</button>` : ""}
       ${main ? `<button class="btn go" data-od="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}>${esc(main.label)}</button>` : ""}
       ${o.can_collect && o.due > 0 ? `<button class="btn money" data-od="pay" data-due="${o.due}">${money(o.due)} collect</button>` : ""}
     </div>

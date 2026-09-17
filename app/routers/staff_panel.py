@@ -89,6 +89,10 @@ def can_bill(p: StaffPrincipal) -> bool:
 # rok deta hai; UI mein chhupana kaafi nahi tha (API se sab aa jaata tha).
 can_money = can_bill
 
+# Grahak se baat (poora number, pata, WhatsApp message) bhi unhi ki — washerman
+# ka grahak se koi lena-dena nahi: use kapde, status aur photo chahiye, bas.
+can_contact = can_bill
+
 
 def require_biller(feature: str = "billing"):
     """Plan ka pehra + role ka pehra, ek hi jagah.
@@ -217,6 +221,7 @@ async def me(
         # hisaab rakhne par hi "dikh raha hai par chalta nahi" hota hai.
         "can_bill": can_bill(p),
         "can_money": can_money(p),
+        "can_contact": can_contact(p),
         "can_expense": can_expense(p),
         "must_change_password": p.staff.must_change_password,
         "shop": p.tenant.shop_name if p.tenant else "",
@@ -684,7 +689,7 @@ async def order_detail(
     out = {
         "number": order.order_number,
         "customer": (cust.name or "Customer") if cust else "?",
-        "phone_masked": mask_phone(cust.phone if cust else ""),
+        **({"phone_masked": mask_phone(cust.phone if cust else "")} if can_contact(p) else {}),
         "items": order.items or [],
         "items_text": items_summary(order),
         # har kapde ki line: kitne, kitne diye, kitne baaki (KG bore ke andar bhi)
@@ -779,6 +784,21 @@ async def order_picked_up(
     order = await _my_order(db, p, number)
     try:
         return await delivery.picked_up(db, order, by=p.staff.name)
+    except delivery.DeliveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/orders/{number}/washing")
+async def order_washing(
+    number: str,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Washerman: dhulai shuru (grahak ka page bhi 'Cleaning' par aa jaata hai)."""
+    _role_or_403(p, _WASH_ROLES, "Washing")
+    order = await _my_order(db, p, number)
+    try:
+        return await delivery.washing(db, order, by=p.staff.name)
     except delivery.DeliveryError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
@@ -1597,6 +1617,8 @@ async def call_customer(
     karna hi padta hai. Isliye poora number tabhi milta hai jab wo
     maange, aur uska record rehta hai.
     """
+    if not can_contact(p):
+        raise HTTPException(status_code=403, detail="Grahak se baat delivery/manager karte hain")
     order = await _my_order(db, p, number)
     cust = await db.get(Customer, order.customer_id)
     if cust is None:
@@ -1982,8 +2004,10 @@ async def my_route(
                 "number": o.order_number,
                 "kind": kind,
                 "customer": (cust.name or "Customer") if cust else "?",
-                "phone_masked": mask_phone(cust.phone if cust else ""),
-                "address": (cust.address or "").strip() if cust and show_route else "",
+                # Number/pata sirf unhe jo grahak tak jaate hain; washerman ko nahi
+                **({"phone_masked": mask_phone(cust.phone if cust else ""),
+                    "address": (cust.address or "").strip() if cust and show_route else ""}
+                   if can_contact(p) else {"address": ""}),
                 "items": items_summary(o),
                 "status": o.status.name,
                 "urgent": o.priority == "urgent",

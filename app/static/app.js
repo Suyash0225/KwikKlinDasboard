@@ -3391,11 +3391,15 @@ function renderRateMatrix() {
     return `<td><input type="number" step="0.5" style="max-width:86px" value="${r ? r.rate : ""}"
       placeholder="—" onchange="rmCell('${esc(g)}','${esc(s)}',this.value,'${r ? r.id : ""}')"></td>`;
   };
+  // Header (service ke naam) aur pehla column (kapde ka naam) chipke rehte
+  // hain — neeche/daayein scroll par bhi pata rahe ki kaunsa daam kis ka hai.
+  // Har service/kapde par ✕: galti se bana ho to poora column/row hat jaata hai.
+  const x = (fn, arg, title) => `<button type="button" class="rm-x" title="${esc(title)}" aria-label="${esc(title)}" onclick="${fn}('${esc(arg)}')">✕</button>`;
   $("rate-matrix").innerHTML = `
     <table class="tbl keep" style="min-width:${180 + services.length * 110}px"><thead><tr>
-      <th>Laundry garment name</th>${services.map((s) => `<th>${esc(s)} (₹)</th>`).join("")}
+      <th>Laundry garment name</th>${services.map((s) => `<th><span class="rm-h">${esc(s)} (₹)${x("rmDeleteService", s, `Remove service ${s}`)}</span></th>`).join("")}
     </tr></thead><tbody>
-      ${garments.map((g) => `<tr><td><b style="font-size:13px;text-transform:none;letter-spacing:0">${esc(g)}</b></td>${services.map((s) => cell(g, s)).join("")}</tr>`).join("")}
+      ${garments.map((g) => `<tr><td><span class="rm-h"><b style="font-size:13px;text-transform:none;letter-spacing:0">${esc(g)}</b>${x("rmDeleteGarment", g, `Remove ${g}`)}</span></td>${services.map((s) => cell(g, s)).join("")}</tr>`).join("")}
     </tbody></table>`;
   $("rate-kg").innerHTML = kg.map((r) => `
     <div class="sumrow"><span>${esc(r.service)}</span>
@@ -3416,6 +3420,23 @@ async function rmCell(garment, service, value, id) {
     renderRateMatrix();
   } catch (e) { toast(e.message, true); }
 }
+async function rmDeleteGroup(kind, name) {
+  const saved = RM_RATES.filter((r) => r.unit === "pc" && r[kind] === name).length;
+  const what = kind === "service" ? "service" : "item";
+  if (!confirm(saved
+    ? `Remove ${what} "${name}" and its ${saved} saved rate${saved > 1 ? "s" : ""}? Old bills are not affected.`
+    : `Remove ${what} "${name}"?`)) return;
+  try {
+    if (saved) await api(`/admin/api/rates?${kind}=${encodeURIComponent(name)}`, { method: "DELETE" });
+    if (kind === "service") RM_EXTRA_S = RM_EXTRA_S.filter((s) => s !== name);
+    else RM_EXTRA_G = RM_EXTRA_G.filter((g) => g !== name);
+    RM_RATES = await api("/admin/api/rates");
+    renderRateMatrix();
+    toast(`${name} removed`);
+  } catch (e) { toast(e.message, true); }
+}
+const rmDeleteService = (s) => rmDeleteGroup("service", s);
+const rmDeleteGarment = (g) => rmDeleteGroup("garment", g);
 function rmAddGarment() {
   const g = $("rm-garment").value.trim();
   if (!g) return;
