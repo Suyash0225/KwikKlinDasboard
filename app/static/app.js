@@ -693,8 +693,12 @@ function orderMenu(num) {
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
 }
 function billMenu(num) {
+  const o = BILLS.find((x) => x.order_number === num) || ((DASH && DASH.active_orders) || []).find((x) => x.order_number === num);
+  const step = o && NEXT_STEP[o.status];
   openModal(`<h3>${num}</h3>
     <div class="frm">
+      ${step ? `<button class="btn" onclick="closeModal();setStatus('${num}','${o.status}','${step[0]}')">${step[1]}</button>` : ""}
+      ${o && !["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn ghost" onclick="closeModal();statusModal('${num}','${o.status}')">🔄 Change status</button>` : ""}
       <button class="btn ghost" onclick="closeModal();printReceiptFromOrder('${num}')">🖨 Print receipt</button>
       <button class="btn ghost" onclick="closeModal();shareBillFromOrder('${num}')">📲 Share on WhatsApp</button>
       <button class="btn ghost" onclick="closeModal();messageMenu('${num}')">💬 Send a message</button>
@@ -964,8 +968,10 @@ async function orderDetail(number) {
         : `<p class="muted">No work assigned yet.</p>`}
       ${o.notes ? `<hr class="hr"><b>Internal notes</b><p class="muted" style="white-space:pre-wrap">${esc(o.notes)}</p>` : ""}
       <div class="btnrow" style="margin-top:14px">
+        ${nextStepBtn(o, "btn")}
+        ${!["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn ghost" onclick="statusModal('${o.order_number}','${o.status}')">🔄 Status</button>` : ""}
         <button class="btn ghost" onclick="printReceiptFromOrder('${o.order_number}')">🖨 Print</button>
-        <button class="btn" onclick="jumpChat('${o.customer_phone}')">💬 Chat</button>
+        <button class="btn ghost" onclick="jumpChat('${o.customer_phone}')">💬 Chat</button>
       </div>`;
   } catch (e) { $("drawer-body").innerHTML = errBox(e.message, "closeDrawer"); }
 }
