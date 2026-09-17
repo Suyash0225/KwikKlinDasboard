@@ -65,10 +65,15 @@ def build(
     prev_bills: int = 0,
 ) -> dict:
     """Order + settings -> bill ka dhaancha (render se alag, taaki test ho sake)."""
+    from app.services import delivery as _dl
+
+    # Kitne kapde de diye, kitne abhi dukaan par — usi hisaab se jo panel
+    # aur dashboard dikhate hain (delivery.lines), alag ginti nahi.
+    by_line = {row["line"]: row for row in _dl.lines(order)}
     items = []
     has_kg = False
     urgent_charge = 0.0
-    for it in order.items or []:
+    for idx, it in enumerate(order.items or []):
         if it.get("kind") == urgent.KIND:
             # kapda nahi, jaldi ki fees — totals mein apni line
             urgent_charge += _num(it.get("amount"))
@@ -88,6 +93,7 @@ def build(
             for p in (it.get("pieces") or [])
             if isinstance(p, dict) and p.get("type")
         ]
+        dl = by_line.get(idx) or {}
         items.append({
             "title": str(title),
             "qty": _qty(it.get("qty", 1)),
@@ -95,7 +101,21 @@ def build(
             "rate": None if rate is None else _num(rate),
             "amount": None if amount is None else _num(amount),
             "pieces": pieces,
+            # delivery ki ginti (partial delivery ke bill ke liye)
+            "count": int(dl.get("qty") or 0),
+            "delivered": int(dl.get("delivered") or 0),
+            "pending": int(dl.get("pending") or 0),
+            "pieces_pending": [(str(p["type"]), int(p["pending"])) for p in (dl.get("pieces") or []) if p.get("pending")],
         })
+    clothes = _dl.counts(order)
+    partial = 0 < clothes["delivered"] < clothes["total"]
+    still = []          # jo abhi dukaan par hai: (naam, kitne)
+    if partial:
+        for it in items:
+            if it["pieces_pending"]:
+                still.extend(it["pieces_pending"])
+            elif it["pending"]:
+                still.append((it["title"], it["pending"]))
 
     total = _num(order.total_amount)
     disc = _num(order.discount_amount)
@@ -115,6 +135,9 @@ def build(
         "customer": (customer_name or "").strip() or (customer_phone or ""),
         "delivery": order.expected_delivery.strftime("%d %b %Y") if order.expected_delivery else "",
         "items": items,
+        "clothes": clothes,
+        "partial": partial,
+        "still": still,
         "urgent": getattr(order, "priority", "normal") == "urgent",
         "urgent_charge": urgent_charge,
         "has_total": order.total_amount is not None,
@@ -200,6 +223,9 @@ def render(r: dict, width: int | None = None, *, terms: bool = True) -> str:
         row("Delivery", r["delivery"])
     if r.get("urgent"):
         row("Priority", "URGENT" if printing else "⚡ URGENT")
+    if r.get("partial"):
+        c = r["clothes"]
+        row("Delivered", f"{c['delivered']} of {c['total']} clothes")
     out.append(rule)
 
     for it in r["items"]:
@@ -222,7 +248,22 @@ def render(r: dict, width: int | None = None, *, terms: bool = True) -> str:
             else:
                 out.extend(f"  {name} {n}" for name, n in it["pieces"])
                 out.append(f"  Total clothes: {count}")
+        # Partial delivery: har line par saaf likha ho ki ye gaya ya abhi yahin hai
+        if r.get("partial") and it.get("count"):
+            if it["pending"] == 0:
+                note = "delivered"
+            elif it["delivered"] == 0:
+                note = "still with us"
+            else:
+                note = f"{it['delivered']} of {it['count']} delivered, {it['pending']} pending"
+            text(f"({note})", indent=2)
     out.append(rule)
+    if r.get("partial") and r.get("still"):
+        n = sum(k for _, k in r["still"])
+        text(f"Still with us ({n}):")
+        for name, k in r["still"]:
+            row(name, str(k), indent=2)
+        out.append(rule)
 
     if r["has_total"]:
         if r["discount"] or r["gst"] or r.get("urgent_charge"):
@@ -235,7 +276,9 @@ def render(r: dict, width: int | None = None, *, terms: bool = True) -> str:
                 row("GST", "+" + money(r["gst"]))
         row("Total", money(r["total"]))
         row("Paid", money(r["paid"]))
-        row("Due", money(r["due"]))
+        # Chukta bill par "Due: ₹0" aur UPI ID grahak ko phir se paisa maangne
+        # jaisa lagta hai — isliye saaf "Paid in full", aur UPI line hi nahi.
+        row("Due", money(r["due"]) if r["due"] > 0 else ("Nil - PAID IN FULL" if printing else "Nil ✅ Paid in full"))
     else:
         row("Total", "-")
     if r["prev_due"] > 0:
@@ -243,7 +286,7 @@ def render(r: dict, width: int | None = None, *, terms: bool = True) -> str:
         bills = "bill" if r["prev_bills"] == 1 else "bills"
         row(f"Previous due ({r['prev_bills']} {bills})", money(r["prev_due"]))
         row("TOTAL TO PAY", money(r["due"] + r["prev_due"]))
-    if r["upi"]:
+    if r["upi"] and (r["due"] > 0 or r["prev_due"] > 0 or not r["has_total"]):
         out.append(rule)
         text(f"Pay via UPI: {r['upi']}" + (f" ({r['upi_payee']})" if r["upi_payee"] else ""))
     if r["terms"] and terms:
@@ -273,5 +316,7 @@ def payload(order, cust, tenant, settings: dict, prev_due: float, prev_bills: in
     # WhatsApp wale text mein web bill ka link (dekho + GPay/PhonePe se pay);
     # printer wale kagaz par nahi. Public domain pata na ho to link hi nahi.
     url = bill_link.url(order, settings)
-    text = render(r, terms=False) + (f"\n\n🧾 View bill & pay online:\n{url}" if url else "")
+    settled = r["has_total"] and r["due"] <= 0 and r["prev_due"] <= 0
+    link_line = "🧾 View your bill online:" if settled else "🧾 View bill & pay online:"
+    text = render(r, terms=False) + (f"\n\n{link_line}\n{url}" if url else "")
     return {"text": text, "print_text": render(r, width=PAPER_CHARS[mm]), "paper_mm": mm, "bill_url": url}

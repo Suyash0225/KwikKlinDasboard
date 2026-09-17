@@ -77,6 +77,14 @@ body { font:16px/1.55 var(--font); background:var(--bg); color:var(--ink); -webk
 .items { list-style:none; }
 .items li { display:flex; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px dashed var(--line); }
 .items li:last-child { border-bottom:0; }
+/* partial delivery: har kapde par gaya / baaki ka tag */
+.dl { display:inline-block; margin-top:5px; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:700; }
+.dl.ok { background:#dcfce7; color:var(--ok); }
+.dl.part { background:#fef3c7; color:var(--warn); }
+.dl.wait { background:var(--bg); color:var(--ink-3); }
+.still { list-style:none; margin:8px 0 0; padding:0; }
+.still li { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px dashed var(--line); font-size:14px; }
+.still li:last-child { border-bottom:0; }
 .items .name { font-weight:700; }
 .items small { display:block; color:var(--ink-3); font-size:13px; font-weight:500; }
 .items .amt { font-weight:700; white-space:nowrap; font-variant-numeric:tabular-nums; }

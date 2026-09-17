@@ -79,6 +79,25 @@ async def test_bill_page_shows_bill_and_upi_apps_with_live_due(client, order_wit
     assert "Paid in full" in html and "Pay with Google Pay" not in html
 
 
+async def test_bill_page_shows_partial_delivery(client, order_with_upi) -> None:
+    """3 shirt + 1 saree; 2 shirt de diye -> page par 'Partly delivered',
+    har line par gaya/baaki, aur 'Still with us' ki list."""
+    from app.models import OrderStatus
+    from app.services import delivery
+
+    home, o = order_with_upi
+    tok = bill_link.make(home, o.id)
+    async with tenant_context.as_tenant(home):
+        async with async_session_factory() as db:
+            order = await db.get(Order, o.id)
+            await order_service.update_status(db, order, OrderStatus.READY, changed_by="test", notify=False)
+            await delivery.deliver(db, order, [{"line": 0, "qty": 2}], by="test")
+    html = (await client.get(f"/b/{tok}")).text
+    assert "Partly delivered" in html and "2 of 4 clothes delivered" in html
+    assert "2 of 3 delivered · 1 pending" in html and "with us</span>" in html
+    assert "Still with us" in html and "2 more coming soon" in html
+
+
 async def test_bad_or_foreign_token_is_404(client, order_with_upi) -> None:
     home, o = order_with_upi
     assert (await client.get("/b/nonsense")).status_code == 404

@@ -1914,8 +1914,12 @@ async def today_summary(
     return out
 
 
-async def _route_query(db: AsyncSession, p: StaffPrincipal):
+async def _route_query(db: AsyncSession, p: StaffPrincipal, tab: str = "todo"):
     """Is aadmi ka kaam kaunsa hai — ek hi jagah.
+
+    tab="done": jo nipat gaya (washer: Ready/nikla/diya; delivery: diya),
+    pichhle 7 din ka — Ready dabate hi order gayab ho jaata tha aur aadmi
+    ke paas apne kaam ka koi record nahi bachta tha.
 
     Ye pehle `my_route` ke andar likha tha. Ab do jagah chahiye (list aur
     late ki ginti), aur do copy rakhna sabse bura vikalp hai: banner "2
@@ -1932,7 +1936,19 @@ async def _route_query(db: AsyncSession, p: StaffPrincipal):
         )
     )
     col = Order.assigned_delivery_id if is_delivery else Order.assigned_washer_id
-    q = select(Order).where(Order.status.in_(stages))
+    if tab == "done":
+        from datetime import timedelta
+
+        stages = (
+            (OrderStatus.DELIVERED,) if is_delivery
+            else (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY, OrderStatus.DELIVERED)
+        )
+        q = select(Order).where(
+            Order.status.in_(stages),
+            Order.updated_at >= datetime.now(timezone.utc) - timedelta(days=7),
+        )
+    else:
+        q = select(Order).where(Order.status.in_(stages))
     if not p.is_manager:
         # "Mera kaam" ka matlab sirf explicitly assigned nahi hai.
         #
@@ -1956,6 +1972,7 @@ async def _route_query(db: AsyncSession, p: StaffPrincipal):
 async def my_route(
     limit: int = 40,
     offset: int = 0,
+    tab: str = Query(default="todo", pattern="^(todo|done)$"),
     p: StaffPrincipal = Depends(current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -1965,8 +1982,8 @@ async def my_route(
     ki kataar. Sabse pehle urgent, phir jiski delivery date sabse paas
     hai — taaki koi order neeche daba na rah jaye.
     """
-    base, is_delivery = await _route_query(db, p)
-    q = base.order_by(
+    base, is_delivery = await _route_query(db, p, tab)
+    q = base.order_by(Order.updated_at.desc()) if tab == "done" else base.order_by(
         Order.priority.desc(),
         Order.expected_delivery.asc().nullslast(),
         Order.created_at,
@@ -1995,8 +2012,8 @@ async def my_route(
     for o in rows:
         cust = customers.get(o.customer_id)
         kind = (
-            "Pickup"
-            if o.status is OrderStatus.PICKUP_ASSIGNED
+            "Done" if tab == "done"
+            else "Pickup" if o.status is OrderStatus.PICKUP_ASSIGNED
             else ("Delivery" if is_delivery else "Dhulai")
         )
         stops.append(
@@ -2015,6 +2032,7 @@ async def my_route(
                 "delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
                 # kitne kapde, kitne diye — thodi delivery ho chuki ho to row par "4 pending"
                 "clothes": delivery.counts(o),
+                **({"done_at": o.updated_at.isoformat()} if tab == "done" and o.updated_at else {}),
             }
         )
     return {

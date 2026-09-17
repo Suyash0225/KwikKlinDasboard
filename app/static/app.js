@@ -713,10 +713,18 @@ const MSG_KINDS = [
   ["service_thanks", "🙏", "Thank you for the service"],
   ["review_request", "⭐", "Please review us on Google"],
 ];
-function messageMenu(num) {
+async function messageMenu(num) {
+  // Chukta bill par "Payment reminder" dikhana galat hai — manager ne abhi
+  // paisa liya aur menu phir se paisa maangne ko keh raha tha. Baaki ho tabhi.
+  let due = 1;
+  try {
+    const o = (await api(`/orders/${encodeURIComponent(num)}`)).order;
+    due = Number(o.total_amount || 0) - Number(o.amount_paid || 0);
+  } catch (e) { due = 1; /* pata na chale to sab options */ }
+  const kinds = due > 0 ? MSG_KINDS : MSG_KINDS.filter(([k]) => k !== "payment_reminder");
   openModal(`<h3>💬 Message — ${esc(num)}</h3>
-    <p class="muted">You see the message before it goes.</p>
-    <div class="frm">${MSG_KINDS.map(([k, ico, label]) =>
+    <p class="muted">${due > 0 ? "You see the message before it goes." : "Bill is paid in full — thank them, or ask for a review."}</p>
+    <div class="frm">${kinds.map(([k, ico, label]) =>
       `<button class="btn ghost" onclick="composeMessage('${esc(num)}','${k}')">${ico} ${label}</button>`).join("")}
     </div>
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);

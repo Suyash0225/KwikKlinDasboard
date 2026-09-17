@@ -67,6 +67,14 @@ async def test_washer_cannot_reach_the_customer_but_can_move_the_wash(client, tw
     r = await client.post(f"/staff/api/orders/{num}/ready")
     assert r.status_code == 200 and r.json()["status"] == "READY", r.text
 
+    # Ready ke baad kaam list se hat jaata hai, par "Done" mein rehta hai (7 din)
+    todo = [s["number"] for s in (await client.get("/staff/api/route")).json()["stops"]]
+    done = (await client.get("/staff/api/route?tab=done")).json()["stops"]
+    assert num not in todo
+    mine = next(s for s in done if s["number"] == num)
+    assert mine["kind"] == "Done" and mine["status"] == "READY" and mine["done_at"]
+    assert "due" not in mine and "phone_masked" not in mine
+
     # Delivery wale ko number/pata pehle jaisa
     await _login(client, A_DEL_PHONE)
     assert (await client.get("/staff/api/me")).json()["can_contact"] is True

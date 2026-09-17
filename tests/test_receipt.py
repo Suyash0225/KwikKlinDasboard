@@ -53,6 +53,41 @@ def test_printer_text_fits_the_paper_and_is_plain_ascii() -> None:
     assert " 15.6 kg x Rs.60          Rs.936" in receipt.render(r, width=32)
 
 
+def test_partial_delivery_bill_says_what_went_and_what_stayed() -> None:
+    """Aadhe kapde diye to bill mein saaf ho: kitne gaye, kitne dukaan par."""
+    o = _order(
+        items=[{"type": "Shirt", "qty": 3, "rate": 40, "amount": 120, "unit": "pc", "delivered": 2},
+               {"type": "Kurta", "qty": 1, "rate": 60, "amount": 60, "unit": "pc"}],
+        total_amount=180, discount_amount=0, amount_paid=0,
+    )
+    r = _r(o)
+    assert r["partial"] and r["clothes"] == {"total": 4, "delivered": 2, "pending": 2}
+    assert r["still"] == [("Shirt", 1), ("Kurta", 1)]
+    t = receipt.render(r, terms=False)
+    assert "Delivered: 2 of 4 clothes" in t
+    assert "(2 of 3 delivered, 1 pending)" in t and "(still with us)" in t
+    assert "Still with us (2):" in t and "Kurta: 1" in t
+    p = receipt.render(r, width=32)
+    assert "Still with us (2):" in p and max(len(ln) for ln in p.splitlines()) <= 32
+    # kuch diya hi nahi, ya sab de diya — section hai hi nahi
+    assert "Still with us" not in receipt.render(_r())
+    for it in o.items:
+        it["delivered"] = it["qty"]
+    assert "Still with us" not in receipt.render(_r(o)) and not _r(o)["partial"]
+
+
+def test_paid_bill_does_not_ask_for_money_again() -> None:
+    """Paisa aa gaya to bill "Paid in full" bole — na Due ₹0, na UPI ID."""
+    o = _order(amount_paid=1036)
+    r = _r(o, upi_vpa="shop@upi")
+    t = receipt.render(r, terms=False)
+    assert "Paid in full" in t and "Pay via UPI" not in t and "Due: ₹0" not in t
+    assert "Rs.0" not in receipt.render(r, width=32) and "PAID IN FULL" in receipt.render(r, width=32)
+    # baaki ho to UPI aur due pehle jaisa
+    t2 = receipt.render(_r(upi_vpa="shop@upi"), terms=False)
+    assert "Due: ₹836" in t2 and "Pay via UPI: shop@upi" in t2
+
+
 def test_terms_are_owner_editable_and_kg_bills_get_the_count_rule() -> None:
     t = receipt.render(_r())
     assert "Terms & conditions:" in t and "10x the service charge" in t

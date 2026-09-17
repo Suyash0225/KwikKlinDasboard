@@ -573,14 +573,34 @@ async def bill_page(token: str):
     shop_meta = "".join(f"<p>{e(x)}</p>" for x in meta)
 
     items = []
+    partial = bool(r.get("partial"))
     for it in r["items"]:
         unit = " kg" if it["kg"] else ""
         detail = f"{it['qty']}{unit}" + (f" × {money(it['rate'])}" if it["rate"] is not None else "")
         pieces = ", ".join(f"{n} {q}" for n, q in it["pieces"])
+        dl = ""
+        if partial and it.get("count"):
+            if it["pending"] == 0:
+                dl = "<span class='dl ok'>✓ delivered</span>"
+            elif it["delivered"] == 0:
+                dl = "<span class='dl wait'>with us</span>"
+            else:
+                dl = f"<span class='dl part'>{it['delivered']} of {it['count']} delivered · {it['pending']} pending</span>"
         items.append(
             f"<li><span><span class='name'>{e(it['title'])}</span><small>{e(detail)}"
-            f"{' · ' + e(pieces) if pieces else ''}</small></span>"
+            f"{' · ' + e(pieces) if pieces else ''}</small>{dl}</span>"
             f"<span class='amt'>{money(it['amount']) if it['amount'] is not None else ''}</span></li>"
+        )
+    clothes = r.get("clothes") or {}
+    delivery_card = ""
+    if partial:
+        still = "".join(f"<li><span>{e(n)}</span><b>× {k}</b></li>" for n, k in r["still"])
+        delivery_card = (
+            "<section class='card'><h2>Delivery</h2>"
+            f"<div class='row'><span class='label'>Delivered</span><b class='status ok'>{clothes['delivered']} of {clothes['total']} clothes</b></div>"
+            f"<div class='row'><span class='label'>Still with us</span><b class='status wait'>{clothes['pending']}</b></div>"
+            f"<ul class='still'>{still}</ul>"
+            "<p class='note'>We'll deliver the rest as soon as it's ready.</p></section>"
         )
     if r["urgent_charge"]:
         items.append(f"<li><span class='name'>Urgent charge</span><span class='amt'>{money(r['urgent_charge'])}</span></li>")
@@ -654,6 +674,10 @@ async def bill_page(token: str):
     elif st == "DELIVERED":
         mood, emoji, title = "happy", "😊", "Delivered!"
         sub = "Hope the clothes came back just the way you like them."
+    elif partial:
+        mood, emoji, title = "happy", "🧺", "Partly delivered"
+        sub = (f"{clothes['delivered']} of {clothes['total']} clothes delivered · {clothes['pending']} still with us"
+               + (f" · {money(float(due))} due" if due > 0 else ""))
     elif st in ("READY", "OUT_FOR_DELIVERY"):
         mood, emoji, title = ("due" if due > 0 else "happy"), "🧺", ("Your clothes are ready" if st == "READY" else "On the way to you")
         sub = f"Balance of {money(float(due))} — pay now or at delivery." if due > 0 else "Fresh, folded and coming home."
@@ -668,6 +692,8 @@ async def bill_page(token: str):
     badge = ""
     if on_time:
         badge = "<span class='hero-badge'>⏱️ Delivered on time</span>"
+    elif partial and st != "DELIVERED":
+        badge = f"<span class='hero-badge'>🧺 {clothes['pending']} more coming soon</span>"
     elif order.priority == "urgent" and st not in ("DELIVERED", "CANCELLED"):
         badge = "<span class='hero-badge'>⚡ Urgent service</span>"
     art = ""
@@ -698,7 +724,7 @@ async def bill_page(token: str):
         "{{DELIVERY_ROW}}": (f"<div class='row'><span class='label'>Delivery</span><span>{e(r['delivery'])}</span></div>"
                              if r["delivery"] else ""),
         "{{STATUS_CLASS}}": status_cls, "{{STATUS}}": e(status_word),
-        "{{PAY_BLOCK}}": pay_block, "{{ITEMS}}": "".join(items), "{{TOTALS}}": totals,
+        "{{PAY_BLOCK}}": pay_block + delivery_card, "{{ITEMS}}": "".join(items), "{{TOTALS}}": totals,
         "{{TERMS}}": terms, "{{CONTACT_BTN}}": contact_btn,
         "{{MOOD}}": mood, "{{THEME}}": theme, "{{HERO_ART}}": art, "{{HERO_EMOJI}}": emoji,
         "{{HERO_TITLE}}": e(title), "{{HERO_SUB}}": e(sub), "{{HERO_BADGE}}": badge, "{{PROGRESS}}": progress,

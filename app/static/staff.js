@@ -83,6 +83,7 @@ const ACTIONS = {
   jobdone: (c) => { closeModal(); askDone(c); },
   decide: (c) => { closeModal(); decideCancel(c); },
   photo: (n) => { closeModal(); askPhoto(n); },
+  message: (n) => { closeModal(); const w = WORK.find((x) => x.number === n); messageMenu(n, Number((w && w.due) || 0)); },
   cancel: (c) => { closeModal(); askCancel(c); },
   more: (fn) => (fn === "loadWork" ? loadWork({ more: true }) : loadBills({ more: true })),
 };
@@ -334,7 +335,9 @@ const KIND = {
   Pickup:   { chip: "pickup",  spine: "pickup",  label: "Collect" },
   Delivery: { chip: "deliver", spine: "deliver", label: "Deliver" },
   Dhulai:   { chip: "wash",    spine: "wash",    label: "Washing" },
+  Done:     { chip: "done",    spine: "",        label: "Done" },
 };
+const inDone = () => FILTER === "done";
 
 function workChips() {
   const n = (f) => WORK.filter((w) => f === "all" || w.chip === f).length;
@@ -345,9 +348,12 @@ function workChips() {
   if (kinds.includes("deliver")) out.push(["deliver", "Deliver"]);
   if (kinds.includes("task")) out.push(["task", "Work"]);
   if (WORK.some((w) => w.late)) out.push(["late", "Late"]);
+  // "Done" hamesha: nipta hua kaam (7 din) yahan milta hai, gayab nahi hota
+  out.push(["done", "Done"]);
   return out.map(([v, label]) => {
-    const c = v === "late" ? WORK.filter((w) => w.late).length : n(v);
-    return `<button data-chip="${v}" class="${FILTER === v ? "on" : ""}">${label}<span class="n">${c}</span></button>`;
+    const c = inDone() ? (v === "done" ? WORK.length : null)
+      : v === "done" ? null : v === "late" ? WORK.filter((w) => w.late).length : n(v);
+    return `<button data-chip="${v}" class="${FILTER === v ? "on" : ""}">${label}${c === null ? "" : `<span class="n">${c}</span>`}</button>`;
   }).join("");
 }
 
@@ -359,8 +365,9 @@ async function loadWork(opts = {}) {
   let route = { stops: [], total: 0 }, tasks = { tasks: [], total: 0 };
   try {
     [route, tasks] = await Promise.all([
-      api(`/route?limit=${PAGE}&offset=${skip}`).catch(() => ({ stops: [], total: 0 })),
-      api(`/tasks?tab=mine&limit=${PAGE}&offset=${skip}`).catch(() => ({ tasks: [], total: 0 })),
+      api(`/route?tab=${inDone() ? "done" : "todo"}&limit=${PAGE}&offset=${skip}`).catch(() => ({ stops: [], total: 0 })),
+      inDone() ? { tasks: [], total: 0 }
+        : api(`/tasks?tab=mine&limit=${PAGE}&offset=${skip}`).catch(() => ({ tasks: [], total: 0 })),
     ]);
   } catch (e) {
     if (mine !== WORK_SEQ || opts.quiet) return;
@@ -379,7 +386,9 @@ async function loadWork(opts = {}) {
   const byOrder = new Map();
   for (const s of route.stops) {
     const k = KIND[s.kind] || { chip: "task", spine: "", label: s.kind };
-    const w = whenParts(s.delivery);
+    const w = s.done_at
+      ? { top: new Date(s.done_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" }), sub: STATUS_WORD[s.status] || "done", late: false }
+      : whenParts(s.delivery);
     const item = {
       type: "stop", chip: k.chip, spine: w.late ? "late" : k.spine, kindLabel: k.label,
       number: s.number, who: s.customer, items: s.items, due: s.due,
@@ -420,7 +429,7 @@ async function loadWork(opts = {}) {
   // ("60 of 539" jabki asli rows 300 hain). Yahan sirf itna jaanna hai ki
   // aur bacha hai ya nahi: dono mein se koi bhi poora nahi aaya to haan.
   MORE_LEFT = (route.stops.length >= PAGE) || (tasks.tasks.length >= PAGE);
-  WORK.sort((a, b) => (b.late - a.late) || (b.urgent - a.urgent));
+  if (!inDone()) WORK.sort((a, b) => (b.late - a.late) || (b.urgent - a.urgent));   // done: naya sabse upar
   $("chips").innerHTML = workChips();
   paintLate();
   renderWork();
@@ -439,8 +448,11 @@ async function loadWork(opts = {}) {
 $("chips").addEventListener("click", (e) => {
   const b = e.target.closest("[data-chip]");
   if (!b) return;
+  const wasDone = inDone();
   FILTER = b.dataset.chip;
   if (NAV === "bills") { loadBills(); return; }
+  // Done alag list hai (server se), baaki chips usi list ko chhaantte hain
+  if (inDone() || wasDone) { loadWork(); return; }
   $("chips").innerHTML = workChips();
   paintLate();
   renderWork();
@@ -448,9 +460,11 @@ $("chips").addEventListener("click", (e) => {
 
 function renderWork() {
   const rows = WORK.filter((w) =>
-    FILTER === "all" ? true : FILTER === "late" ? w.late : w.chip === FILTER);
+    FILTER === "all" || inDone() ? true : FILTER === "late" ? w.late : w.chip === FILTER);
   if (!rows.length) {
-    $("list").innerHTML = WORK.length
+    $("list").innerHTML = inDone()
+      ? `<div class="empty"><b>Nothing finished yet</b>Work you complete stays here for 7 days.</div>`
+      : WORK.length
       ? `<div class="empty"><b>Nothing in this filter</b>Try another one.</div>`
       : `<div class="empty"><b>All clear 👏</b>New work shows up here.</div>`;
     return;
@@ -458,7 +472,7 @@ function renderWork() {
   // "Show more" sirf tab jab chhaant lagi hi na ho — chip ke andar aadhi
   // list dikhana aur "aur hai" kehna jhooth hai.
   $("list").innerHTML = `<div class="reg">${rows.map(workRow).join("")}</div>`
-    + (FILTER === "all" && MORE_LEFT
+    + ((FILTER === "all" || inDone()) && MORE_LEFT
         ? `<div class="morebar"><span>${WORK.length} shown</span>
              <button class="btn ghost sm" data-act="more" data-arg="loadWork">Show more</button></div>`
         : "");
@@ -631,12 +645,14 @@ async function orderDetailModal(number) {
     </div>
     <div class="btnrow">
       ${ME.can_money ? `<button class="btn ghost" data-od="share">🧾 Send bill</button>` : ""}
+      ${ME.can_money ? `<button class="btn ghost" data-od="message">💬 Message</button>` : ""}
       <button class="btn ghost" data-act="close">Close</button>
     </div>`);
   $("modal-body").querySelectorAll("[data-od]").forEach((b) => {
     b.onclick = () => {
       closeModal();
       if (b.dataset.od === "share") return shareBill(number);
+      if (b.dataset.od === "message") return messageMenu(number, Number(o.due || 0));
       return runAction(b.dataset.od, number, b.dataset);
     };
   });
@@ -764,6 +780,7 @@ function moreMenu(number) {
       ${t ? `<button class="btn ghost" data-act="jobdone" data-arg="${esc(t.code)}">✅ Mark job ${esc(t.code)} done</button>` : ""}
       ${t && ME.can_ask ? `<button class="btn ghost" data-act="thread" data-arg="${esc(t.code)}">❓ Ask the owner</button>` : ""}
       ${ME.can_money ? `<button class="btn ghost" data-act="share" data-arg="${esc(number)}">🧾 Send bill on WhatsApp</button>` : ""}
+      ${ME.can_money && w.hasOrder ? `<button class="btn ghost" data-act="message" data-arg="${esc(number)}">💬 Send a message</button>` : ""}
       <button class="btn ghost" data-act="photo" data-arg="${esc(number)}">📷 Add a photo</button>
       ${t && ME.features.includes("cancel_approval") && !t.cancel_requested
         ? `<button class="btn ghost" data-act="cancel" data-arg="${esc(t.code)}">🛑 Request cancel</button>` : ""}
