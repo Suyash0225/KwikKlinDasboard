@@ -346,6 +346,11 @@ footer h2 { color:#fff; font-size:14px; letter-spacing:.02em; margin:0 0 14px; f
 footer ul { list-style:none; display:grid; gap:10px; }
 footer a { text-decoration:none; }
 footer a:hover { color:#fff; }
+/* phone: footer links thumb-size (44px tap target), not 21px text lines */
+@media (max-width:700px) {
+  footer ul { gap:2px; }
+  footer ul a { display:block; padding:11px 0; }
+}
 .nap { font-style:normal; margin-top:16px; max-width:320px; }
 .copy { display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; border-top:1px solid #1f2937; margin-top:48px; padding-top:22px; font-size:13px; }
 

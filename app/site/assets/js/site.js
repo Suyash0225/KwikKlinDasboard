@@ -21,9 +21,17 @@ document.querySelectorAll("[data-wa]").forEach((a) => {
 });
 document.getElementById("yr").textContent = new Date().getFullYear();
 
-/* mobile menu closes after a tap */
+/* mobile menu: closes after a tap on a link, a tap anywhere outside,
+   Escape, or scrolling — not only on the ✕ */
 const menu = document.querySelector(".menu");
-menu.querySelectorAll("a").forEach((a) => a.addEventListener("click", () => menu.removeAttribute("open")));
+if (menu) {
+  const closeMenu = () => menu.removeAttribute("open");
+  menu.querySelectorAll("a").forEach((a) => a.addEventListener("click", closeMenu));
+  document.addEventListener("pointerdown", (e) => { if (menu.hasAttribute("open") && !menu.contains(e.target)) closeMenu(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
+  window.addEventListener("scroll", () => { if (menu.hasAttribute("open")) closeMenu(); }, { passive: true });
+  window.addEventListener("resize", closeMenu);
+}
 
 /* ---------- rate tabs (content is in the HTML for SEO) ---------- */
 const tabs = [...document.querySelectorAll('[role="tab"]')];
