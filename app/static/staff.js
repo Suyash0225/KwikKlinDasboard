@@ -94,10 +94,35 @@ document.addEventListener("click", (e) => {
   if (fn) fn(el.dataset.arg);
 });
 
-function openModal(html) { $("modal-body").innerHTML = html; $("modal-ov").classList.add("open"); }
-function closeModal() { $("modal-ov").classList.remove("open"); }
+/* ─── Android back button ────────────────────────────────────────────
+ * Pehle back dabate hi PWA band ho jaata tha (history mein ek hi entry).
+ * Ab: har screen (go) aur har popup (openModal) history mein ek entry
+ * banata hai — back se popup band, phir pichhli screen, aur sabse pehli
+ * screen par "Exit?" Yes/No. */
+const modalOpen = () => $("modal-ov").classList.contains("open");
+function openModal(html) {
+  if (!modalOpen() && !(history.state && history.state.kk === "modal")) history.pushState({ kk: "modal" }, "");
+  $("modal-body").innerHTML = html; $("modal-ov").classList.add("open");
+}
+function closeModal() { $("modal-ov").classList.remove("open"); }   // history entry rehti hai; agla popup use reuse karta hai, back use kha jaata hai
 $("modal-ov").addEventListener("click", (e) => { if (e.target.id === "modal-ov") closeModal(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+let EXITING = false;
+function askExit() {
+  history.pushState({ kk: "nav", nav: NAV }, "");        // root par ruko, app band na ho
+  openModal(`<h3>Exit the app?</h3>
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">No</button>
+      <button class="btn go" id="m-exit">Yes, exit</button>
+    </div>`);
+  $("m-exit").onclick = () => { EXITING = true; history.go(-3); setTimeout(() => { try { window.close(); } catch (e) { /* browser mana kare to kuch nahi */ } }, 400); };
+}
+window.addEventListener("popstate", () => {
+  const st = history.state || {};
+  if (modalOpen()) { closeModal(); if (st.kk !== "root") return; }
+  if (st.kk === "root") { if (EXITING) { history.back(); return; } askExit(); return; }
+  if (st.kk === "nav" && st.nav && st.nav !== NAV) go(st.nav, false);
+});
 
 /* "2026-09-14" ko phone par padhna padta hai — "Aaj"/"Kal" ek nazar mein
    samajh aata hai. Beeti hui date laal, taaki late kaam chhupe nahi. */
@@ -167,6 +192,8 @@ async function start() {
   }
   $("boot").hidden = true;
   $("login").hidden = true; $("app").hidden = false;
+  // History ki jad: root -> pehli screen. Back yahan tak aaye to Exit poochho.
+  if (!(history.state && history.state.kk)) { history.replaceState({ kk: "root" }, ""); history.pushState({ kk: "nav", nav: "work" }, ""); }
   $("who").textContent = ME.name;
   $("whoRole").textContent = `${roleLabel(ME.role)} · ${ME.shop || ""}`;
   $("pwbanner").hidden = !ME.must_change_password;
@@ -204,7 +231,8 @@ function renderNav() {
   $("nav").querySelectorAll("[data-nav]").forEach((b) => { b.onclick = () => go(b.dataset.nav); });
 }
 
-function go(nav) {
+function go(nav, push = true) {
+  if (push && NAV !== nav) history.pushState({ kk: "nav", nav }, "");
   NAV = nav;
   FILTER = nav === "bills" ? "all" : "all";
   $("q").value = "";

@@ -46,7 +46,7 @@ const qs = new URLSearchParams(location.search);
 if (qs.get("key")) {
   KEY = qs.get("key");
   localStorage.setItem("kk_admin_key", KEY);
-  history.replaceState({}, "", location.pathname + location.hash);
+  history.replaceState({ kk: "root" }, "", location.pathname + location.hash);
 }
 
 async function api(path, opts = {}) {
@@ -112,13 +112,33 @@ function toast(msg, err = false, ms = 0) {
 const skeleton = (n = 4) => Array.from({ length: n }, () => '<div class="skel skelrow"></div>').join("");
 const emptyBox = (msg, ico = "🧺") => `<div class="empty"><div class="ico">${ico}</div>${esc(msg)}</div>`;
 const errBox = (msg, retry) => `<div class="errbox">⚠️ ${esc(msg)}<br><br><button class="btn ghost" onclick="${retry}()">${T.tryAgain}</button></div>`;
+/* Android/phone back: popup pehle band ho, phir section badle (hash), aur
+   pehle section par "Exit?" poochhe — seedha app band na ho. */
+const modalOpen = () => $("modal-ov") && $("modal-ov").classList.contains("open");
 function openModal(html) {
+  if (!modalOpen() && !(history.state && history.state.kk === "modal")) history.pushState({ kk: "modal" }, "", location.href);
   $("modal-body").innerHTML = html;
   $("modal-ov").classList.add("open");
   const first = $("modal-body").querySelector("input, select, textarea, button");
   if (first) first.focus();
 }
 function closeModal() { $("modal-ov").classList.remove("open"); }
+let EXITING = false;
+function askExit() {
+  history.pushState({ kk: "nav" }, "", location.href);
+  openModal(`<h3>Exit the app?</h3>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">No</button>
+    <button class="btn" onclick="EXITING=true;history.go(-3);setTimeout(()=>{try{window.close()}catch(e){}},400)">Yes, exit</button></div>`);
+}
+window.addEventListener("popstate", () => {
+  const st = history.state || {};
+  if (modalOpen()) { closeModal(); if (st.kk !== "root") return; }
+  if (st.kk === "root") { if (EXITING) { history.back(); return; } askExit(); }
+});
+if (!(history.state && history.state.kk)) {
+  history.replaceState({ kk: "root" }, "", location.href);
+  history.pushState({ kk: "nav" }, "", location.href);
+}
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && $("modal-ov") && $("modal-ov").classList.contains("open")) closeModal();
 });
