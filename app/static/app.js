@@ -724,7 +724,7 @@ function billMenu(num) {
    phir dukaan ke number se ya apne WhatsApp se. */
 const MSG_KINDS = [
   ["payment_reminder", "💰", "Payment reminder"],
-  ["delivery_update", "🚚", "Delivery update — delivered / pending, with bill link"],
+  ["delivery_update", "🚚", "Delivery update (with bill link)"],
   ["payment_thanks", "💚", "Payment received — thank you"],
   ["service_thanks", "🙏", "Thank you for the service"],
   ["review_request", "⭐", "Please review us on Google"],
@@ -2163,10 +2163,7 @@ function renderCustomers() {
       <td class="muted">${c.last_message_at ? fmtWhen(c.last_message_at) : "—"}</td>
       <td><div class="act">
         ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
-        <button class="btn sm ghost" title="Send a message" onclick="customerMessageMenu('${c.phone}')">✉️ Message</button>
-        <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">💬</button>
-        <button class="btn sm ghost" onclick="editCustomerModal('${c.phone}')">Edit</button>
-        <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button>
+        <button class="btn sm ghost" title="Actions" aria-label="Actions" onclick="customerMenu('${c.phone}')">⋯</button>
       </div></td></tr>`).join("")}
     </tbody></table>
     <div class="rowcards">${rows.map((c) => `
@@ -2174,10 +2171,22 @@ function renderCustomers() {
       <div class="kv"><span>${c.phone}</span><span>${c.total_orders} orders</span></div>
       <div class="kv"><span>Business ${money(c.business)}</span><span>Paid ${money(c.paid)}</span></div>
       <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
-      <button class="btn sm ghost" onclick="customerMessageMenu('${c.phone}')">✉️ Message</button>
-      <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">Chat</button>
-      <button class="btn sm ghost" onclick="editCustomerModal('${c.phone}')">Edit</button>
-      <button class="btn sm danger" onclick="deleteCustomerModal('${c.phone}')">Delete</button></div></div>`).join("")}</div>${moreBtn}`;
+      <button class="btn sm ghost" onclick="customerMenu('${c.phone}')">⋯ Actions</button></div></div>`).join("")}</div>${moreBtn}`;
+}
+
+/* Ek ⋯ se saare kaam — har jagah wahi pattern (dashboard, bill history, staff panel) */
+function customerMenu(phone) {
+  const c = (typeof visibleCustomers === "function" ? visibleCustomers() : []).find((x) => x.phone === phone) || {};
+  openModal(`<h3>${esc(displayName(c.name, phone))}</h3>
+    <p class="muted">${esc(phone)}${Number(c.outstanding) > 0 ? ` · <b style="color:var(--danger)">${money(c.outstanding)} due</b>` : ""}</p>
+    <div class="frm">
+      ${Number(c.outstanding) > 0 ? `<button class="btn" onclick="closeModal();sendReminder('${phone}')">💰 Payment reminder (all bills)</button>` : ""}
+      <button class="btn ghost" onclick="closeModal();customerMessageMenu('${phone}')">💬 Send a message</button>
+      <button class="btn ghost" onclick="closeModal();jumpChat('${phone}')">📨 Open chat</button>
+      <button class="btn ghost" onclick="closeModal();editCustomerModal('${phone}')">✏️ Edit customer</button>
+      <button class="btn ghost danger-ic" onclick="closeModal();deleteCustomerModal('${phone}')">🗑 Delete customer</button>
+    </div>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
 }
 
 /* ---- customer edit / delete ---- */

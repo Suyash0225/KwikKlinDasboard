@@ -120,7 +120,7 @@ input:disabled { background: var(--rule-2); color: var(--ink-3); }
 .btn.ghost { background: var(--sheet); color: var(--ink); border: 1.5px solid var(--rule); }
 .btn.danger { background: var(--late); }
 .btn.money { background: var(--deliver); }
-.btn.wide { width: 100%; margin-top: 16px; }
+.btn.wide { width: 100%; margin-top: 16px; white-space: normal; height: auto; line-height: 1.25; }
 .btn.sm { min-height: 38px; padding: 7px 12px; font-size: 13.5px; border-radius: 8px; }
 .btn:disabled { opacity: .5; }
 .btn:active { transform: translateY(1px); }

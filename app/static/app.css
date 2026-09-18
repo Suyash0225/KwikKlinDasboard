@@ -344,6 +344,8 @@ a { color: var(--brand-600); text-decoration: none; }
 .rowcard { background: var(--n0); border: 1px solid var(--n200); border-radius: 12px; padding: 13px; box-shadow: var(--shadow); }
 .card.listcard .rowcards { padding: 12px; }
 .rowcard.overdue { border-left: 3px solid var(--danger); }
+/* Modal ki button-list: label lamba ho to lipte, box se bahar na nikle */
+.modal .frm .btn, .modal .steplist .btn { white-space: normal; text-align: center; line-height: 1.25; height: auto; }
 /* 🎁 reward chip on New bill */
 .rwchip { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:8px; padding:8px 10px; border-radius:10px; background:#fff7ed; border:1px solid #fed7aa; font-size:13px; }
 .rwchip.on { background:var(--ok-50); border-color:var(--ok); }
