@@ -86,7 +86,7 @@ async def control_google_start():
     state = google_auth.new_state()
     response = Response(status_code=302)
     response.headers["Location"] = google_auth.start_url(
-        state, base=_control_google_base()
+        state, base=_control_google_base(), callback_path="/control/auth/google/callback"
     )
     response.set_cookie(
         google_auth.STATE_COOKIE,
@@ -114,7 +114,7 @@ async def control_google_callback(
         raise HTTPException(status_code=400, detail="Google authorization code missing")
 
     try:
-        ident = await google_auth.exchange_code(code, base=_control_google_base())
+        ident = await google_auth.exchange_code(code, base=_control_google_base(), callback_path="/control/auth/google/callback")
     except google_auth.GoogleAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
