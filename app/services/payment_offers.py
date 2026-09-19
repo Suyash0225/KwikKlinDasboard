@@ -52,6 +52,17 @@ async def create_offer(
 
 async def open_offer(db: AsyncSession, offer: PaymentOffer, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
+    if offer.opened_at is None and offer.expires_at is not None:
+        return {
+            "active": False,
+            "expired": True,
+            "remaining_seconds": 0,
+            "original_amount": float(offer.original_amount),
+            "discount_amount": float(offer.discount_amount),
+            "offer_amount": float(offer.offer_amount),
+            "kind": offer.kind,
+            "expires_at": offer.expires_at.isoformat(),
+        }
     if offer.opened_at is None:
         offer.opened_at = now
         offer.expires_at = now + timedelta(seconds=offer.duration_seconds)
