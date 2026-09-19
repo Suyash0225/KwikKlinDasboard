@@ -717,6 +717,7 @@ function orderMenu(num) {
       ${o && !["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn ghost" onclick="closeModal();statusModal('${num}','${o.status}')">🔄 Change status</button>` : ""}
       <button class="btn ghost" onclick="closeModal();messageMenu('${num}')">💬 Send a message</button>
       <button class="btn ghost" onclick="closeModal();shareBillFromOrder('${num}')">📲 Share bill on WhatsApp</button>
+      ${o && Number(o.total_amount || 0) - Number(o.amount_paid || 0) > 30 ? `<button class="btn ghost" onclick="closeModal();sendAdvanceOffer('${num}')">⚡ Pay in advance & save ₹30</button>` : ""}
       ${o && !["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn ghost" onclick="closeModal();dateModal('${num}')">📅 Delivery date</button>` : ""}
       <button class="btn ghost" onclick="closeModal();orderDetail('${num}')">👁 Details</button>
       ${o ? `<button class="btn ghost" onclick="closeModal();jumpChat('${o.phone}')">💬 Open chat</button>` : ""}
@@ -732,6 +733,7 @@ function billMenu(num) {
       ${o && !["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn ghost" onclick="closeModal();statusModal('${num}','${o.status}')">🔄 Change status</button>` : ""}
       <button class="btn ghost" onclick="closeModal();printReceiptFromOrder('${num}')">🖨 Print receipt</button>
       <button class="btn ghost" onclick="closeModal();shareBillFromOrder('${num}')">📲 Share on WhatsApp</button>
+      ${o && Number(o.total_amount || 0) - Number(o.amount_paid || 0) > 30 ? `<button class="btn ghost" onclick="closeModal();sendAdvanceOffer('${num}')">⚡ Pay in advance & save ₹30</button>` : ""}
       <button class="btn ghost" onclick="closeModal();messageMenu('${num}')">💬 Send a message</button>
       <button class="btn ghost" onclick="closeModal();editBillModal('${num}')">✏️ Edit bill</button>
       <button class="btn ghost danger-ic" onclick="closeModal();deleteBillModal('${num}')">🗑 Delete bill</button>
@@ -775,11 +777,14 @@ async function messageMenu(num) {
 }
 async function composeMessage(num, kind) {
   if (kind === "payment_reminder") {
-    // grahak ke saare baaki bil ek message mein, UPI link ke saath — purana rasta
-    let o;
-    try { o = (await api(`/orders/${encodeURIComponent(num)}`)).order; } catch (e) { toast(e.message, true); return; }
     closeModal();
-    return sendReminder(o.customer_phone);
+    try {
+      const r = await api(`/staff/api/orders/${encodeURIComponent(num)}/remind`, { method: "POST" });
+      if (r.sent) { toast("Payment reminder sent"); return; }
+      shareTextModal(r.phone, r.text, "Payment reminder",
+        "WhatsApp khulega — 2-minute offer link pehle se message mein hai.");
+    } catch (e) { toast(e.message, true); }
+    return;
   }
   let r;
   try { r = await api(`/orders/${encodeURIComponent(num)}/message?kind=${kind}`); }
@@ -796,6 +801,22 @@ async function composeMessage(num, kind) {
       <button class="btn ghost" onclick="copyShareText()">Copy</button>
       <button class="btn ghost" onclick="closeModal()">Close</button>
     </div>`);
+}
+async function sendAdvanceOffer(num) {
+  try {
+    const r = await api(`/staff/api/orders/${encodeURIComponent(num)}/payment-offer?kind=advance`, { method: "POST" });
+    const text =
+      `🧺 *KWIK KLIN*\\n\\n🧾 Bill #${num}\\nTotal Bill: *₹${Number(r.due).toLocaleString("en-IN")}*\\n\\n` +
+      `⚡ *PAY IN ADVANCE & SAVE ₹${Number(r.discount).toLocaleString("en-IN")}*\\n` +
+      `Pay Now: *₹${Number(r.offer_amount).toLocaleString("en-IN")}*\\n` +
+      `You Save: ₹${Number(r.discount).toLocaleString("en-IN")}\\n\\n` +
+      `⏱️ *Offer starts when you open the payment page*\\nValid for *2 minutes*\\n\\n` +
+      `👇 *Pay Now*\\n${r.link}\\n\\n` +
+      `After the offer expires, the regular amount of *₹${Number(r.due).toLocaleString("en-IN")}* will apply.\\n\\n` +
+      `Thank you for choosing *Kwik Klin* 🙏`;
+    shareTextModal(r.phone, text, "Advance payment offer",
+      "WhatsApp khulega — customer ke payment page par 2-minute countdown start hoga.");
+  } catch (e) { toast(e.message, true); }
 }
 let MSG_TARGET = "";
 async function sendComposed(btn) {
