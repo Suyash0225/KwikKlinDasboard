@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Customer, Order, PaymentOffer
 from app.services import bill_link, payment_offers
-from app.services.staff_auth import StaffPrincipal, require_biller, require_manager
+from app.services.staff_auth import StaffPrincipal
+from app.routers.staff_panel import require_biller
 
 router = APIRouter(tags=["payment-offers"])
 
