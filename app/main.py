@@ -293,8 +293,10 @@ from app.routers.account import router as account_router
 app.include_router(account_router)
 
 # Suyash ka apna panel: sab clients, plans, paisa (app/routers/control.py)
+from app.routers.control import auth_router as control_auth_router
 from app.routers.control import router as control_router
 
+app.include_router(control_auth_router)
 app.include_router(control_router)
 
 # Dukaan ke aadmi ka apna panel — owner ke dashboard se bilkul alag rasta,
