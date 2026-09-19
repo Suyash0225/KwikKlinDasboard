@@ -804,7 +804,7 @@ async function composeMessage(num, kind) {
 }
 async function sendAdvanceOffer(num) {
   try {
-    const r = await api(`/staff/api/orders/${encodeURIComponent(num)}/payment-offer?kind=advance`, { method: "POST" });
+    const r = await api(`/api/orders/${encodeURIComponent(num)}/payment-offer?kind=advance`, { method: "POST" });
     const text =
       `🧺 *KWIK KLIN*\n\n🧾 Bill #${num}\nTotal Bill: *₹${Number(r.due).toLocaleString("en-IN")}*\n\n` +
       `⚡ *PAY IN ADVANCE & SAVE ₹${Number(r.discount).toLocaleString("en-IN")}*\n` +
