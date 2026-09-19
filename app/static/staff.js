@@ -1156,10 +1156,10 @@ async function advanceOffer(number, btn) {
     const r = await api(`/orders/${encodeURIComponent(number)}/payment-offer?kind=advance`, { method: "POST" });
     const n = (v) => Number(v).toLocaleString("en-IN");
     const text =
-      `🧺 *KWIK KLIN*\\n\\n🧾 Bill #${number}\\nTotal Bill: *₹${n(r.due)}*\\n\\n` +
-      `⚡ *PAY IN ADVANCE & SAVE ₹${n(r.discount)}*\\nPay Now: *₹${n(r.offer_amount)}*\\nYou Save: ₹${n(r.discount)}\\n\\n` +
-      `⏱️ *Offer starts when you open the payment page*\\nValid for *2 minutes*\\n\\n👇 *Pay Now*\\n${r.link}\\n\\n` +
-      `After the offer expires, the regular amount of *₹${n(r.due)}* will apply.\\n\\nThank you for choosing *Kwik Klin* 🙏`;
+      `🧺 *KWIK KLIN*\n\n🧾 Bill #${number}\nTotal Bill: *₹${n(r.due)}*\n\n` +
+      `⚡ *PAY IN ADVANCE & SAVE ₹${n(r.discount)}*\nPay Now: *₹${n(r.offer_amount)}*\nYou Save: ₹${n(r.discount)}\n\n` +
+      `⏱️ *Offer starts when you open the payment page*\nValid for *2 minutes*\n\n👇 *Pay Now*\n${r.link}\n\n` +
+      `After the offer expires, the regular amount of *₹${n(r.due)}* will apply.\n\nThank you for choosing *Kwik Klin* 🙏`;
     SHARE_TEXT = text;
     openModal(`<h3>Advance payment offer</h3>
       <p class="said">To ${esc(r.name)}</p>
