@@ -35,7 +35,7 @@ async def open_payment_offer(
     offer: str = Query(min_length=10),
     db: AsyncSession = Depends(get_db),
 ):
-    parsed = bill_link.parse(bill)
+    parsed = await bill_link.resolve(bill)
     if parsed is None:
         raise HTTPException(status_code=404, detail="Bill not found")
     tid, oid = parsed
