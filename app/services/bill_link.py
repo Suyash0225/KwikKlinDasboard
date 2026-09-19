@@ -68,6 +68,31 @@ def parse(token: str, now: float | None = None) -> tuple[uuid.UUID, uuid.UUID] |
         return None
 
 
+async def resolve(token: str) -> tuple[uuid.UUID, uuid.UUID] | None:
+    """Resolve either a legacy signed token or the new short bill code."""
+    parsed = parse(token)
+    if parsed is not None:
+        return parsed
+    code = str(token or "").strip().upper()
+    if len(code) != 10:
+        return None
+    from sqlalchemy import select
+    from app.database import async_session_factory
+    from app.models import Order
+    from app.services import tenant_context
+
+    # Short-code lookup is intentionally exact and runs in trusted system
+    # context only to discover the tenant; the actual bill read is scoped.
+    async with tenant_context.as_tenant(None):
+        async with async_session_factory() as db:
+            row = (
+                await db.execute(
+                    select(Order.tenant_id, Order.id).where(Order.bill_code == code)
+                )
+            ).first()
+    return (row[0], row[1]) if row else None
+
+
 # ---- grahak ke SAARE baaki bill ek page par (/b/c/<token>) ----
 # Payment reminder mein pehle /pay/<amount> link jaata tha jo kholte hi UPI app
 # khol deta tha — grahak ko kapde, bill, rakam kuch dekhne ka mauka nahi.
