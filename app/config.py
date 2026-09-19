@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     CONTROL_GOOGLE_LEVEL: Literal["read", "write", "danger"] = "danger"
     # Exact public base used to build the Control-panel OAuth callback.
     # Production: https://kwikklin.online/control
-    CONTROL_GOOGLE_BASE_URL: str = "https://kwikklin.online/control"
+    CONTROL_GOOGLE_BASE_URL: str = ""
 
     # --- Website (/laundry) par live Google reviews ---
     # Google Cloud Console -> "Places API (New)" enable -> API key banao.
