@@ -10,6 +10,7 @@ rakhe gaye hain: client ka user chahe kuch bhi ho, yahan nahi ghus sakta.
 """
 
 from datetime import datetime, timedelta, timezone
+import hmac
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -39,6 +40,94 @@ log = structlog.get_logger()
 router = APIRouter(
     prefix="/control", tags=["control"], dependencies=[Depends(require_vendor_key)]
 )
+
+# Public OAuth entry/callback routes. The actual /control/api/* panel APIs
+# remain behind require_vendor_key; OAuth must be reachable before a session exists.
+auth_router = APIRouter(prefix="/control", tags=["control-auth"])
+
+
+def _control_google_emails() -> set[str]:
+    return {
+        e.strip().lower()
+        for e in settings.CONTROL_GOOGLE_ALLOWED_EMAILS.split(",")
+        if e.strip()
+    }
+
+
+def _control_google_base() -> str:
+    # OAuth redirect must be stable; do not derive it from an arbitrary Host header.
+    return settings.CONTROL_GOOGLE_BASE_URL.rstrip("/")
+
+
+def _set_vendor_cookie(response: Response, level: str, label: str) -> None:
+    from app.routers.orders import VENDOR_COOKIE, VENDOR_SESSION_HOURS, mint_vendor_token
+
+    response.set_cookie(
+        VENDOR_COOKIE,
+        mint_vendor_token(level, label, kid="env"),
+        max_age=VENDOR_SESSION_HOURS * 3600,
+        httponly=True,
+        samesite="strict",
+        secure=settings.ENVIRONMENT == "production",
+        path="/control",
+    )
+
+
+@auth_router.get("/auth/google")
+async def control_google_start():
+    """Start the dedicated Control-panel Google login."""
+    from app.services import google_auth
+
+    if not google_auth.enabled() or not _control_google_emails():
+        raise HTTPException(status_code=503, detail="Control Google login is not configured")
+
+    state = google_auth.new_state()
+    response = Response(status_code=302)
+    response.headers["Location"] = google_auth.start_url(
+        state, base=_control_google_base()
+    )
+    response.set_cookie(
+        google_auth.STATE_COOKIE,
+        state,
+        max_age=600,
+        httponly=True,
+        samesite="lax",
+        secure=settings.ENVIRONMENT == "production",
+        path="/control",
+    )
+    return response
+
+
+@auth_router.get("/auth/google/callback")
+async def control_google_callback(
+    request: Request, response: Response, code: str = "", state: str = ""
+):
+    """Verify Google identity, allowlist the email, then mint the normal vendor session."""
+    from app.services import google_auth
+
+    expected = request.cookies.get(google_auth.STATE_COOKIE, "")
+    if not state or not expected or not hmac.compare_digest(state, expected):
+        raise HTTPException(status_code=400, detail="Google login state invalid or expired")
+    if not code:
+        raise HTTPException(status_code=400, detail="Google authorization code missing")
+
+    try:
+        ident = await google_auth.exchange_code(code, base=_control_google_base())
+    except google_auth.GoogleAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    email = ident["email"]
+    if email not in _control_google_emails():
+        log.warning("control_google_denied", email=email)
+        raise HTTPException(status_code=403, detail="This Google account is not allowed to open Control Panel")
+
+    label = ident.get("name") or email
+    _set_vendor_cookie(response, settings.CONTROL_GOOGLE_LEVEL, label)
+    response.delete_cookie(google_auth.STATE_COOKIE, path="/control")
+    response.status_code = 303
+    response.headers["Location"] = "/control"
+    return response
+
 
 
 def _phone_clash_detail(t: Tenant) -> str:
