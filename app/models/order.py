@@ -13,6 +13,7 @@ Call order.recalculate_payment_status() after ANY change to amount_paid or
 total_amount. Overpayment counts as PAID.
 """
 
+import secrets
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
@@ -24,6 +25,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TenantScoped
 from app.models.enums import OrderStatus, PaymentMethod, PaymentStatus
+
+
+def _new_bill_code() -> str:
+    """Short customer-facing bill URL code; 40 bits of random entropy."""
+    return secrets.token_hex(5).upper()
 
 
 def derive_payment_status(
@@ -51,6 +57,12 @@ class Order(Base, TenantScoped):
     # Human-facing, e.g. "KK-20260801-01". PER-TENANT unique (self-serve
     # gate): numbering ctx-scoped hai, to do shops ka "-01" clash na kare.
     order_number: Mapped[str] = mapped_column(String(30), index=True)
+
+    # Short customer-facing URL code, e.g. /b/K7X2P9A4Q8. The signed token
+    # remains supported for old links; this code is only an opaque lookup key.
+    bill_code: Mapped[str] = mapped_column(
+        String(10), unique=True, index=True, default=_new_bill_code
+    )
 
     customer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("customers.id"), index=True
