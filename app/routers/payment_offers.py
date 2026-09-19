@@ -12,6 +12,7 @@ from app.models import Customer, Order, PaymentOffer
 from app.services import bill_link, payment_offers
 from app.services.staff_auth import StaffPrincipal
 from app.routers.staff_panel import require_biller
+from app.routers.orders import require_admin_key
 
 router = APIRouter(tags=["payment-offers"])
 
@@ -66,6 +67,41 @@ async def open_payment_offer(
         data = await payment_offers.open_offer(scoped, row)
         await scoped.commit()
         return data
+
+
+@router.post("/api/orders/{number}/payment-offer", include_in_schema=False, dependencies=[Depends(require_admin_key)])
+async def create_admin_payment_offer(
+    number: str,
+    kind: str = Query(pattern="^(advance|reminder)$"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Dashboard/admin-key version of payment-offer creation."""
+    order = (
+        await db.execute(select(Order).where(Order.order_number == number))
+    ).scalar_one_or_none()
+    if order is None:
+        raise HTTPException(status_code=404, detail="Bill not found")
+    cust = await db.get(Customer, order.customer_id)
+    if cust is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    due = Decimal(str(order.total_amount or 0)) - Decimal(str(order.amount_paid or 0))
+    if due <= 0:
+        raise HTTPException(status_code=400, detail="Is bill ka paisa chukta hai")
+    offer = await payment_offers.create_offer(db, order=order, kind=kind, created_by="admin")
+    if offer is None:
+        raise HTTPException(status_code=400, detail="Bill must be above ₹30 to use this offer")
+    link = await bill_link.url_for(db, order)
+    link = f"{link}?offer={offer.id}" if link else ""
+    await db.commit()
+    return {
+        "phone": cust.phone,
+        "name": cust.name or "Customer",
+        "due": float(due),
+        "discount": float(offer.discount_amount),
+        "offer_amount": float(offer.offer_amount),
+        "link": link,
+        "kind": kind,
+    }
 
 
 @router.post("/staff/api/orders/{number}/payment-offer", include_in_schema=False)
