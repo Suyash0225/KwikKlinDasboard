@@ -1804,9 +1804,23 @@ async def send_payment_reminder(
         # Ek hi message mein poora sach — warna grahak is bill ka paisa
         # dekar samajhta hai ki hisaab saaf ho gaya.
         text += f"\n\nPrevious balance: ₹{prev:.0f} ({prev_bills} bill). Total due: ₹{due + prev:.0f}"
-    from app.services import bill_link
+    from app.services import bill_link, payment_offers
 
-    text += bill_link.message_line(await bill_link.url_for(db, order))
+    offer = await payment_offers.create_offer(
+        db, order=order, kind="reminder", created_by=p.staff.name
+    )
+    if offer is None:
+        raise HTTPException(status_code=400, detail="Bill must be above ₹30 to use this offer")
+    await db.flush()
+    bill_url = await bill_link.url_for(db, order)
+    offer_url = f"{bill_url}?offer={offer.id}" if bill_url else ""
+    text += (
+        f"\\n\\n⚡ *PAY NOW & SAVE ₹{offer.discount_amount:.0f}*"
+        f"\\nPay only *₹{offer.offer_amount:.0f}*"
+        f"\\n\\n⏱️ *2-minute offer starts when you open the payment page*"
+        f"\\n\\n👇 *Pay Now*\\n{offer_url}"
+        f"\\n\\nAfter the offer expires, the regular amount of *₹{offer.original_amount:.0f}* will apply."
+    )
 
     sent = False
     try:
