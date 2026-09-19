@@ -86,9 +86,9 @@ async def create_payment_offer(
     offer = await payment_offers.create_offer(db, order=order, kind=kind, created_by=p.staff.name)
     if offer is None:
         raise HTTPException(status_code=400, detail="Bill must be above ₹30 to use this offer")
-    await db.commit()
     link = await bill_link.url_for(db, order)
     link = f"{link}?offer={offer.id}" if link else ""
+    await db.commit()
     return {
         "phone": cust.phone,
         "name": cust.name or "Customer",
