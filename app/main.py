@@ -550,7 +550,7 @@ async def bill_page(token: str, offer: str | None = Query(default=None, include_
             headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"},
         )
 
-    parsed = bill_link.parse(token)
+    parsed = await bill_link.resolve(token)
     if parsed is None:
         return _fail()
     tid, oid = parsed
@@ -968,7 +968,7 @@ async def customer_statement_page(token: str):
                 f"<div class='totals'><div class='row'><span>Total</span><span>{_money(r['total'])}</span></div>"
                 f"<div class='row'><span>Paid</span><span>{_money(r['paid'])}</span></div>"
                 f"<div class='row due-row'><span><b>Balance due</b></span><span><b>{_money(due)}</b></span></div></div>"
-                f"<a class='open' href='/b/{bill_link.make(tid, o.id)}'>Open this bill →</a></div></details>"
+                f"<a class='open' href='/b/{e(o.bill_code)}'>Open this bill →</a></div></details>"
             )
 
         for o in history:
