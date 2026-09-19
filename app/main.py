@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 import structlog
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.config import settings
 from app.database import engine
