@@ -1419,12 +1419,14 @@ function renderPicker() {
   const rows = here.concat(elsewhere);
   const line = (r, n, showSvc) => {
     const inCart = CART.find((x) => x.service === r.service && x.garment === r.garment);
-    const badge = inCart ? (r.unit === "kg" ? `${inCart.qty} kg` : `× ${inCart.qty}`) : "";
-    return `<button type="button" class="item-row${inCart ? " in" : ""}" data-tile="${n}">
-      <span class="ir-name">${esc(r.garment || "By weight")}${showSvc ? ` <small>${esc(r.service)}</small>` : ""}</span>
-      <span class="ir-price">${money(r.rate)}${r.unit === "kg" ? "/kg" : ""}</span>
-      <span class="ir-add${badge ? " n" : ""}">${badge ? esc(badge) : "＋"}</span>
-    </button>`;
+    const badge = inCart ? (r.unit === "kg" ? \`\${inCart.qty} kg\` : \`× \${inCart.qty}\`) : "";
+    const shownRate = inCart ? inCart.rate : r.rate;
+    const rateChanged = !!inCart && inCart.rate !== inCart.card;
+    return \`<button type="button" class="item-row\${inCart ? " in" : ""}" data-tile="\${n}">
+      <span class="ir-name">\${esc(r.garment || "By weight")}\${showSvc ? \` <small>\${esc(r.service)}</small>\` : ""}</span>
+      <span class="ir-price">\${money(shownRate)}\${r.unit === "kg" ? "/kg" : ""}\${rateChanged ? \` <small>card \${money(inCart.card)}</small>\` : ""}</span>
+      <span class="ir-add\${badge ? " n" : ""}">\${badge ? esc(badge) : "＋"}</span>
+    </button>\`;
   };
   let html = here.map((r, n) => line(r, n, false)).join("");
   if (q && !here.length) html += `<p class="ir-none">No “${esc(raw)}” in ${esc(PICK_SVC)}.</p>`;
@@ -1543,19 +1545,20 @@ function tapItem(r) {
     CART.push({ service: r.service, garment: r.garment, qty: 1, rate: r.rate, card: r.rate, unit: r.unit || "pc", pieces: [] });
     idx = CART.length - 1;
   }
-  // search se joda tha to khaana saaf karke wahin focus — agla kapda seedha
-  // likho. Bina search ke tap kiya ho to keyboard zabardasti nahi kholte.
+  // Search ko jaan-boojhkar wahi rehne do. Phone par pehle tap ke baad
+  // item list se gayab nahi hona chahiye: wahi row par ×1, ×2, ×3 dikhe
+  // aur usi row ko dobara tap karke quantity badh sake. Rate edit cart mein
+  // turant available hai; badla hua rate picker mein bhi dikhaya jayega.
   const searched = $("b-q") && $("b-q").value.trim();
-  if (searched) $("b-q").value = "";
   renderCart();
-  if (navigator.vibrate) navigator.vibrate(12);   // haath ko pata chale ki juda
+  if (navigator.vibrate) navigator.vibrate(12);
   if (r.unit === "kg") {
-    const inp = $("b-cart").querySelector(`[data-qty="${idx}"]`);
+    const inp = $("b-cart").querySelector(\`[data-qty="\${idx}"]\`);
     if (inp) { inp.focus(); inp.select(); }
   } else if (searched) {
     $("b-q").focus();
   }
-  toast(`${r.garment || r.service} added`, false, 1200);
+  toast(\`\${r.garment || r.service} added\`, false, 1200);
 }
 
 /* Grahak aisa kapda laaya jo rate card par nahi. Bill chhod kar owner ko
