@@ -45,15 +45,15 @@
       if (due) due.textContent = money(data.original_amount);
       if (save) save.textContent = "Offer expired · regular amount applies";
       if (timer) { timer.textContent = "⏰ Offer expired"; timer.classList.add("expired"); }
-      if (note) note.textContent = "The 2-minute special offer has ended. Regular bill amount applies.";
+      if (note) note.textContent = "The 15-minute special offer has ended. Regular bill amount applies.";
     }
   }
   function startPaymentOffer() {
-    var qs = new URLSearchParams(location.search), offer = qs.get("offer");
+    var qs = new URLSearchParams(location.search), offer = qs.get("o") || qs.get("offer");
     if (!offer || !window.fetch) return;
     var token = location.pathname.split("/b/")[1] || "";
     if (!token || token.indexOf("/") >= 0) return;
-    fetch("/payment-offers/open?bill=" + encodeURIComponent(token) + "&offer=" + encodeURIComponent(offer), {cache:"no-store", credentials:"omit"})
+    fetch("/payment-offers/open?bill=" + encodeURIComponent(token) + "&o=" + encodeURIComponent(offer), {cache:"no-store", credentials:"omit"})
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
         if (!data) return;
