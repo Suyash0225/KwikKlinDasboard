@@ -1419,14 +1419,14 @@ function renderPicker() {
   const rows = here.concat(elsewhere);
   const line = (r, n, showSvc) => {
     const inCart = CART.find((x) => x.service === r.service && x.garment === r.garment);
-    const badge = inCart ? (r.unit === "kg" ? \`\${inCart.qty} kg\` : \`× \${inCart.qty}\`) : "";
+    const badge = inCart ? (r.unit === "kg" ? `${inCart.qty} kg` : `× ${inCart.qty}`) : "";
     const shownRate = inCart ? inCart.rate : r.rate;
     const rateChanged = !!inCart && inCart.rate !== inCart.card;
-    return \`<button type="button" class="item-row\${inCart ? " in" : ""}" data-tile="\${n}">
-      <span class="ir-name">\${esc(r.garment || "By weight")}\${showSvc ? \` <small>\${esc(r.service)}</small>\` : ""}</span>
-      <span class="ir-price">\${money(shownRate)}\${r.unit === "kg" ? "/kg" : ""}\${rateChanged ? \` <small>card \${money(inCart.card)}</small>\` : ""}</span>
-      <span class="ir-add\${badge ? " n" : ""}">\${badge ? esc(badge) : "＋"}</span>
-    </button>\`;
+    return `<button type="button" class="item-row${inCart ? " in" : ""}" data-tile="${n}">
+      <span class="ir-name">${esc(r.garment || "By weight")}${showSvc ? ` <small>${esc(r.service)}</small>` : ""}</span>
+      <span class="ir-price">${money(shownRate)}${r.unit === "kg" ? "/kg" : ""}${rateChanged ? ` <small>card ${money(inCart.card)}</small>` : ""}</span>
+      <span class="ir-add${badge ? " n" : ""}">${badge ? esc(badge) : "＋"}</span>
+    </button>`;
   };
   let html = here.map((r, n) => line(r, n, false)).join("");
   if (q && !here.length) html += `<p class="ir-none">No “${esc(raw)}” in ${esc(PICK_SVC)}.</p>`;
@@ -1553,12 +1553,12 @@ function tapItem(r) {
   renderCart();
   if (navigator.vibrate) navigator.vibrate(12);
   if (r.unit === "kg") {
-    const inp = $("b-cart").querySelector(\`[data-qty="\${idx}"]\`);
+    const inp = $("b-cart").querySelector(`[data-qty="${idx}"]`);
     if (inp) { inp.focus(); inp.select(); }
   } else if (searched) {
     $("b-q").focus();
   }
-  toast(\`\${r.garment || r.service} added\`, false, 1200);
+  toast(`${r.garment || r.service} added`, false, 1200);
 }
 
 /* Grahak aisa kapda laaya jo rate card par nahi. Bill chhod kar owner ko
