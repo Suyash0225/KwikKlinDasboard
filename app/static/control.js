@@ -1577,8 +1577,8 @@ function showSignin() {
   $("main").classList.add("hidden");
   $("signedout").classList.remove("hidden");
   $("session-label").textContent = STR[L].signedOut;
-  const k = $("key");
-  if (k) k.focus();
+  const g = $("btn-google-signin");
+  if (g) g.focus();
 }
 function showApp(level, label) {
   LEVEL = level;
@@ -1621,7 +1621,7 @@ function lazySections() {
 
 /* ---------- wiring (all listeners; zero inline handlers) ---------------- */
 document.addEventListener("DOMContentLoaded", () => {
-  $("signin").addEventListener("submit", async (e) => {
+  $("emergency-signin").addEventListener("submit", async (e) => {
     e.preventDefault();
     const input = $("key");
     const key = input.value.trim();
