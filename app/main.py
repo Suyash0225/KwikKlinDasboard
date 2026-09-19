@@ -526,7 +526,7 @@ _STATUS_WORD = {
 
 
 @app.get("/b/{token}", include_in_schema=False)
-async def bill_page(token: str, offer: str | None = Query(default=None, include_in_schema=False)):
+async def bill_page(token: str, o: str | None = Query(default=None, include_in_schema=False), offer: str | None = Query(default=None, include_in_schema=False)):
     """Grahak ka bill — web page + UPI (GPay/PhonePe/Paytm) se payment.
 
     Token signed hai (services/bill_link.py). Amount LIVE: payment ke baad
@@ -568,19 +568,22 @@ async def bill_page(token: str, offer: str | None = Query(default=None, include_
         rw = await _rw.for_bill_page(db, cust.id) if cust else {"available": [], "progress": []}
         statement_link = f"/b/c/{bill_link.make_customer(tid, cust.id)}" if cust else ""
         offer_data = None
-        if offer:
+        offer_key = (o or offer or "").strip()
+        if offer_key:
             try:
                 from uuid import UUID
                 from app.models import PaymentOffer
                 from app.services import payment_offers as _payment_offers
+                offer_conditions = [
+                    PaymentOffer.order_id == order.id,
+                    PaymentOffer.tenant_id == tid,
+                ]
+                try:
+                    offer_conditions.append(PaymentOffer.id == UUID(offer_key))
+                except ValueError:
+                    offer_conditions.append(PaymentOffer.offer_code == offer_key.upper())
                 offer_row = (
-                    await db.execute(
-                        select(PaymentOffer).where(
-                            PaymentOffer.id == UUID(offer),
-                            PaymentOffer.order_id == order.id,
-                            PaymentOffer.tenant_id == tid,
-                        )
-                    )
+                    await db.execute(select(PaymentOffer).where(*offer_conditions))
                 ).scalar_one_or_none()
                 if offer_row:
                     offer_data = await _payment_offers.open_offer(db, offer_row)
