@@ -33,28 +33,31 @@ async def _order_for_bill(db: AsyncSession, token: str):
 @router.get("/payment-offers/open", include_in_schema=False)
 async def open_payment_offer(
     bill: str = Query(min_length=10),
-    offer: str = Query(min_length=10),
+    o: str | None = Query(default=None, min_length=1),
+    offer: str | None = Query(default=None, min_length=1),
     db: AsyncSession = Depends(get_db),
 ):
     parsed = await bill_link.resolve(bill)
     if parsed is None:
         raise HTTPException(status_code=404, detail="Bill not found")
     tid, oid = parsed
-    try:
-        offer_id = uuid.UUID(offer)
-    except ValueError:
+    offer_key = (o or offer or "").strip()
+    if not offer_key:
         raise HTTPException(status_code=404, detail="Offer not found")
 
     from app.services import integrations
     async with integrations.tenant_db(tid) as scoped:
+        conditions = [
+            PaymentOffer.order_id == oid,
+            PaymentOffer.tenant_id == tid,
+        ]
+        try:
+            offer_id = uuid.UUID(offer_key)
+            conditions.append(PaymentOffer.id == offer_id)
+        except ValueError:
+            conditions.append(PaymentOffer.offer_code == offer_key.upper())
         row = (
-            await scoped.execute(
-                select(PaymentOffer).where(
-                    PaymentOffer.id == offer_id,
-                    PaymentOffer.order_id == oid,
-                    PaymentOffer.tenant_id == tid,
-                )
-            )
+            await scoped.execute(select(PaymentOffer).where(*conditions))
         ).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=404, detail="Offer not found")
@@ -91,7 +94,7 @@ async def create_admin_payment_offer(
     if offer is None:
         raise HTTPException(status_code=400, detail="Bill must be above ₹30 to use this offer")
     link = await bill_link.url_for(db, order)
-    link = f"{link}?offer={offer.id}" if link else ""
+    link = payment_offers.url_for_offer(link, offer)
     await db.commit()
     return {
         "phone": cust.phone,
