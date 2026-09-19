@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Order, PaymentOffer
 
-DURATION_SECONDS = 120
+DURATION_SECONDS = 900
 DISCOUNT_RUPEES = Decimal("30.00")
 
 
@@ -84,3 +84,8 @@ async def open_offer(db: AsyncSession, offer: PaymentOffer, now: datetime | None
         "kind": offer.kind,
         "expires_at": offer.expires_at.isoformat() if offer.expires_at else None,
     }
+
+
+def url_for_offer(bill_url: str, offer: PaymentOffer) -> str:
+    """Build the compact customer-facing payment-offer URL."""
+    return f"{bill_url}?o={offer.offer_code}" if bill_url else ""
