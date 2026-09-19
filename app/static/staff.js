@@ -1136,7 +1136,9 @@ const MSG_KINDS = [
   ["review_request", "⭐", "Please review us on Google"],
 ];
 function messageMenu(number, due) {
-  const kinds = (ME.is_manager && due > 0 ? [["remind", "💰", "Payment reminder"]] : []).concat(MSG_KINDS);
+  const kinds = (due > 30 ? [["advance", "⚡", "Pay in advance & save ₹30"]] : [])
+    .concat(ME.is_manager && due > 0 ? [["remind", "💰", "Payment reminder"]] : [])
+    .concat(MSG_KINDS);
   openModal(`<h3>💬 Message — ${esc(number)}</h3>
     <p class="said">You see the message before it goes.</p>
     ${kinds.map(([k, ico, label]) => `<button class="btn ghost wide" data-msg="${k}">${ico} ${label}</button>`).join("")}
@@ -1144,10 +1146,36 @@ function messageMenu(number, due) {
   $("modal-body").querySelectorAll("[data-msg]").forEach((b) => {
     b.onclick = () => {
       if (b.dataset.msg === "remind") { closeModal(); return remindBill(number, null); }
+      if (b.dataset.msg === "advance") { closeModal(); return advanceOffer(number, b); }
       return busy(b, () => composeMessage(number, b.dataset.msg));
     };
   });
 }
+async function advanceOffer(number, btn) {
+  await busy(btn, async () => {
+    const r = await api(`/orders/${encodeURIComponent(number)}/payment-offer?kind=advance`, { method: "POST" });
+    const n = (v) => Number(v).toLocaleString("en-IN");
+    const text =
+      `🧺 *KWIK KLIN*\\n\\n🧾 Bill #${number}\\nTotal Bill: *₹${n(r.due)}*\\n\\n` +
+      `⚡ *PAY IN ADVANCE & SAVE ₹${n(r.discount)}*\\nPay Now: *₹${n(r.offer_amount)}*\\nYou Save: ₹${n(r.discount)}\\n\\n` +
+      `⏱️ *Offer starts when you open the payment page*\\nValid for *2 minutes*\\n\\n👇 *Pay Now*\\n${r.link}\\n\\n` +
+      `After the offer expires, the regular amount of *₹${n(r.due)}* will apply.\\n\\nThank you for choosing *Kwik Klin* 🙏`;
+    SHARE_TEXT = text;
+    openModal(`<h3>Advance payment offer</h3>
+      <p class="said">To ${esc(r.name)}</p>
+      <pre class="sharetext">${esc(text)}</pre>
+      <div class="btnrow">
+        <a class="btn go" href="${esc(waUrl(r.phone, text))}" target="_blank" rel="noopener" data-act="close">📲 Open WhatsApp</a>
+        <button class="btn ghost" id="m-copy">Copy</button>
+      </div>
+      <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
+    $("m-copy").onclick = async () => {
+      try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied"); }
+      catch (e) { toast("Could not copy — select the text above", true); }
+    };
+  });
+}
+
 async function composeMessage(number, kind) {
   let r;
   try { r = await api(`/orders/${encodeURIComponent(number)}/message?kind=${kind}`); }
