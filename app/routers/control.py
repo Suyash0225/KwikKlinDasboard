@@ -86,7 +86,7 @@ async def control_google_start():
     state = google_auth.new_state()
     response = Response(status_code=302)
     response.headers["Location"] = google_auth.start_url(
-        state, base=_control_google_base(), callback_path="/control/auth/google/callback"
+        state, base=_control_google_base(), callback_path="/auth/google/callback"
     )
     response.set_cookie(
         google_auth.STATE_COOKIE,
