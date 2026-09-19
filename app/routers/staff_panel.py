@@ -1816,11 +1816,11 @@ async def send_payment_reminder(
     offer_url = f"{bill_url}?offer={offer.id}" if bill_url else ""
     await db.commit()
     text += (
-        f"\\n\\n⚡ *PAY NOW & SAVE ₹{offer.discount_amount:.0f}*"
-        f"\\nPay only *₹{offer.offer_amount:.0f}*"
-        f"\\n\\n⏱️ *2-minute offer starts when you open the payment page*"
-        f"\\n\\n👇 *Pay Now*\\n{offer_url}"
-        f"\\n\\nAfter the offer expires, the regular amount of *₹{offer.original_amount:.0f}* will apply."
+        f"\n\n⚡ *PAY NOW & SAVE ₹{offer.discount_amount:.0f}*"
+        f"\nPay only *₹{offer.offer_amount:.0f}*"
+        f"\n\n⏱️ *2-minute offer starts when you open the payment page*"
+        f"\n\n👇 *Pay Now*\n{offer_url}"
+        f"\n\nAfter the offer expires, the regular amount of *₹{offer.original_amount:.0f}* will apply."
     )
 
     sent = False
