@@ -23,13 +23,23 @@
   </div>
 </header>
 
-<!-- Sign-in: the key is sent ONCE and exchanged for an httpOnly cookie. -->
-<form id="signin" class="toolbar" autocomplete="off">
-  <label class="sr-only" for="key">Admin API key</label>
-  <input id="key" name="kk-admin-key" type="password" placeholder="Admin API key" autofocus
-         autocomplete="new-password" spellcheck="false" required>
-  <button type="submit" class="btn-primary">Sign in</button>
-</form>
+<!-- Control-panel authentication: Google is the normal login. -->
+<section id="signin" class="toolbar" aria-label="Control panel sign in">
+  <a id="btn-google-signin" class="btn-primary" href="/control/auth/google">
+    Continue with Google
+  </a>
+  <span class="muted">Only your authorized Google account can open this panel.</span>
+</section>
+
+<details id="emergency-auth" class="toolbar">
+  <summary>Emergency API-key sign in</summary>
+  <form id="emergency-signin" autocomplete="off">
+    <label class="sr-only" for="key">Admin API key</label>
+    <input id="key" name="kk-admin-key" type="password" placeholder="Admin API key"
+           autocomplete="new-password" spellcheck="false" required>
+    <button type="submit">Sign in with API key</button>
+  </form>
+</details>
 
 <div id="appbar" class="toolbar hidden">
   <button id="btn-add" class="btn-primary">＋ Add Tenant</button>
@@ -44,8 +54,7 @@
 <section id="signedout" class="state">
   <span class="ico">🔐</span>
   <div class="title">Sign in to see your clients</div>
-  <p>Paste your admin API key above. It is exchanged for a secure session cookie —
-     the key itself is never stored in this browser.</p>
+  <p>Use “Continue with Google” to securely sign in. Your Google account is checked against the Control-panel allowlist.</p>
 </section>
 
 <main id="main" class="hidden">
