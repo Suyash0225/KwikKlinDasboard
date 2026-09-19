@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
@@ -526,7 +526,7 @@ _STATUS_WORD = {
 
 
 @app.get("/b/{token}", include_in_schema=False)
-async def bill_page(token: str):
+async def bill_page(token: str, offer: str | None = Query(default=None, include_in_schema=False)):
     """Grahak ka bill — web page + UPI (GPay/PhonePe/Paytm) se payment.
 
     Token signed hai (services/bill_link.py). Amount LIVE: payment ke baad
@@ -567,6 +567,26 @@ async def bill_page(token: str):
         prev = await customer_balance.previous(db, cust.id, exclude_order_id=order.id) if cust else {"due": 0, "bills": 0, "clothes": [], "clothes_total": 0}
         rw = await _rw.for_bill_page(db, cust.id) if cust else {"available": [], "progress": []}
         statement_link = f"/b/c/{bill_link.make_customer(tid, cust.id)}" if cust else ""
+        offer_data = None
+        if offer:
+            try:
+                from uuid import UUID
+                from app.models import PaymentOffer
+                from app.services import payment_offers as _payment_offers
+                offer_row = (
+                    await db.execute(
+                        select(PaymentOffer).where(
+                            PaymentOffer.id == UUID(offer),
+                            PaymentOffer.order_id == order.id,
+                            PaymentOffer.tenant_id == tid,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if offer_row:
+                    offer_data = await _payment_offers.open_offer(db, offer_row)
+                    await db.commit()
+            except (ValueError, TypeError):
+                offer_data = None
 
     e = _esc
     shop = (tenant.shop_name if tenant else "") or "Laundry"
@@ -638,7 +658,15 @@ async def bill_page(token: str):
     if r["has_total"] and due <= 0 and r["total"] > 0:
         pay_block = ""   # hero khud "Paid in full" bolta hai
     elif r["has_total"] and due > 0:
-        pay_block = _upi_pay_block(r["upi"], r["upi_payee"], shop, due, f"Bill {order.order_number}")
+        pay_amount = due
+        pay_label = "Amount due"
+        if offer_data and offer_data.get("active"):
+            pay_amount = Decimal(str(offer_data["offer_amount"])).quantize(Decimal("0.01"))
+            pay_label = f"⚡ Pay now & save ₹{float(offer_data['discount_amount']):.0f}"
+        pay_block = _upi_pay_block(
+            r["upi"], r["upi_payee"], shop, pay_amount,
+            f"Bill {order.order_number}", label=pay_label
+        )
 
     terms = ""
     if r["terms"]:
