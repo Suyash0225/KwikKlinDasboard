@@ -118,7 +118,9 @@ def url(order, app_settings_dict: dict | None = None) -> str:
     base = public_base(app_settings_dict)
     if not base or order.tenant_id is None:
         return ""
-    return f"{base}/b/{make(order.tenant_id, order.id)}"
+    code = getattr(order, "bill_code", None)
+    token = code or make(order.tenant_id, order.id)
+    return f"{base}/b/{token}"
 
 
 async def url_for(db, order) -> str:
