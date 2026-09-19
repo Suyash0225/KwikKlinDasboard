@@ -806,13 +806,13 @@ async function sendAdvanceOffer(num) {
   try {
     const r = await api(`/staff/api/orders/${encodeURIComponent(num)}/payment-offer?kind=advance`, { method: "POST" });
     const text =
-      `🧺 *KWIK KLIN*\\n\\n🧾 Bill #${num}\\nTotal Bill: *₹${Number(r.due).toLocaleString("en-IN")}*\\n\\n` +
-      `⚡ *PAY IN ADVANCE & SAVE ₹${Number(r.discount).toLocaleString("en-IN")}*\\n` +
-      `Pay Now: *₹${Number(r.offer_amount).toLocaleString("en-IN")}*\\n` +
-      `You Save: ₹${Number(r.discount).toLocaleString("en-IN")}\\n\\n` +
-      `⏱️ *Offer starts when you open the payment page*\\nValid for *2 minutes*\\n\\n` +
-      `👇 *Pay Now*\\n${r.link}\\n\\n` +
-      `After the offer expires, the regular amount of *₹${Number(r.due).toLocaleString("en-IN")}* will apply.\\n\\n` +
+      `🧺 *KWIK KLIN*\n\n🧾 Bill #${num}\nTotal Bill: *₹${Number(r.due).toLocaleString("en-IN")}*\n\n` +
+      `⚡ *PAY IN ADVANCE & SAVE ₹${Number(r.discount).toLocaleString("en-IN")}*\n` +
+      `Pay Now: *₹${Number(r.offer_amount).toLocaleString("en-IN")}*\n` +
+      `You Save: ₹${Number(r.discount).toLocaleString("en-IN")}\n\n` +
+      `⏱️ *Offer starts when you open the payment page*\nValid for *2 minutes*\n\n` +
+      `👇 *Pay Now*\n${r.link}\n\n` +
+      `After the offer expires, the regular amount of *₹${Number(r.due).toLocaleString("en-IN")}* will apply.\n\n` +
       `Thank you for choosing *Kwik Klin* 🙏`;
     shareTextModal(r.phone, text, "Advance payment offer",
       "WhatsApp khulega — customer ke payment page par 2-minute countdown start hoga.");
