@@ -63,7 +63,9 @@ async def open_payment_offer(
         due = Decimal(str(order.total_amount or 0)) - Decimal(str(order.amount_paid or 0))
         if due <= 0:
             return {"active": False, "expired": True, "paid": True, "remaining_seconds": 0}
-        return await payment_offers.open_offer(scoped, row)
+        data = await payment_offers.open_offer(scoped, row)
+        await scoped.commit()
+        return data
 
 
 @router.post("/staff/api/orders/{number}/payment-offer", include_in_schema=False)
