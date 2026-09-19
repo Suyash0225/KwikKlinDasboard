@@ -728,7 +728,7 @@ async def _notify_customer(
             fmt["bill_line"] = bill_link.message_line(await bill_link.url_for(db, order))
         url_param = None
         if TEMPLATES.get(template_name, {}).get("url_button") and order.tenant_id:
-            url_param = bill_link.make(order.tenant_id, order.id)
+            url_param = order.bill_code or bill_link.make(order.tenant_id, order.id)
         text_body = get_message(message_key, order_number=order.order_number, **fmt)
         try:
             await send_message(
