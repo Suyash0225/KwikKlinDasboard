@@ -31,6 +31,7 @@ from app.models.marketing import Campaign, Lead, CampaignRecipient, Coupon, Coup
 from app.models.rewards import CustomerReward, RewardRule
 from app.models.order import Order, OrderStatusHistory, derive_payment_status
 from app.models.payment import Payment
+from app.models.payment_offer import PaymentOffer
 from app.models.rate import Rate
 from app.models.staff import Staff
 from app.models.staff_session import StaffSession
@@ -88,6 +89,7 @@ __all__ = [
     "OrderStatusHistory",
     "OutboundMessage",
     "Payment",
+    "PaymentOffer",
     "PaymentMethod",
     "PaymentStatus",
     "Rate",
