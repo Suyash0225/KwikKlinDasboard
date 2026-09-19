@@ -11,11 +11,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("orders", sa.Column("bill_code", sa.String(10), nullable=True))
-    # Existing orders get a deterministic 10-char code before the unique index.
+    op.add_column("orders", sa.Column("bill_code", sa.String(12), nullable=True))
+    # Existing orders get a deterministic 12-char code before the unique index.
     # md5 is used only as a compact identifier here, not for authentication.
     op.execute(
-        "UPDATE orders SET bill_code = upper(substr(md5(id::text), 1, 10)) "
+        "UPDATE orders SET bill_code = upper(substr(md5(id::text), 1, 12)) "
         "WHERE bill_code IS NULL"
     )
     op.alter_column("orders", "bill_code", nullable=False)
