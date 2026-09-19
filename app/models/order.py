@@ -28,8 +28,8 @@ from app.models.enums import OrderStatus, PaymentMethod, PaymentStatus
 
 
 def _new_bill_code() -> str:
-    """Short customer-facing bill URL code; 40 bits of random entropy."""
-    return secrets.token_hex(5).upper()
+    """Short customer-facing bill URL code; 48 bits of random entropy."""
+    return secrets.token_hex(6).upper()
 
 
 def derive_payment_status(
@@ -61,7 +61,7 @@ class Order(Base, TenantScoped):
     # Short customer-facing URL code, e.g. /b/K7X2P9A4Q8. The signed token
     # remains supported for old links; this code is only an opaque lookup key.
     bill_code: Mapped[str] = mapped_column(
-        String(10), unique=True, index=True, default=_new_bill_code
+        String(12), unique=True, index=True, default=_new_bill_code
     )
 
     customer_id: Mapped[uuid.UUID] = mapped_column(
