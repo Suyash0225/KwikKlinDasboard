@@ -74,7 +74,7 @@ async def resolve(token: str) -> tuple[uuid.UUID, uuid.UUID] | None:
     if parsed is not None:
         return parsed
     code = str(token or "").strip().upper()
-    if len(code) != 10:
+    if len(code) != 12:
         return None
     from sqlalchemy import select
     from app.database import async_session_factory
