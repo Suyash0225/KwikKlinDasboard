@@ -1814,6 +1814,7 @@ async def send_payment_reminder(
     await db.flush()
     bill_url = await bill_link.url_for(db, order)
     offer_url = f"{bill_url}?offer={offer.id}" if bill_url else ""
+    await db.commit()
     text += (
         f"\\n\\n⚡ *PAY NOW & SAVE ₹{offer.discount_amount:.0f}*"
         f"\\nPay only *₹{offer.offer_amount:.0f}*"
