@@ -67,17 +67,18 @@ async def public_base(db) -> str:
     return (live or settings.APP_BASE_URL).rstrip("/")
 
 
-def redirect_uri(base: str | None = None) -> str:
+def redirect_uri(base: str | None = None, callback_path: str = "/api/auth/google/callback") -> str:
     base = (base or settings.APP_BASE_URL).rstrip("/")
-    return base + "/api/auth/google/callback"
+    callback_path = "/" + callback_path.strip("/")
+    return base + callback_path
 
 
-def start_url(state: str, base: str | None = None) -> str:
+def start_url(state: str, base: str | None = None, callback_path: str = "/api/auth/google/callback") -> str:
     """Consent screen ka URL."""
     return AUTH_URL + "?" + urlencode(
         {
             "client_id": settings.GOOGLE_CLIENT_ID,
-            "redirect_uri": redirect_uri(base),
+            "redirect_uri": redirect_uri(base, callback_path),
             "response_type": "code",
             "scope": "openid email profile",
             "state": state,
@@ -97,7 +98,7 @@ def _b64url_json(segment: str) -> dict:
     return json.loads(base64.urlsafe_b64decode(segment + pad).decode())
 
 
-async def exchange_code(code: str, base: str | None = None) -> dict:
+async def exchange_code(code: str, base: str | None = None, callback_path: str = "/api/auth/google/callback") -> dict:
     """code -> Google ki verified pehchaan.
 
     `base` wahi hona chahiye jo start_url() ko diya tha — Google dono baar
@@ -116,7 +117,7 @@ async def exchange_code(code: str, base: str | None = None) -> dict:
                     "code": code,
                     "client_id": settings.GOOGLE_CLIENT_ID,
                     "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                    "redirect_uri": redirect_uri(base),
+                    "redirect_uri": redirect_uri(base, callback_path),
                     "grant_type": "authorization_code",
                 },
             )
