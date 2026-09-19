@@ -1813,12 +1813,12 @@ async def send_payment_reminder(
         raise HTTPException(status_code=400, detail="Bill must be above ₹30 to use this offer")
     await db.flush()
     bill_url = await bill_link.url_for(db, order)
-    offer_url = f"{bill_url}?offer={offer.id}" if bill_url else ""
+    offer_url = payment_offers.url_for_offer(bill_url, offer)
     await db.commit()
     text += (
         f"\n\n⚡ *PAY NOW & SAVE ₹{offer.discount_amount:.0f}*"
         f"\nPay only *₹{offer.offer_amount:.0f}*"
-        f"\n\n⏱️ *2-minute offer starts when you open the payment page*"
+        f"\n\n⏱️ *15-minute offer starts when you open the payment page*"
         f"\n\n👇 *Pay Now*\n{offer_url}"
         f"\n\nAfter the offer expires, the regular amount of *₹{offer.original_amount:.0f}* will apply."
     )
