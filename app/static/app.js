@@ -1737,6 +1737,7 @@ function showBillSuccess(o) {
       <button class="btn ghost" onclick="printReceiptFromOrder('${n}')">🖨 Print bill</button>
       ${wa ? `<button class="btn ghost" onclick="waBill('${n}')">📲 Send from shop number</button>` : ""}
       <button class="btn ${wa ? "ghost" : ""}" onclick="closeModal();shareBillFromOrder('${n}')">💬 Share on WhatsApp</button>
+      ${Number(o.total_amount || 0) - Number(o.amount_paid || 0) > 30 ? `<button class="btn ghost" onclick="closeModal();sendAdvanceOffer('${n}')">⚡ Pay in advance & save ₹30</button>` : ""}
       <button class="btn ${wa ? "" : "ghost"}" onclick="closeModal()">Done</button>
     </div>`);
 }
