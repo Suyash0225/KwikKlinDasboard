@@ -129,6 +129,16 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
+    # --- Control panel Google access ---
+    # Comma-separated Google accounts allowed to open /control.
+    # Example: CONTROL_GOOGLE_ALLOWED_EMAILS=suyashsrivstava49@gmail.com
+    CONTROL_GOOGLE_ALLOWED_EMAILS: str = ""
+    # Must be read/write/danger. The control panel owner normally needs danger.
+    CONTROL_GOOGLE_LEVEL: Literal["read", "write", "danger"] = "danger"
+    # Exact public base used to build the Control-panel OAuth callback.
+    # Production: https://kwikklin.online/control
+    CONTROL_GOOGLE_BASE_URL: str = "https://kwikklin.online/control"
+
     # --- Website (/laundry) par live Google reviews ---
     # Google Cloud Console -> "Places API (New)" enable -> API key banao.
     # Khali chhodne par site par reviews ki jagah "Read reviews on Google"
