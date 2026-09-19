@@ -821,7 +821,7 @@ async def bill_live(token: str):
     from app.models import Order
     from app.services import bill_link, integrations
 
-    parsed = bill_link.parse(token)
+    parsed = await bill_link.resolve(token)
     if parsed is None:
         return JSONResponse({"detail": "not found"}, status_code=404)
     tid, oid = parsed
