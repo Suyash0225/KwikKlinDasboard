@@ -56,7 +56,9 @@ def _control_google_emails() -> set[str]:
 
 def _control_google_base() -> str:
     # OAuth redirect must be stable; do not derive it from an arbitrary Host header.
-    return settings.CONTROL_GOOGLE_BASE_URL.rstrip("/")
+    if settings.CONTROL_GOOGLE_BASE_URL:
+        return settings.CONTROL_GOOGLE_BASE_URL.rstrip("/")
+    return (settings.SITE_URL or settings.APP_BASE_URL).rstrip("/") + "/control"
 
 
 def _set_vendor_cookie(response: Response, level: str, label: str) -> None:
