@@ -428,7 +428,9 @@ async def update_status(
                 db, "sla_heavy_days" if heavy else "sla_normal_days"
             )
         )
-        order.expected_delivery = date.today() + timedelta(days=days)
+        from app.services.business_days import add_delivery_days
+
+        order.expected_delivery = await add_delivery_days(db, date.today(), days)
     db.add(
         OrderStatusHistory(
             order_id=order.id,
