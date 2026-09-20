@@ -1275,7 +1275,7 @@ async def _finalize_bill(
             exp = None
     if exp is None:
         # default = today + the shop's standard turnaround (Settings)
-        days = int(await app_settings.get(db, "turnaround_days"))
+        days = max(5, int(await app_settings.get(db, "turnaround_days")))
         from app.services.business_days import add_delivery_days
         exp = await add_delivery_days(db, date.today(), days)
 
