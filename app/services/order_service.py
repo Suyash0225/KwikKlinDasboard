@@ -28,6 +28,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models import (
     Customer,
     Order,
@@ -36,7 +37,7 @@ from app.models import (
     PaymentMethod,
 )
 from app.services.messages import get_message
-from app.services.whatsapp import SendError, WindowClosedError, send_message
+from app.services.whatsapp import Button, SendError, WindowClosedError, send_message
 from app.utils.phone import normalize_phone
 
 log = structlog.get_logger()
@@ -501,8 +502,6 @@ async def update_status(
             log.exception("delivery_payment_offer_failed", order_number=order.order_number)
 
         # thank-you + rating buttons (owner's policy 03 Aug)
-        from app.services.whatsapp import Button
-
         await _notify_customer(
             db, order,
             message_key="thankyou_rating",
@@ -743,7 +742,7 @@ async def _notify_customer(
     message_key: str,
     template_name: str,
     template_params: list[str],
-    buttons: list | None = None,
+    buttons: list[Button] | None = None,
     payment_offer=None,
     **fmt: str,
 ) -> None:
@@ -787,9 +786,28 @@ async def _notify_customer(
         if TEMPLATES.get(template_name, {}).get("url_button") and order.tenant_id:
             url_param = bill_url.rsplit("/b/", 1)[-1] if "/b/" in bill_url else (order.bill_code or bill_link.make(order.tenant_id, order.id))
         text_body = get_message(message_key, order_number=order.order_number, **fmt)
+
+        # WAHA button messages use URL buttons for the customer-facing
+        # actions. Meta keeps its existing reply-button semantics.
+        outbound_buttons = buttons
+        if settings.WHATSAPP_PROVIDER == "waha":
+            actions: list[Button] = []
+            if bill_url:
+                if payment_offer is not None:
+                    actions.append(Button("pay_now", "💳 Pay Now", "url", bill_url))
+                elif order.total_amount is not None and (order.total_amount - (order.amount_paid or Decimal("0"))) > 0:
+                    actions.append(Button("pay_now", "💳 Pay Now", "url", bill_url))
+                actions.append(Button("view_bill", "🧾 View Bill", "url", bill_url))
+            # Keep the delivered rating action as a reply button so the
+            # existing deterministic rating handler remains intact.
+            for b in (buttons or []):
+                if b.id.startswith("rate_"):
+                    actions.append(b)
+            outbound_buttons = actions[:3]
+
         try:
             await send_message(
-                db, to_phone=customer.phone, text=text_body, buttons=buttons
+                db, to_phone=customer.phone, text=text_body, buttons=outbound_buttons
             )
         except WindowClosedError:
             await send_message(
