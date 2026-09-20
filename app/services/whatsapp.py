@@ -215,6 +215,61 @@ def _template_log(name: str, params: list[str] | None) -> str:
     return f"[template:{name}] {joined}".strip()
 
 
+async def _waha_send_text(
+    *,
+    to_phone: str,
+    text: str,
+    reply_to: str | None = None,
+) -> str:
+    """Send a text through the private WAHA instance.
+
+    WAHA is deliberately kept behind localhost; only this server-side
+    adapter knows the API key. The existing Meta provider remains untouched.
+    """
+    if not settings.WAHA_API_KEY:
+        raise SendError("WAHA provider is not configured", transient=False)
+    chat_id = to_phone.lstrip("+") + "@c.us"
+    payload = {
+        "session": settings.WAHA_SESSION,
+        "chatId": chat_id,
+        "text": text,
+    }
+    if reply_to:
+        payload["reply_to"] = reply_to
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                settings.WAHA_BASE_URL.rstrip("/") + "/api/sendText",
+                headers={
+                    "X-Api-Key": settings.WAHA_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+    except httpx.TransportError as exc:
+        raise SendError("WAHA is unreachable", transient=True) from exc
+
+    if response.status_code >= 500 or response.status_code == 429:
+        raise SendError("WAHA temporarily unavailable", transient=True)
+    if response.status_code >= 400:
+        log.warning("waha_send_failed", status=response.status_code)
+        raise SendError("WAHA rejected the message", transient=False)
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise SendError("WAHA returned an invalid response", transient=False) from exc
+
+    wa_message_id = (
+        data.get("id")
+        or (data.get("key") or {}).get("id")
+        or (data.get("message") or {}).get("id")
+    )
+    if not wa_message_id:
+        raise SendError("WAHA did not return a message id", transient=False)
+    return str(wa_message_id)
+
+
 async def send_message(
     db: AsyncSession,
     *,
@@ -342,6 +397,57 @@ async def send_message(
         wa_message_id, to_phone, sent_by, reply_to,
         _billing_category(template_name, category),
     )
+        return wa_message_id
+
+    # --- WAHA provider: private WhatsApp Web adapter ---
+    # WAHA Core does not implement Meta templates. Keep template sends on
+    # Meta/DotPe until a WAHA-specific campaign/template strategy is added.
+    # Interactive buttons are intentionally rejected because WAHA documents
+    # its button API as deprecated/fragile.
+    if settings.WHATSAPP_PROVIDER == "waha":
+        if template_name:
+            raise SendError(
+                "WAHA provider does not support Meta templates; use a text message",
+                transient=False,
+            )
+        if buttons or list_rows:
+            raise SendError(
+                "WAHA provider does not support the current interactive message mode",
+                transient=False,
+            )
+        assert text is not None
+        try:
+            wa_message_id = await _waha_send_text(
+                to_phone=to_phone,
+                text=text,
+                reply_to=reply_to,
+            )
+        except SendError as exc:
+            if exc.transient and enqueue_on_fail:
+                await _enqueue_outbound(
+                    db,
+                    to_phone,
+                    {
+                        "text": text,
+                        "buttons": None,
+                        "template_name": None,
+                        "template_params": None,
+                        "template_url_param": None,
+                        "sent_by": sent_by,
+                    },
+                )
+            raise
+        log.info(
+            "whatsapp_sent",
+            to=to_phone,
+            provider="waha",
+            wa_message_id=wa_message_id,
+        )
+        await _record_outbound(
+            db, customer, staff, (log_as if log_as is not None else text),
+            wa_message_id, to_phone, sent_by, reply_to,
+            _billing_category(None, category),
+        )
         return wa_message_id
 
     # --- build payload (Meta direct) ---
