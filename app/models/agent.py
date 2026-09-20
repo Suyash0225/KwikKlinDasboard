@@ -124,6 +124,9 @@ class DocChunk(Base, TenantScoped):
     )
     document: Mapped[str] = mapped_column(String(160), index=True)  # filename
     chunk_index: Mapped[int] = mapped_column()
+    audience: Mapped[str] = mapped_column(
+        String(12), default="customer", server_default="customer"
+    )  # customer | staff | all
     content: Mapped[str] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
