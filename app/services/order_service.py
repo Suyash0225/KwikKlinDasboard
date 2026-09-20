@@ -576,7 +576,7 @@ async def record_payment(
     offer_applied = None
     try:
         from app.models import PaymentOffer
-        from app.services.payment_offers import open_offer
+        from datetime import datetime, timezone
         candidate = (
             await db.execute(
                 select(PaymentOffer)
@@ -590,13 +590,18 @@ async def record_payment(
             )
         ).scalar_one_or_none()
         current_due = (order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0"))
-        if candidate is not None and current_due == candidate.original_amount:
-            offer_state = await open_offer(db, candidate)
-            if offer_state.get("active"):
-                order.total_amount = (order.total_amount or Decimal("0")) - candidate.discount_amount
-                order.discount_amount = (order.discount_amount or Decimal("0")) + candidate.discount_amount
-                offer_applied = candidate
-                log.info("payment_offer_applied", order_number=order.order_number, offer=candidate.offer_code, discount=str(candidate.discount_amount))
+        now = datetime.now(timezone.utc)
+        if (
+            candidate is not None
+            and current_due == candidate.original_amount
+            and candidate.opened_at is not None
+            and candidate.expires_at is not None
+            and candidate.opened_at <= now < candidate.expires_at
+        ):
+            order.total_amount = (order.total_amount or Decimal("0")) - candidate.discount_amount
+            order.discount_amount = (order.discount_amount or Decimal("0")) + candidate.discount_amount
+            offer_applied = candidate
+            log.info("payment_offer_applied", order_number=order.order_number, offer=candidate.offer_code, discount=str(candidate.discount_amount))
     except Exception:
         log.exception("payment_offer_apply_failed", order_number=order.order_number)
     # Overpayment is ALLOWED — customers round up or pay advance for the next
