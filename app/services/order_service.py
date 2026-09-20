@@ -790,6 +790,26 @@ async def _notify_customer(
                 template_params=template_params,
                 template_url_param=url_param,
             )
+            # Delivered already uses the approved rating template. If the
+            # 24h window is closed, that legacy template has no bill button,
+            # so send the dedicated bill template as the fallback. Inside the
+            # window the normal free-form message above already contains the
+            # same live bill/payment link, so no duplicate is sent.
+            if message_key == "thankyou_rating":
+                try:
+                    await send_message(
+                        db,
+                        to_phone=customer.phone,
+                        template_name="kk_bill_requested",
+                        template_params=[
+                            order.order_number,
+                            str(order.total_amount or 0),
+                            str(max((order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0")), Decimal("0"))),
+                        ],
+                        template_url_param=url_param,
+                    )
+                except SendError:
+                    log.info("delivery_bill_template_not_sent", order_number=order.order_number)
     except SendError as exc:
         # Template not approved yet / Meta down — logged, business goes on.
         log.warning(
