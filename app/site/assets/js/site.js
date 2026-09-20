@@ -74,7 +74,7 @@ document.getElementById("book").addEventListener("submit", (e) => {
   const msg = "Hello Kwik Klin, I would like to book a pickup.\n" +
     "Name: " + v("b-name") + "\nMobile: " + phone + "\nLocality: " + v("b-area") + ", Varanasi" +
     "\nService: " + v("b-service") + "\nPreferred pickup: " + v("b-when");
-  if (typeof gtag === "function") gtag("event", "generate_lead", { lead_source: "website_booking", value: 1, currency: "INR" });
+  if (typeof gtag === "function") gtag("event", "generate_lead", { lead_source: "website_booking" });
   window.open(wa(msg), "_blank", "noopener");
 });
 
