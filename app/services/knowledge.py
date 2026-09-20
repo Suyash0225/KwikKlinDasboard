@@ -38,6 +38,7 @@ log = structlog.get_logger()
 _CACHE_TTL_SECONDS = 60.0
 
 _WORD_RE = re.compile(r"[a-z0-9ऀ-ॿ]+")
+_PHONE_RE = re.compile(r"(?<!\\d)(?:\\+?91[\\s-]?)?[6-9]\\d{9}(?!\\d)")
 
 # Hinglish/English filler words that carry no meaning for matching
 _STOPWORDS = {
@@ -369,5 +370,6 @@ async def thread_history(
     lines = []
     for m in reversed(rows):
         who = "THEM" if m.direction.name == "INBOUND" else "US"
-        lines.append(f"{who}: {(m.message_text or '')[:200]}")
+        safe_text = _PHONE_RE.sub("[phone hidden]", (m.message_text or "")[:200])
+        lines.append(f"{who}: {safe_text}")
     return "Recent conversation (oldest first):\n" + "\n".join(lines)
