@@ -251,10 +251,29 @@ async def ai_campaign_draft(
     for key in ("message", "gmb_title", "gmb_body", "gmb_cta", "creative_brief", "rationale"):
         draft[key] = str(draft.get(key) or "").strip()
     draft["gmb_body"] = draft["gmb_body"].replace("\\n", " ")
+    # Generate the actual branded Google-safe creative now. This is deterministic
+    # PIL rendering (logo/brand/offer layout), not a fake AI-generated shop photo.
+    creative_file = None
+    try:
+        from pathlib import Path
+        from app.services.social import draw_poster
+        media_dir = Path(__file__).resolve().parent.parent / "media"
+        media_dir.mkdir(exist_ok=True)
+        creative_file = f"campaign-{uuid_module.uuid4().hex}.png"
+        draw_poster(
+            str(draft.get("gmb_title") or "Kwik Klin"),
+            str(draft.get("gmb_title") or "Fresh clothes, less hassle"),
+            str(draft.get("gmb_body") or "Book your next laundry service."),
+            media_dir / creative_file,
+            show_phone=False,
+        )
+    except Exception:
+        log.exception("campaign_creative_generation_failed")
     # Phone-free Google copy is a hard rule, not an AI instruction.
     import re as _re
     draft["gmb_body"] = _re.sub(r"(?:\+?91[-\s]?)?[6-9]\d{9}", "", draft["gmb_body"]).strip()
     draft["gmb_title"] = _re.sub(r"(?:\+?91[-\s]?)?[6-9]\d{9}", "", draft["gmb_title"]).strip()
+    draft["creative_file"] = creative_file
     return draft
 
 
