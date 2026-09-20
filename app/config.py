@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # "meta"  = direct Meta Cloud API (test number, development)
     # "dotpe" = DotPe BSP (the real business number lives there)
     WHATSAPP_PROVIDER: Literal["meta", "dotpe"] = "meta"
+    # WAHA stays private on the EC2 host; FastAPI is the only browser-facing bridge.
+    # Keep these in the server secret store/.env, never in frontend code.
+    WAHA_BASE_URL: str = "http://127.0.0.1:3000"
+    WAHA_API_KEY: str = ""
+    WAHA_SESSION: str = "kwikklin"
 
     # --- WhatsApp Cloud API (Meta Graph API) ---
     WHATSAPP_TOKEN: str
