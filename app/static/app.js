@@ -463,7 +463,7 @@ const renderBillsDeb = debounce(() => reloadBills(), 300);
 const custSearchDeb = debounce(() => { CUST_SHOWN = 30; renderCustomers(); }, 300);
 
 /* ============================= router ============================= */
-const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "tasks", "agents", "usage", "training", "activity", "settings"];
+const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "analytics", "tasks", "agents", "usage", "training", "activity", "settings"];
 const TITLES = {
   dashboard: ["Dashboard", "Today at a glance"],
   inbox: ["Inbox", "WhatsApp — see and reply yourself"],
@@ -2359,6 +2359,47 @@ async function loadTplPreview() {
 /* ============================= AI usage ============================= */
 const usd = (n) => "$" + Number(n || 0).toFixed(Number(n) >= 1 ? 2 : 4);
 const kTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n || 0));
+
+async function loadAnalytics() {
+  const ids = ["analytics-kpis","analytics-web","analytics-gbp","analytics-wa","analytics-ai"];
+  ids.forEach((id) => { if ($(id)) $(id).innerHTML = skeleton(2); });
+  try {
+    const a = await api("/admin/api/analytics?days=30");
+    const wa = a.whatsapp || {}, ai = a.ai || {}, gbp = a.google_business || {}, web = a.website || {};
+    const delivered = Number(wa.delivered || 0), failed = Number(wa.failed || 0);
+    const waRate = (delivered + failed) ? Math.round(delivered * 100 / (delivered + failed)) : 0;
+    $("analytics-kpis").innerHTML = kpi("WA messages", wa.total, "Last 30 days", "", "📱", "orange") + kpi("WA failed", failed, "Delivery failures", "", "⚠️", "red") + kpi("Marketing", wa.marketing, "Messages", "", "📣", "orange") + kpi("Service", wa.service, "Messages", "", "💬", "green") + kpi("AI tokens", ai.total_tokens, "Last 30 days", "", "🤖", "purple");
+    $("analytics-web").innerHTML = web.configured ? (web.error ? errBox(web.error, "loadAnalytics") :
+      "<div class="sumrow"><span>Active users</span><b>" + Number(web.summary?.active_users || 0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>New users</span><b>" + Number(web.summary?.new_users || 0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Sessions</span><b>" + Number(web.summary?.sessions || 0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Page views</span><b>" + Number(web.summary?.page_views || 0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Engagement rate</span><b>" + (Number(web.summary?.engagement_rate || 0)*100).toFixed(1) + "%</b></div>") :
+      "<p class="muted">GA4 tracking is installed, but server-side reporting is not connected yet.</p><a class="btn ghost sm" href="https://analytics.google.com/" target="_blank" rel="noopener">Open Google Analytics</a>";
+    $("analytics-gbp").innerHTML = gbp.configured ? (gbp.error ? errBox(gbp.error, "loadAnalytics") :
+      "<div class="sumrow"><span>Google Search views</span><b>" + Number(gbp.search_views||0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Google Maps views</span><b>" + Number(gbp.maps_views||0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Website clicks</span><b>" + Number(gbp.website_clicks||0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Call clicks</span><b>" + Number(gbp.call_clicks||0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Direction requests</span><b>" + Number(gbp.direction_requests||0).toLocaleString("en-IN") + "</b></div>") :
+      "<p class="muted">Connect Google Business Profile to show real Search/Maps traffic and actions here.</p>";
+    $("analytics-wa").innerHTML =
+      "<div class="sumrow"><span>Sent</span><b>" + Number(wa.sent||0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Delivered</span><b>" + delivered.toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Read</span><b>" + Number(wa.read||0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Failed</span><b>" + failed.toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Delivery success</span><b>" + waRate + "%</b></div>" +
+      "<div class="sumrow"><span>Utility</span><b>" + Number(wa.utility||0).toLocaleString("en-IN") + "</b></div>";
+    $("analytics-ai").innerHTML =
+      "<div class="sumrow"><span>Today calls</span><b>" + Number(ai.today?.calls||0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Month calls</span><b>" + Number(ai.month?.calls||0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Input tokens</span><b>" + Number(ai.input_tokens||0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Output tokens</span><b>" + Number(ai.output_tokens||0).toLocaleString("en-IN") + "</b></div>" +
+      "<div class="sumrow"><span>Total tokens</span><b>" + Number(ai.total_tokens||0).toLocaleString("en-IN") + "</b></div>";
+  } catch (e) {
+    ids.forEach((id) => { if ($(id)) $(id).innerHTML = errBox(e.message, "loadAnalytics"); });
+  }
+}
 
 async function loadUsage() {
   $("usage-kpis").innerHTML = skeleton(1);
