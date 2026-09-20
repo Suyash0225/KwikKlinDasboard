@@ -2984,10 +2984,14 @@ async function aiCreateCampaignDraft(btn) {
       d.gmb_title ? `GMB: ${d.gmb_title}` : "",
       d.rationale || "",
     ].filter(Boolean).join(" · ");
+    const img = d.creative_file
+      ? `<img src="/admin/media/${encodeURIComponent(d.creative_file)}?key=${encodeURIComponent(KEY)}" alt="Google Business campaign creative" style="width:100%;max-width:420px;border-radius:12px;margin:8px 0">`
+      : "";
     toast("AI offer ready — review it, then Save as draft");
     openModal(`<h3>✨ AI marketing draft</h3>
       <p class="muted">${esc(details)}</p>
       <p><b>Google Business creative</b><br>${esc(d.creative_brief || "Kwik Klin branded laundry visual; no phone number.")}</p>
+      ${img}
       <p><b>GMB copy</b><br>${esc(d.gmb_body || "")}</p>
       <div class="btnrow"><button class="btn" onclick="closeModal()">Use this draft</button></div>`);
   });
