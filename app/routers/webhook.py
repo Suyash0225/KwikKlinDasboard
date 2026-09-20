@@ -212,6 +212,20 @@ def _waha_message_to_meta_shape(event: dict) -> dict | None:
     if not raw_from.endswith("@c.us"):
         return None
     body = str(msg.get("body") or "")
+    # WEBJS button replies expose the selected id/text under _data. Preserve
+    # them in the same [button:<id>] shape used by Meta/our command handlers.
+    data = msg.get("_data") or {}
+    dynamic = data.get("dynamicReplyButtons") or []
+    selected = None
+    for item in dynamic:
+        if isinstance(item, dict):
+            bid = item.get("buttonId") or (item.get("button") or {}).get("id")
+            btext = (item.get("buttonText") or {}).get("displayText") if isinstance(item.get("buttonText"), dict) else item.get("buttonText")
+            if bid:
+                selected = (str(bid), str(btext or ""))
+                break
+    if selected is not None:
+        body = f"[button:{selected[0]}] {selected[1]}".strip()
     return {
         "from": raw_from.split("@", 1)[0],
         "id": str(msg.get("id") or ""),
