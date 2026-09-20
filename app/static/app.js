@@ -1066,7 +1066,7 @@ async function initNewBill() {
   if (!LINES.length) addLine();
   if ($("nb-newrate")) $("nb-newrate").style.display = canEditRates() ? "" : "none";
   renderLines();
-  const days = NB_URG.on ? urgCfg().days : (parseInt(SETTINGS_CACHE.turnaround_days) || 2);
+  const days = NB_URG.on ? urgCfg().days : Math.max(5, parseInt(SETTINGS_CACHE.turnaround_days) || 5);
   $("nb-date").value = isoInDays(days);
   nbPaintUrgent();
   $("nb-gst").checked = !!SETTINGS_CACHE.gst_default_on;
@@ -1162,13 +1162,24 @@ const urgDefault = (sub) => {
   const raw = c.type === "flat" ? c.value : (sub * c.value) / 100;
   return raw > 0 ? Math.round(raw) : 0;
 };
-const isoInDays = (d) => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
+const isoInDays = (d) => {
+  let cur = new Date();
+  let left = Math.max(0, Number(d) || 0);
+  const holidays = new Set((SETTINGS_CACHE && SETTINGS_CACHE.delivery_holidays) || []);
+  while (left > 0) {
+    cur.setDate(cur.getDate() + 1);
+    const iso = cur.toISOString().slice(0, 10);
+    if (cur.getDay() === 0 || holidays.has(iso)) continue; // Sunday / shop holiday
+    left--;
+  }
+  return cur.toISOString().slice(0, 10);
+};
 const daysWord = (d) => (d === 0 ? "today" : d === 1 ? "tomorrow" : `in ${d} days`);
 function nbToggleUrgent(force) {
   NB_URG.on = force === undefined ? !NB_URG.on : !!force;
   NB_URG.manual = false;
   const c = urgCfg();
-  const normalDays = parseInt((SETTINGS_CACHE || {}).turnaround_days) || 2;
+  const normalDays = Math.max(5, parseInt((SETTINGS_CACHE || {}).turnaround_days) || 5);
   $("nb-date").value = isoInDays(NB_URG.on ? c.days : normalDays);
   nbPaintUrgent();
   calcBill();
