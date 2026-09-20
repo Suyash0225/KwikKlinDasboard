@@ -869,16 +869,24 @@ async def run_payment_reminders() -> int:
             if not await _claim(key):
                 continue
             try:
+                # Reminder ke waqt ek short-lived offer banega. Bill page par
+                # offer amount live calculate hota hai; AI khud discount invent nahi karta.
+                from app.services import payment_offers
+                offer = await payment_offers.create_offer(
+                    db, order=o, kind="reminder", created_by="scheduler"
+                )
+                bill_url = await bill_link.url_for(db, o)
+                if offer is not None:
+                    bill_url = payment_offers.url_for_offer(bill_url, offer)
                 await send_message(
                     db, to_phone=cust.phone,
-                    # lang="en": teeno reminder raste ek hi bhasha bolein —
-                    # dashboard, staff panel, aur ye. Grahak ko pata nahi
-                    # chalna chahiye ki kisne yaad dilaya.
                     text=get_message(
                         kind, lang="en", order_number=o.order_number, amount=f"{due}",
-                    ) + bill_link.message_line(await bill_link.url_for(db, o)),
+                    )
+                    + bill_link.message_line(bill_url),
                 )
                 sends += 1
+                await db.commit()
             except SendError:
                 log.info("payment_reminder_not_sent", order=o.order_number)
         if flagged and await _claim(f"payrem-adminflag:{now_ist.strftime('%Y-%m-%d')}"):
