@@ -18,7 +18,7 @@
 <!-- app.css is mobile-first and carries every breakpoint — one sheet, one cascade.
      It stays render-blocking on purpose: it IS the critical CSS (too big to inline). -->
 <link rel="stylesheet" href="/admin/static/tokens.css?v=rs1">
-<link rel="stylesheet" href="/admin/static/app.css?v=rs5">
+<link rel="stylesheet" href="/admin/static/app.css?v=rs6">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
 <script src="/admin/static/app.js?v=rs5" defer></script>
 </head>
@@ -411,6 +411,7 @@
         <b>📄 Documents — upload a PDF/TXT/CSV and the agent reads it</b>
         <p class="muted" style="margin-top:4px">Price lists, policies, service brochures — the agent pulls the matching part into its answers. Re-uploading a file with the same name replaces it.</p>
         <div class="filters" style="margin-top:8px">
+          <select id="doc-aud" aria-label="Document audience" title="Who can use this document"><option value="customer">For customers</option><option value="staff">For staff</option><option value="all">Everyone</option></select>
           <label class="btn ghost" style="cursor:pointer">⬆ Choose file<input type="file" accept=".pdf,.txt,.csv,.md" style="display:none" onchange="uploadDoc(this)"></label>
           <span class="muted" id="doc-status"></span>
         </div>
@@ -547,6 +548,23 @@
               <input type="checkbox" id="bp-gstdef"> Enable GST by default on new bills</label>
           </div>
           <button class="btn" style="margin-top:12px" onclick="saveProfile(this)">Save profile configurations</button>
+        </div>
+
+        <div class="card" style="margin-bottom:14px" id="waha-connect-card">
+          <b>📱 WhatsApp connection</b>
+          <p class="muted" style="margin:6px 0 10px">Connect the Kwik Klin WhatsApp number without opening Docker or exposing WAHA to the internet.</p>
+          <div id="waha-status" class="connstate">Checking connection…</div>
+          <div id="waha-qr-wrap" style="display:none;margin-top:12px;text-align:center">
+            <img id="waha-qr" alt="WhatsApp pairing QR code"
+                 style="width:276px;height:276px;max-width:100%;image-rendering:auto;border-radius:10px;border:1px solid var(--line,#d9dee8)">
+            <p class="muted" style="margin:8px 0">Open WhatsApp → Linked Devices → Link a Device and scan this QR.</p>
+            <button class="btn ghost sm" onclick="wahaRefreshQr()">↻ Refresh QR</button>
+          </div>
+          <div class="act" style="margin-top:12px">
+            <button class="btn" id="waha-connect-btn" onclick="wahaConnect()">Connect WhatsApp</button>
+            <button class="btn ghost" id="waha-check-btn" onclick="wahaLoad()">↻ Check status</button>
+          </div>
+          <small class="muted">Security: WAHA remains private on the server; the WAHA API key is never sent to the browser.</small>
         </div>
 
         <div class="card" style="margin-bottom:14px">

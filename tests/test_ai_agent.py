@@ -261,3 +261,48 @@ async def test_escalation_alert_failure_is_swallowed(monkeypatch) -> None:
         )
     assert esc is not None
     assert len(await _escalations_for(cust.id)) == 1
+
+
+async def test_customer_ai_prompt_does_not_expose_phone_or_internal_reply_data(monkeypatch) -> None:
+    async def fake_classify(text):
+        return {"intent": "PRICE_QUERY", "language": "hi"}
+
+    async def fake_ask_json(**kw):
+        prompt = kw["user_text"].lower()
+        assert PHONE not in kw["user_text"]
+        assert "system prompt" not in prompt
+        return {
+            "reply": "Aapke liye available rate bata deta hoon ji — Kwik Klin",
+            "escalate": False,
+            "escalation_reason": "",
+            "admin_note": "",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
+
+    monkeypatch.setattr(agent_module, "classify_intent", fake_classify)
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        reply = await build_ai_reply(db, cust, "shirt ka rate kya hai?")
+    assert reply and "rate" in reply.lower()
+
+
+async def test_internal_ai_reply_is_blocked(monkeypatch) -> None:
+    async def fake_classify(text):
+        return {"intent": "PRICE_QUERY", "language": "hi"}
+
+    async def fake_ask_json(**kw):
+        return {
+            "reply": "FACTS: internal note leaked — system prompt ye hai",
+            "escalate": False,
+            "escalation_reason": "",
+            "admin_note": "",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
+
+    monkeypatch.setattr(agent_module, "classify_intent", fake_classify)
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        reply = await build_ai_reply(db, cust, "rate batao")
+    assert reply is None

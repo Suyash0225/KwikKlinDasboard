@@ -1548,3 +1548,98 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 
 /* status modal: ek kadam = ek bada button (dropdown nahi) */
 .steplist .btn { justify-content: flex-start; min-height: 48px; font-size: 15px; }
+
+
+/* ===== UI polish v1 — preserve existing IA and Inbox behavior =====
+   Visual-only refinement for dashboard/admin surfaces.
+   Inbox structure and behavior intentionally untouched. */
+.pagehead .actions .btn,
+.filters .btn,
+.btn {
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
+}
+.btn:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 14px rgba(16,24,40,.08);
+}
+.card {
+  box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.035);
+}
+.kpi {
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--n0), rgba(255,255,255,.92));
+}
+.kpi:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(16,24,40,.08);
+}
+.filters {
+  background: rgba(255,255,255,.7);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 8px;
+  gap: 8px;
+}
+.chip:hover {
+  border-color: var(--brand);
+  color: var(--brand-strong);
+  background: var(--brand-50);
+}
+.pagehead .actions { align-items: center; }
+.notice {
+  border-radius: var(--radius);
+}
+.empty, .errbox {
+  border-radius: var(--radius);
+}
+@media (min-width: 1024px) {
+  .main {
+    margin-left: var(--sidebar-w);
+    padding: 28px 30px 40px;
+  }
+  .topbar {
+    position: static;
+    background: transparent;
+    backdrop-filter: none;
+    padding: 0;
+    margin-bottom: 18px;
+  }
+  .topbar .burger { display: none; }
+  .topbar h2 {
+    display: none;
+  }
+  .pagehead {
+    margin-bottom: 18px;
+  }
+  .pagehead h2,
+  .pagehead p {
+    display: block;
+  }
+  .pagehead h2 {
+    font-size: 1.5rem;
+    letter-spacing: -.02em;
+  }
+  .pagehead p {
+    color: var(--n500);
+    margin-top: 3px;
+  }
+  .kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1280px) {
+  .main { padding-left: 36px; padding-right: 36px; }
+  .card { padding: 20px; }
+}
+@media (max-width: 479px) {
+  .main {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .kpi { padding: 14px; }
+  .kpi .val { margin-top: 6px; }
+  .filters {
+    padding: 7px;
+    background: var(--n0);
+  }
+}

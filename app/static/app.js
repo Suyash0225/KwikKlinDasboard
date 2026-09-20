@@ -3229,7 +3229,7 @@ function renderDocs(docs) {
   DOCS_CACHE = docs;
   $("doc-list").innerHTML = docs.length ? docs.map((d, i) => `
     <div class="sumrow"><span>📄 <b>${esc(d.document)}</b> <span class="tag">${d.chunks} parts</span>
-      <span class="muted">${fmtWhen(d.uploaded_at)}</span></span>
+      <span class="tag">${esc(d.audience || "customer")}</span> <span class="muted">${fmtWhen(d.uploaded_at)}</span></span>
       <button class="btn sm danger" aria-label="Delete document" onclick="delDocAt(${i})">✕</button></div>`).join("")
     : `<p class="muted">No documents yet.</p>`;
 }
@@ -3237,10 +3237,11 @@ async function uploadDoc(input) {
   if (!input.files || !input.files[0]) return;
   const fd = new FormData();
   fd.append("file", input.files[0]);
+  fd.append("audience", $("doc-aud")?.value || "customer");
   $("doc-status").textContent = "Reading " + input.files[0].name + "…";
   try {
     const r = await api("/admin/api/training/upload", { method: "POST", body: fd });
-    toast(`${r.document} learned — ${r.chunks} parts, live now`);
+    toast(`${r.document} learned — ${r.chunks} parts (${r.audience}), live now`);
     $("doc-status").textContent = "";
     loadTraining();
   } catch (e) { toast(e.message, true); $("doc-status").textContent = ""; }
@@ -3469,6 +3470,88 @@ function stTab(t) {
   document.querySelectorAll("[data-st]").forEach((el) => el.classList.toggle("on", el.dataset.st === t));
 }
 
+let WAHA_QR_URL = null;
+let WAHA_POLL = null;
+
+function wahaStatusText(s) {
+  const status = s.status || "";
+  const state = s.state || "";
+  if (status === "WORKING" || state === "CONNECTED") {
+    return `<span class="dot"></span> <b>Connected</b>${s.push_name ? " · " + esc(s.push_name) : ""}${s.number_masked ? " · " + esc(s.number_masked) : ""}`;
+  }
+  if (status === "SCAN_QR_CODE") return "🟡 Waiting for QR scan";
+  if (status === "STARTING") return "🟡 Starting WhatsApp…";
+  if (status === "NOT_CREATED") return "⚪ WhatsApp session not created yet";
+  if (status === "FAILED") return "🔴 WhatsApp session failed — restart the connection";
+  return status ? `⚪ ${esc(status)}` : "⚪ Not connected";
+}
+
+function wahaClearQr() {
+  const img = $("waha-qr");
+  if (WAHA_QR_URL) { URL.revokeObjectURL(WAHA_QR_URL); WAHA_QR_URL = null; }
+  if (img) img.removeAttribute("src");
+  const wrap = $("waha-qr-wrap");
+  if (wrap) wrap.style.display = "none";
+}
+
+async function wahaLoad() {
+  const box = $("waha-status");
+  if (!box) return;
+  try {
+    const s = await api("/admin/api/whatsapp/waha/status");
+    box.innerHTML = wahaStatusText(s);
+    const btn = $("waha-connect-btn");
+    if (btn) btn.textContent = (s.status === "WORKING" || s.state === "CONNECTED") ? "WhatsApp Connected" : "Connect WhatsApp";
+    if (s.status === "SCAN_QR_CODE") {
+      await wahaRefreshQr();
+      clearTimeout(WAHA_POLL);
+      WAHA_POLL = setTimeout(wahaLoad, 15000);
+    } else if (s.status === "STARTING") {
+      wahaClearQr();
+      clearTimeout(WAHA_POLL);
+      WAHA_POLL = setTimeout(wahaLoad, 3000);
+    } else {
+      wahaClearQr();
+      clearTimeout(WAHA_POLL);
+    }
+  } catch (e) {
+    box.textContent = e.message;
+    wahaClearQr();
+    clearTimeout(WAHA_POLL);
+  }
+}
+
+async function wahaConnect() {
+  const btn = $("waha-connect-btn");
+  if (!btn) return;
+  await busy(btn, async () => {
+    const s = await api("/admin/api/whatsapp/waha/start", { method: "POST" });
+    toast(s.state === "CONNECTED" || s.status === "WORKING" ? "WhatsApp connected" : "WhatsApp connection started");
+    await wahaLoad();
+  });
+}
+
+async function wahaRefreshQr() {
+  const wrap = $("waha-qr-wrap"), img = $("waha-qr");
+  if (!wrap || !img) return;
+  const r = await fetch("/admin/api/whatsapp/waha/qr?ts=" + Date.now(), {
+    headers: { "X-API-Key": KEY },
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  if (r.status === 401) { showLogin(); throw new Error("Please sign in"); }
+  if (!r.ok) {
+    let d = "QR code is not available yet";
+    try { d = (await r.json()).detail || d; } catch (e) {}
+    throw new Error(d);
+  }
+  const blob = await r.blob();
+  if (WAHA_QR_URL) URL.revokeObjectURL(WAHA_QR_URL);
+  WAHA_QR_URL = URL.createObjectURL(blob);
+  img.src = WAHA_QR_URL;
+  wrap.style.display = "";
+}
+
 async function loadSettings() {
   mfLoad();
   try {
@@ -3522,6 +3605,7 @@ async function loadSettings() {
     $("bp-gstpct").value = s.gst_percent;
     $("bp-gstdef").checked = !!s.gst_default_on;
     gbpLoad();
+    wahaLoad();
   } catch (e) { toast(e.message, true); }
 }
 

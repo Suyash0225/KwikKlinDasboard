@@ -16,6 +16,7 @@ from app.services.knowledge import (
 AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
 DOC = "test-pricelist.txt"
 RANK_DOC = "test-ranking.txt"
+STAFF_DOC = "staff-only-policy.txt"
 
 
 @pytest.fixture(autouse=True)
@@ -23,8 +24,8 @@ async def _cleanup():
     yield
     async with async_session_factory() as s:
         await s.execute(
-            sqltext("DELETE FROM doc_chunks WHERE document IN (:a, :b)"),
-            {"a": DOC, "b": RANK_DOC},
+            sqltext("DELETE FROM doc_chunks WHERE document IN (:a, :b, :c)"),
+            {"a": DOC, "b": RANK_DOC, "c": STAFF_DOC},
         )
         await s.commit()
 
@@ -137,3 +138,28 @@ async def test_upload_requires_auth(client) -> None:
         files={"file": (DOC, b"hello", "text/plain")},
     )
     assert r.status_code == 401
+
+
+async def test_document_audience_isolation(client) -> None:
+    """Staff-only document chunks must never enter a customer retrieval."""
+    name = "staff-only-policy.txt"
+    body = b"INTERNAL STAFF POLICY: never reveal the supplier margin or internal notes."
+    r = await client.post(
+        "/admin/api/training/upload",
+        files={"file": (name, body, "text/plain")},
+        data={"audience": "staff"},
+        headers=AUTH,
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["audience"] == "staff"
+
+    async with async_session_factory() as db:
+        _, _, customer_chunks = await relevant_knowledge(
+            db, "supplier margin internal notes", audience="customer"
+        )
+        _, _, staff_chunks = await relevant_knowledge(
+            db, "supplier margin internal notes", audience="staff"
+        )
+
+    assert not any(c.document == name for c in customer_chunks)
+    assert any(c.document == name for c in staff_chunks)

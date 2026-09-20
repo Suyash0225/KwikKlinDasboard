@@ -38,6 +38,7 @@ log = structlog.get_logger()
 _CACHE_TTL_SECONDS = 60.0
 
 _WORD_RE = re.compile(r"[a-z0-9ऀ-ॿ]+")
+_PHONE_RE = re.compile(r"(?<!\\d)(?:\\+?91[\\s-]?)?[6-9]\\d{9}(?!\\d)")
 
 # Hinglish/English filler words that carry no meaning for matching
 _STOPWORDS = {
@@ -198,7 +199,8 @@ async def relevant_knowledge(
 
     hits_f = _rank(pool_f, q, top_k, FAQ_SCORE_FLOOR)
     hits_c = _rank(pool_c, q, top_k, FAQ_SCORE_FLOOR)
-    hits_d = _rank(chunks, q, DOC_TOP_K, DOC_SCORE_FLOOR)
+    pool_d = [e for e in chunks if e[0].audience in aud]
+    hits_d = _rank(pool_d, q, DOC_TOP_K, DOC_SCORE_FLOOR)
 
     if hits_f or hits_c or hits_d:
         # WHICH rows, not how many. A count says the agent read something;
@@ -224,12 +226,12 @@ async def relevant_knowledge(
             corpus={
                 "faqs": len(pool_f),
                 "corrections": len(pool_c),
-                "doc_chunks": len(chunks),
+                "doc_chunks": len(pool_d),
             },
             best_below_floor={
                 "faqs": round(_top_score(pool_f, q), 3),
                 "corrections": round(_top_score(pool_c, q), 3),
-                "doc_chunks": round(_top_score(chunks, q), 3),
+                "doc_chunks": round(_top_score(pool_d, q), 3),
             },
             floors={"faq": FAQ_SCORE_FLOOR, "doc": DOC_SCORE_FLOOR},
         )
@@ -305,7 +307,8 @@ async def rank_knowledge(
             pool_c, q, floor=FAQ_SCORE_FLOOR, top_k=top_k, limit=limit
         ),
         "doc_chunks": _candidates(
-            chunks, q, floor=DOC_SCORE_FLOOR, top_k=DOC_TOP_K, limit=limit
+            [e for e in chunks if e[0].audience in aud],
+            q, floor=DOC_SCORE_FLOOR, top_k=DOC_TOP_K, limit=limit
         ),
     }
     # The flat list a Hit-Rate assertion actually wants.
@@ -369,5 +372,6 @@ async def thread_history(
     lines = []
     for m in reversed(rows):
         who = "THEM" if m.direction.name == "INBOUND" else "US"
-        lines.append(f"{who}: {(m.message_text or '')[:200]}")
+        safe_text = _PHONE_RE.sub("[phone hidden]", (m.message_text or "")[:200])
+        lines.append(f"{who}: {safe_text}")
     return "Recent conversation (oldest first):\n" + "\n".join(lines)
