@@ -1367,7 +1367,7 @@ async def create_bill(
     # Bina iske customer se "kab milega" ka koi jawab hi nahi hota tha.
     # Urgent = owner ki "urgent delivery days" (default kal).
     try:
-        turnaround = int(await app_settings.get(db, "turnaround_days"))
+        turnaround = max(5, int(await app_settings.get(db, "turnaround_days")))
     except Exception:
         turnaround = 2
     delivery = (
