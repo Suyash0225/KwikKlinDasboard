@@ -18,6 +18,14 @@ const WA_TEXT = {
 document.querySelectorAll("[data-wa]").forEach((a) => {
   a.href = wa(WA_TEXT[a.dataset.wa]);
   a.target = "_blank"; a.rel = "noopener";
+  a.addEventListener("click", () => {
+    if (typeof gtag === "function") gtag("event", "contact_whatsapp", { lead_source: "website", cta: a.dataset.wa || "unknown" });
+  });
+});
+document.querySelectorAll('a[href^="tel:"]').forEach((a) => {
+  a.addEventListener("click", () => {
+    if (typeof gtag === "function") gtag("event", "contact_phone", { lead_source: "website" });
+  });
 });
 document.getElementById("yr").textContent = new Date().getFullYear();
 
@@ -66,6 +74,7 @@ document.getElementById("book").addEventListener("submit", (e) => {
   const msg = "Hello Kwik Klin, I would like to book a pickup.\n" +
     "Name: " + v("b-name") + "\nMobile: " + phone + "\nLocality: " + v("b-area") + ", Varanasi" +
     "\nService: " + v("b-service") + "\nPreferred pickup: " + v("b-when");
+  if (typeof gtag === "function") gtag("event", "generate_lead", { lead_source: "website_booking", value: 1, currency: "INR" });
   window.open(wa(msg), "_blank", "noopener");
 });
 
@@ -176,6 +185,9 @@ function say(text, who, waKey, waLabel) {
     const a = document.createElement("a");
     a.className = "btn btn-wa"; a.target = "_blank"; a.rel = "noopener";
     a.href = wa(WA_TEXT[waKey]); a.textContent = waLabel || "Continue on WhatsApp";
+    a.addEventListener("click", () => {
+      if (typeof gtag === "function") gtag("event", "contact_whatsapp", { lead_source: "website_chat", cta: waKey });
+    });
     m.appendChild(a);
   }
   chatBody.appendChild(m);
