@@ -269,7 +269,10 @@ async def receive_waha_webhook(
                     await _handle_inbound_message(
                         msg,
                         db,
-                        profile_name=str((payload.get("me") or {}).get("pushName") or ""),
+                        # WAHA's me.pushName is the business account name,
+                        # not the sender's profile. Do not store it as a
+                        # customer's name.
+                        profile_name="",
                     )
                     await db.commit()
                 finally:
