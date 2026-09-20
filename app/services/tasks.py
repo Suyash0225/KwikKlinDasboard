@@ -204,29 +204,29 @@ async def _send_to_assignee(
                 order_details = "\n" + "\n".join(lines) + "\n"
             except Exception:
                 log.exception("task_order_context_failed", code=task.code)
-    head = "🔴 URGENT" if task.urgent else "📋 WORK ASSIGNMENT"
+    head = "🔴 URGENT" if task.urgent else "📋 KAAM ASSIGNMENT"
     if task.kind == "wash":
-        head = "🧺 WASHING ASSIGNMENT"
+        head = "🧺 WASHING KAAM"
     elif task.kind == "pickup":
-        head = "🛵 PICKUP ASSIGNMENT"
+        head = "🛵 PICKUP KAAM"
     elif task.kind == "delivery":
-        head = "🚚 DELIVERY ASSIGNMENT"
+        head = "🚚 DELIVERY KAAM"
     if first:
         body = (
             f"{head} [{task.code}]{order_bit}\n"
             f"━━━━━━━━━━━━━━━━\n"
             f"{task.title}\n"
             f"{order_details}\n"
-            f"Please complete this task and reply: done {task.code}\n"
+            f"Kaam complete hone ke baad bas reply karein: done {task.code}\n"
             f"— Kwik Klin"
         )
     else:
         body = (
-            f"⏰ TASK REMINDER [{task.code}]{order_bit}\n"
+            f"⏰ KAAM KA REMINDER [{task.code}]{order_bit}\n"
             f"━━━━━━━━━━━━━━━━\n"
             f"{task.title}\n"
             f"{order_details}\n"
-            f"Please send an update or reply: done {task.code}\n"
+            f"Kaam ka update bhej dein, ya complete hone par reply karein: done {task.code}\n"
             f"— Kwik Klin"
         )
     # Tap = zero typing. Button id mein task ka CODE hai, isliye 5-6 kaam
