@@ -188,6 +188,130 @@ async def receive_webhook(
     return JSONResponse({"status": "received"})
 
 
+def _waha_signature_valid(body: bytes, header: str | None) -> bool:
+    """Verify WAHA's SHA-512 HMAC over the raw webhook body."""
+    if not settings.WAHA_WEBHOOK_HMAC_KEY or not header:
+        return False
+    expected = hmac.new(
+        settings.WAHA_WEBHOOK_HMAC_KEY.encode(),
+        body,
+        hashlib.sha512,
+    ).hexdigest()
+    return hmac.compare_digest(expected, header)
+
+
+def _waha_message_to_meta_shape(event: dict) -> dict | None:
+    """Translate a WAHA message event into the existing inbound handler shape."""
+    if event.get("event") != "message":
+        return None
+    msg = event.get("payload") or {}
+    if msg.get("fromMe"):
+        return None
+    raw_from = str(msg.get("from") or "")
+    # Groups/statuses are not customer inbox conversations.
+    if not raw_from.endswith("@c.us"):
+        return None
+    body = str(msg.get("body") or "")
+    return {
+        "from": raw_from.split("@", 1)[0],
+        "id": str(msg.get("id") or ""),
+        "type": "text",
+        "text": {"body": body},
+        "context": (
+            {"id": str((msg.get("replyTo") or {}).get("id"))}
+            if isinstance(msg.get("replyTo"), dict) and (msg.get("replyTo") or {}).get("id")
+            else None
+        ),
+    }
+
+
+@router.post("/webhook/waha")
+async def receive_waha_webhook(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> JSONResponse:
+    """Receive WAHA message/ack/session events.
+
+    WAHA is localhost-only; this public endpoint is authenticated with the
+    per-session HMAC configured in WAHA. Only the configured home session is
+    accepted, and only customer messages enter the existing conversation/AI
+    pipeline.
+    """
+    body = await request.body()
+    if not _waha_signature_valid(body, request.headers.get("X-Webhook-Hmac")):
+        log.warning("waha_bad_signature")
+        return JSONResponse({"error": "invalid signature"}, status_code=403)
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return JSONResponse({"status": "ignored"}, status_code=400)
+
+    if str(payload.get("session") or "") != settings.WAHA_SESSION:
+        log.warning("waha_unknown_session", session=payload.get("session"))
+        return JSONResponse({"status": "ignored"}, status_code=403)
+
+    event = await _journal_event(db, "waha", body, payload)
+    if event is None:
+        return JSONResponse({"status": "duplicate"})
+
+    try:
+        event_name = payload.get("event")
+        if event_name == "message":
+            msg = _waha_message_to_meta_shape(payload)
+            if msg is not None and msg.get("id"):
+                from app.services import tenant_context
+                home_tid = await tenant_context.get_home_tenant_id()
+                if home_tid is None:
+                    raise RuntimeError("home tenant is not configured")
+                await db.commit()
+                token = tenant_context.current_tenant_id.set(home_tid)
+                try:
+                    await _handle_inbound_message(
+                        msg,
+                        db,
+                        profile_name=str((payload.get("me") or {}).get("pushName") or ""),
+                    )
+                    await db.commit()
+                finally:
+                    tenant_context.current_tenant_id.reset(token)
+        elif event_name == "message.ack":
+            ack = payload.get("payload") or {}
+            ack_name = str(ack.get("ackName") or "").upper()
+            status_map = {
+                "PENDING": "sent",
+                "SERVER": "sent",
+                "DEVICE": "delivered",
+                "READ": "read",
+                "PLAYED": "read",
+                "ERROR": "failed",
+            }
+            status = status_map.get(ack_name)
+            if status:
+                from app.services import tenant_context
+                home_tid = await tenant_context.get_home_tenant_id()
+                if home_tid is not None:
+                    await db.commit()
+                    token = tenant_context.current_tenant_id.set(home_tid)
+                    try:
+                        await _record_delivery_status(
+                            db, str(ack.get("id") or ""), status
+                        )
+                    finally:
+                        tenant_context.current_tenant_id.reset(token)
+        elif event_name == "session.status":
+            state = str((payload.get("payload") or {}).get("status") or "")
+            log.info("waha_session_status", session=settings.WAHA_SESSION, status=state)
+        else:
+            log.info("waha_event_ignored", event=event_name)
+    except Exception as exc:
+        log.exception("waha_webhook_processing_failed")
+        await _mark_event(db, event.event_key, "failed", error=repr(exc))
+    else:
+        await _mark_event(db, event.event_key, "processed")
+
+    return JSONResponse({"status": "received"})
+
+
 @router.post("/webhook/dotpe")
 async def receive_dotpe_webhook(
     request: Request, db: AsyncSession = Depends(get_db)
