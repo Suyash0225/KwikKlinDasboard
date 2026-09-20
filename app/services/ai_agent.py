@@ -35,7 +35,7 @@ _REPLY_SCHEMA = {
         "reply": {"type": "string"},
         "intent": {
             "type": "string",
-            "enum": ["ORDER_STATUS", "NEW_ORDER", "PRICE_QUERY", "COMPLAINT", "GREETING", "OTHER"],
+            "enum": ["ORDER_STATUS", "NEW_ORDER", "PRICE_QUERY", "BILL_REQUEST", "COMPLAINT", "GREETING", "OTHER"],
         },
         "language": {"type": "string", "enum": ["hi", "en"]},
         "action": {"type": "string", "enum": ["NONE", "ANSWER", "SEND_BILL", "CREATE_LEAD", "FOLLOW_UP_LEAD", "CREATE_ORDER", "ESCALATE", "CREATE_CAMPAIGN", "REFERRAL_REQUEST"]},
@@ -257,7 +257,7 @@ async def build_ai_reply(
 
     lang = out.get("language") if out.get("language") in ("hi", "en") else "hi"
     intent = out.get("intent") if out.get("intent") in {
-        "ORDER_STATUS", "NEW_ORDER", "PRICE_QUERY", "COMPLAINT", "GREETING", "OTHER"
+        "ORDER_STATUS", "NEW_ORDER", "PRICE_QUERY", "BILL_REQUEST", "COMPLAINT", "GREETING", "OTHER"
     } else "OTHER"
 
     action = out.get("action") if out.get("action") in {
