@@ -267,6 +267,15 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
         await run_task_followups()
     except Exception:
         log.exception("task_followups_failed")
+    # Ops agent: delivery promise ke 3 din pehle hi washer ko actual
+    # kaam/ping mile. Ye DB-only planner hai — koi LLM/token nahi.
+    try:
+        from app.services import ops_agent
+        async with async_session_factory() as db:
+            await ops_agent.plan_due_wash_tasks(db)
+    except Exception:
+        log.exception("ops_agent_wash_planner_failed")
+
     # Ops agent: hataye gaye/inactive staff ke khule kaam doosre ko; phir
     # stage/delivery-date se aage nikle orders ka ek alert manager ko
     try:
