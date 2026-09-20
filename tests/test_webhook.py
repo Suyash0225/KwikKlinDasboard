@@ -11,6 +11,7 @@ from app.config import settings
 from app.database import async_session_factory
 from app.models import Conversation, Customer, Staff
 from app.services.messages import get_message
+from app.routers.webhook import _waha_message_to_meta_shape
 from tests.conftest import (
     TEST_WASHER_PHONE,
     TEST_WASHER_PHONE_RAW,
@@ -429,3 +430,27 @@ async def test_single_message_still_replies_instantly(client, sent) -> None:
     assert r.status_code == 200
     replies = [m for m in sent if m["to"] == TEST_CUSTOMER_PHONE]
     assert len(replies) == 1
+
+
+async def test_waha_button_reply_preserves_selected_button_id() -> None:
+    event = {
+        "event": "message",
+        "session": "kwikklin",
+        "payload": {
+            "id": "false_919999999999@c.us_BUTTON1",
+            "from": "919999999999@c.us",
+            "fromMe": False,
+            "body": "ignored body",
+            "_data": {
+                "dynamicReplyButtons": [
+                    {
+                        "buttonId": "pay_now",
+                        "buttonText": {"displayText": "💳 Pay Now"},
+                    }
+                ]
+            },
+        },
+    }
+    msg = _waha_message_to_meta_shape(event)
+    assert msg is not None
+    assert msg["text"]["body"] == "[button:pay_now] 💳 Pay Now"
