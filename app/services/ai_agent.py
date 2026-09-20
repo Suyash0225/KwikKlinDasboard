@@ -25,7 +25,7 @@ from app.services.escalation import raise_escalation
 from app.services.intent import classify_intent
 from app.services.llm_client import LLMError
 from app.services.messages import CUSTOMER_LANG, get_message, status_label
-from app.services.order_service import get_active_orders_for_phone
+from app.services.order_service import get_active_orders_for_phone, send_bill_to_customer
 from app.services.tenant_context import manager_phone
 
 log = structlog.get_logger()
@@ -157,6 +157,25 @@ async def build_ai_reply(
     # Acknowledge what arrived, then let the owner take it from there.
     if not text:
         return None
+
+    # Billing is a transactional action, not a language-generation task.
+    # Handle common bill requests before the LLM so the customer gets the
+    # real signed bill URL instead of a conversational promise.
+    if re.search(r"\b(?:bill|invoice)\b", text, re.I):
+        order_match = re.search(r"\bKK[- ]\d{8}[- ]\d{2}\b", text, re.I)
+        order_number = order_match.group(0).replace(" ", "-").upper() if order_match else None
+        try:
+            sent = await send_bill_to_customer(db, customer, order_number=order_number)
+        except Exception:
+            log.exception("customer_bill_request_failed")
+            sent = False
+        if sent:
+            return None  # bill sender already sent the customer-facing message
+        return (
+            "I couldn't find an unpaid bill for this number. Please send your order number "
+            "(for example, KK-YYYYMMDD-01), and I'll check it. — " + settings.SHOP_NAME
+        )
+
     if text.startswith("["):
         # A transcribed voice note IS the customer's message — answer it
         # like typed text instead of just confirming the file arrived.
