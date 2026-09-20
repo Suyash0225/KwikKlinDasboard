@@ -532,6 +532,54 @@ async def get_active_orders_for_phone(db: AsyncSession, phone: str) -> list[Orde
     return list(rows)
 
 
+async def send_bill_to_customer(
+    db: AsyncSession,
+    customer: Customer,
+    *,
+    order_number: str | None = None,
+) -> bool:
+    """Send the customer's current unpaid bill deterministically."""
+    from app.services import bill_link
+
+    q = select(Order).where(
+        Order.customer_id == customer.id,
+        Order.status != OrderStatus.CANCELLED,
+        Order.total_amount.isnot(None),
+        Order.payment_status != PaymentStatus.PAID,
+    ).order_by(Order.created_at.desc())
+    if order_number:
+        q = q.where(Order.order_number == order_number.upper())
+    orders = list((await db.execute(q)).scalars().all())
+    if not orders:
+        return False
+
+    if len(orders) > 1 and not order_number:
+        lines = ["🧾 Your unpaid bills:"]
+        for o in orders[:5]:
+            due = max((o.total_amount or Decimal("0")) - (o.amount_paid or Decimal("0")), Decimal("0"))
+            link = await bill_link.url_for(db, o)
+            lines.append("• {} — Due ₹{} — {}".format(o.order_number, due, link))
+        try:
+            await send_message(db, to_phone=customer.phone, text="\n".join(lines) + "\n— Kwik Klin")
+            return True
+        except (SendError, WindowClosedError):
+            return False
+
+    o = orders[0]
+    due = max((o.total_amount or Decimal("0")) - (o.amount_paid or Decimal("0")), Decimal("0"))
+    link = await bill_link.url_for(db, o)
+    await _notify_customer(
+        db, o,
+        message_key="bill_requested",
+        template_name="kk_bill_requested",
+        template_params=[o.order_number, str(o.total_amount or 0), str(due)],
+        total=str(o.total_amount or 0),
+        due=str(due),
+        bill_line=bill_link.message_line(link),
+    )
+    return True
+
+
 async def record_payment(
     db: AsyncSession,
     order: Order,
