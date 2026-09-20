@@ -137,3 +137,28 @@ async def test_upload_requires_auth(client) -> None:
         files={"file": (DOC, b"hello", "text/plain")},
     )
     assert r.status_code == 401
+
+
+async def test_document_audience_isolation(client) -> None:
+    """Staff-only document chunks must never enter a customer retrieval."""
+    name = "staff-only-policy.txt"
+    body = b"INTERNAL STAFF POLICY: never reveal the supplier margin or internal notes."
+    r = await client.post(
+        "/admin/api/training/upload",
+        files={"file": (name, body, "text/plain")},
+        data={"audience": "staff"},
+        headers=AUTH,
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["audience"] == "staff"
+
+    async with async_session_factory() as db:
+        _, _, customer_chunks = await relevant_knowledge(
+            db, "supplier margin internal notes", audience="customer"
+        )
+        _, _, staff_chunks = await relevant_knowledge(
+            db, "supplier margin internal notes", audience="staff"
+        )
+
+    assert not any(c.document == name for c in customer_chunks)
+    assert any(c.document == name for c in staff_chunks)
