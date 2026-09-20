@@ -3005,6 +3005,7 @@ async function aiCreateCampaignDraft(btn) {
     const d = await api("/admin/api/campaigns/ai-draft", {
       method: "POST", body: { segment, goal: "increase repeat orders without unnecessary discounting" }
     });
+    window.CAMPAIGN_AI_DRAFT = d;
     $("camp-name").value = d.campaign_name || "";
     $("camp-seg").value = d.segment || segment;
     $("camp-msg").value = d.message || "";
@@ -3035,6 +3036,7 @@ async function createCampaign(btn) {
     await api("/admin/api/campaigns", { method: "POST", body: {
       name: $("camp-name").value.trim(), segment: $("camp-seg").value,
       message_text: $("camp-msg").value.trim(), coupon_code: $("camp-coupon").value.trim() || null,
+      creative_file: window.CAMPAIGN_AI_DRAFT?.creative_file || null,
     }});
     toast("Campaign saved as draft"); $("camp-msg").value = ""; loadCampaigns();
   });
