@@ -199,7 +199,8 @@ async def relevant_knowledge(
 
     hits_f = _rank(pool_f, q, top_k, FAQ_SCORE_FLOOR)
     hits_c = _rank(pool_c, q, top_k, FAQ_SCORE_FLOOR)
-    hits_d = _rank(chunks, q, DOC_TOP_K, DOC_SCORE_FLOOR)
+    pool_d = [e for e in chunks if e[0].audience in aud]
+    hits_d = _rank(pool_d, q, DOC_TOP_K, DOC_SCORE_FLOOR)
 
     if hits_f or hits_c or hits_d:
         # WHICH rows, not how many. A count says the agent read something;
@@ -225,12 +226,12 @@ async def relevant_knowledge(
             corpus={
                 "faqs": len(pool_f),
                 "corrections": len(pool_c),
-                "doc_chunks": len(chunks),
+                "doc_chunks": len(pool_d),
             },
             best_below_floor={
                 "faqs": round(_top_score(pool_f, q), 3),
                 "corrections": round(_top_score(pool_c, q), 3),
-                "doc_chunks": round(_top_score(chunks, q), 3),
+                "doc_chunks": round(_top_score(pool_d, q), 3),
             },
             floors={"faq": FAQ_SCORE_FLOOR, "doc": DOC_SCORE_FLOOR},
         )
