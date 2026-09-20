@@ -65,6 +65,14 @@ def draw_poster(
     d = ImageDraw.Draw(img)
     # header band
     d.rectangle([0, 0, W, 200], fill="#f97316")
+    logo_path = Path(__file__).resolve().parent.parent / "site" / "assets" / "img" / "logo.png"
+    try:
+        if logo_path.exists():
+            logo = Image.open(logo_path).convert("RGBA")
+            logo.thumbnail((120, 120))
+            img.paste(logo, (W - logo.width - 55, 38), logo)
+    except Exception:
+        log.warning("campaign_logo_load_failed", path=str(logo_path))
     d.text((60, 48), "KWIK KLIN", font=_font(84), fill="white")
     d.text((60, 148), "LAUNDRY  ·  DRY CLEAN  ·  VARANASI", font=_font(30, False), fill="#ffedd5")
     # theme chip
