@@ -314,7 +314,9 @@
             <div><label>Name</label><input id="camp-name" placeholder="diwali-offer"></div>
             <div><label>Audience segment</label><select id="camp-seg"></select></div>
             <div><label>Message — use {name} for the customer's name</label>
-              <textarea id="camp-msg" rows="3" placeholder="Hello {name}! …"></textarea></div>
+              <textarea id="camp-msg" rows="3" placeholder="Hello {name}! …"></textarea>
+              <button class="btn ghost sm" type="button" onclick="aiCreateCampaignDraft(this)" style="margin-top:6px">✨ AI Create Offer</button>
+              <small class="muted">AI suggests offer + coupon + WhatsApp copy + phone-free Google Business creative. Nothing is sent until you approve.</small></div>
             <div><label>Coupon code (optional)</label><input id="camp-coupon" placeholder="OFF10"></div>
             <button class="btn" onclick="createCampaign(this)">Save as draft</button>
           </div>
