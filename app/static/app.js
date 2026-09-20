@@ -2998,6 +2998,42 @@ function renderCampaigns(camps) {
       </div></div>`;
   }).join("");
 }
+function updateCampaignMsgCount() {
+  const el = $("camp-msg");
+  const count = $("camp-msg-count");
+  if (el && count) count.textContent = `${el.value.length}/1000`;
+}
+
+async function uploadCampaignImage(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const d = await api("/admin/api/campaigns/upload-image", { method: "POST", body: fd });
+    window.CAMPAIGN_CUSTOM_IMAGE = d.creative_file;
+    $("camp-image-preview").innerHTML =
+      `<div style="position:relative;display:inline-block">
+        <img src="/admin/media/${encodeURIComponent(d.creative_file)}?key=${encodeURIComponent(KEY)}"
+             alt="Campaign image preview"
+             style="width:220px;max-height:220px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">
+        <button class="btn sm ghost" type="button" onclick="removeCampaignImage()" style="display:block;margin-top:6px">Remove image</button>
+      </div>`;
+    toast("Your campaign image is ready");
+  } catch (e) {
+    input.value = "";
+    toast(e.message, true);
+  }
+}
+
+function removeCampaignImage() {
+  window.CAMPAIGN_CUSTOM_IMAGE = null;
+  const input = $("camp-image");
+  if (input) input.value = "";
+  const preview = $("camp-image-preview");
+  if (preview) preview.innerHTML = "";
+}
+
 async function aiCreateCampaignDraft(btn) {
   const segment = $("camp-seg").value;
   if (!segment) { toast("Select an audience segment first", true); return; }
@@ -3009,6 +3045,7 @@ async function aiCreateCampaignDraft(btn) {
     $("camp-name").value = d.campaign_name || "";
     $("camp-seg").value = d.segment || segment;
     $("camp-msg").value = d.message || "";
+    updateCampaignMsgCount();
     $("camp-coupon").value = d.coupon_code || "";
     const details = [
       d.offer_type === "percent" ? `${d.discount_value}% off` :
@@ -3032,15 +3069,27 @@ async function aiCreateCampaignDraft(btn) {
   });
 }
 async function createCampaign(btn) {
+  const message = $("camp-msg").value.trim();
+  if (!message) { toast("Please add a campaign message", true); return; }
   await busy(btn, async () => {
+    const creativeFile = window.CAMPAIGN_CUSTOM_IMAGE || window.CAMPAIGN_AI_DRAFT?.creative_file || null;
     await api("/admin/api/campaigns", { method: "POST", body: {
       name: $("camp-name").value.trim(), segment: $("camp-seg").value,
-      message_text: $("camp-msg").value.trim(), coupon_code: $("camp-coupon").value.trim() || null,
-      creative_file: window.CAMPAIGN_AI_DRAFT?.creative_file || null,
+      message_text: message, coupon_code: $("camp-coupon").value.trim() || null,
+      creative_file: creativeFile,
     }});
-    toast("Campaign saved as draft"); $("camp-msg").value = ""; loadCampaigns();
+    toast("Campaign saved as draft");
+    $("camp-msg").value = "";
+    $("camp-coupon").value = "";
+    $("camp-name").value = "";
+    window.CAMPAIGN_CUSTOM_IMAGE = null;
+    window.CAMPAIGN_AI_DRAFT = null;
+    removeCampaignImage();
+    updateCampaignMsgCount();
+    loadCampaigns();
   });
 }
+
 function approveCampaign(id) {
   confirmDialog("Send this campaign now? Only opted-in customers are messaged; quiet hours are respected.", async () => {
     try { const r = await api(`/admin/api/campaigns/${id}/approve`, { method: "POST" }); toast(`Sending to ${r.queued} customers`); loadCampaigns(); }
