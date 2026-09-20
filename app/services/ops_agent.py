@@ -27,6 +27,8 @@ WhatsApp work order.
 Kabhi raise nahi karta: kaam baantne ki galti se bill nahi girna chahiye.
 """
 
+from datetime import date, timedelta
+
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -136,7 +138,7 @@ async def on_order_created(db: AsyncSession, order: Order) -> dict:
                 # washer yet — the scheduler will create the task in the
                 # preparation window. This keeps WhatsApp quiet and avoids
                 # unnecessary staff messages.
-                if order.expected_delivery is None or order.expected_delivery <= __import__("datetime").date.today() + __import__("datetime").timedelta(days=3):
+                if order.expected_delivery is None or order.expected_delivery <= date.today() + timedelta(days=3):
                     task = await task_service.create_task(
                         db,
                         title=f"{who} — wash & iron: {items_summary(order)[:160]}",
