@@ -2,7 +2,7 @@
 
 raise_escalation() NEVER raises — an escalation failure must not break the
 webhook or an in-flight reply. The DB row is the source of truth; the
-WhatsApp alerts are best-effort and go to the whole team (see team.py).
+WhatsApp alerts are best-effort and go only to admin/owner recipients (see team.py).
 """
 
 import uuid
