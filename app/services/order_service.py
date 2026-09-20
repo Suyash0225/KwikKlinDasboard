@@ -257,9 +257,9 @@ async def create_order(
     except Exception:
         log.exception("lead_convert_hook_failed")
 
+    from app.services import payment_offers as _payment_offers
     payment_offer = None
     try:
-        from app.services import payment_offers as _payment_offers
         payment_offer = await _payment_offers.create_offer(
             db, order=order, kind="advance", created_by=created_by
         )
