@@ -173,20 +173,61 @@ async def _send_to_assignee(
 ) -> bool:
     """WhatsApp the assignee. False = could not deliver (logged, never raises)."""
     order_bit = ""
+    order_details = ""
     if task.order_id:
         order = await db.get(Order, task.order_id)
         if order is not None:
             order_bit = f" ({order.order_number})"
-    head = "🔴 URGENT" if task.urgent else "📋 Kaam"
+            # Staff ko sirf task title nahi, kaam karne ke liye zaroori context
+            # bhi mile. Link signed hai; amount/details DB se hi aate hain.
+            try:
+                from app.models import Customer
+                from app.services.bill_link import url_for as bill_url_for
+                from app.services.work_orders import items_summary
+                customer = await db.get(Customer, order.customer_id)
+                due = max(
+                    (order.total_amount or 0) - (order.amount_paid or 0), 0
+                )
+                lines = [
+                    f"👤 Customer: {(customer.name if customer and customer.name else customer.phone if customer else 'Customer')}",
+                    f"🧺 Items: {items_summary(order)}",
+                ]
+                if order.expected_delivery:
+                    lines.append(f"📅 Delivery: {order.expected_delivery.strftime('%d %b %Y')}")
+                if task.kind in ("pickup", "delivery") and customer and customer.address:
+                    lines.append(f"📍 Address: {customer.address.strip()}")
+                if due > 0:
+                    lines.append(f"💰 Due: ₹{due:g}")
+                bill_link = await bill_url_for(db, order)
+                if bill_link:
+                    lines.append(f"🧾 Bill & payment: {bill_link}")
+                order_details = "\n" + "\n".join(lines) + "\n"
+            except Exception:
+                log.exception("task_order_context_failed", code=task.code)
+    head = "🔴 URGENT" if task.urgent else "📋 WORK ASSIGNMENT"
+    if task.kind == "wash":
+        head = "🧺 WASHING ASSIGNMENT"
+    elif task.kind == "pickup":
+        head = "🛵 PICKUP ASSIGNMENT"
+    elif task.kind == "delivery":
+        head = "🚚 DELIVERY ASSIGNMENT"
     if first:
         body = (
-            f"{head} [{task.code}]{order_bit}\n{task.title}\n\n"
-            f"Neeche button dabaiye — ya likh dijiye: done {task.code}"
+            f"{head} [{task.code}]{order_bit}\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"{task.title}\n"
+            f"{order_details}\n"
+            f"Please complete this task and reply: done {task.code}\n"
+            f"— Kwik Klin"
         )
     else:
         body = (
-            f"⏰ Reminder [{task.code}]{order_bit}\n{task.title}\n\n"
-            f"Kya status hai? Button dabaiye — ya likh dijiye: done {task.code}"
+            f"⏰ TASK REMINDER [{task.code}]{order_bit}\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"{task.title}\n"
+            f"{order_details}\n"
+            f"Please send an update or reply: done {task.code}\n"
+            f"— Kwik Klin"
         )
     # Tap = zero typing. Button id mein task ka CODE hai, isliye 5-6 kaam
     # ek saath pending hon tab bhi galat task kabhi band nahi hota. Likh kar
