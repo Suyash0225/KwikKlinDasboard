@@ -25,6 +25,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import structlog
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -200,7 +201,31 @@ def _waha_signature_valid(body: bytes, header: str | None) -> bool:
     return hmac.compare_digest(expected, header)
 
 
-def _waha_message_to_meta_shape(event: dict) -> dict | None:
+async def _waha_resolve_lid(raw_from: str) -> str | None:
+    """Resolve a NOWEB LID to the phone JID used by the existing pipeline."""
+    if not raw_from.endswith("@lid") or not settings.WAHA_API_KEY:
+        return None
+    lid = raw_from.rsplit("@", 1)[0]
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{settings.WAHA_BASE_URL.rstrip('/')}/api/{settings.WAHA_SESSION}/lids/{lid}",
+                headers={"X-Api-Key": settings.WAHA_API_KEY},
+            )
+        if response.status_code >= 300:
+            log.warning("waha_lid_resolve_failed", status=response.status_code)
+            return None
+        pn = str((response.json() or {}).get("pn") or "")
+        if not pn.endswith("@c.us"):
+            log.warning("waha_lid_resolve_invalid", has_pn=bool(pn))
+            return None
+        return pn
+    except (httpx.HTTPError, ValueError, TypeError):
+        log.exception("waha_lid_resolve_error")
+        return None
+
+
+async def _waha_message_to_meta_shape(event: dict) -> dict | None:
     """Translate a WAHA message event into the existing inbound handler shape."""
     if event.get("event") != "message":
         return None
@@ -208,8 +233,16 @@ def _waha_message_to_meta_shape(event: dict) -> dict | None:
     if msg.get("fromMe"):
         return None
     raw_from = str(msg.get("from") or "")
-    # Groups/statuses are not customer inbox conversations.
-    if not raw_from.endswith("@c.us"):
+    # Groups/statuses are not customer inbox conversations. NOWEB can identify
+    # direct chats with a Linked Device ID (@lid), so resolve that to @c.us
+    # before handing it to the existing phone-normalization pipeline.
+    if raw_from.endswith("@lid"):
+        resolved_from = await _waha_resolve_lid(raw_from)
+        if not resolved_from:
+            log.warning("waha_lid_message_ignored")
+            return None
+        raw_from = resolved_from
+    elif not raw_from.endswith("@c.us"):
         return None
     body = str(msg.get("body") or "")
     # WEBJS button replies expose the selected id/text under _data. Preserve
@@ -271,7 +304,7 @@ async def receive_waha_webhook(
     try:
         event_name = payload.get("event")
         if event_name == "message":
-            msg = _waha_message_to_meta_shape(payload)
+            msg = await _waha_message_to_meta_shape(payload)
             if msg is not None and msg.get("id"):
                 from app.services import tenant_context
                 home_tid = await tenant_context.get_home_tenant_id()
