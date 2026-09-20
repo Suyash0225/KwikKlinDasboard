@@ -56,6 +56,11 @@ from app.services.work_orders import items_summary
 IST = timezone(timedelta(hours=5, minutes=30))
 
 router = APIRouter(prefix="/staff/api", tags=["staff-panel"])
+
+async def _working_delivery_date(db: AsyncSession, start: date, days: int) -> date:
+    from app.services.business_days import add_delivery_days
+    return await add_delivery_days(db, start, days)
+
 log = structlog.get_logger()
 
 
@@ -1367,7 +1372,7 @@ async def create_bill(
         turnaround = 2
     delivery = (
         urgent_svc.delivery_date(urgent_cfg) if body.urgent
-        else _date.today() + _td(days=max(turnaround, 1))
+        else await _working_delivery_date(db, _date.today(), max(turnaround, 1))
     )
     order = await create_order(
         db,
