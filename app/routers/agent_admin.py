@@ -334,7 +334,7 @@ async def delete_correction(cid: str, db: AsyncSession = Depends(get_db)) -> dic
     return {"deleted": True}
 
 
-from fastapi import File, UploadFile
+from fastapi import File, Form, UploadFile
 
 _ALLOWED_DOC_TYPES = {".pdf", ".txt", ".csv", ".md"}
 _MAX_DOC_BYTES = 8 * 1024 * 1024  # 8 MB
@@ -360,9 +360,14 @@ def _chunk_text(text: str) -> list[str]:
 
 @router.post("/training/upload", dependencies=[Depends(require_feature("service_agent"))], status_code=201)
 async def upload_training_doc(
-    file: UploadFile = File(...), db: AsyncSession = Depends(get_db)
+    file: UploadFile = File(...),
+    audience: str = Form("customer"),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """PDF/TXT/CSV/MD -> text -> chunks the agent retrieves at answer time."""
+    """PDF/TXT/CSV/MD -> text -> audience-scoped chunks for the agent."""
+    audience = audience.strip().lower()
+    if audience not in {"customer", "staff", "all"}:
+        raise HTTPException(status_code=400, detail="audience must be customer, staff or all")
     from pathlib import PurePosixPath
 
     from app.models import DocChunk
@@ -403,13 +408,13 @@ async def upload_training_doc(
 
     await db.execute(sqldelete(DocChunk).where(DocChunk.document == name))
     for i, c in enumerate(chunks):
-        db.add(DocChunk(document=name, chunk_index=i, content=c[:4000]))
+        db.add(DocChunk(document=name, chunk_index=i, audience=audience, content=c[:4000]))
     await db.commit()
     await audit.record(
         actor_role="admin", actor="dashboard", action="training_doc_uploaded",
         args={"document": name}, result=f"{len(chunks)} chunks",
     )
-    return {"document": name, "chunks": len(chunks)}
+    return {"document": name, "chunks": len(chunks), "audience": audience}
 
 
 @router.get("/training/docs", dependencies=[Depends(require_feature("service_agent"))])
@@ -418,13 +423,13 @@ async def list_training_docs(db: AsyncSession = Depends(get_db)) -> list[dict]:
 
     rows = (
         await db.execute(
-            select(DocChunk.document, func.count(), func.max(DocChunk.created_at))
-            .group_by(DocChunk.document)
+            select(DocChunk.document, DocChunk.audience, func.count(), func.max(DocChunk.created_at))
+            .group_by(DocChunk.document, DocChunk.audience)
             .order_by(func.max(DocChunk.created_at).desc())
         )
     ).all()
     return [
-        {"document": d, "chunks": n, "uploaded_at": at.isoformat()} for d, n, at in rows
+        {"document": d, "audience": aud, "chunks": n, "uploaded_at": at.isoformat()} for d, aud, n, at in rows
     ]
 
 
