@@ -192,13 +192,21 @@ async def _send_to_assignee(
     # ek saath pending hon tab bhi galat task kabhi band nahi hota. Likh kar
     # jawab dena ("done T-11", ya poori baat) waise hi chalta rahega —
     # button sirf sabse aam jawab ka shortcut hai.
-    from app.services.work_orders import task_buttons
-
-    buttons = await task_buttons(db, task.code)
     try:
-        await send_message(
-            db, to_phone=staff.phone, text=body, buttons=buttons, sent_by="bot"
-        )
+        # Assignment notification is a critical WhatsApp message. In WAHA
+        # mode use plain text so delivery does not depend on interactive-list
+        # support. The task code is still included for "done T-123" replies.
+        if settings.WHATSAPP_PROVIDER == "waha":
+            await send_message(
+                db, to_phone=staff.phone, text=body, sent_by="bot"
+            )
+        else:
+            from app.services.work_orders import task_buttons
+            buttons = await task_buttons(db, task.code)
+            await send_message(
+                db, to_phone=staff.phone, text=body, buttons=buttons, sent_by="bot"
+            )
+        log.info("task_whatsapp_assignment_sent", code=task.code, staff=staff.name)
         return True
     except WindowClosedError:
         # Their 24h window is shut, so WhatsApp forbids free-form. Fall back
