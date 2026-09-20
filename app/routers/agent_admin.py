@@ -7,7 +7,8 @@ Same auth as everything else: X-API-Key (require_admin_key).
 import asyncio
 import time as _time
 import uuid as uuid_module
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -24,6 +25,8 @@ from app.models import (
     Customer,
     FaqEntry,
     OpenQuestion,
+    CampaignRecipient,
+    Rate,
 )
 from app.routers.orders import require_admin_owner, require_feature
 from app.services import app_settings, audit
@@ -96,6 +99,163 @@ class CampaignIn(BaseModel):
     segment: str
     message_text: str = Field(min_length=5)
     coupon_code: str | None = None
+
+
+class CampaignAIDraftIn(BaseModel):
+    segment: str
+    goal: str = Field(default="increase repeat orders", max_length=120)
+
+
+_CAMPAIGN_AI_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "campaign_name": {"type": "string"},
+        "segment": {"type": "string"},
+        "offer_type": {"type": "string", "enum": ["percent", "flat", "service_bonus", "no_discount"]},
+        "discount_value": {"type": "number"},
+        "min_order": {"type": "number"},
+        "validity_days": {"type": "integer"},
+        "coupon_code": {"type": "string"},
+        "message": {"type": "string"},
+        "gmb_title": {"type": "string"},
+        "gmb_body": {"type": "string"},
+        "gmb_cta": {"type": "string"},
+        "creative_brief": {"type": "string"},
+        "rationale": {"type": "string"},
+    },
+    "required": [
+        "campaign_name", "segment", "offer_type", "discount_value", "min_order",
+        "validity_days", "coupon_code", "message", "gmb_title", "gmb_body",
+        "gmb_cta", "creative_brief", "rationale",
+    ],
+}
+
+
+@router.post("/campaigns/ai-draft", dependencies=[Depends(require_feature("campaigns"))])
+async def ai_campaign_draft(
+    body: CampaignAIDraftIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Use AI for offer strategy/copy, then clamp the result with code.
+
+    AI never creates a coupon or sends a message. The owner still saves the
+    returned draft and explicitly approves the campaign.
+    """
+    segs = await compute_segments(db)
+    members = segs.get(body.segment, [])
+    if not members:
+        raise HTTPException(status_code=400, detail="No customers in this segment")
+
+    now = datetime.now(timezone.utc)
+    aov = (
+        sum(Decimal(str(m["lifetime_paid"])) for m in members)
+        / max(sum(int(m["order_count"]) for m in members), 1)
+    )
+    prev = (
+        await db.execute(
+            select(
+                CampaignRecipient.status,
+                func.count(CampaignRecipient.id),
+            )
+            .join(Campaign, Campaign.id == CampaignRecipient.campaign_id)
+            .where(Campaign.segment == body.segment)
+            .group_by(CampaignRecipient.status)
+        )
+    ).all()
+    history = {str(k): int(v) for k, v in prev}
+    rates = (
+        await db.execute(
+            select(Rate.service, Rate.garment, Rate.rate, Rate.unit)
+            .where(Rate.is_active.is_(True))
+            .order_by(Rate.service, Rate.garment)
+            .limit(80)
+        )
+    ).all()
+    rate_card = [
+        {"service": s, "garment": g, "rate": float(r), "unit": u}
+        for s, g, r, u in rates
+    ]
+    max_discount = float(await app_settings.get(db, "marketing_max_discount_percent"))
+    month = now.month
+    season = {
+        9: "festival/Diwali preparation and home linen cleaning",
+        10: "Diwali preparation",
+        11: "winter blankets plus wedding garments",
+        12: "winter blankets plus wedding garments",
+        1: "winter blankets plus wedding garments",
+        2: "winter blankets plus wedding garments",
+        3: "post-Holi stain cleaning",
+        4: "summer storage and linen",
+        5: "summer linen and curtains",
+        6: "summer linen and curtains",
+        7: "monsoon care",
+        8: "monsoon care",
+    }.get(month, "general laundry demand")
+
+    system = (
+        "You are Kwik Klin's marketing strategist. Recommend an offer using the "
+        "actual segment, customer value, previous campaign outcomes, season and rate card. "
+        "Do not invent services, prices, margins or customer facts. Prefer non-discount "
+        "value when it can work. Never exceed the supplied max discount. Keep WhatsApp "
+        "copy <= 3 short lines. Google Business copy must not include a phone number, "
+        "fake address, fake review, or fabricated claim. Return only JSON matching the schema."
+    )
+    user = {
+        "segment": body.segment,
+        "goal": body.goal,
+        "audience_size": len(members),
+        "average_order_value": round(float(aov), 2),
+        "season": season,
+        "previous_campaign_status_counts": history,
+        "max_discount_percent": max_discount,
+        "rate_card": rate_card,
+        "shop_name": "Kwik Klin",
+    }
+    try:
+        from app.services.llm_client import ask_json, MODEL_SMART, track
+        with track("marketing_strategy"):
+            draft = await ask_json(
+                system=system,
+                user_text=str(user),
+                schema=_CAMPAIGN_AI_SCHEMA,
+                model=MODEL_SMART,
+                max_tokens=900,
+            )
+    except Exception:
+        # Deterministic fallback: safe and cheap, but clearly not pretending
+        # that the model succeeded.
+        value = min(10.0 if body.segment == "lapsed" else 5.0, max_discount)
+        draft = {
+            "campaign_name": f"{body.segment}-{now.date().isoformat()}",
+            "segment": body.segment,
+            "offer_type": "percent" if value else "no_discount",
+            "discount_value": value,
+            "min_order": round(float(aov), 0) if aov else 0,
+            "validity_days": 7,
+            "coupon_code": f"KK{body.segment[:5].upper()}{now.strftime('%d%m')}",
+            "message": f"Hi {{name}}! Get {value:g}% off your next laundry order this week. — Kwik Klin",
+            "gmb_title": f"{value:g}% off your next laundry order" if value else "Fresh clothes, less hassle",
+            "gmb_body": "Book your next laundry service with Kwik Klin this week.",
+            "gmb_cta": "Book now",
+            "creative_brief": "Kwik Klin logo + clean laundry visual + offer badge; no phone number.",
+            "rationale": "Safe deterministic fallback because the marketing model was unavailable.",
+        }
+
+    # Hard safety/business clamps. AI is advisory; code owns money and dates.
+    draft["segment"] = body.segment
+    draft["discount_value"] = max(0.0, min(float(draft.get("discount_value") or 0), max_discount))
+    if draft.get("offer_type") == "percent" and draft["discount_value"] > max_discount:
+        draft["discount_value"] = max_discount
+    draft["validity_days"] = max(1, min(int(draft.get("validity_days") or 7), 30))
+    draft["min_order"] = max(0.0, float(draft.get("min_order") or 0))
+    draft["coupon_code"] = str(draft.get("coupon_code") or f"KK{body.segment[:5].upper()}{now.strftime('%d%m')}").upper()[:30]
+    for key in ("message", "gmb_title", "gmb_body", "gmb_cta", "creative_brief", "rationale"):
+        draft[key] = str(draft.get(key) or "").strip()
+    draft["gmb_body"] = draft["gmb_body"].replace("\\n", " ")
+    # Phone-free Google copy is a hard rule, not an AI instruction.
+    import re as _re
+    draft["gmb_body"] = _re.sub(r"(?:\+?91[-\s]?)?[6-9]\d{9}", "", draft["gmb_body"]).strip()
+    draft["gmb_title"] = _re.sub(r"(?:\+?91[-\s]?)?[6-9]\d{9}", "", draft["gmb_title"]).strip()
+    return draft
 
 
 @router.post("/campaigns", dependencies=[Depends(require_feature("campaigns"))], status_code=201)
