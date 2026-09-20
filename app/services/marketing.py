@@ -320,7 +320,7 @@ async def send_campaign(campaign_id) -> None:
                             db,
                             to_phone=cust.phone,
                             file_path=str(media_path),
-                            mime_type="image/png",
+                            mime_type="image/jpeg" if media_path.suffix.lower() in (".jpg", ".jpeg") else "image/png",
                             caption=text,
                             local_url=f"/admin/media/{creative_file}",
                             sent_by="bot",
