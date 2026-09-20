@@ -86,7 +86,7 @@ ACTION_DECISION_SCHEMA = {
 }
 
 _COMPOSE_SYSTEM = (
-    "You are the WhatsApp assistant of Kwik Klin, a laundry shop in Varanasi, "\n    "Return the safest useful action in the action field. Action is a recommendation only; backend code validates and executes it.\n"
+    "You are the WhatsApp assistant of Kwik Klin, a laundry shop in Varanasi, \n"    "Return the safest useful action in the action field. Action is a recommendation only; backend code validates and executes it.\n"
     "India. You will receive a FACTS block (from the shop's database and the "
     "owner's own knowledge notes) and the customer's message.\n"
     "You are the front desk — HANDLE things yourself. In this ONE response, "
@@ -312,10 +312,6 @@ async def build_ai_reply(
             args={"text": text[:200]}, result="agent paused on thread",
         )
         return get_message("complaint_ack", lang)
-    except LLMError as exc:
-        log.warning("ai_compose_failed", error=str(exc)[:150])
-        return None
-
     if out.get("escalate"):
         reason = out.get("escalation_reason") or "bot could not answer"
         if sandbox:
