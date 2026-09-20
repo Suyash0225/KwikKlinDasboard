@@ -25,6 +25,7 @@ from app.services.llm_client import LLMError
 from app.services.messages import CUSTOMER_LANG, get_message, status_label
 from app.services.order_service import get_active_orders_for_phone, send_bill_to_customer
 from app.services.tenant_context import manager_phone
+from app.services.action_policy import ACTION_EXECUTION_RULES, business_policy_text
 
 log = structlog.get_logger()
 
@@ -337,7 +338,7 @@ async def _gather_context(
 
 def _build_prompt(ctx: tuple[str, str, str], text: str, lang: str) -> str:
     facts, kb, history = ctx
-    parts = [f"FACTS:\n{facts}"]
+    parts = [f"BUSINESS ACTION POLICY:\n{business_policy_text()}\n\n{ACTION_EXECUTION_RULES}", f"FACTS:\n{facts}"]
     if kb:
         parts.append(kb)
     if history:
