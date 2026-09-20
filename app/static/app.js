@@ -3237,10 +3237,11 @@ async function uploadDoc(input) {
   if (!input.files || !input.files[0]) return;
   const fd = new FormData();
   fd.append("file", input.files[0]);
+  fd.append("audience", $("doc-aud")?.value || "customer");
   $("doc-status").textContent = "Reading " + input.files[0].name + "…";
   try {
     const r = await api("/admin/api/training/upload", { method: "POST", body: fd });
-    toast(`${r.document} learned — ${r.chunks} parts, live now`);
+    toast(`${r.document} learned — ${r.chunks} parts (${r.audience}), live now`);
     $("doc-status").textContent = "";
     loadTraining();
   } catch (e) { toast(e.message, true); $("doc-status").textContent = ""; }
