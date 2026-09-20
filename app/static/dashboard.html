@@ -411,6 +411,7 @@
         <b>📄 Documents — upload a PDF/TXT/CSV and the agent reads it</b>
         <p class="muted" style="margin-top:4px">Price lists, policies, service brochures — the agent pulls the matching part into its answers. Re-uploading a file with the same name replaces it.</p>
         <div class="filters" style="margin-top:8px">
+          <select id="doc-aud" aria-label="Document audience" title="Who can use this document"><option value="customer">For customers</option><option value="staff">For staff</option><option value="all">Everyone</option></select>
           <label class="btn ghost" style="cursor:pointer">⬆ Choose file<input type="file" accept=".pdf,.txt,.csv,.md" style="display:none" onchange="uploadDoc(this)"></label>
           <span class="muted" id="doc-status"></span>
         </div>
