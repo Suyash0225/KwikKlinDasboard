@@ -344,8 +344,9 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
 
 
 async def _hourly_platform(now_ist: datetime) -> None:
-    """Jo kaam dukaan ka nahi, platform ka hai — .env wale (home) number ka
-    Meta block watcher. Home tenant ke context mein, ek baar."""
+    """Platform-only checks. WAHA has no Meta block/window probe."""
+    if settings.WHATSAPP_PROVIDER != "meta":
+        return
     from app.services.tenant_context import as_tenant, get_home_tenant_id
 
     home = await get_home_tenant_id()

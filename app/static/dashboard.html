@@ -74,6 +74,13 @@
            loadDashboard() replaces them with real numbers -->
       <div class="grid kpis" id="kpis"><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div></div>
       <div class="card" id="wa-stats" style="margin-bottom:14px"><span class="muted">📱 Loading WhatsApp stats…</span></div>
+      <div class="card" id="growth-analytics" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <b>📈 Live growth</b><button class="btn sm ghost" onclick="loadGrowthAnalytics()">↻ Refresh</button>
+        </div>
+        <div class="muted" style="margin-top:6px">Website realtime, Google Business Profile performance, and campaign results.</div>
+        <div id="growth-analytics-body" style="margin-top:10px"><span class="muted">Loading…</span></div>
+      </div>
       <div class="chips" id="dash-chips"></div>
       <div class="filters">
         <input type="search" aria-label="Search orders" placeholder="Search name, phone or order…" oninput="dashFilter.q=this.value;dashFilter.page=1;renderOrdersDeb()">
@@ -314,7 +321,9 @@
             <div><label>Name</label><input id="camp-name" placeholder="diwali-offer"></div>
             <div><label>Audience segment</label><select id="camp-seg"></select></div>
             <div><label>Message — use {name} for the customer's name</label>
-              <textarea id="camp-msg" rows="3" placeholder="Hello {name}! …"></textarea></div>
+              <textarea id="camp-msg" rows="3" placeholder="Hello {name}! …"></textarea>
+              <button class="btn ghost sm" type="button" onclick="aiCreateCampaignDraft(this)" style="margin-top:6px">✨ AI Create Offer</button>
+              <small class="muted">AI suggests offer + coupon + WhatsApp copy + phone-free Google Business creative. Nothing is sent until you approve.</small></div>
             <div><label>Coupon code (optional)</label><input id="camp-coupon" placeholder="OFF10"></div>
             <button class="btn" onclick="createCampaign(this)">Save as draft</button>
           </div>

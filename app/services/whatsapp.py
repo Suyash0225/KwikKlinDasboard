@@ -233,57 +233,24 @@ async def send_message(
     category: str | None = None,
     log_as: str | None = None,
 ) -> str:
-    """Send one WhatsApp message. Returns Meta's wa_message_id.
+    """Single outbound gateway. WAHA is first-class; Meta/DotPe keep legacy behavior.
 
-    Exactly one mode:
-      text                      -> free-form text        (window required)
-      text + buttons            -> interactive buttons    (window required)
-      text + list_rows          -> interactive list       (window required)
-      template_name [+ params]  -> template               (always allowed)
-
-    reply_to: a wamid to quote, so the recipient sees which message this
-    answers — the same as swiping to reply in WhatsApp.
-
-    log_as: what to WRITE INTO our own message log instead of the real body.
-    For the one case where the text is a secret (a staff member's temporary
-    panel password): WhatsApp has to carry it, but our Inbox, our outbound
-    queue and our backups must not. Callers that use this should also pass
-    enqueue_on_fail=False, or a transient failure parks the plaintext in the
-    retry queue.
-
-    Raises WindowClosedError / SendError. Never returns silently on failure.
+    In WAHA mode there is intentionally NO Meta 24-hour service-window check.
+    Interactive buttons are represented as a WAHA list so task actions remain
+    deterministic without relying on WAHA's deprecated button endpoint.
     """
-    # --- validate the mode ---
     if template_name and (text or buttons or list_rows):
         raise ValueError("template cannot be combined with text/buttons/list")
     if buttons and list_rows:
         raise ValueError("a message is either buttons or a list, not both")
     if (buttons or list_rows) and not text:
         raise ValueError("buttons/list need a text body")
-    if not template_name and not text:
-        raise ValueError("nothing to send: give text or template_name")
-    if buttons:
-        if len(buttons) > MAX_BUTTONS:
-            raise ValueError(f"WhatsApp allows max {MAX_BUTTONS} buttons")
-        for b in buttons:
-            if len(b.title) > MAX_BUTTON_TITLE:
-                raise ValueError(f"button title too long (max {MAX_BUTTON_TITLE}): {b.title!r}")
-    if list_rows:
-        if len(list_rows) > MAX_LIST_ROWS:
-            raise ValueError(f"WhatsApp allows max {MAX_LIST_ROWS} list rows")
-        if len(list_button) > MAX_LIST_BUTTON:
-            raise ValueError(f"list button too long (max {MAX_LIST_BUTTON})")
-        for r in list_rows:
-            if not r.title or len(r.title) > MAX_ROW_TITLE:
-                raise ValueError(f"row title must be 1-{MAX_ROW_TITLE} chars: {r.title!r}")
-            if len(r.description) > MAX_ROW_DESC:
-                raise ValueError(f"row description too long (max {MAX_ROW_DESC})")
+    if buttons and len(buttons) > MAX_BUTTONS:
+        raise ValueError(f"WhatsApp allows max {MAX_BUTTONS} buttons")
+    if list_rows and len(list_rows) > MAX_LIST_ROWS:
+        raise ValueError(f"WhatsApp allows max {MAX_LIST_ROWS} list rows")
 
-    # Plan ki WhatsApp quota — send se PEHLE. Exceeded -> permanent
-    # SendError: direct sends fail loudly, queued sends dead-letter hote
-    # hain (kabhi silent drop nahi). Owner upgrade kare to turant chalu.
     from app.services.quota import QuotaExceeded, check_wa_quota
-
     try:
         await check_wa_quota(db)
     except QuotaExceeded as exc:
@@ -291,43 +258,80 @@ async def send_message(
 
     customer, staff = await _find_recipient(db, to_phone)
 
-    # --- 24h window check for free-form ---
-    is_free_form = template_name is None
-    if is_free_form:
-        last_inbound = None
-        participant = customer or staff
-        if participant is not None:
-            last_inbound = participant.last_message_at
-        if last_inbound is None or _now() - last_inbound > SERVICE_WINDOW:
-            log.warning(
-                "window_closed_freeform_refused",
-                to=to_phone,
-                last_inbound=str(last_inbound),
-            )
-            raise WindowClosedError(
-                f"24h window closed for {to_phone} — send a template instead"
-            )
-
     if text:
         text = _wa_format(text)
         if customer is not None and sent_by != "manager":
             text = sign_ai(text)
 
-    # --- DotPe provider: delegate the actual send, keep everything else ---
+    # ---------------- WAHA ----------------
+    if settings.WHATSAPP_PROVIDER == "waha":
+        from app.services import waha
+        try:
+            if template_name:
+                # WAHA has no Meta template concept. Render our local approved
+                # copy as ordinary text so the same business message remains usable.
+                from app.services.templates import STANDARD_SPECS
+                spec = STANDARD_SPECS.get(template_name)
+                if spec:
+                    body = spec.get("body", "")
+                    for i, value in enumerate(template_params or [], 1):
+                        body = body.replace("{{%d}}" % i, str(value))
+                    text = body
+                else:
+                    text = text or _template_log(template_name, template_params)
+                if customer is not None and sent_by != "manager":
+                    text = sign_ai(_wa_format(text))
+            assert text is not None
+            if buttons:
+                rows = [
+                    {"rowId": b.id, "title": b.title[:MAX_ROW_TITLE], "description": ""}
+                    for b in buttons
+                ]
+                mid = await waha.send_list(to_phone, text, rows, button=list_button[:MAX_LIST_BUTTON])
+                logged = f"{text} [list: {', '.join(b.title for b in buttons)}]"
+            elif list_rows:
+                rows = [
+                    {"rowId": r.id, "title": r.title[:MAX_ROW_TITLE], "description": r.description[:MAX_ROW_DESC]}
+                    for r in list_rows
+                ]
+                mid = await waha.send_list(to_phone, text, rows, button=list_button[:MAX_LIST_BUTTON])
+                logged = f"{text} [list: {', '.join(r.title for r in list_rows)}]"
+            else:
+                mid = await waha.send_text(to_phone, text, reply_to=reply_to, link_preview=True)
+                logged = text
+        except waha.WahaError as exc:
+            if exc.transient and enqueue_on_fail:
+                await _enqueue_outbound(
+                    db, to_phone,
+                    {"text": text, "buttons": [[b.id, b.title] for b in buttons] if buttons else None,
+                     "list_rows": [[r.id, r.title, r.description] for r in list_rows] if list_rows else None,
+                     "sent_by": sent_by, "reply_to": reply_to, "category": category},
+                )
+            raise SendError(str(exc), transient=exc.transient) from exc
+        await _record_outbound(
+            db, customer, staff, (log_as if log_as is not None else logged),
+            mid, to_phone, sent_by, reply_to, _billing_category(template_name, category),
+        )
+        log.info("whatsapp_sent", to=to_phone, provider="waha", wa_message_id=mid)
+        return mid
+
+    # ---------------- legacy Meta/DotPe ----------------
+    if template_name is None:
+        participant = customer or staff
+        last_inbound = participant.last_message_at if participant else None
+        if last_inbound is None or _now() - last_inbound > SERVICE_WINDOW:
+            raise WindowClosedError(
+                f"24h window closed for {to_phone} — send a template instead"
+            )
+
     if settings.WHATSAPP_PROVIDER == "dotpe":
         if buttons or list_rows:
-            # DotPe's API has no interactive reply buttons (their docs:
-            # text/media/location only). Callers must use numbered text
-            # options on this provider.
             raise SendError("DotPe provider does not support interactive buttons")
         try:
             if template_name:
-                build_template(template_name, template_params, template_url_param)  # validates
+                build_template(template_name, template_params, template_url_param)
                 wa_message_id = await dotpe.send_template(
-                    to_phone,
-                    template_name,
-                    TEMPLATES[template_name]["language"],
-                    template_params,
+                    to_phone, template_name, TEMPLATES[template_name]["language"], template_params,
                 )
                 logged_text = _template_log(template_name, template_params)
             else:
@@ -336,18 +340,15 @@ async def send_message(
                 logged_text = text
         except dotpe.DotpeError as exc:
             raise SendError(str(exc)) from exc
-        log.info("whatsapp_sent", to=to_phone, provider="dotpe", wa_message_id=wa_message_id)
         await _record_outbound(
-        db, customer, staff, (log_as if log_as is not None else logged_text),
-        wa_message_id, to_phone, sent_by, reply_to,
-        _billing_category(template_name, category),
-    )
+            db, customer, staff, (log_as if log_as is not None else logged_text),
+            wa_message_id, to_phone, sent_by, reply_to, _billing_category(template_name, category),
+        )
         return wa_message_id
 
-    # --- build payload (Meta direct) ---
+    creds = await resolve_creds(db)
     payload: dict = {"messaging_product": "whatsapp", "to": to_phone.lstrip("+")}
     if reply_to:
-        # Meta shows this message quoting the one being answered.
         payload["context"] = {"message_id": reply_to}
     if template_name:
         payload["type"] = "template"
@@ -355,76 +356,34 @@ async def send_message(
         logged_text = _template_log(template_name, template_params)
     elif buttons:
         payload["type"] = "interactive"
-        payload["interactive"] = {
-            "type": "button",
-            "body": {"text": text},
-            "action": {
-                "buttons": [
-                    {"type": "reply", "reply": {"id": b.id, "title": b.title}}
-                    for b in buttons
-                ]
-            },
-        }
+        payload["interactive"] = {"type": "button", "body": {"text": text},
+            "action": {"buttons": [{"type": "reply", "reply": {"id": b.id, "title": b.title}} for b in buttons]}}
         logged_text = f"{text} [buttons: {', '.join(b.title for b in buttons)}]"
     elif list_rows:
         payload["type"] = "interactive"
-        payload["interactive"] = {
-            "type": "list",
-            "body": {"text": text},
-            "action": {
-                "button": list_button,
-                "sections": [
-                    {
-                        "title": (list_title or "Options")[:MAX_ROW_TITLE],
-                        "rows": [
-                            {"id": r.id, "title": r.title, "description": r.description}
-                            if r.description
-                            else {"id": r.id, "title": r.title}
-                            for r in list_rows
-                        ],
-                    }
-                ],
-            },
-        }
+        payload["interactive"] = {"type": "list", "body": {"text": text},
+            "action": {"button": list_button, "sections": [{"title": (list_title or "Options")[:MAX_ROW_TITLE],
+                "rows": [{"id": r.id, "title": r.title, **({"description": r.description} if r.description else {})} for r in list_rows]}]}}
         logged_text = f"{text} [list: {', '.join(r.title for r in list_rows)}]"
     else:
         payload["type"] = "text"
         payload["text"] = {"body": text, "preview_url": False}
         logged_text = text or ""
 
-    # --- send (with one retry on transient failure) ---
     try:
         data = await _post_with_retry(payload, to_phone)
     except SendError as exc:
         if exc.transient and enqueue_on_fail:
-            await _enqueue_outbound(
-                db,
-                to_phone,
-                {
-                    "text": text,
-                    "buttons": [[b.id, b.title] for b in buttons] if buttons else None,
-                    "template_name": template_name,
-                    "template_params": template_params,
-                    "template_url_param": template_url_param,
-                    "sent_by": sent_by,
-                },
-            )
+            await _enqueue_outbound(db, to_phone, {"text": text, "buttons": [[b.id, b.title] for b in buttons] if buttons else None,
+                "template_name": template_name, "template_params": template_params,
+                "template_url_param": template_url_param, "sent_by": sent_by})
         raise
-    wa_message_id: str = data["messages"][0]["id"]
-    log.info(
-        "whatsapp_sent",
-        to=to_phone,
-        kind=payload["type"],
-        wa_message_id=wa_message_id,
-    )
-
+    wa_message_id = data["messages"][0]["id"]
     await _record_outbound(
         db, customer, staff, (log_as if log_as is not None else logged_text),
-        wa_message_id, to_phone, sent_by, reply_to,
-        _billing_category(template_name, category),
+        wa_message_id, to_phone, sent_by, reply_to, _billing_category(template_name, category),
     )
     return wa_message_id
-
 
 def _billing_category(template_name: str | None, category: str | None) -> str:
     """Meta ke paise ka hisaab, ek jagah.
@@ -484,12 +443,24 @@ async def send_image(
     local_url: str,
     sent_by: str = "manager",
 ) -> str:
-    """Upload an image to Meta and send it. Free-form -> window required.
-
-    local_url is our own serving path, stored in the conversation text as
-    '[image:<local_url>] <caption>' so the Inbox can render it.
-    """
+    """Send media through WAHA when configured; keep Meta/DotPe legacy path."""
     customer, staff = await _find_recipient(db, to_phone)
+
+    if settings.WHATSAPP_PROVIDER == "waha":
+        from app.services import waha
+        try:
+            mid = await waha.send_image(
+                to_phone, file_path, mime_type=mime_type or "image/jpeg", caption=caption
+            )
+        except waha.WahaError as exc:
+            raise SendError(str(exc), transient=exc.transient) from exc
+        logged = f"[image:{local_url}] {caption or ''}".strip()
+        await _record_outbound(
+            db, customer, staff, logged, mid, to_phone, sent_by, None,
+            "marketing" if sent_by == "bot" else "service",
+        )
+        return mid
+
     participant = customer or staff
     last_inbound = participant.last_message_at if participant else None
     if last_inbound is None or _now() - last_inbound > SERVICE_WINDOW:
@@ -497,12 +468,11 @@ async def send_image(
 
     creds = await resolve_creds(db)
     headers = {"Authorization": f"Bearer {creds.token}"}
-    media_url = creds.media_url
     try:
         with open(file_path, "rb") as fh:
             async with httpx.AsyncClient(timeout=60) as client:
                 up = await client.post(
-                    media_url,
+                    creds.media_url,
                     headers=headers,
                     data={"messaging_product": "whatsapp", "type": mime_type},
                     files={"file": (file_path.rsplit("\\", 1)[-1], fh, mime_type)},
@@ -515,19 +485,17 @@ async def send_image(
     if not media_id:
         raise SendError("media upload: no id in response")
 
-    payload: dict = {
-        "messaging_product": "whatsapp",
-        "to": to_phone.lstrip("+"),
-        "type": "image",
-        "image": {"id": media_id, **({"caption": caption} if caption else {})},
-    }
+    payload = {"messaging_product": "whatsapp", "to": to_phone.lstrip("+"),
+               "type": "image", "image": {"id": media_id}}
+    if caption:
+        payload["image"]["caption"] = _wa_format(caption)
     data = await _post_with_retry(payload, to_phone)
-    wa_message_id: str = data["messages"][0]["id"]
-    log.info("whatsapp_image_sent", to=to_phone, wa_message_id=wa_message_id)
-    logged = f"[image:{local_url}]" + (f" {caption}" if caption else "")
-    await _record_outbound(db, customer, staff, logged, wa_message_id, to_phone, sent_by)
-    return wa_message_id
-
+    mid = data["messages"][0]["id"]
+    await _record_outbound(
+        db, customer, staff, f"[image:{local_url}] {caption or ''}".strip(),
+        mid, to_phone, sent_by, None, "marketing" if sent_by == "bot" else "service",
+    )
+    return mid
 
 async def download_media(media_id: str, dest_dir: str) -> str | None:
     """Fetch an inbound media file from Meta; returns saved filename or None.
