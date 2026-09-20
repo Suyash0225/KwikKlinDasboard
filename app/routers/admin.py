@@ -101,10 +101,13 @@ def _waha_is_home_tenant() -> bool:
     return tid is None or home is None or tid == home
 
 
-async def _waha_request(method: str, path: str, **kwargs) -> httpx.Response:
+async def _waha_request(method: str, path: str, *, headers: dict[str, str] | None = None, **kwargs) -> httpx.Response:
     try:
+        merged = _waha_headers()
+        if headers:
+            merged.update(headers)
         async with httpx.AsyncClient(timeout=WAHA_TIMEOUT) as client:
-            return await client.request(method, _waha_url(path), headers=_waha_headers(), **kwargs)
+            return await client.request(method, _waha_url(path), headers=merged, **kwargs)
     except httpx.HTTPError as exc:
         log.warning("waha_unreachable", error=str(exc))
         raise HTTPException(status_code=503, detail="WhatsApp service is temporarily unavailable") from exc
