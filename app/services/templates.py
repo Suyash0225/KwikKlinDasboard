@@ -50,6 +50,8 @@ TEMPLATES: dict[str, dict] = {
     # approve hone tak bhejna fail hota hai aur sirf log hota hai.
     # {{1}} amount {{2}} order {{3}} balance line ("Balance due: ₹200" / "fully paid")
     "kk_payment_received": {"language": "en_US", "param_count": 3, "url_button": True},
+    "kk_bill_requested": {"language": "en_US", "param_count": 3, "url_button": True},
+    "kk_payment_reminder": {"language": "en_US", "param_count": 3, "url_button": True},
     # {{1}} order {{2}} delivered now {{3}} still pending
     "kk_partial_delivery": {"language": "en_US", "param_count": 3, "url_button": True},
 }
@@ -128,6 +130,18 @@ STANDARD_SPECS: dict[str, dict] = {
             {"type": "QUICK_REPLY", "text": "🙂 It was okay"},
             {"type": "QUICK_REPLY", "text": "😞 Needs work"},
         ],
+    },
+    "kk_bill_requested": {
+        "purpose": "Customer asked for bill",
+        "body": "Here is your bill for order {{1}}. Total: ₹{{2}}. Balance due: ₹{{3}}.",
+        "samples": ["KK-20260916-01", "250", "150"],
+        "buttons": [BILL_BUTTON],
+    },
+    "kk_payment_reminder": {
+        "purpose": "Payment reminder",
+        "body": "Reminder: ₹{{1}} is pending for order {{2}}. Please pay when convenient.",
+        "samples": ["150", "KK-20260916-01"],
+        "buttons": [BILL_BUTTON],
     },
     "kk_staff_alert": {
         "purpose": "Staff / owner alert",
