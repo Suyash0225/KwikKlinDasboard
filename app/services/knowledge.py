@@ -307,7 +307,8 @@ async def rank_knowledge(
             pool_c, q, floor=FAQ_SCORE_FLOOR, top_k=top_k, limit=limit
         ),
         "doc_chunks": _candidates(
-            chunks, q, floor=DOC_SCORE_FLOOR, top_k=DOC_TOP_K, limit=limit
+            [e for e in chunks if e[0].audience in aud],
+            q, floor=DOC_SCORE_FLOOR, top_k=DOC_TOP_K, limit=limit
         ),
     }
     # The flat list a Hit-Rate assertion actually wants.
