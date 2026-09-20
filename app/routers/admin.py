@@ -13,6 +13,8 @@ payment derivation, notifications) applies automatically.
 import csv
 import io
 import re
+
+import httpx
 import uuid as uuid_module
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -72,6 +74,160 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 log = structlog.get_logger()
+
+
+# ---------------------------------------------------------------------------
+# Private WAHA bridge
+# ---------------------------------------------------------------------------
+# WAHA is bound to 127.0.0.1 on the EC2 host. The browser never receives the
+# WAHA API key and cannot call WAHA directly. These endpoints are owner/manager
+# authenticated and only expose the minimum data needed by the dashboard.
+WAHA_TIMEOUT = httpx.Timeout(10.0, connect=3.0)
+
+
+def _waha_url(path: str) -> str:
+    return settings.WAHA_BASE_URL.rstrip("/") + path
+
+
+def _waha_headers() -> dict[str, str]:
+    if not settings.WAHA_API_KEY:
+        raise HTTPException(status_code=503, detail="WhatsApp connection is not configured")
+    return {"X-Api-Key": settings.WAHA_API_KEY}
+
+
+def _waha_is_home_tenant() -> bool:
+    tid = tenant_context.current_tenant_id.get()
+    home = tenant_context.cached_home_tenant_id()
+    return tid is None or home is None or tid == home
+
+
+async def _waha_request(method: str, path: str, *, headers: dict[str, str] | None = None, **kwargs) -> httpx.Response:
+    try:
+        merged = _waha_headers()
+        if headers:
+            merged.update(headers)
+        async with httpx.AsyncClient(timeout=WAHA_TIMEOUT) as client:
+            return await client.request(method, _waha_url(path), headers=merged, **kwargs)
+    except httpx.HTTPError as exc:
+        log.warning("waha_unreachable", error=str(exc))
+        raise HTTPException(status_code=503, detail="WhatsApp service is temporarily unavailable") from exc
+
+
+@router.get("/api/whatsapp/waha/status", dependencies=[Depends(require_admin_owner)])
+async def waha_status() -> dict:
+    if not _waha_is_home_tenant():
+        raise HTTPException(status_code=403, detail="WhatsApp connection is managed for the home shop only")
+    r = await _waha_request("GET", f"/api/sessions/{settings.WAHA_SESSION}")
+    if r.status_code == 404:
+        return {"configured": True, "session": settings.WAHA_SESSION, "status": "NOT_CREATED", "state": None, "me": None}
+    if r.status_code >= 400:
+        log.warning("waha_status_failed", status=r.status_code)
+        raise HTTPException(status_code=502, detail="Could not read WhatsApp connection status")
+    data = r.json()
+    me = data.get("me") or {}
+    raw_id = str(me.get("id") or "").split("@", 1)[0]
+    masked = (raw_id[:3] + "******" + raw_id[-2:]) if len(raw_id) > 7 else ""
+    return {
+        "configured": True,
+        "session": data.get("name", settings.WAHA_SESSION),
+        "status": data.get("status"),
+        "state": (data.get("engine") or {}).get("state"),
+        "push_name": me.get("pushName"),
+        "number_masked": masked,
+    }
+
+
+@router.post("/api/whatsapp/waha/start", dependencies=[Depends(require_admin_owner)])
+async def waha_start() -> dict:
+    if not _waha_is_home_tenant():
+        raise HTTPException(status_code=403, detail="WhatsApp connection is managed for the home shop only")
+    session = settings.WAHA_SESSION
+    status = await _waha_request("GET", f"/api/sessions/{session}")
+    if status.status_code == 404:
+        created = await _waha_request(
+            "POST", "/api/sessions", json={"name": session}
+        )
+        if created.status_code >= 400:
+            log.warning("waha_session_create_failed", status=created.status_code)
+            raise HTTPException(status_code=502, detail="Could not create WhatsApp session")
+    elif status.status_code >= 400:
+        raise HTTPException(status_code=502, detail="Could not read WhatsApp session")
+
+    started = await _waha_request("POST", f"/api/sessions/{session}/start")
+    if started.status_code >= 400:
+        log.warning("waha_session_start_failed", status=started.status_code)
+        raise HTTPException(status_code=502, detail="Could not start WhatsApp connection")
+    data = started.json()
+    return {
+        "session": data.get("name", session),
+        "status": data.get("status"),
+        "state": (data.get("engine") or {}).get("state"),
+    }
+
+
+@router.get("/api/whatsapp/waha/qr", dependencies=[Depends(require_admin_owner)])
+async def waha_qr() -> Response:
+    if not _waha_is_home_tenant():
+        raise HTTPException(status_code=403, detail="WhatsApp connection is managed for the home shop only")
+    r = await _waha_request(
+        "GET", f"/api/{settings.WAHA_SESSION}/auth/qr",
+        headers={"Accept": "image/png", **_waha_headers()},
+    )
+    if r.status_code >= 400:
+        log.warning("waha_qr_failed", status=r.status_code)
+        raise HTTPException(status_code=502, detail="QR code is not available yet — start the WhatsApp connection first")
+    return Response(
+        content=r.content,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, private",
+            "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+
+@router.post("/api/whatsapp/waha/configure-webhook", dependencies=[Depends(require_admin_owner)])
+async def waha_configure_webhook(request: Request) -> dict:
+    """Configure WAHA -> Kwik Klin webhook for the private home session.
+
+    WAHA applies a session config update by restarting the session when it is
+    currently running. This endpoint is intentionally separate from Connect
+    so configuration changes are explicit and never happen during QR polling.
+    """
+    if not _waha_is_home_tenant():
+        raise HTTPException(status_code=403, detail="WhatsApp connection is managed for the home shop only")
+    if not settings.WAHA_WEBHOOK_HMAC_KEY:
+        raise HTTPException(status_code=503, detail="WhatsApp webhook security is not configured")
+
+    body = {
+        "name": settings.WAHA_SESSION,
+        "config": {
+            "noweb": {
+                "store": {
+                    "enabled": True,
+                    "fullSync": True,
+                }
+            },
+            "webhooks": [{
+                "url": f"{settings.SITE_URL.rstrip('/') if settings.SITE_URL else 'https://kwikklin.online'}/webhook/waha",
+                "events": ["message", "message.ack", "session.status"],
+                "hmac": {"key": settings.WAHA_WEBHOOK_HMAC_KEY},
+                "retries": {"policy": "exponential", "delaySeconds": 2, "attempts": 5},
+            }]
+        },
+    }
+    r = await _waha_request(
+        "PUT",
+        f"/api/sessions/{settings.WAHA_SESSION}",
+        json=body,
+    )
+    if r.status_code >= 400:
+        log.warning("waha_webhook_config_failed", status=r.status_code)
+        raise HTTPException(status_code=502, detail="Could not configure WhatsApp webhook")
+    return {"configured": True, "session": settings.WAHA_SESSION}
+
 
 _DASHBOARD_FILE = Path(__file__).resolve().parent.parent / "static" / "dashboard.html"
 
