@@ -60,14 +60,6 @@ async def _escalations_for(customer_id) -> list[Escalation]:
 
 async def test_markers_and_empty_skip_ai(monkeypatch) -> None:
     """Markers never reach the LLM — but a customer's file still gets a reply."""
-    called = False
-
-    async def fake_classify(text):
-        nonlocal called
-        called = True
-        return {"intent": "OTHER", "language": "hi"}
-
-    monkeypatch.setattr(agent_module, "classify_intent", fake_classify)
     async with async_session_factory() as db:
         cust = await _seed_customer()
         # a photo is acknowledged from a fixed string, not composed by the LLM
@@ -76,24 +68,21 @@ async def test_markers_and_empty_skip_ai(monkeypatch) -> None:
         # our own button tap is never chatted back at
         assert await build_ai_reply(db, cust, "[button:rate_good] Good") is None
         assert await build_ai_reply(db, cust, "") is None
-    assert called is False, "no marker may cost an LLM call"
-
-
-async def test_classifier_down_returns_none(monkeypatch) -> None:
-    async def fake_classify(text):
-        return None
-
-    monkeypatch.setattr(agent_module, "classify_intent", fake_classify)
-    async with async_session_factory() as db:
-        cust = await _seed_customer()
-        assert await build_ai_reply(db, cust, "hello ji") is None
 
 
 async def test_complaint_escalates_and_apologizes(monkeypatch, esc_sent) -> None:
-    async def fake_classify(text):
-        return {"intent": "COMPLAINT", "language": "hi"}
+    async def fake_ask_json(**kw):
+        return {
+            "reply": "Ji, manager aapse jald baat karenge.",
+            "intent": "COMPLAINT",
+            "language": "hi",
+            "escalate": True,
+            "escalation_reason": "customer complaint",
+            "admin_note": "",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
 
-    monkeypatch.setattr(agent_module, "classify_intent", fake_classify)
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
     async with async_session_factory() as db:
         cust = await _seed_customer()
         reply = await build_ai_reply(db, cust, "mera kurta kharab ho gaya!")
@@ -110,16 +99,12 @@ async def test_complaint_escalates_and_apologizes(monkeypatch, esc_sent) -> None
 
 
 async def test_compose_happy_path_no_escalation(monkeypatch) -> None:
-    async def fake_classify(text):
-        return {"intent": "PRICE_QUERY", "language": "hi"}
-
     async def fake_ask_json(**kw):
         # the FACTS block must carry customer identity, never notes
         assert "AI Grahak" in kw["user_text"]
         assert "notes" not in kw["user_text"].lower()
-        return {"reply": "Shirt ₹30 hai ji — Kwik Klin", "escalate": False, "escalation_reason": ""}
+        return {"reply": "Shirt ₹30 hai ji — Kwik Klin", "intent": "PRICE_QUERY", "language": "hi", "escalate": False, "escalation_reason": "", "admin_note": "", "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False}}
 
-    monkeypatch.setattr(agent_module, "classify_intent", fake_classify)
     monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
     async with async_session_factory() as db:
         cust = await _seed_customer()
@@ -130,17 +115,15 @@ async def test_compose_happy_path_no_escalation(monkeypatch) -> None:
 
 
 async def test_compose_escalate_creates_row(monkeypatch, esc_sent) -> None:
-    async def fake_classify(text):
-        return {"intent": "NEW_ORDER", "language": "hi"}
-
     async def fake_ask_json(**kw):
         return {
             "reply": "Manager aapse jald sampark karenge 🙏 — Kwik Klin",
             "escalate": True,
-            "escalation_reason": "pickup request",
+            "intent": "NEW_ORDER", "language": "hi",
+            "escalation_reason": "pickup request", "admin_note": "",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
         }
 
-    monkeypatch.setattr(agent_module, "classify_intent", fake_classify)
     monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
     async with async_session_factory() as db:
         cust = await _seed_customer()
@@ -155,15 +138,14 @@ async def test_compose_escalate_creates_row(monkeypatch, esc_sent) -> None:
 async def test_agent_handles_inquiry_itself_and_fyis_admin(monkeypatch) -> None:
     """New-order inquiry: agent deals with it, owner gets an FYI, NO waiting."""
 
-    async def fake_classify(text):
-        return {"intent": "NEW_ORDER", "language": "hi"}
-
     async def fake_ask_json(**kw):
         return {
             "reply": "Ji bilkul! Address bhej dijiye, kal subah utha lenge 😊 — Kwik Klin",
             "escalate": False,
             "escalation_reason": "",
+            "intent": "NEW_ORDER", "language": "hi",
             "admin_note": "Naya pickup — AI Grahak, kal subah, address aana baaki",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
         }
 
     fyi_calls: list[dict] = []
@@ -172,7 +154,6 @@ async def test_agent_handles_inquiry_itself_and_fyis_admin(monkeypatch) -> None:
         fyi_calls.append({"to": to_phone, "text": text})
         return "wamid.FYI"
 
-    monkeypatch.setattr(agent_module, "classify_intent", fake_classify)
     monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
     monkeypatch.setattr("app.services.whatsapp.send_message", fake_send)
 
@@ -187,9 +168,6 @@ async def test_agent_handles_inquiry_itself_and_fyis_admin(monkeypatch) -> None:
 
 
 async def test_compose_llm_down_falls_back(monkeypatch) -> None:
-    async def fake_classify(text):
-        return {"intent": "GREETING", "language": "hi"}
-
     async def fake_ask_json(**kw):
         raise LLMUnavailable("down")
 
