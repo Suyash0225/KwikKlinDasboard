@@ -63,6 +63,7 @@ async def _ga4_report(days: int = 30) -> dict:
             "dimensions": [{"name": "date"}],
             "orderBys": [{"dimension": {"dimensionName": "date"}}],
             "limit": 100,
+            "returnTotals": True,
         }
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(
