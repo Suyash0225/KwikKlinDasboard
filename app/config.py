@@ -145,6 +145,9 @@ class Settings(BaseSettings):
     # button dikhta hai. PLACE_ID khali ho to dukaan ka naam se dhoondh lete hain.
     GOOGLE_PLACES_API_KEY: str = ""
     GOOGLE_PLACE_ID: str = ""
+    # GA4 reporting for the owner dashboard. The service account JSON stays on the server.
+    GA4_PROPERTY_ID: str = ""
+    GOOGLE_APPLICATION_CREDENTIALS: str = ""
 
     ENVIRONMENT: Literal["development", "production"] = "development"
 
