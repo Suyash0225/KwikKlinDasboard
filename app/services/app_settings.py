@@ -155,6 +155,11 @@ DEFAULTS: dict[str, Any] = {
     "urgent_delivery_days": 1,
     # named discount presets for New Bill [{name, type: percent|flat, value}]
     "discount_presets": [],
+    # Payment offers: timing-aware offers used by customer payment reminders.
+    # Example: [{"id":"advance5","trigger":"advance","type":"percent","value":5,"min_due":0,"active":true},
+    # {"id":"delivery50","trigger":"delivery","type":"flat","value":50,"min_due":500,"valid_minutes":120,"active":true}]
+    # These offers are NEVER invented by AI; only configured active rules are eligible.
+    "payment_offer_rules": [],
     # owner ki apni expense categories (built-in list services/expenses.py
     # mein; ye usme JUDTI hain, uski jagah nahi)
     "expense_categories": [],
