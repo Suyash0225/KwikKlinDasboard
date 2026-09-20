@@ -21,6 +21,7 @@ from app.services.llm_client import LLMError
 from app.services.marketing import compute_segments, queue_campaign, send_campaign
 from app.services.whatsapp import SendError, send_message
 from app.services.tenant_context import manager_phone
+from app.services.action_policy import business_policy_text
 
 log = structlog.get_logger()
 
@@ -266,7 +267,8 @@ async def _draft_copy(segment: str, offer: str) -> str:
             extra = (await app_settings.get(db, "marketing_instructions") or "").strip()
     except Exception:
         pass
-    system = _COPY_SYSTEM + (f"\nOwner's style rules (follow them): {extra}" if extra else "")
+    system = (_COPY_SYSTEM + f"\n\nBusiness policy:\n{business_policy_text()}"
+               + (f"\nOwner's style rules (follow them): {extra}" if extra else ""))
     try:
         with llm_client.track("marketing"):
             copy = await llm_client.ask(
