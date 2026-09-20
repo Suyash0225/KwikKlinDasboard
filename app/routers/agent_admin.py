@@ -251,6 +251,10 @@ async def ai_campaign_draft(
     for key in ("message", "gmb_title", "gmb_body", "gmb_cta", "creative_brief", "rationale"):
         draft[key] = str(draft.get(key) or "").strip()
     draft["gmb_body"] = draft["gmb_body"].replace("\\n", " ")
+    # Phone-free Google copy is a hard rule, not an AI instruction.
+    import re as _re
+    draft["gmb_body"] = _re.sub(r"(?:\+?91[-\s]?)?[6-9]\d{9}", "", draft["gmb_body"]).strip()
+    draft["gmb_title"] = _re.sub(r"(?:\+?91[-\s]?)?[6-9]\d{9}", "", draft["gmb_title"]).strip()
     # Generate the actual branded Google-safe creative now. This is deterministic
     # PIL rendering (logo/brand/offer layout), not a fake AI-generated shop photo.
     creative_file = None
@@ -269,10 +273,6 @@ async def ai_campaign_draft(
         )
     except Exception:
         log.exception("campaign_creative_generation_failed")
-    # Phone-free Google copy is a hard rule, not an AI instruction.
-    import re as _re
-    draft["gmb_body"] = _re.sub(r"(?:\+?91[-\s]?)?[6-9]\d{9}", "", draft["gmb_body"]).strip()
-    draft["gmb_title"] = _re.sub(r"(?:\+?91[-\s]?)?[6-9]\d{9}", "", draft["gmb_title"]).strip()
     draft["creative_file"] = creative_file
     return draft
 
