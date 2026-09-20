@@ -44,6 +44,8 @@
       <div data-s="reports" onclick="go('reports')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-reports"/></svg>Reports</div>
       <div class="navsec">Growth</div>
       <div data-s="campaigns" onclick="go('campaigns')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-campaign"/></svg>Campaigns</div>
+      <div class="navsec">Insights</div>
+      <div data-s="analytics" onclick="go('analytics')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-reports"/></svg>Analytics</div>
       <div class="navsec">Agent</div>
       <div data-s="tasks" onclick="go('tasks')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-task"/></svg>Tasks</div>
       <div data-s="agents" onclick="go('agents')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-agent"/></svg>Agents</div>
@@ -437,6 +439,23 @@
       </div>
     </section>
 
+    <!-- Owner analytics -->
+    <section id="sec-analytics" style="display:none">
+      <div class="pagehead"><div><h2>Analytics</h2><p>Real website, Google Business, WhatsApp and AI numbers</p></div>
+        <div class="actions"><button class="btn ghost" onclick="loadAnalytics()">↻ Refresh</button></div>
+      </div>
+      <div class="grid kpis" id="analytics-kpis"></div>
+      <div class="split2">
+        <div class="card"><b>🌐 Website traffic</b><div id="analytics-web" style="margin-top:10px"></div></div>
+        <div class="card"><b>📍 Google Business Profile</b><div id="analytics-gbp" style="margin-top:10px"></div></div>
+      </div>
+      <div class="split2" style="margin-top:14px">
+        <div class="card"><b>📱 WhatsApp delivery</b><div id="analytics-wa" style="margin-top:10px"></div></div>
+        <div class="card"><b>🤖 AI token usage</b><div id="analytics-ai" style="margin-top:10px"></div></div>
+      </div>
+      <div class="card" style="margin-top:14px"><b>What these numbers mean</b><p class="muted" style="margin-top:6px">Website = GA4. Google Business = Google Business Profile Performance API. WhatsApp = messages recorded by Kwik Klin plus delivery-status webhooks. AI = provider usage recorded by the AI client.</p></div>
+    </section>
+
     <!-- AI usage -->
     <section id="sec-usage" style="display:none">
       <div class="pagehead"><div><h2>AI usage</h2><p>How much AI was used, what it cost — and the monthly run rate</p></div>
@@ -767,6 +786,7 @@
     <div onclick="sheetGo('expenses')"><span class="si">💸</span>Expenses</div>
     <div onclick="sheetGo('reports')"><span class="si">📈</span>Reports</div>
     <div onclick="sheetGo('campaigns')"><span class="si">📣</span>Campaigns</div>
+    <div onclick="sheetGo('analytics')"><span class="si">📊</span>Analytics</div>
     <div onclick="sheetGo('agents')"><span class="si">🤖</span>Agents</div>
     <div onclick="sheetGo('training')"><span class="si">🎓</span>AI training</div>
     <div onclick="sheetGo('activity')"><span class="si">🛰</span>Activity</div>
