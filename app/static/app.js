@@ -2371,37 +2371,36 @@ async function loadAnalytics() {
     const waRate = (delivered + failed) ? Math.round(delivered * 100 / (delivered + failed)) : 0;
     $("analytics-kpis").innerHTML = kpi("WA messages", wa.total, "Last 30 days", "", "📱", "orange") + kpi("WA failed", failed, "Delivery failures", "", "⚠️", "red") + kpi("Marketing", wa.marketing, "Messages", "", "📣", "orange") + kpi("Service", wa.service, "Messages", "", "💬", "green") + kpi("AI tokens", ai.total_tokens, "Last 30 days", "", "🤖", "purple");
     $("analytics-web").innerHTML = web.configured ? (web.error ? errBox(web.error, "loadAnalytics") :
-      "<div class="sumrow"><span>Active users</span><b>" + Number(web.summary?.active_users || 0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>New users</span><b>" + Number(web.summary?.new_users || 0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Sessions</span><b>" + Number(web.summary?.sessions || 0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Page views</span><b>" + Number(web.summary?.page_views || 0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Engagement rate</span><b>" + (Number(web.summary?.engagement_rate || 0)*100).toFixed(1) + "%</b></div>") :
-      "<p class="muted">GA4 tracking is installed, but server-side reporting is not connected yet.</p><a class="btn ghost sm" href="https://analytics.google.com/" target="_blank" rel="noopener">Open Google Analytics</a>";
+      '<div class="sumrow"><span>Active users</span><b>' + Number(web.summary?.active_users || 0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>New users</span><b>' + Number(web.summary?.new_users || 0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Sessions</span><b>' + Number(web.summary?.sessions || 0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Page views</span><b>' + Number(web.summary?.page_views || 0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Engagement rate</span><b>' + (Number(web.summary?.engagement_rate || 0)*100).toFixed(1) + "%</b></div>") :
+      '<p class="muted">GA4 tracking is installed, but server-side reporting is not connected yet.</p><a class="btn ghost sm" href="https://analytics.google.com/" target="_blank" rel="noopener">Open Google Analytics</a>';
     $("analytics-gbp").innerHTML = gbp.configured ? (gbp.error ? errBox(gbp.error, "loadAnalytics") :
-      "<div class="sumrow"><span>Google Search views</span><b>" + Number(gbp.search_views||0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Google Maps views</span><b>" + Number(gbp.maps_views||0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Website clicks</span><b>" + Number(gbp.website_clicks||0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Call clicks</span><b>" + Number(gbp.call_clicks||0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Direction requests</span><b>" + Number(gbp.direction_requests||0).toLocaleString("en-IN") + "</b></div>") :
-      "<p class="muted">Connect Google Business Profile to show real Search/Maps traffic and actions here.</p>";
+      '<div class="sumrow"><span>Google Search views</span><b>' + Number(gbp.search_views||0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Google Maps views</span><b>' + Number(gbp.maps_views||0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Website clicks</span><b>' + Number(gbp.website_clicks||0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Call clicks</span><b>' + Number(gbp.call_clicks||0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Direction requests</span><b>' + Number(gbp.direction_requests||0).toLocaleString("en-IN") + "</b></div>") :
+      '<p class="muted">Connect Google Business Profile to show real Search/Maps traffic and actions here.</p>';
     $("analytics-wa").innerHTML =
-      "<div class="sumrow"><span>Sent</span><b>" + Number(wa.sent||0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Delivered</span><b>" + delivered.toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Read</span><b>" + Number(wa.read||0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Failed</span><b>" + failed.toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Delivery success</span><b>" + waRate + "%</b></div>" +
-      "<div class="sumrow"><span>Utility</span><b>" + Number(wa.utility||0).toLocaleString("en-IN") + "</b></div>";
+      '<div class="sumrow"><span>Sent</span><b>' + Number(wa.sent||0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Delivered</span><b>' + delivered.toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Read</span><b>' + Number(wa.read||0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Failed</span><b>' + failed.toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Delivery success</span><b>' + waRate + "%</b></div>" +
+      '<div class="sumrow"><span>Utility</span><b>' + Number(wa.utility||0).toLocaleString("en-IN") + "</b></div>";
     $("analytics-ai").innerHTML =
-      "<div class="sumrow"><span>Today calls</span><b>" + Number(ai.today?.calls||0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Month calls</span><b>" + Number(ai.month?.calls||0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Input tokens</span><b>" + Number(ai.input_tokens||0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Output tokens</span><b>" + Number(ai.output_tokens||0).toLocaleString("en-IN") + "</b></div>" +
-      "<div class="sumrow"><span>Total tokens</span><b>" + Number(ai.total_tokens||0).toLocaleString("en-IN") + "</b></div>";
+      '<div class="sumrow"><span>Today calls</span><b>' + Number(ai.today?.calls||0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Month calls</span><b>' + Number(ai.month?.calls||0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Input tokens</span><b>' + Number(ai.input_tokens||0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Output tokens</span><b>' + Number(ai.output_tokens||0).toLocaleString("en-IN") + "</b></div>" +
+      '<div class="sumrow"><span>Total tokens</span><b>' + Number(ai.total_tokens||0).toLocaleString("en-IN") + "</b></div>";
   } catch (e) {
     ids.forEach((id) => { if ($(id)) $(id).innerHTML = errBox(e.message, "loadAnalytics"); });
   }
 }
-
 async function loadUsage() {
   $("usage-kpis").innerHTML = skeleton(1);
   $("usage-models").innerHTML = skeleton(3);
