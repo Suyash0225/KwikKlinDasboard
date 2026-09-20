@@ -2,9 +2,8 @@
 
 One place answers three questions the whole app kept answering differently:
 - who is an ADMIN (owner side)? -> admins(), is_admin_phone()
-- who must hear when a CUSTOMER has a problem? -> alert_recipients()
-  (owner's rule, 06 Aug: escalations reach Suyash, Ravi AND Ajit — not just
-  the manager and one CC number)
+- who must hear when a CUSTOMER/AI escalation occurs? -> alert_recipients()
+  (admin/owner numbers only; never washermen or delivery staff)
 - who does pickups/deliveries? -> delivery_staff()
 
 Every function degrades instead of raising: settings.MANAGER_PHONE is always
