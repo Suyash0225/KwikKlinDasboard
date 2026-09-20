@@ -869,18 +869,26 @@ async def run_payment_reminders() -> int:
             if not await _claim(key):
                 continue
             try:
-                await send_message(
-                    db, to_phone=cust.phone,
-                    # lang="en": teeno reminder raste ek hi bhasha bolein —
-                    # dashboard, staff panel, aur ye. Grahak ko pata nahi
-                    # chalna chahiye ki kisne yaad dilaya.
-                    text=get_message(
-                        kind, lang="en", order_number=o.order_number, amount=f"{due}",
-                    ) + bill_link.message_line(await bill_link.url_for(db, o)),
-                )
+                reminder_text = get_message(
+                    kind, lang="en", order_number=o.order_number, amount=f"{due}",
+                ) + bill_link.message_line(await bill_link.url_for(db, o))
+                await send_message(db, to_phone=cust.phone, text=reminder_text)
                 sends += 1
+            except WindowClosedError:
+                try:
+                    await send_message(
+                        db, to_phone=cust.phone,
+                        template_name="kk_payment_reminder",
+                        template_params=[f"{due}", o.order_number, "Please clear the pending amount."],
+                        template_url_param=bill_link.make(o.tenant_id, o.id) if o.tenant_id else None,
+                    )
+                    sends += 1
+                except SendError:
+                    log.info("payment_reminder_template_not_sent", order=o.order_number)
+                    await _unclaim(key)
             except SendError:
                 log.info("payment_reminder_not_sent", order=o.order_number)
+                await _unclaim(key)
         if flagged and await _claim(f"payrem-adminflag:{now_ist.strftime('%Y-%m-%d')}"):
             try:
                 await send_message(
