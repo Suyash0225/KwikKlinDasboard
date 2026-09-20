@@ -39,15 +39,21 @@ class Settings(BaseSettings):
     # --- Provider switch ---
     # "meta"  = direct Meta Cloud API (test number, development)
     # "dotpe" = DotPe BSP (the real business number lives there)
-    WHATSAPP_PROVIDER: Literal["meta", "dotpe"] = "meta"
+    WHATSAPP_PROVIDER: Literal["waha", "meta", "dotpe"] = "waha"
 
     # --- WhatsApp Cloud API (Meta Graph API) ---
-    WHATSAPP_TOKEN: str
-    WHATSAPP_PHONE_NUMBER_ID: str
-    # Shared secret we echo back during Meta's GET webhook verification.
-    WHATSAPP_VERIFY_TOKEN: str
-    # Used to verify the X-Hub-Signature-256 header on incoming webhooks.
-    WHATSAPP_APP_SECRET: str
+    WHATSAPP_TOKEN: str = ""
+    WHATSAPP_PHONE_NUMBER_ID: str = ""
+    # Meta webhook credentials (unused by WAHA).
+    WHATSAPP_VERIFY_TOKEN: str = ""
+    WHATSAPP_APP_SECRET: str = ""
+
+    # --- WAHA (self-hosted WhatsApp Web) ---
+    # Example: http://waha:3000 when both containers share a Docker network.
+    WAHA_BASE_URL: str = ""
+    WAHA_API_KEY: str = ""
+    WAHA_SESSION: str = "default"
+    WAHA_WEBHOOK_SECRET: str = ""
 
     # --- Backups ---
     # Where pg_dump lives on this machine; nightly backups need it.
@@ -135,6 +141,12 @@ class Settings(BaseSettings):
     # button dikhta hai. PLACE_ID khali ho to dukaan ka naam se dhoondh lete hain.
     GOOGLE_PLACES_API_KEY: str = ""
     GOOGLE_PLACE_ID: str = ""
+
+    # --- Google Analytics 4 Data API (optional dashboard reporting) ---
+    # Property id is the numeric GA4 property id, e.g. 123456789.
+    # The refresh token must be granted analytics.readonly by the same OAuth client.
+    GA4_PROPERTY_ID: str = ""
+    GA4_REFRESH_TOKEN: str = ""
 
     ENVIRONMENT: Literal["development", "production"] = "development"
 
