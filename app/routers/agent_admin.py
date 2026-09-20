@@ -998,3 +998,680 @@ async def list_tasks(
     # sau round-trip.
     #
     # "Bina jawab ka" = us task ka aakhri sandesh staff ka hai. Ginti nahi,
+    # kram dekhte hain: owner ne jawab de diya aur staff ne phir se poocha,
+    # to wo dobara bina jawab ka hai.
+    from app.models import TaskMessage
+
+    threads: dict = {}
+    if rows:
+        msgs = (
+            await db.execute(
+                select(TaskMessage)
+                .where(TaskMessage.task_id.in_([t.id for t in rows]))
+                .order_by(TaskMessage.at)
+            )
+        ).scalars().all()
+        for m in msgs:
+            threads.setdefault(m.task_id, []).append(m)
+
+    now = datetime.now(timezone.utc)
+    out = []
+    for t in rows:
+        staff = await db.get(_S, t.assigned_staff_id) if t.assigned_staff_id else None
+        order = await db.get(_O, t.order_id) if t.order_id else None
+        thread = threads.get(t.id, [])
+        waiting = bool(thread) and thread[-1].author_kind == "staff"
+        out.append(
+            {
+                "id": str(t.id), "code": t.code, "title": t.title,
+                "status": t.status, "urgent": t.urgent,
+                "staff": staff.name if staff else None,
+                "staff_phone": staff.phone if staff else None,
+                "order_number": order.order_number if order else None,
+                "reply": t.reply,
+                "ping_count": t.ping_count,
+                "escalated": t.escalated_at is not None,
+                "age_hours": int((now - t.created_at).total_seconds() // 3600),
+                # Sawaal ka hisaab — card par badge, sheet mein poora thread
+                "msg_count": len(thread),
+                "awaiting_reply": waiting,
+                "last_question": thread[-1].text[:160] if waiting else None,
+                # detail card ke liye — kab aakhri baar poocha aur unhone
+                # kya samay diya; ye pehle sirf DB mein tha, kahin dikhta nahi
+                "last_ping_at": t.last_ping_at.isoformat() if t.last_ping_at else None,
+                "eta_text": t.eta_text,
+                "created_by": t.created_by,
+                "created_at": t.created_at.isoformat(),
+                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+            }
+        )
+    return out
+
+
+@router.post("/tasks", status_code=201)
+async def create_task_api(body: TaskIn, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.models import Order as _O
+    from app.services import tasks as task_service
+
+    staff = await task_service.find_staff(db, body.staff or "") if body.staff else None
+    if body.staff and staff is None:
+        raise HTTPException(status_code=400, detail=f"'{body.staff}' staff list mein nahi mila")
+    order = None
+    if body.order_number:
+        order = (
+            await db.execute(select(_O).where(_O.order_number == body.order_number.upper()))
+        ).scalar_one_or_none()
+        if order is None:
+            raise HTTPException(status_code=404, detail=f"{body.order_number} nahi mila")
+
+    task = await task_service.create_task(
+        db, title=body.title, staff=staff, order=order,
+        urgent=body.urgent, created_by="dashboard",
+    )
+    return {"code": task.code, "id": str(task.id)}
+
+
+@router.post("/tasks/{code}/done")
+async def complete_task_api(code: str, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    await task_service.complete_task(db, task, by="dashboard")
+    return {"ok": True}
+
+
+@router.post("/tasks/{code}/cancel")
+async def cancel_task_api(code: str, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    await task_service.cancel_task(db, task, by="dashboard")
+    return {"ok": True}
+
+
+@router.post("/tasks/{code}/ping")
+async def ping_task_api(code: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """'Abhi pooch lo' — nudge the assignee without waiting for the clock."""
+    from datetime import datetime, timezone
+
+    from app.models import Staff as _S
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    staff = await db.get(_S, task.assigned_staff_id) if task.assigned_staff_id else None
+    if staff is None:
+        raise HTTPException(status_code=400, detail="Ye kaam kisi ko assign nahi hai")
+    ok = await task_service._send_to_assignee(db, task, staff, first=False)
+    task.ping_count += 1
+    task.last_ping_at = datetime.now(timezone.utc)
+    db.add(task)
+    await db.commit()
+    return {"ok": ok, "detail": "bhej diya" if ok else "window band hai — nahi ja paya"}
+
+
+class TaskReplyIn(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+@router.get("/tasks/{code}/messages")
+async def task_thread_admin(code: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Is kaam par staff ne kya poocha aur kya jawab gaya — ek jagah."""
+    from app.models import TaskMessage
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    rows = (
+        await db.execute(
+            select(TaskMessage).where(TaskMessage.task_id == task.id).order_by(TaskMessage.at)
+        )
+    ).scalars().all()
+    return {
+        "code": task.code,
+        "title": task.title,
+        "messages": [
+            {"who": m.author_kind, "name": m.author_name, "text": m.text,
+             "at": m.at.isoformat(), "read": m.read_by_staff_at is not None}
+            for m in rows
+        ],
+    }
+
+
+@router.post("/tasks/{code}/reply")
+async def reply_to_task(
+    code: str, body: TaskReplyIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Staff ke sawaal ka jawab — thread mein bhi, uske WhatsApp par bhi.
+
+    Pehle jawab dene ka koi rasta hi nahi tha: sawaal owner ke WhatsApp par
+    aata tha aur wo wahin se reply karta tha, jo kisi record mein nahi
+    jaata tha. Ab dono taraf ek hi thread dikhta hai, aur panel mein
+    staff ko unread badge milta hai.
+    """
+    from app.models import Staff as _S
+    from app.models import TaskMessage
+    from app.services import tasks as task_service
+    from app.services.whatsapp import SendError, send_message
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    text = body.text.strip()
+    db.add(
+        TaskMessage(
+            task_id=task.id, author_kind="owner", author_name="Owner", text=text[:1000]
+        )
+    )
+    await db.commit()
+
+    delivered = False
+    staff = await db.get(_S, task.assigned_staff_id) if task.assigned_staff_id else None
+    wa_text = f"[{task.code}] {task.title}\n\nJawab: {text[:500]}"
+    if staff is not None:
+        try:
+            await send_message(db, to_phone=staff.phone, text=wa_text)
+            delivered = True
+        except SendError as exc:
+            # Panel mein to dikh hi jayega — WhatsApp fail hona jawab ko
+            # rokta nahi.
+            log.warning("task_reply_wa_failed", code=task.code, error=str(exc))
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="task_replied",
+        args={"code": task.code}, result=text[:150],
+    )
+    # API se na gaya? To owner ke apne phone ka WhatsApp hai. Number aur
+    # bana-banaya text wapas bhejte hain taaki dashboard ek wa.me link de
+    # sake — wahi rasta jo staff panel bill share karne ke liye use karta
+    # hai. Bina iske jawab sirf panel mein baithta hai aur staff ko tab
+    # tak pata nahi chalta jab tak wo khud khol kar na dekhe.
+    return {
+        "ok": True,
+        "whatsapp": delivered,
+        "staff_phone": (staff.phone if staff is not None and not delivered else None),
+        "staff_name": (staff.name if staff is not None else None),
+        "wa_text": (wa_text if not delivered else None),
+    }
+
+
+@router.post("/jobs/task-followups")
+async def trigger_task_followups() -> dict:
+    """Run the follow-up sweep now (the button next to the task list)."""
+    from app.services.tasks import run_task_followups
+
+    return {"sent": await run_task_followups()}
+
+
+@router.get("/leads", dependencies=[Depends(require_feature("marketing_agent"))])
+async def list_leads(
+    db: AsyncSession = Depends(get_db),
+    stage: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict]:
+    """Lead pipeline for the dashboard/CRM view. Newest activity first."""
+    from app.models import Lead
+
+    q = select(Lead).order_by(Lead.created_at.desc()).limit(limit)
+    if stage:
+        q = q.where(Lead.stage == stage.upper())
+    rows = (await db.execute(q)).scalars().all()
+    return [
+        {
+            "phone": l.phone, "name": l.name, "source": l.source, "area": l.area,
+            "stage": l.stage, "followup_count": l.followup_count,
+            "last_contact_at": l.last_contact_at.isoformat() if l.last_contact_at else None,
+            "next_followup_at": l.next_followup_at.isoformat() if l.next_followup_at else None,
+            "created_at": l.created_at.isoformat(),
+            "notes": l.notes,
+        }
+        for l in rows
+    ]
+
+
+@router.get("/templates/registry")
+async def templates_registry() -> list[dict]:
+    """Local template registry — works even when Meta's API is down."""
+    from app.services.templates import _DYNAMIC, TEMPLATES
+
+    merged = {**TEMPLATES, **_DYNAMIC}
+    return [
+        {
+            "name": name, "status": "UNKNOWN", "category": "UTILITY",
+            "body": " ".join("{{%d}}" % i for i in range(1, spec["param_count"] + 1))
+            or "(no variables)",
+            "param_count": spec["param_count"],
+        }
+        for name, spec in merged.items()
+        if name != "hello_world"
+    ]
+
+
+@router.get("/templates")
+async def list_templates(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    try:
+        return await wa_templates.list_remote(await wa_templates.creds_for_current(db))
+    except wa_templates.TemplateError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
+
+
+class TplButtonIn(BaseModel):
+    type: str = Field(pattern="^(QUICK_REPLY|URL|PHONE_NUMBER)$")
+    text: str = Field(min_length=1, max_length=25)
+    url: str | None = None
+    phone_number: str | None = None
+
+
+class TemplateIn(BaseModel):
+    name: str = Field(min_length=3, max_length=60)
+    category: str = Field(pattern="^(UTILITY|MARKETING)$")
+    language: str = "en_US"
+    body: str = Field(min_length=5, max_length=1024)
+    footer: str | None = Field(default=None, max_length=60)
+    buttons: list[TplButtonIn] = Field(default_factory=list, max_length=3)
+    samples: list[str] = Field(default_factory=list)  # one per {{n}}
+
+
+@router.post("/templates", status_code=201)
+async def create_template(body: TemplateIn, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        out = await wa_templates.create(
+            await wa_templates.creds_for_current(db), **body.model_dump(exclude={"buttons"}),
+            buttons=[b.model_dump() for b in body.buttons],
+        )
+    except wa_templates.TemplateError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="template_submitted",
+        args={"name": out["name"], "category": body.category}, result=out["status"],
+    )
+    return out
+
+
+@router.delete("/templates/{name}")
+async def delete_template(name: str, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        await wa_templates.delete(await wa_templates.creds_for_current(db), name)
+    except wa_templates.TemplateError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
+    return {"deleted": name}
+
+
+# ---------------------------------------------------------------------------
+# Agents overview (control room)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/agents/overview", dependencies=[Depends(require_feature("service_agent"))])
+async def agents_overview(db: AsyncSession = Depends(get_db)) -> dict:
+    """One call powering the Agents control-room page."""
+    from zoneinfo import ZoneInfo
+
+    from app.models import Campaign, Correction, DocChunk, FaqEntry
+    from app.services.marketing import compute_segments, month_send_count
+
+    ist = ZoneInfo("Asia/Kolkata")
+    now_ist = datetime.now(ist)
+    today_start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(
+        timezone.utc
+    )
+    month_start = now_ist.replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    ).astimezone(timezone.utc)
+
+    counts_rows = (
+        await db.execute(
+            select(AuditLog.action, func.count())
+            .where(AuditLog.at >= today_start)
+            .group_by(AuditLog.action)
+        )
+    ).all()
+    today_actions = {a: c for a, c in counts_rows}
+
+    faq_n = (await db.execute(select(func.count()).select_from(FaqEntry))).scalar_one()
+    corr_n = (await db.execute(select(func.count()).select_from(Correction))).scalar_one()
+    docs_n = (
+        await db.execute(select(func.count(func.distinct(DocChunk.document))))
+    ).scalar_one()
+    teachme_n = (
+        await db.execute(
+            select(func.count())
+            .select_from(OpenQuestion)
+            .where(OpenQuestion.status == "open")
+        )
+    ).scalar_one()
+
+    month_campaigns = (
+        (
+            await db.execute(
+                select(Campaign).where(
+                    Campaign.status == "sent", Campaign.sent_at >= month_start
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    orders_attr = sum((c.stats or {}).get("orders_attributed", 0) for c in month_campaigns)
+    revenue_attr = sum((c.stats or {}).get("revenue_attributed", 0) for c in month_campaigns)
+
+    s = await app_settings.all_settings(db)
+    segs = await compute_segments(db)
+
+    return {
+        "service": {
+            "enabled": s["agent_enabled"],
+            "today": {
+                "replies": today_actions.get("ai_reply", 0),
+                "escalations": today_actions.get("escalated", 0)
+                + today_actions.get("complaint_escalated", 0),
+                "fyis": today_actions.get("admin_fyi", 0),
+                "commands": sum(
+                    today_actions.get(a, 0)
+                    for a in (
+                        "create_bill", "status_update", "delay_update", "relay",
+                        "set_priority", "assign_staff", "add_note", "record_payment",
+                    )
+                ),
+                "taught": today_actions.get("taught_via_whatsapp", 0),
+            },
+            "knowledge": {"faqs": faq_n, "corrections": corr_n, "docs": docs_n},
+            "teachme_open": teachme_n,
+        },
+        "marketing": {
+            "autonomy": s["marketing_autonomy"],
+            "segments": {k: len(v) for k, v in segs.items()},
+            "month": {
+                "campaigns_sent": len(month_campaigns),
+                "orders_attributed": orders_attr,
+                "revenue_attributed": revenue_attr,
+                "messages_used": await month_send_count(db),
+                "budget": s["marketing_monthly_msg_budget"],
+            },
+            "social": {
+                "enabled": s["social_daily_enabled"],
+                "hour": s["social_post_hour"],
+                "instagram_linked": bool(s["ig_user_id"] and s["ig_access_token"]),
+            },
+        },
+        "health": {
+            "llm_provider": __import__("app.services.llm_client", fromlist=["PROVIDER"]).PROVIDER,
+            "public_url_set": bool(s["public_base_url"]),
+            "standup_hour": s["standup_hour"],
+            "turnaround_days": s["turnaround_days"],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Settings + agent controls
+# ---------------------------------------------------------------------------
+
+
+# Settings whose values are credentials — never sent back to the browser.
+_SECRET_SETTINGS = {"ig_access_token", "gbp_connection"}
+# Sirf vendor Control panel likhta hai (routers/control.py) — dukaan ke
+# dashboard ke generic settings PUT se nahi, warna koi token/listing badal de.
+_READONLY_SETTINGS = {"gbp_connection", "gbp_reviews", "ig_user_id", "ig_access_token"}
+_SECRET_MASK = "••••••••"
+
+
+def _redact_settings(s: dict) -> dict:
+    return {
+        k: (_SECRET_MASK if k in _SECRET_SETTINGS and v else v) for k, v in s.items()
+    }
+
+
+@router.get("/settings")
+async def get_settings(db: AsyncSession = Depends(get_db)) -> dict:
+    return _redact_settings(await app_settings.all_settings(db))
+
+
+class SettingIn(BaseModel):
+    key: str
+    value: object
+
+
+@router.put("/settings")
+async def put_setting(body: SettingIn, db: AsyncSession = Depends(get_db)) -> dict:
+    # Saving the mask back would overwrite the real secret with dots.
+    if body.key in _SECRET_SETTINGS and body.value == _SECRET_MASK:
+        return {"ok": True, "unchanged": True}
+    if body.key in _READONLY_SETTINGS:
+        raise HTTPException(status_code=400, detail=f"{body.key} is managed by the Kwik Klin team (Control panel)")
+    try:
+        await app_settings.set_value(db, body.key, body.value)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+class AgentToggleIn(BaseModel):
+    phone: str
+    paused: bool
+
+
+@router.post("/inbox/toggle-agent", dependencies=[Depends(require_feature("service_agent"))])
+async def toggle_agent(body: AgentToggleIn, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        phone = normalize_phone(body.phone)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad phone")
+    cust = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if cust is None:
+        raise HTTPException(status_code=404, detail="customer not found")
+    cust.agent_paused = body.paused
+    await db.commit()
+    await audit.record(
+        actor_role="admin", actor="dashboard",
+        action="agent_paused" if body.paused else "agent_resumed",
+        args={"phone": phone}, result="",
+    )
+    return {"phone": phone, "agent_paused": cust.agent_paused}
+
+
+@router.get("/growth-analytics", dependencies=[Depends(require_feature("reports"))])
+async def growth_analytics(db: AsyncSession = Depends(get_db)) -> dict:
+    """Website realtime + GBP daily performance + local campaign KPIs."""
+    from app.services.analytics import growth_snapshot
+    snap = await growth_snapshot(db)
+    from app.services.marketing import month_send_count
+    from app.models import Campaign, CampaignRecipient
+    month = await month_send_count(db)
+    campaigns = (
+        await db.execute(select(Campaign).order_by(Campaign.created_at.desc()).limit(20))
+    ).scalars().all()
+    return {
+        **snap,
+        "campaign": {
+            "messages_sent_this_month": month,
+            "recent": [
+                {
+                    "name": c.name,
+                    "status": c.status,
+                    "segment": c.segment,
+                    "stats": c.stats or {},
+                }
+                for c in campaigns
+            ],
+        },
+    }
+
+
+@router.get("/whatsapp/stats", dependencies=[Depends(require_feature("reports"))])
+async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
+    """Today's WhatsApp traffic (our DB) + live Meta template/quality data."""
+    from zoneinfo import ZoneInfo
+
+    from app.models import Conversation, Direction
+
+    ist = ZoneInfo("Asia/Kolkata")
+    today_start = (
+        datetime.now(ist).replace(hour=0, minute=0, second=0, microsecond=0)
+    ).astimezone(timezone.utc)
+    sent_n = (
+        await db.execute(
+            select(func.count()).select_from(Conversation).where(
+                Conversation.direction == Direction.OUTBOUND,
+                Conversation.created_at >= today_start,
+            )
+        )
+    ).scalar_one()
+    recv_n = (
+        await db.execute(
+            select(func.count()).select_from(Conversation).where(
+                Conversation.direction == Direction.INBOUND,
+                Conversation.created_at >= today_start,
+            )
+        )
+    ).scalar_one()
+    talked = (
+        await db.execute(
+            select(func.count(func.distinct(Conversation.customer_id))).where(
+                Conversation.created_at >= today_start,
+                Conversation.customer_id.isnot(None),
+            )
+        )
+    ).scalar_one()
+
+    tpl = {"approved": 0, "pending": 0, "rejected": 0}
+    quality, meta_ok, meta_state = None, False, "not_connected"
+
+    creds = await wa_templates.creds_for_current(db)
+    if creds is not None:
+        cached = _wa_stats_cached(creds.waba_id)
+        if cached is not None:
+            tpl, quality = dict(cached["templates"]), cached["quality"]
+            meta_ok, meta_state = cached["meta_ok"], cached["meta_state"]
+        else:
+            try:
+                status, data = await wa_templates.graph(
+                    "GET", f"{creds.waba_id}/message_templates",
+                    token=creds.token,
+                    params={"fields": "name,status", "limit": 100},
+                )
+                if status == 200:
+                    meta_ok, meta_state = True, "ok"
+                    for t in data.get("data", []):
+                        k = (t.get("status") or "").lower()
+                        if k in tpl:
+                            tpl[k] += 1
+                    # Only worth asking for quality once the token has proven
+                    # itself. Firing it after a 401 was the second wasted call.
+                    s2, d2 = await wa_templates.graph(
+                        "GET", creds.phone_number_id,
+                        token=creds.token,
+                        params={"fields": "quality_rating"},
+                    )
+                    if s2 == 200:
+                        quality = d2.get("quality_rating")
+                elif status in (401, 403):
+                    meta_state = "auth_failed"
+                else:
+                    meta_state = "error"
+            except Exception:
+                meta_state = "unreachable"
+                log.exception("wa_stats_meta_failed")
+            _wa_stats_cache[creds.waba_id] = (
+                _time.monotonic(),
+                {"templates": dict(tpl), "quality": quality,
+                 "meta_ok": meta_ok, "meta_state": meta_state},
+            )
+
+    return {
+        "today": {"sent": sent_n, "received": recv_n, "customers_talked": talked},
+        "templates": tpl,
+        "quality": quality,
+        "meta_ok": meta_ok,
+        # Why Meta data is missing, so the UI can stop calling a shop that
+        # never connected WhatsApp "unreachable".
+        "meta_state": meta_state,
+    }
+
+
+@router.get("/backup.json")
+async def backup_json(db: AsyncSession = Depends(get_db)) -> dict:
+    """One-click business backup: every business table as plain JSON.
+
+    (Full binary-safe backups: pg_dump. This is the owner-friendly export.)
+    """
+    from app.models import (
+        Correction as _Cr,
+        Coupon as _Cp,
+        Customer as _C,
+        DocChunk as _D,
+        Expense as _E,
+        FaqEntry as _F,
+        Order as _O,
+        Payment as _P,
+        Rate as _R,
+    )
+
+    import enum as _enum
+
+    def _row(obj, cols):
+        out = {}
+        for col in cols:
+            v = getattr(obj, col)
+            if isinstance(v, _enum.Enum):
+                v = v.name
+            elif v is not None and not isinstance(v, (int, float, bool, str, list, dict)):
+                v = str(v)
+            out[col] = v
+        return out
+
+    customers = (await db.execute(select(_C))).scalars().all()
+    orders = (await db.execute(select(_O))).scalars().all()
+    payments = (await db.execute(select(_P))).scalars().all()
+    rates = (await db.execute(select(_R))).scalars().all()
+    expenses = (await db.execute(select(_E))).scalars().all()
+    coupons = (await db.execute(select(_Cp))).scalars().all()
+    faqs = (await db.execute(select(_F))).scalars().all()
+    # everything the owner TAUGHT the agent — without these the export
+    # restores the business but loses the agent's learning
+    corrections = (await db.execute(select(_Cr))).scalars().all()
+    doc_chunks = (
+        (await db.execute(select(_D).order_by(_D.document, _D.chunk_index)))
+        .scalars()
+        .all()
+    )
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "customers": [_row(c, ["phone", "name", "address", "opted_out", "created_at"]) for c in customers],
+        "orders": [
+            _row(o, ["order_number", "status", "items", "total_amount", "discount_amount",
+                     "gst_amount", "amount_paid", "payment_status", "expected_delivery",
+                     "priority", "notes", "created_at"])
+            | {"customer_phone": next((c.phone for c in customers if c.id == o.customer_id), None)}
+            for o in orders
+        ],
+        "payments": [_row(p, ["amount", "method", "recorded_by", "received_at"]) for p in payments],
+        "rates": [_row(r, ["service", "garment", "unit", "rate", "is_active"]) for r in rates],
+        "expenses": [_row(e, ["category", "amount", "spent_on", "description"]) for e in expenses],
+        "coupons": [_row(c, ["code", "discount_type", "value", "active"]) for c in coupons],
+        "faq": [_row(f, ["question", "answer", "audience", "enabled"]) for f in faqs],
+        "corrections": [
+            _row(c, ["question", "correct_reply", "audience", "enabled", "created_at"])
+            for c in corrections
+        ],
+        "doc_chunks": [
+            _row(d, ["document", "chunk_index", "content", "enabled"]) for d in doc_chunks
+        ],
+        "settings": _redact_settings(await app_settings.all_settings(db)),
+    }
+
+
+@router.post("/jobs/standup")
+async def trigger_standup() -> dict:
+    """Manual standup trigger — for testing and 'bhej do abhi' moments."""
+    from app.services.scheduler import run_standup
+
+    sends = await run_standup(force=True)
+    return {"sent_to": sends}
