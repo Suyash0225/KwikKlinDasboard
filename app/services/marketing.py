@@ -10,6 +10,7 @@ Compliance is CODE, not convention — every send passes eligible():
 
 import asyncio
 import hashlib
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -26,7 +27,7 @@ from app.models import (
     Order,
 )
 from app.services import app_settings, audit
-from app.services.whatsapp import SendError, send_message
+from app.services.whatsapp import SendError, send_image, send_message
 
 log = structlog.get_logger()
 
@@ -305,11 +306,28 @@ async def send_campaign(campaign_id) -> None:
                     continue
                 text = campaign.message_text.replace("{name}", cust.name or "ji")
                 try:
-                    # Campaign = MARKETING category: Meta par sabse mehnga
-                    # (~₹0.80/msg) — billable meter isse alag ginta hai.
-                    wamid = await send_message(
-                        db, to_phone=cust.phone, text=text, category="marketing"
+                    # One campaign = one approved creative. Send the same
+                    # generated image + caption to each eligible customer;
+                    # never regenerate an image per recipient.
+                    creative_file = (campaign.stats or {}).get("creative_file")
+                    media_path = (
+                        Path(__file__).resolve().parent.parent / "media" / creative_file
+                        if creative_file else None
                     )
+                    if media_path and media_path.exists():
+                        wamid = await send_image(
+                            db,
+                            to_phone=cust.phone,
+                            file_path=str(media_path),
+                            mime_type="image/png",
+                            caption=text,
+                            local_url=f"/admin/media/{creative_file}",
+                            sent_by="bot",
+                        )
+                    else:
+                        wamid = await send_message(
+                            db, to_phone=cust.phone, text=text, category="marketing"
+                        )
                     rec.status = "sent"
                     rec.wa_message_id = wamid
                     cust.last_marketing_at = datetime.now(timezone.utc)
