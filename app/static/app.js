@@ -2463,11 +2463,13 @@ async function loadTasks() {
 function renderTaskKpis() {
   const open = TASKS.filter((t) => t.status === "OPEN");
   const stuck = open.filter((t) => t.escalated || t.age_hours >= 6);
+  const unassigned = open.filter((t) => !t.staff);
   const doneToday = TASKS.filter((t) => t.status === "DONE"
     && t.completed_at && t.completed_at.slice(0, 10) === new Date().toISOString().slice(0, 10));
   $("task-kpis").innerHTML =
-    kpi("Pending tasks", open.length, "", "", "📋", "orange") +
-    kpi("Stuck", stuck.length, "6h+ old or escalated", "", "🚨", "red") +
+    kpi("Open work", open.length, "Team ka pending kaam", "", "📋", "orange") +
+    kpi("Stuck", stuck.length, "6h+ old ya escalated", "", "🚨", "red") +
+    kpi("Unassigned", unassigned.length, "Kisi staff ko nahi diya", "", "👤", "orange") +
     kpi("Done today", doneToday.length, "", "", "✅", "green");
 }
 
