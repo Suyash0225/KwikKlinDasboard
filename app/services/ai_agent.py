@@ -38,6 +38,8 @@ _REPLY_SCHEMA = {
             "enum": ["ORDER_STATUS", "NEW_ORDER", "PRICE_QUERY", "COMPLAINT", "GREETING", "OTHER"],
         },
         "language": {"type": "string", "enum": ["hi", "en"]},
+        "action": {"type": "string", "enum": ["NONE", "ANSWER", "SEND_BILL", "CREATE_LEAD", "FOLLOW_UP_LEAD", "CREATE_ORDER", "ESCALATE", "CREATE_CAMPAIGN", "REFERRAL_REQUEST"]},
+        "action_reason": {"type": "string"},
         "escalate": {"type": "boolean"},
         "escalation_reason": {"type": "string"},
         # FYI to the owner — the agent handled it, the owner just gets told
@@ -58,14 +60,33 @@ _REPLY_SCHEMA = {
         },
     },
     "required": [
-        "reply", "intent", "language", "escalate",
+        "reply", "intent", "language", "action", "action_reason", "escalate",
         "escalation_reason", "admin_note", "intake",
     ],
     "additionalProperties": False,
 }
 
+
+
+ACTION_DECISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": [
+                "NONE", "ANSWER", "SEND_BILL", "CREATE_LEAD",
+                "FOLLOW_UP_LEAD", "CREATE_ORDER", "ESCALATE",
+                "CREATE_CAMPAIGN", "REFERRAL_REQUEST"
+            ],
+        },
+        "reason": {"type": "string"},
+    },
+    "required": ["action", "reason"],
+    "additionalProperties": False,
+}
+
 _COMPOSE_SYSTEM = (
-    "You are the WhatsApp assistant of Kwik Klin, a laundry shop in Varanasi, "
+    "You are the WhatsApp assistant of Kwik Klin, a laundry shop in Varanasi, "\n    "Return the safest useful action in the action field. Action is a recommendation only; backend code validates and executes it.\n"
     "India. You will receive a FACTS block (from the shop's database and the "
     "owner's own knowledge notes) and the customer's message.\n"
     "You are the front desk — HANDLE things yourself. In this ONE response, "
