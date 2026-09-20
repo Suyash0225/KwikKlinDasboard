@@ -9,6 +9,7 @@ Compliance is CODE, not convention — every send passes eligible():
 """
 
 import asyncio
+import random
 import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -338,7 +339,7 @@ async def send_campaign(campaign_id) -> None:
                     rec.status = "failed"
                     rec.detail = str(exc)[:200]
                 await db.commit()
-                await asyncio.sleep(1.0)  # Meta-friendly pace
+                # Randomize the campaign gap between 15–20 seconds.\n                # This is intentionally slower than the old 1-second pace.\n                await asyncio.sleep(random.uniform(15.0, 20.0))
 
         campaign.status = "sent"
         campaign.sent_at = datetime.now(timezone.utc)
