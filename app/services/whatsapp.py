@@ -499,7 +499,15 @@ async def send_message(
                     to_phone,
                     {
                         "text": text,
-                        "buttons": buttons,
+                        "buttons": [
+                            {
+                                "id": b.id,
+                                "title": b.title,
+                                "kind": b.kind,
+                                "url": b.url,
+                            }
+                            for b in (buttons or [])
+                        ] or None,
                         "template_name": None,
                         "template_params": None,
                         "template_url_param": None,
@@ -922,7 +930,25 @@ async def drain_outbound_queue() -> int:
         for row in rows:
             p = row.payload or {}
             raw_buttons = p.get("buttons") or []
-            buttons = [Button(b[0], b[1]) for b in raw_buttons] or None
+            buttons = []
+            for b in raw_buttons:
+                if isinstance(b, dict):
+                    buttons.append(Button(
+                        str(b.get("id") or ""),
+                        str(b.get("title") or ""),
+                        str(b.get("kind") or "reply"),
+                        str(b.get("url") or ""),
+                    ))
+                elif isinstance(b, (list, tuple)):
+                    buttons.append(
+                        Button(
+                            str(b[0]),
+                            str(b[1]),
+                            str(b[2]) if len(b) > 2 else "reply",
+                            str(b[3]) if len(b) > 3 else "",
+                        )
+                    )
+            buttons = buttons or None
             try:
                 await send_message(
                     db,
