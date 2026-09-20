@@ -342,7 +342,10 @@ async def send_campaign(campaign_id) -> None:
 
         campaign.status = "sent"
         campaign.sent_at = datetime.now(timezone.utc)
-        campaign.stats = await campaign_stats(db, campaign.id)
+        final_stats = await campaign_stats(db, campaign.id)
+        if (campaign.stats or {}).get("creative_file"):
+            final_stats["creative_file"] = campaign.stats["creative_file"]
+        campaign.stats = final_stats
         await db.commit()
         await audit.record(
             actor_role="system", actor="marketing", action="campaign_sent",
