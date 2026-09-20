@@ -2,9 +2,8 @@
 
 One place answers three questions the whole app kept answering differently:
 - who is an ADMIN (owner side)? -> admins(), is_admin_phone()
-- who must hear when a CUSTOMER has a problem? -> alert_recipients()
-  (owner's rule, 06 Aug: escalations reach Suyash, Ravi AND Ajit — not just
-  the manager and one CC number)
+- who must hear when a CUSTOMER/AI escalation occurs? -> alert_recipients()
+  (admin/owner numbers only; never washermen or delivery staff)
 - who does pickups/deliveries? -> delivery_staff()
 
 Every function degrades instead of raising: settings.MANAGER_PHONE is always
@@ -64,29 +63,12 @@ async def is_admin_phone(db: AsyncSession, phone: str) -> bool:
 
 
 async def alert_recipients(db: AsyncSession) -> list[tuple[str, str]]:
-    """(phone, name) for the people a CUSTOMER PROBLEM must reach.
+    """(phone, name) for customer/AI escalation alerts.
 
-    Owner's rule (06 Aug, revised): the admins and the washerman (Ravi) —
-    the people who can actually answer a customer. The delivery boy is NOT
-    on this list: he was getting every "urgent delivery?" escalation as a
-    template alert he could do nothing about. He is told when the owner
-    tells him ("Ajit ko bol do ..."), and by his own pickup/delivery jobs.
+    Escalation alerts are owner/admin notifications only. Never include
+    washermen, delivery staff, or other non-admin staff here.
     """
-    seen: dict[str, str] = {}
-    for st in await active_staff(db):
-        if st.role is StaffRole.DELIVERY:
-            continue
-        p = _norm(st.phone)
-        if p:
-            seen.setdefault(p, st.name or p)
-    for phone, label in (
-        (manager_phone(), "Manager"),
-        (settings.ESCALATION_CC_PHONE, "CC"),
-    ):
-        p = _norm(phone)
-        if p:
-            seen.setdefault(p, label)
-    return list(seen.items())
+    return [(phone, "Admin") for phone in await admin_phones(db)]
 
 
 async def notify_admins(db: AsyncSession, text: str, *, skip_phone: str = "") -> int:

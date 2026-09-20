@@ -178,7 +178,7 @@ Rules that matter:
 
 **Env**: see `.env` — `LLM_PROVIDER=gemini` + `GEMINI_API_KEY` (Claude path
 kept: set `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`).
-`ESCALATION_CC_PHONE` CCs escalations to Ravi.
+`ESCALATION_CC_PHONE` is deprecated; AI/customer escalation alerts are sent to admin numbers only.
 
 **Migrations**: `alembic upgrade head` (latest: payments ledger, audit_log,
 campaigns/coupons, open_questions, faq/corrections, settings_kv).

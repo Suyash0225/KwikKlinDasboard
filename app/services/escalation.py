@@ -2,7 +2,7 @@
 
 raise_escalation() NEVER raises — an escalation failure must not break the
 webhook or an in-flight reply. The DB row is the source of truth; the
-WhatsApp alerts are best-effort and go to the whole team (see team.py).
+WhatsApp alerts are best-effort and go only to admin/owner recipients (see team.py).
 """
 
 import uuid
@@ -35,7 +35,7 @@ async def raise_escalation(
     customer: Customer | None = None,
     order_id: uuid.UUID | None = None,
 ) -> Escalation | None:
-    """Store an escalation and ping the manager. Returns None on failure."""
+    """Store an escalation and alert admin recipients. Returns None on failure."""
     try:
         esc = Escalation(
             customer_id=customer.id if customer else None,
@@ -60,13 +60,11 @@ async def raise_escalation(
         phone=customer.phone if customer else "-",
         question=question[:300],
     )
-    # Escalation means the AI could not handle the customer message.
-    # This is an owner/admin alert, not a staff task reminder. Only admin
-    # numbers should receive it; washermen and delivery staff must not get
-    # these alerts.
+    # Escalation is an owner/admin alert, not a staff task reminder.
+    # Keep recipient policy centralized in team.alert_recipients().
     from app.services import team
 
-    recipients = [(phone, "Admin") for phone in await team.admin_phones(db)]
+    recipients = await team.alert_recipients(db)
     log.info("escalation_alert_admin_only", count=len(recipients))
     for to_phone, _name in recipients:
         if not to_phone:

@@ -91,11 +91,11 @@ async def test_complaint_escalates_and_apologizes(monkeypatch, esc_sent) -> None
     assert reply is not None and "manager" in reply
     escs = await _escalations_for(cust.id)
     assert len(escs) == 1 and escs[0].question.startswith("COMPLAINT:")
-    # manager + Ravi CC both alerted
+    # Only admins receive escalation alerts; the old Ravi CC must not receive it.
     targets = {c["to"] for c in esc_sent}
     assert settings.MANAGER_PHONE in targets
     if settings.ESCALATION_CC_PHONE:
-        assert settings.ESCALATION_CC_PHONE in targets
+        assert settings.ESCALATION_CC_PHONE not in targets
     assert "kharab" in esc_sent[0]["text"]
 
 
