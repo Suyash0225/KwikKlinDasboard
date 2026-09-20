@@ -809,6 +809,23 @@ async def _notify_customer(
             await send_message(
                 db, to_phone=customer.phone, text=text_body, buttons=outbound_buttons
             )
+        except SendError as exc:
+            # WAHA documents Send Buttons as deprecated/fragile. If the
+            # interactive endpoint rejects a button payload, retry the same
+            # business message as plain text with the secure HTTPS bill link.
+            # Never retry after a transient failure: that could duplicate a
+            # successfully accepted message whose response was lost.
+            if settings.WHATSAPP_PROVIDER == "waha" and outbound_buttons and not exc.transient:
+                log.warning(
+                    "waha_buttons_fallback_to_text",
+                    order_number=order.order_number,
+                    error=str(exc),
+                )
+                await send_message(
+                    db, to_phone=customer.phone, text=text_body, buttons=None
+                )
+            else:
+                raise
         except WindowClosedError:
             await send_message(
                 db,
