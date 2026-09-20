@@ -150,10 +150,12 @@ MAX_LIST_BUTTON = 20
 
 
 class Button(NamedTuple):
-    """One interactive reply button. id carries context, e.g. 'order:<uuid>:done'."""
+    """Interactive button. kind='reply' sends an action id; kind='url' opens url."""
 
     id: str
     title: str
+    kind: str = "reply"
+    url: str = ""
 
 
 class ListRow(NamedTuple):
@@ -267,6 +269,66 @@ async def _waha_send_text(
     )
     if not wa_message_id:
         raise SendError("WAHA did not return a message id", transient=False)
+    return str(wa_message_id)
+
+
+async def _waha_send_buttons(
+    *,
+    to_phone: str,
+    text: str,
+    buttons: list[Button],
+    reply_to: str | None = None,
+) -> str:
+    """Send WAHA interactive buttons; caller must provide a safe HTTPS URL."""
+    if not settings.WAHA_API_KEY:
+        raise SendError("WAHA provider is not configured", transient=False)
+    chat_id = to_phone.lstrip("+") + "@c.us"
+    payload = {
+        "session": settings.WAHA_SESSION,
+        "chatId": chat_id,
+        "body": text,
+        "buttons": [],
+    }
+    for b in buttons:
+        if b.kind == "url":
+            url = (b.url or "").strip()
+            if not url.lower().startswith("https://"):
+                raise SendError("WAHA URL button requires HTTPS", transient=False)
+            payload["buttons"].append({"type": "url", "text": b.title, "url": url})
+        elif b.kind == "reply":
+            payload["buttons"].append({"type": "reply", "text": b.title, "id": b.id})
+        else:
+            raise ValueError(f"unsupported WAHA button kind: {b.kind!r}")
+    if reply_to:
+        payload["reply_to"] = reply_to
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                settings.WAHA_BASE_URL.rstrip("/") + "/api/sendButtons",
+                headers={
+                    "X-Api-Key": settings.WAHA_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+    except httpx.TransportError as exc:
+        raise SendError("WAHA is unreachable", transient=True) from exc
+    if response.status_code >= 500 or response.status_code == 429:
+        raise SendError("WAHA temporarily unavailable", transient=True)
+    if response.status_code >= 400:
+        log.warning("waha_send_buttons_failed", status=response.status_code)
+        raise SendError("WAHA rejected the button message", transient=False)
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise SendError("WAHA returned an invalid response", transient=False) from exc
+    wa_message_id = (
+        data.get("id")
+        or (data.get("key") or {}).get("id")
+        or (data.get("message") or {}).get("id")
+    )
+    if not wa_message_id:
+        raise SendError("WAHA did not return a button message id", transient=False)
     return str(wa_message_id)
 
 
@@ -400,28 +462,36 @@ async def send_message(
         return wa_message_id
 
     # --- WAHA provider: private WhatsApp Web adapter ---
-    # WAHA Core does not implement Meta templates. Keep template sends on
-    # Meta/DotPe until a WAHA-specific campaign/template strategy is added.
-    # Interactive buttons are intentionally rejected because WAHA documents
-    # its button API as deprecated/fragile.
+    # WAHA templates are not Meta templates. Interactive buttons are supported
+    # by the endpoint, but WAHA currently marks Send Buttons as deprecated/
+    # fragile, so _notify_customer callers must tolerate SendError and the
+    # normal text+HTTPS-link path remains the fallback.
     if settings.WHATSAPP_PROVIDER == "waha":
         if template_name:
             raise SendError(
                 "WAHA provider does not support Meta templates; use a text message",
                 transient=False,
             )
-        if buttons or list_rows:
+        if list_rows:
             raise SendError(
-                "WAHA provider does not support the current interactive message mode",
+                "WAHA provider does not support the current list mode",
                 transient=False,
             )
         assert text is not None
         try:
-            wa_message_id = await _waha_send_text(
-                to_phone=to_phone,
-                text=text,
-                reply_to=reply_to,
-            )
+            if buttons:
+                wa_message_id = await _waha_send_buttons(
+                    to_phone=to_phone,
+                    text=text,
+                    buttons=buttons,
+                    reply_to=reply_to,
+                )
+            else:
+                wa_message_id = await _waha_send_text(
+                    to_phone=to_phone,
+                    text=text,
+                    reply_to=reply_to,
+                )
         except SendError as exc:
             if exc.transient and enqueue_on_fail:
                 await _enqueue_outbound(
@@ -429,7 +499,7 @@ async def send_message(
                     to_phone,
                     {
                         "text": text,
-                        "buttons": None,
+                        "buttons": buttons,
                         "template_name": None,
                         "template_params": None,
                         "template_url_param": None,
