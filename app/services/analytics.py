@@ -22,14 +22,34 @@ async def _ga4_report(days: int = 30) -> dict:
         return {"configured": False, "reason": "GA4 reporting credentials are not configured"}
 
     try:
-        from google.auth.transport.requests import Request
-        from google.oauth2 import service_account
+        import base64
+        import time
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
 
-        creds = service_account.Credentials.from_service_account_file(
-            settings.GOOGLE_APPLICATION_CREDENTIALS,
-            scopes=["https://www.googleapis.com/auth/analytics.readonly"],
-        )
-        creds.refresh(Request())
+        with open(settings.GOOGLE_APPLICATION_CREDENTIALS, "r", encoding="utf-8") as fh:
+            sa = json.load(fh)
+        def _b64(obj):
+            return base64.urlsafe_b64encode(json.dumps(obj, separators=(",", ":")).encode()).rstrip(b"=").decode()
+        now_ts = int(time.time())
+        header = _b64({"alg": "RS256", "typ": "JWT"})
+        claim = _b64({
+            "iss": sa["client_email"],
+            "scope": "https://www.googleapis.com/auth/analytics.readonly",
+            "aud": "https://oauth2.googleapis.com/token",
+            "iat": now_ts,
+            "exp": now_ts + 3600,
+        })
+        key = serialization.load_pem_private_key(sa["private_key"].encode(), password=None)
+        signature = key.sign(f"{header}.{claim}".encode(), padding.PKCS1v15(), hashes.SHA256())
+        assertion = f"{header}.{claim}." + base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
+        async with httpx.AsyncClient(timeout=15) as token_client:
+            token_resp = await token_client.post(
+                "https://oauth2.googleapis.com/token",
+                data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": assertion},
+            )
+        token_resp.raise_for_status()
+        access_token = token_resp.json()["access_token"]
 
         body = {
             "dateRanges": [{"startDate": f"{max(1, days)}daysAgo", "endDate": "today"}],
@@ -47,7 +67,7 @@ async def _ga4_report(days: int = 30) -> dict:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(
                 f"https://analyticsdata.googleapis.com/v1beta/properties/{settings.GA4_PROPERTY_ID}:runReport",
-                headers={"Authorization": f"Bearer {creds.token}"},
+                headers={"Authorization": f"Bearer {access_token}"},
                 json=body,
             )
         if r.status_code != 200:
