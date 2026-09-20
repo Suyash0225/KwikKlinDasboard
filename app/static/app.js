@@ -548,6 +548,38 @@ function sheetGo(sec) { closeSheet(); go(sec); }
 let DASH = null, SUMMARY = null, dashFilter = { status: "", pay: "", q: "", page: 1 };
 const PAGE = 25;
 
+async function loadGrowthAnalytics() {
+  const box = $("growth-analytics-body");
+  if (!box) return;
+  try {
+    const d = await api("/admin/api/growth-analytics");
+    const w = d.website || {}, g = d.gmb || {}, m = d.campaign || {};
+    const wStatus = w.configured
+      ? `🟢 <b>${w.active_users || 0}</b> active now · ${w.views || 0} views · ${w.events || 0} events`
+      : `⚪ GA4 not connected${w.error ? ` — ${esc(w.error)}` : ""}`;
+    const gm = g.metrics || {};
+    const gStatus = g.configured
+      ? `🟢 Website clicks <b>${gm.WEBSITE_CLICKS || 0}</b> · Calls <b>${gm.CALL_CLICKS || 0}</b> · Directions <b>${gm.BUSINESS_DIRECTION_REQUESTS || 0}</b>`
+      : `⚪ Google Business Performance not connected${g.error ? ` — ${esc(g.error)}` : ""}`;
+    box.innerHTML = `
+      <div class="split2">
+        <div style="padding:10px;border:1px solid var(--border);border-radius:10px">
+          <b>🌐 Website</b><div style="margin-top:6px">${wStatus}</div>
+          <small class="muted">GA4 realtime is the live counter; it is not a made-up server hit.</small>
+        </div>
+        <div style="padding:10px;border:1px solid var(--border);border-radius:10px">
+          <b>📍 Google Business Profile</b><div style="margin-top:6px">${gStatus}</div>
+          <small class="muted">GBP reporting is daily/aggregated, so this card shows the latest available period.</small>
+        </div>
+      </div>
+      <div style="margin-top:10px;padding:10px;background:var(--n50);border-radius:10px">
+        <b>📣 Campaigns</b> · ${m.messages_sent_this_month || 0} messages sent this month
+      </div>`;
+  } catch (e) {
+    box.innerHTML = `<span class="muted">Growth analytics unavailable: ${esc(e.message)}</span>`;
+  }
+}
+
 async function loadDashboard() {
   $("kpis").innerHTML = skeleton(1) ;
   $("dash-orders").innerHTML = skeleton(5);
@@ -559,6 +591,8 @@ async function loadDashboard() {
   }
   renderKpis(); renderChips(); renderOrders();
   loadWaStats();
+  loadGrowthAnalytics();
+  if (!window._growthTimer) window._growthTimer = setInterval(loadGrowthAnalytics, 30000);
 }
 /* "unreachable" used to cover every case, including shops that simply never
    connected WhatsApp. Each state needs a different next step from the owner. */
