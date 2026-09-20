@@ -266,6 +266,17 @@ async def build_ai_reply(
     } else "ANSWER"
     action_reason = (out.get("action_reason") or "").strip()
 
+    # Action/intent pairing is validated in code. A model cannot turn an
+    # unrelated message into a bill send just by returning SEND_BILL.
+    allowed_action = (
+        (action == "SEND_BILL" and intent == "BILL_REQUEST")
+        or (action == "CREATE_LEAD" and intent in {"NEW_ORDER", "OTHER"})
+        or action not in {"SEND_BILL", "CREATE_LEAD"}
+    )
+    if not allowed_action:
+        log.warning("ai_action_rejected", action=action, intent=intent)
+        action = "ANSWER"
+
     # Execute only actions with deterministic handlers. Everything else stays
     # in its existing domain workflow below.
     if action in {"SEND_BILL", "CREATE_LEAD"} and not sandbox:
