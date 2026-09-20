@@ -2964,6 +2964,34 @@ function renderCampaigns(camps) {
       </div></div>`;
   }).join("");
 }
+async function aiCreateCampaignDraft(btn) {
+  const segment = $("camp-seg").value;
+  if (!segment) { toast("Select an audience segment first", true); return; }
+  await busy(btn, async () => {
+    const d = await api("/admin/api/campaigns/ai-draft", {
+      method: "POST", body: { segment, goal: "increase repeat orders without unnecessary discounting" }
+    });
+    $("camp-name").value = d.campaign_name || "";
+    $("camp-seg").value = d.segment || segment;
+    $("camp-msg").value = d.message || "";
+    $("camp-coupon").value = d.coupon_code || "";
+    const details = [
+      d.offer_type === "percent" ? `${d.discount_value}% off` :
+        d.offer_type === "flat" ? `₹${d.discount_value} off` :
+        d.offer_type === "no_discount" ? "No discount" : "Service bonus",
+      d.min_order ? `min ₹${d.min_order}` : "",
+      d.validity_days ? `${d.validity_days} days` : "",
+      d.gmb_title ? `GMB: ${d.gmb_title}` : "",
+      d.rationale || "",
+    ].filter(Boolean).join(" · ");
+    toast("AI offer ready — review it, then Save as draft");
+    openModal(`<h3>✨ AI marketing draft</h3>
+      <p class="muted">${esc(details)}</p>
+      <p><b>Google Business creative</b><br>${esc(d.creative_brief || "Kwik Klin branded laundry visual; no phone number.")}</p>
+      <p><b>GMB copy</b><br>${esc(d.gmb_body || "")}</p>
+      <div class="btnrow"><button class="btn" onclick="closeModal()">Use this draft</button></div>`);
+  });
+}
 async function createCampaign(btn) {
   await busy(btn, async () => {
     await api("/admin/api/campaigns", { method: "POST", body: {
