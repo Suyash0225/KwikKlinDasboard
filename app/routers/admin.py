@@ -188,6 +188,41 @@ async def waha_qr() -> Response:
 
 
 
+@router.post("/api/whatsapp/waha/configure-webhook", dependencies=[Depends(require_admin_owner)])
+async def waha_configure_webhook(request: Request) -> dict:
+    """Configure WAHA -> Kwik Klin webhook for the private home session.
+
+    WAHA applies a session config update by restarting the session when it is
+    currently running. This endpoint is intentionally separate from Connect
+    so configuration changes are explicit and never happen during QR polling.
+    """
+    if not _waha_is_home_tenant():
+        raise HTTPException(status_code=403, detail="WhatsApp connection is managed for the home shop only")
+    if not settings.WAHA_WEBHOOK_HMAC_KEY:
+        raise HTTPException(status_code=503, detail="WhatsApp webhook security is not configured")
+
+    body = {
+        "name": settings.WAHA_SESSION,
+        "config": {
+            "webhooks": [{
+                "url": f"{settings.SITE_URL.rstrip('/') if settings.SITE_URL else 'https://kwikklin.online'}/webhook/waha",
+                "events": ["message", "message.ack", "session.status"],
+                "hmac": {"key": settings.WAHA_WEBHOOK_HMAC_KEY},
+                "retries": {"policy": "exponential", "delaySeconds": 2, "attempts": 5},
+            }]
+        },
+    }
+    r = await _waha_request(
+        "PUT",
+        f"/api/sessions/{settings.WAHA_SESSION}",
+        json=body,
+    )
+    if r.status_code >= 400:
+        log.warning("waha_webhook_config_failed", status=r.status_code)
+        raise HTTPException(status_code=502, detail="Could not configure WhatsApp webhook")
+    return {"configured": True, "session": settings.WAHA_SESSION}
+
+
 _DASHBOARD_FILE = Path(__file__).resolve().parent.parent / "static" / "dashboard.html"
 
 
