@@ -549,6 +549,23 @@
           <button class="btn" style="margin-top:12px" onclick="saveProfile(this)">Save profile configurations</button>
         </div>
 
+        <div class="card" style="margin-bottom:14px" id="waha-connect-card">
+          <b>📱 WhatsApp connection</b>
+          <p class="muted" style="margin:6px 0 10px">Connect the Kwik Klin WhatsApp number without opening Docker or exposing WAHA to the internet.</p>
+          <div id="waha-status" class="connstate">Checking connection…</div>
+          <div id="waha-qr-wrap" style="display:none;margin-top:12px;text-align:center">
+            <img id="waha-qr" alt="WhatsApp pairing QR code"
+                 style="width:276px;height:276px;max-width:100%;image-rendering:auto;border-radius:10px;border:1px solid var(--line,#d9dee8)">
+            <p class="muted" style="margin:8px 0">Open WhatsApp → Linked Devices → Link a Device and scan this QR.</p>
+            <button class="btn ghost sm" onclick="wahaRefreshQr()">↻ Refresh QR</button>
+          </div>
+          <div class="act" style="margin-top:12px">
+            <button class="btn" id="waha-connect-btn" onclick="wahaConnect()">Connect WhatsApp</button>
+            <button class="btn ghost" id="waha-check-btn" onclick="wahaLoad()">↻ Check status</button>
+          </div>
+          <small class="muted">Security: WAHA remains private on the server; the WAHA API key is never sent to the browser.</small>
+        </div>
+
         <div class="card" style="margin-bottom:14px">
           <b>⭐ Google reviews on your website</b>
           <p class="muted" style="margin:6px 0 10px">Once the Kwik Klin team connects your Business Profile,
