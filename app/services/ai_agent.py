@@ -244,7 +244,7 @@ async def build_ai_reply(
             actor_role="customer", actor=customer.phone, action="escalated",
             args={"reason": reason, "text": text[:200]}, result="open question created",
         )
-        return out.get("reply") or get_message("escalated_ack", lang)
+        return _customer_safe_reply(out.get("reply")) or get_message("escalated_ack", lang)
 
     # Pickup intake complete -> the agent CREATES the order itself
     intake = out.get("intake") or {}
