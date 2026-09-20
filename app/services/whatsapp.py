@@ -443,12 +443,24 @@ async def send_image(
     local_url: str,
     sent_by: str = "manager",
 ) -> str:
-    """Upload an image to Meta and send it. Free-form -> window required.
-
-    local_url is our own serving path, stored in the conversation text as
-    '[image:<local_url>] <caption>' so the Inbox can render it.
-    """
+    """Send media through WAHA when configured; keep Meta/DotPe legacy path."""
     customer, staff = await _find_recipient(db, to_phone)
+
+    if settings.WHATSAPP_PROVIDER == "waha":
+        from app.services import waha
+        try:
+            mid = await waha.send_image(
+                to_phone, file_path, mime_type=mime_type or "image/jpeg", caption=caption
+            )
+        except waha.WahaError as exc:
+            raise SendError(str(exc), transient=exc.transient) from exc
+        logged = f"[image:{local_url}] {caption or ''}".strip()
+        await _record_outbound(
+            db, customer, staff, logged, mid, to_phone, sent_by, None,
+            "marketing" if sent_by == "bot" else "service",
+        )
+        return mid
+
     participant = customer or staff
     last_inbound = participant.last_message_at if participant else None
     if last_inbound is None or _now() - last_inbound > SERVICE_WINDOW:
@@ -456,12 +468,11 @@ async def send_image(
 
     creds = await resolve_creds(db)
     headers = {"Authorization": f"Bearer {creds.token}"}
-    media_url = creds.media_url
     try:
         with open(file_path, "rb") as fh:
             async with httpx.AsyncClient(timeout=60) as client:
                 up = await client.post(
-                    media_url,
+                    creds.media_url,
                     headers=headers,
                     data={"messaging_product": "whatsapp", "type": mime_type},
                     files={"file": (file_path.rsplit("\\", 1)[-1], fh, mime_type)},
@@ -474,19 +485,17 @@ async def send_image(
     if not media_id:
         raise SendError("media upload: no id in response")
 
-    payload: dict = {
-        "messaging_product": "whatsapp",
-        "to": to_phone.lstrip("+"),
-        "type": "image",
-        "image": {"id": media_id, **({"caption": caption} if caption else {})},
-    }
+    payload = {"messaging_product": "whatsapp", "to": to_phone.lstrip("+"),
+               "type": "image", "image": {"id": media_id}}
+    if caption:
+        payload["image"]["caption"] = _wa_format(caption)
     data = await _post_with_retry(payload, to_phone)
-    wa_message_id: str = data["messages"][0]["id"]
-    log.info("whatsapp_image_sent", to=to_phone, wa_message_id=wa_message_id)
-    logged = f"[image:{local_url}]" + (f" {caption}" if caption else "")
-    await _record_outbound(db, customer, staff, logged, wa_message_id, to_phone, sent_by)
-    return wa_message_id
-
+    mid = data["messages"][0]["id"]
+    await _record_outbound(
+        db, customer, staff, f"[image:{local_url}] {caption or ''}".strip(),
+        mid, to_phone, sent_by, None, "marketing" if sent_by == "bot" else "service",
+    )
+    return mid
 
 async def download_media(media_id: str, dest_dir: str) -> str | None:
     """Fetch an inbound media file from Meta; returns saved filename or None.
