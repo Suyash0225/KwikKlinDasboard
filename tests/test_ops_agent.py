@@ -75,6 +75,25 @@ async def test_bill_creates_wash_task_for_the_least_busy_washer(shop) -> None:
         assert (await db.get(Order, o.id)).assigned_washer_id == shop["w2"]
 
 
+async def test_wash_task_waits_until_three_days_before_delivery(shop, sent) -> None:
+    future = date.today() + timedelta(days=7)
+    o = await _order(expected_delivery=future)
+    assert await _tasks(o.id) == []
+
+    async with async_session_factory() as db:
+        created = await ops_agent.plan_due_wash_tasks(db, today=date.today() + timedelta(days=4))
+        assert created == 0
+        assert await ops_agent.plan_due_wash_tasks(db, today=date.today() + timedelta(days=4)) == 0
+
+        created = await ops_agent.plan_due_wash_tasks(db, today=date.today() + timedelta(days=5))
+        assert created == 1
+
+    ts = await _tasks(o.id)
+    assert len(ts) == 1 and ts[0].kind == "wash"
+    assert ts[0].status == "OPEN"
+    assert any(x["to"] in (W1, W2) for x in sent)
+
+
 async def test_pickup_bill_gives_pickup_task_to_delivery_boy_without_double_message(shop, sent) -> None:
     o = await _order(needs_pickup=True, pickup_date=date.today())
     kinds = {t.kind: t for t in await _tasks(o.id)}
