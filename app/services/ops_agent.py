@@ -131,16 +131,20 @@ async def on_order_created(db: AsyncSession, order: Order) -> dict:
             if not await _open_tasks(db, order.id, ("wash",)):
                 customer = await db.get(Customer, order.customer_id)
                 who = (customer.name or customer.phone) if customer else "Customer"
-                task = await task_service.create_task(
-                    db,
-                    title=f"{who} — wash & iron: {items_summary(order)[:160]}",
-                    staff=washer, order=order, urgent=order.priority == "urgent",
-                    created_by="agent", kind="wash",
-                    # washerman ko work order ka WhatsApp caller bhejta hai —
-                    # doosra message sirf shor hoga
-                    notify=False,
-                )
-                out["wash"] = {"code": task.code, "staff": washer.name}
+                # Washing is planned from the delivery promise, not from
+                # order creation. If delivery is >3 days away, don't ping the
+                # washer yet — the scheduler will create the task in the
+                # preparation window. This keeps WhatsApp quiet and avoids
+                # unnecessary staff messages.
+                if order.expected_delivery is None or order.expected_delivery <= __import__("datetime").date.today() + __import__("datetime").timedelta(days=3):
+                    task = await task_service.create_task(
+                        db,
+                        title=f"{who} — wash & iron: {items_summary(order)[:160]}",
+                        staff=washer, order=order, urgent=order.priority == "urgent",
+                        created_by="agent", kind="wash",
+                        notify=True,
+                    )
+                    out["wash"] = {"code": task.code, "staff": washer.name}
 
         if order.status is OrderStatus.PICKUP_ASSIGNED:
             boy = await pick_staff(db, "DELIVERY", order)
@@ -163,6 +167,65 @@ async def on_order_created(db: AsyncSession, order: Order) -> dict:
         await db.rollback()
         log.exception("ops_agent_order_created_failed", order=num)
     return out
+
+
+async def plan_due_wash_tasks(db: AsyncSession, *, today=None) -> int:
+    """Create/notify wash tasks only when delivery is within 3 days.
+
+    Deterministic DB workflow: no LLM call. If the order is already READY,
+    OUT_FOR_DELIVERY, DELIVERED, CANCELLED or ON_HOLD, nothing is sent.
+    Idempotency comes from the existing open-task check.
+    """
+    from datetime import date, timedelta
+    from app.models import Customer
+    from app.services import tasks as task_service
+    from app.services.work_orders import items_summary
+
+    today = today or date.today()
+    cutoff = today + timedelta(days=3)
+    rows = (
+        await db.execute(
+            select(Order).where(
+                Order.expected_delivery.isnot(None),
+                Order.expected_delivery <= cutoff,
+                Order.expected_delivery >= today,
+                Order.status.in_(_WASHABLE),
+            )
+        )
+    ).scalars().all()
+
+    created = 0
+    for order in rows:
+        if await _open_tasks(db, order.id, ("wash",)):
+            continue
+        washer = await pick_staff(db, "WASHER", order)
+        if washer is None:
+            continue
+        if order.assigned_washer_id is None:
+            order.assigned_washer_id = washer.id
+            db.add(order)
+            await db.commit()
+        customer = await db.get(Customer, order.customer_id)
+        who = (customer.name or customer.phone) if customer else "Customer"
+        task = await task_service.create_task(
+            db,
+            title=f"{who} — wash & iron: {items_summary(order)[:160]} | delivery {order.expected_delivery.strftime('%d %b')}",
+            staff=washer,
+            order=order,
+            urgent=order.priority == "urgent" or order.expected_delivery <= today + timedelta(days=1),
+            created_by="ops-agent",
+            kind="wash",
+            notify=True,
+        )
+        created += 1
+        await audit.record(
+            actor_role="system",
+            actor="ops-agent",
+            action="wash_task_planned",
+            args={"order": order.order_number, "staff": washer.name, "days_to_delivery": (order.expected_delivery - today).days},
+            result=task.code,
+        )
+    return created
 
 
 async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStatus, by: str) -> None:
