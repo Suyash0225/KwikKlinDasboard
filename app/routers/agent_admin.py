@@ -89,6 +89,7 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
                 "created_at": c.created_at.isoformat(),
                 "sent_at": c.sent_at.isoformat() if c.sent_at else None,
                 "stats": stats,
+                "creative_file": (c.stats or {}).get("creative_file"),
             }
         )
     return out
@@ -99,6 +100,7 @@ class CampaignIn(BaseModel):
     segment: str
     message_text: str = Field(min_length=5)
     coupon_code: str | None = None
+    creative_file: str | None = None
 
 
 class CampaignAIDraftIn(BaseModel):
@@ -279,9 +281,13 @@ async def ai_campaign_draft(
 
 @router.post("/campaigns", dependencies=[Depends(require_feature("campaigns"))], status_code=201)
 async def create_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) -> dict:
+    creative = body.creative_file or ""
+    if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\\.png", creative):
+        raise HTTPException(status_code=400, detail="invalid campaign creative")
     c = Campaign(
         name=body.name, segment=body.segment, message_text=body.message_text,
         coupon_code=body.coupon_code, status="draft", created_by="owner",
+        stats={"creative_file": creative} if creative else None,
     )
     db.add(c)
     await db.commit()
