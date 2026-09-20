@@ -1548,3 +1548,340 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 
 /* status modal: ek kadam = ek bada button (dropdown nahi) */
 .steplist .btn { justify-content: flex-start; min-height: 48px; font-size: 15px; }
+
+
+/* =========================================================
+   Kwik Klin Campaigns — polished SaaS workspace refresh
+   Functional IDs/classes are intentionally preserved so the
+   existing campaign/API JavaScript continues to work.
+   ========================================================= */
+
+#sec-campaigns {
+  --camp-orange: #ff7a00;
+  --camp-orange-2: #ff9b2f;
+  --camp-ink: #12203a;
+  --camp-muted: #6b7890;
+  --camp-border: #e7ebf2;
+  --camp-soft: #f7f9fc;
+  --camp-green: #16a36a;
+  max-width: 1500px;
+  padding-bottom: 28px;
+}
+
+#sec-campaigns .pagehead {
+  align-items: flex-start;
+  margin-bottom: 18px;
+  padding: 6px 2px 0;
+}
+
+#sec-campaigns .pagehead h2 {
+  font-size: clamp(24px, 2.3vw, 34px);
+  letter-spacing: -0.7px;
+  color: var(--camp-ink);
+  margin-bottom: 3px;
+}
+
+#sec-campaigns .pagehead p {
+  color: var(--camp-muted);
+  font-size: 13px;
+  max-width: 720px;
+}
+
+/* KPI strip */
+#sec-campaigns #seg-cards {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+#sec-campaigns #seg-cards > * {
+  min-height: 108px;
+  border: 1px solid var(--camp-border);
+  border-radius: 16px;
+  background: linear-gradient(135deg, #fff 0%, #f8fbff 100%);
+  box-shadow: 0 5px 20px rgba(18, 32, 58, .06);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+
+#sec-campaigns #seg-cards > *:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px rgba(18, 32, 58, .09);
+}
+
+/* Main create + activity workspace */
+#sec-campaigns > .split2 {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1.05fr) minmax(390px, .95fr);
+  gap: 16px;
+  align-items: start;
+}
+
+#sec-campaigns > .split2 > div:first-child,
+#sec-campaigns > .split2 > div:last-child {
+  min-width: 0;
+}
+
+#sec-campaigns > .split2 > div:first-child {
+  background: #fff;
+  border: 1px solid var(--camp-border);
+  border-radius: 18px;
+  box-shadow: 0 7px 28px rgba(18, 32, 58, .07);
+  padding: 22px;
+}
+
+#sec-campaigns > .split2 > div:first-child > b:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--camp-ink);
+  font-size: 19px;
+  letter-spacing: -.25px;
+}
+
+#sec-campaigns > .split2 > div:first-child > b:first-child::before {
+  content: "📣";
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 11px;
+  background: #fff3e5;
+}
+
+#sec-campaigns .frm {
+  gap: 13px;
+}
+
+#sec-campaigns label {
+  color: #34425c;
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+#sec-campaigns input,
+#sec-campaigns select,
+#sec-campaigns textarea {
+  border-color: #dfe5ee;
+  border-radius: 11px;
+  background: #fbfcfe;
+  color: var(--camp-ink);
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+
+#sec-campaigns input:focus,
+#sec-campaigns select:focus,
+#sec-campaigns textarea:focus {
+  border-color: #ff9a35;
+  box-shadow: 0 0 0 3px rgba(255, 122, 0, .10);
+  background: #fff;
+  outline: none;
+}
+
+#sec-campaigns #camp-name,
+#sec-campaigns #camp-seg {
+  min-height: 45px;
+}
+
+#sec-campaigns #camp-msg {
+  min-height: 150px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+#sec-campaigns #camp-msg-count {
+  white-space: nowrap;
+}
+
+#sec-campaigns .btn {
+  border-radius: 10px;
+  font-weight: 700;
+}
+
+#sec-campaigns .btn:not(.ghost) {
+  background: linear-gradient(135deg, var(--camp-orange), var(--camp-orange-2));
+  border-color: transparent;
+  box-shadow: 0 6px 15px rgba(255, 122, 0, .18);
+}
+
+#sec-campaigns .btn:not(.ghost):hover {
+  filter: brightness(.98);
+  transform: translateY(-1px);
+}
+
+#sec-campaigns #camp-image {
+  min-height: 44px;
+  padding: 8px;
+}
+
+#sec-campaigns #camp-image-preview {
+  border-radius: 13px;
+  overflow: hidden;
+}
+
+#sec-campaigns #camp-image-preview img {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  object-fit: cover;
+  border-radius: 13px;
+  border: 1px solid var(--camp-border);
+}
+
+#sec-campaigns hr.hr {
+  margin: 22px 0;
+  border-color: #edf0f5;
+}
+
+/* Coupon studio */
+#sec-campaigns > .split2 > div:first-child > b:nth-of-type(2) {
+  display: block;
+  font-size: 15px;
+  color: var(--camp-ink);
+  margin-bottom: 2px;
+}
+
+#sec-campaigns #coupon-list {
+  display: grid;
+  gap: 8px;
+}
+
+#sec-campaigns #coupon-list > * {
+  border: 1px solid var(--camp-border);
+  border-radius: 12px;
+  background: #fbfcfe;
+}
+
+/* Existing campaign list becomes the visual activity/preview panel */
+#sec-campaigns #camp-list {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#sec-campaigns #camp-list::before {
+  content: "Campaign performance";
+  display: flex;
+  align-items: center;
+  min-height: 58px;
+  padding: 0 18px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #fff7ee, #fff);
+  border: 1px solid #ffe3c5;
+  color: var(--camp-ink);
+  font-size: 17px;
+  font-weight: 700;
+  box-shadow: 0 5px 18px rgba(18, 32, 58, .05);
+}
+
+#sec-campaigns #camp-list > * {
+  border-radius: 16px;
+  border: 1px solid var(--camp-border);
+  background: #fff;
+  box-shadow: 0 5px 20px rgba(18, 32, 58, .055);
+}
+
+#sec-campaigns #camp-list > *:hover {
+  border-color: #ffd2a8;
+}
+
+#sec-campaigns #camp-list .btn {
+  box-shadow: none;
+}
+
+#sec-campaigns #camp-list .statuspill.on {
+  color: #087b4f;
+}
+
+/* Template studio — full-width secondary workspace */
+#sec-campaigns > .card {
+  margin-top: 16px !important;
+  border: 1px solid var(--camp-border);
+  border-radius: 18px;
+  box-shadow: 0 7px 28px rgba(18, 32, 58, .06);
+  overflow: hidden;
+}
+
+#sec-campaigns > .card > b {
+  display: block;
+  font-size: 17px;
+  color: var(--camp-ink);
+}
+
+#sec-campaigns > .card > .split2 {
+  gap: 18px;
+}
+
+#sec-campaigns #tpl-list {
+  max-height: 360px;
+  overflow: auto;
+}
+
+#sec-campaigns #tpl-list > * {
+  border: 1px solid var(--camp-border);
+  border-radius: 12px;
+  margin-bottom: 8px;
+}
+
+/* Better empty/error states */
+#sec-campaigns .empty,
+#sec-campaigns .err {
+  border-radius: 14px;
+}
+
+/* Desktop spacing */
+@media (min-width: 1200px) {
+  #sec-campaigns > .split2 > div:first-child {
+    padding: 24px;
+  }
+}
+
+/* Tablet */
+@media (max-width: 1050px) {
+  #sec-campaigns #seg-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #sec-campaigns > .split2 {
+    grid-template-columns: 1fr;
+  }
+
+  #sec-campaigns > .split2 > div:last-child {
+    min-height: auto;
+  }
+}
+
+/* Phone */
+@media (max-width: 640px) {
+  #sec-campaigns {
+    padding-bottom: 18px;
+  }
+
+  #sec-campaigns .pagehead {
+    margin-bottom: 12px;
+  }
+
+  #sec-campaigns #seg-cards {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  #sec-campaigns #seg-cards > * {
+    min-height: 92px;
+    border-radius: 13px;
+  }
+
+  #sec-campaigns > .split2 > div:first-child {
+    padding: 15px;
+    border-radius: 15px;
+  }
+
+  #sec-campaigns #camp-msg {
+    min-height: 125px;
+  }
+
+  #sec-campaigns > .card {
+    border-radius: 15px;
+  }
+}
