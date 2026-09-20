@@ -174,7 +174,7 @@ DEFAULTS: dict[str, Any] = {
     # them warmly while their 24h window is still open. Capped on purpose —
     # pinging a silent person all day earns blocks, and blocks kill the
     # WhatsApp number. Set engage_max_followups to 0 to switch it off.
-    "engage_followups_enabled": True,
+    "engage_followups_enabled": False,
     "engage_gap_hours": 6,            # min hours of silence before a nudge
     "engage_max_followups": 2,        # per conversation, resets when they reply
     # --- kis dukaan ka deployment hai ---
