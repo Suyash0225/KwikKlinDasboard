@@ -76,6 +76,7 @@ async def test_complaint_escalates_and_apologizes(monkeypatch, esc_sent) -> None
             "reply": "Ji, manager aapse jald baat karenge.",
             "intent": "COMPLAINT",
             "language": "hi",
+            "action": "ANSWER", "action_reason": "",
             "escalate": True,
             "escalation_reason": "customer complaint",
             "admin_note": "",
@@ -103,7 +104,8 @@ async def test_compose_happy_path_no_escalation(monkeypatch) -> None:
         # the FACTS block must carry customer identity, never notes
         assert "AI Grahak" in kw["user_text"]
         assert "notes" not in kw["user_text"].lower()
-        return {"reply": "Shirt ₹30 hai ji — Kwik Klin", "intent": "PRICE_QUERY", "language": "hi", "escalate": False, "escalation_reason": "", "admin_note": "", "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False}}
+        return {"reply": "Shirt ₹30 hai ji — Kwik Klin", "intent": "PRICE_QUERY", "language": "hi",
+            "action": "ANSWER", "action_reason": "", "escalate": False, "escalation_reason": "", "admin_note": "", "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False}}
 
     monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
     async with async_session_factory() as db:
@@ -120,6 +122,7 @@ async def test_compose_escalate_creates_row(monkeypatch, esc_sent) -> None:
             "reply": "Manager aapse jald sampark karenge 🙏 — Kwik Klin",
             "escalate": True,
             "intent": "NEW_ORDER", "language": "hi",
+            "action": "ANSWER", "action_reason": "",
             "escalation_reason": "pickup request", "admin_note": "",
             "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
         }
@@ -144,6 +147,7 @@ async def test_agent_handles_inquiry_itself_and_fyis_admin(monkeypatch) -> None:
             "escalate": False,
             "escalation_reason": "",
             "intent": "NEW_ORDER", "language": "hi",
+            "action": "ANSWER", "action_reason": "",
             "admin_note": "Naya pickup — AI Grahak, kal subah, address aana baaki",
             "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
         }
@@ -171,7 +175,6 @@ async def test_compose_llm_down_falls_back(monkeypatch) -> None:
     async def fake_ask_json(**kw):
         raise LLMUnavailable("down")
 
-    monkeypatch.setattr(agent_module, "classify_intent", fake_classify)
     monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
     async with async_session_factory() as db:
         cust = await _seed_customer()
