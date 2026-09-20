@@ -53,7 +53,8 @@ DEFAULTS: dict[str, Any] = {
     "llm_monthly_budget_usd": 0.0,
     # operations
     "standup_hour": 10,             # daily staff standup (Asia/Kolkata hour)
-    "turnaround_days": 2,           # default delivery = today + this
+    "turnaround_days": 5,           # standard delivery = 5 working days (Sunday/holidays skipped)
+    "delivery_holidays": [],        # shop-specific YYYY-MM-DD holidays excluded from delivery calculations
     "default_washer_phone": "",     # unassigned orders go to this staff phone
     # marketing compliance
     "marketing_freq_cap_per_month": 2,
