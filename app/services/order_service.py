@@ -803,6 +803,21 @@ async def _notify_customer(
             for b in (buttons or []):
                 if b.id.startswith("rate_"):
                     actions.append(b)
+            # WAHA cannot expose Meta's approved template quick replies, so
+            # where the delivered message has a configured Google review URL,
+            # expose it as a direct Review button. Meta keeps its existing
+            # rating quick replies unchanged.
+            if message_key == "thankyou_rating":
+                try:
+                    from app.services import customer_messages
+                    review_links = await customer_messages.review_links(db)
+                    if review_links:
+                        link = review_links[sum(ord(c) for c in customer.phone) % len(review_links)]
+                        if link:
+                            actions = [b for b in actions if not b.id.startswith("rate_")]
+                            actions.append(Button("review", "⭐ Review", "url", link))
+                except Exception:
+                    log.exception("review_button_link_failed", order_number=order.order_number)
             outbound_buttons = actions[:3]
 
         try:
