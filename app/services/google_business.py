@@ -242,7 +242,7 @@ async def sync(db) -> dict:
 
 
 async def fetch_performance(refresh_token: str, location: str, days: int = 30) -> dict:
-    """Fetch daily Business Profile performance from the current v1 API."""
+    """Fetch daily Business Profile performance from Google's current v1 API."""
     from datetime import date, timedelta
 
     tok = await _access_token(refresh_token)
@@ -257,39 +257,42 @@ async def fetch_performance(refresh_token: str, location: str, days: int = 30) -
         "CALL_CLICKS",
         "BUSINESS_DIRECTION_REQUESTS",
     ]
-    body = {
-        "dailyMetrics": [{"dailyMetric": m} for m in metrics],
-        "dailyRange": {
-            "startDate": {"year": start.year, "month": start.month, "day": start.day},
-            "endDate": {"year": end.year, "month": end.month, "day": end.day},
-        },
-    }
+    params = []
+    for metric in metrics:
+        params.append(("dailyMetrics", metric))
+    params.extend([
+        ("dailyRange.start_date.year", str(start.year)),
+        ("dailyRange.start_date.month", str(start.month)),
+        ("dailyRange.start_date.day", str(start.day)),
+        ("dailyRange.end_date.year", str(end.year)),
+        ("dailyRange.end_date.month", str(end.month)),
+        ("dailyRange.end_date.day", str(end.day)),
+    ])
     url = f"https://businessprofileperformance.googleapis.com/v1/{location}:fetchMultiDailyMetricsTimeSeries"
     async with httpx.AsyncClient(timeout=30, headers={"Authorization": f"Bearer {tok}"}) as c:
-        r = await c.post(url, json=body)
+        r = await c.get(url, params=params)
     if r.status_code != 200:
         raise GBPError(_explain(r))
     data = r.json() or {}
     totals = {m: 0 for m in metrics}
-    for series in data.get("multiDailyMetricTimeSeries") or []:
-        metric = ((series.get("dailyMetricTimeSeries") or {}).get("dailyMetric") or
-                  series.get("dailyMetric") or "")
-        metric = str(metric)
-        if metric not in totals:
-            continue
-        for point in (series.get("dailyMetricTimeSeries") or {}).get("timeSeries", {}).get("datedValues", []) or []:
-            try:
-                totals[metric] += int(point.get("value") or 0)
-            except (TypeError, ValueError):
-                pass
-    totals["search_views"] = totals.pop("BUSINESS_IMPRESSIONS_DESKTOP_SEARCH") + totals.pop("BUSINESS_IMPRESSIONS_MOBILE_SEARCH")
-    totals["maps_views"] = totals.pop("BUSINESS_IMPRESSIONS_DESKTOP_MAPS") + totals.pop("BUSINESS_IMPRESSIONS_MOBILE_MAPS")
-    totals["website_clicks"] = totals.pop("WEBSITE_CLICKS")
-    totals["call_clicks"] = totals.pop("CALL_CLICKS")
-    totals["direction_requests"] = totals.pop("BUSINESS_DIRECTION_REQUESTS")
-    totals["period_days"] = days
-    return totals
-
+    for group in data.get("multiDailyMetricTimeSeries") or []:
+        for series in group.get("dailyMetricTimeSeries") or []:
+            metric = str(series.get("dailyMetric") or "")
+            if metric not in totals:
+                continue
+            for point in (series.get("timeSeries") or {}).get("datedValues", []) or []:
+                try:
+                    totals[metric] += int(point.get("value") or 0)
+                except (TypeError, ValueError):
+                    pass
+    return {
+        "search_views": totals["BUSINESS_IMPRESSIONS_DESKTOP_SEARCH"] + totals["BUSINESS_IMPRESSIONS_MOBILE_SEARCH"],
+        "maps_views": totals["BUSINESS_IMPRESSIONS_DESKTOP_MAPS"] + totals["BUSINESS_IMPRESSIONS_MOBILE_MAPS"],
+        "website_clicks": totals["WEBSITE_CLICKS"],
+        "call_clicks": totals["CALL_CLICKS"],
+        "direction_requests": totals["BUSINESS_DIRECTION_REQUESTS"],
+        "period_days": days,
+    }
 
 async def revoke(refresh_token: str) -> None:
     try:
