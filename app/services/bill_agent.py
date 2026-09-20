@@ -1276,7 +1276,8 @@ async def _finalize_bill(
     if exp is None:
         # default = today + the shop's standard turnaround (Settings)
         days = int(await app_settings.get(db, "turnaround_days"))
-        exp = date.today() + timedelta(days=days)
+        from app.services.business_days import add_delivery_days
+        exp = await add_delivery_days(db, date.today(), days)
 
     total = Decimal(str(d["total"])) if d["total"] else None
     order_items = [
