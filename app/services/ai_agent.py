@@ -260,6 +260,29 @@ async def build_ai_reply(
         "ORDER_STATUS", "NEW_ORDER", "PRICE_QUERY", "COMPLAINT", "GREETING", "OTHER"
     } else "OTHER"
 
+    action = out.get("action") if out.get("action") in {
+        "NONE", "ANSWER", "SEND_BILL", "CREATE_LEAD", "FOLLOW_UP_LEAD",
+        "CREATE_ORDER", "ESCALATE", "CREATE_CAMPAIGN", "REFERRAL_REQUEST"
+    } else "ANSWER"
+    action_reason = (out.get("action_reason") or "").strip()
+
+    # Execute only actions with deterministic handlers. Everything else stays
+    # in its existing domain workflow below.
+    if action in {"SEND_BILL", "CREATE_LEAD"} and not sandbox:
+        from app.services.action_registry import execute_customer_action
+        try:
+            handled = await execute_customer_action(db, customer, action, text=text)
+        except Exception:
+            log.exception("ai_action_failed", action=action)
+            handled = False
+        if handled and action == "SEND_BILL":
+            return "🧾 Bill/payment link bhej diya hai. — Kwik Klin"
+        if handled and action == "CREATE_LEAD":
+            log.info("ai_lead_action_handled", phone=customer.phone)
+
+    if sandbox and action in {"SEND_BILL", "CREATE_LEAD"}:
+        return (out.get("reply") or "") + f"\n🧪 (real mein action: {action})"
+
     # Complaints never go through a free-form AI reply. The model only
     # classifies them; the actual escalation/pause remains deterministic.
     if intent == "COMPLAINT":
