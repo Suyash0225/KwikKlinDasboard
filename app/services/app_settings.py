@@ -58,6 +58,7 @@ DEFAULTS: dict[str, Any] = {
     # marketing compliance
     "marketing_freq_cap_per_month": 2,
     "marketing_monthly_msg_budget": 300,
+    "marketing_max_discount_percent": 15,
     "marketing_autonomy": "suggest",  # suggest | auto | off
     "attribution_window_days": 7,
     # Holdout ("control group"): itne % eligible customers ko JAAN-BOOJH kar
