@@ -158,24 +158,6 @@ async def build_ai_reply(
     if not text:
         return None
 
-    # Billing is a transactional action, not a language-generation task.
-    # Handle common bill requests before the LLM so the customer gets the
-    # real signed bill URL instead of a conversational promise.
-    if re.search(r"\b(?:bill|invoice)\b", text, re.I):
-        order_match = re.search(r"\bKK[- ]\d{8}[- ]\d{2}\b", text, re.I)
-        order_number = order_match.group(0).replace(" ", "-").upper() if order_match else None
-        try:
-            sent = await send_bill_to_customer(db, customer, order_number=order_number)
-        except Exception:
-            log.exception("customer_bill_request_failed")
-            sent = False
-        if sent:
-            return None  # bill sender already sent the customer-facing message
-        return (
-            "I couldn't find an unpaid bill for this number. Please send your order number "
-            "(for example, KK-YYYYMMDD-01), and I'll check it. — " + settings.SHOP_NAME
-        )
-
     if text.startswith("["):
         # A transcribed voice note IS the customer's message — answer it
         # like typed text instead of just confirming the file arrived.
@@ -191,6 +173,25 @@ async def build_ai_reply(
     if not sandbox and not await app_settings.get(db, "agent_enabled"):
         log.info("ai_agent_disabled_by_switch")
         return None
+
+    # Billing is a transactional action, not a language-generation task.
+    # Handle it only after media normalization and the global AI switch.
+    if re.search(r"\b(?:bill|invoice)\b", text, re.I):
+        order_match = re.search(r"\bKK[- ]\d{8}[- ]\d{2}\b", text, re.I)
+        order_number = order_match.group(0).replace(" ", "-").upper() if order_match else None
+        if sandbox:
+            return "🧪 Bill request detected; real mode would send the signed bill/payment link."
+        try:
+            sent = await send_bill_to_customer(db, customer, order_number=order_number)
+        except Exception:
+            log.exception("customer_bill_request_failed")
+            sent = False
+        if sent:
+            return None
+        return (
+            "I couldn't find an unpaid bill for this number. Please send your order number "
+            "(for example, KK-YYYYMMDD-01), and I'll check it. — " + settings.SHOP_NAME
+        )
 
     # Intent (an LLM round trip, ~0.5s) and the FACTS block (DB) do not
     # depend on each other — run them together instead of stacking their
