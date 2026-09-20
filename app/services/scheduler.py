@@ -661,81 +661,190 @@ async def _nightly_for_tenant(now_ist: datetime) -> None:
 
 
 async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
-    """Message each active staff member their pending list. Returns sends."""
+    """10 AM daily WhatsApp work briefing for workers + manager.
+
+    Workers get only their own pending work and today's due work.
+    Managers get a business-wide snapshot of open tasks and today's due orders.
+    This is deterministic DB data; no LLM is needed for a task list.
+    """
     now_ist = datetime.now(IST)
     if not force and _in_quiet_hours(now_ist):
         log.info("standup_skipped_quiet_hours")
         return 0
+
     today_key = now_ist.strftime("%Y-%m-%d")
     sends = 0
+
     async with async_session_factory() as db:
-        # Workers only — the owner gets the day summary, not a work list.
-        from app.models import StaffRole
+        from app.models import StaffRole, Task
+        from app.models.task import TASK_OPEN
 
         staff_rows = (
-            (
-                await db.execute(
-                    select(Staff).where(Staff.is_active, Staff.role != StaffRole.ADMIN)
+            await db.execute(
+                select(Staff).where(
+                    Staff.is_active,
+                    Staff.role.in_((StaffRole.WASHER, StaffRole.DELIVERY)),
                 )
             )
-            .scalars()
-            .all()
-        )
+        ).scalars().all()
+
         default_phone = await app_settings.get(db, "default_washer_phone")
+
+        # Worker briefing: role-aware and limited to work they can actually do.
         for st in staff_rows:
             orders = await _pending_orders_for(db, st, default_phone)
-            if not orders:
-                continue
-            if not await _claim(f"{key_prefix}:{today_key}:{st.phone}"):
-                continue
-            lines = [
-                get_message(
-                    "standup_header", greet=_greeting(now_ist),
-                    name=st.name, count=str(len(orders)),
-                )
-            ]
-            for i, o in enumerate(orders[:10], 1):
-                cust = await db.get(Customer, o.customer_id)
-                flags = []
-                if o.priority == "urgent":
-                    flags.append("🔴 URGENT")
-                if o.expected_delivery and o.expected_delivery <= date.today():
-                    flags.append("aaj delivery")
-                lines.append(
-                    f"{i}. {o.order_number} — {cust.name or cust.phone if cust else '?'} — "
-                    f"{items_summary(o)} — {status_label(o.status)}"
-                    + (f" [{', '.join(flags)}]" if flags else "")
-                )
-            lines.append(get_message("standup_footer"))
-            text = "\n".join(lines)
-            try:
-                # Roz subah ki list bhi tappable — jis order par update dena
-                # ho use chun lo, phir teen button. Ye wahi list hai jo staff
-                # ke "order details do" poochhne par jaati hai.
-                from app.services.work_orders import list_button_label, work_rows
-
-                rows = await work_rows(db, orders[:10])
-                await send_message(
-                    db, to_phone=st.phone, text=text, list_rows=rows,
-                    list_button=await list_button_label(db),
-                    list_title="Aaj ka kaam",
-                )
-                sends += 1
-            except WindowClosedError:
-                try:
-                    await send_message(
-                        db, to_phone=st.phone,
-                        template_name="kk_staff_alert",
-                        template_params=[" ".join(text.split())[:600]],
+            task_rows = (
+                await db.execute(
+                    select(Task)
+                    .where(
+                        Task.assigned_staff_id == st.id,
+                        Task.status == TASK_OPEN,
                     )
-                    sends += 1
-                except SendError:
-                    log.warning("standup_not_sent", staff=st.name)
+                    .order_by(Task.urgent.desc(), Task.created_at)
+                    .limit(10)
+                )
+            ).scalars().all()
+
+            if not orders and not task_rows:
+                continue
+            if not await _claim(f"{key_prefix}:{today_key}:worker:{st.phone}"):
+                continue
+
+            lines = [
+                f"{_greeting(now_ist)}, {st.name} ji 👋",
+                "📋 Aaj ka pending kaam:",
+            ]
+
+            if task_rows:
+                for t in task_rows:
+                    flag = " 🔴 URGENT" if t.urgent else ""
+                    lines.append(f"• {t.code} — {t.title[:180]}{flag}")
+
+            if orders:
+                lines.append("")
+                lines.append("🧺 Aaj/ongoing orders:")
+                for i, o in enumerate(orders[:10], 1):
+                    cust = await db.get(Customer, o.customer_id)
+                    flags = []
+                    if o.priority == "urgent":
+                        flags.append("🔴 URGENT")
+                    if o.expected_delivery and o.expected_delivery <= date.today():
+                        flags.append("aaj delivery")
+                    lines.append(
+                        f"{i}. {o.order_number} — "
+                        f"{cust.name or cust.phone if cust else '?'} — "
+                        f"{items_summary(o)} — {status_label(o.status)}"
+                        + (f" [{', '.join(flags)}]" if flags else "")
+                    )
+
+            lines.extend([
+                "",
+                "Kaam complete hone par WhatsApp par task code ke saath reply karein: "
+                "done T-123",
+                "— Kwik Klin",
+            ])
+            text = "\n".join(lines)
+
+            try:
+                await send_message(db, to_phone=st.phone, text=text)
+                sends += 1
             except SendError:
                 log.warning("standup_send_failed", staff=st.name)
+
+        # Manager briefing: all open tasks + today's delivery workload.
+        managers = (
+            await db.execute(
+                select(Staff).where(
+                    Staff.is_active,
+                    Staff.role.in_((StaffRole.MANAGER, StaffRole.SUPERVISOR)),
+                )
+            )
+        ).scalars().all()
+
+        open_tasks = (
+            await db.execute(
+                select(Task, Staff)
+                .outerjoin(Staff, Staff.id == Task.assigned_staff_id)
+                .where(Task.status == TASK_OPEN)
+                .order_by(Task.urgent.desc(), Task.created_at)
+                .limit(30)
+            )
+        ).all()
+
+        today_orders = (
+            await db.execute(
+                select(Order, Customer)
+                .join(Customer, Customer.id == Order.customer_id)
+                .where(
+                    Order.expected_delivery <= date.today(),
+                    Order.status.in_(
+                        (
+                            OrderStatus.RECEIVED,
+                            OrderStatus.IN_WASH,
+                            OrderStatus.IN_DRY,
+                            OrderStatus.IN_IRON,
+                            OrderStatus.READY,
+                            OrderStatus.OUT_FOR_DELIVERY,
+                        )
+                    ),
+                )
+                .order_by(Order.priority.desc(), Order.expected_delivery, Order.created_at)
+                .limit(30)
+            )
+        ).all()
+
+        if managers:
+            manager_text = [
+                f"{_greeting(now_ist)}, Manager ji 👋",
+                "📊 Aaj ka Kwik Klin work briefing",
+                f"Open tasks: {len(open_tasks)}",
+                f"Aaj/overdue delivery orders: {len(today_orders)}",
+            ]
+
+            if open_tasks:
+                manager_text.append("")
+                manager_text.append("📋 Pending tasks:")
+                for task, assignee in open_tasks:
+                    who = assignee.name if assignee else "Unassigned"
+                    flag = " 🔴 URGENT" if task.urgent else ""
+                    manager_text.append(f"• {task.code} — {who} — {task.title[:150]}{flag}")
+
+            if today_orders:
+                manager_text.append("")
+                manager_text.append("🚚 Aaj/overdue delivery:")
+                for order, customer in today_orders[:15]:
+                    manager_text.append(
+                        f"• {order.order_number} — {customer.name or customer.phone} — "
+                        f"{items_summary(order)} — {status_label(order.status)}"
+                    )
+
+            manager_text.extend([
+                "",
+                "Jahan task stuck ho, dashboard se check/assign kar sakte hain.",
+                "— Kwik Klin",
+            ])
+            manager_message = "\n".join(manager_text)
+
+            for manager in managers:
+                if await _claim(f"{key_prefix}:{today_key}:manager:{manager.phone}"):
+                    try:
+                        await send_message(db, to_phone=manager.phone, text=manager_message)
+                        sends += 1
+                    except SendError:
+                        log.warning("manager_standup_not_sent", staff=manager.name)
+
         await audit.record(
-            actor_role="system", actor="scheduler", action="standup",
-            args={"date": today_key}, result=f"sent to {sends} staff",
+            actor_role="system",
+            actor="scheduler",
+            action="standup",
+            args={
+                "date": today_key,
+                "workers": len(staff_rows),
+                "managers": len(managers),
+                "open_tasks": len(open_tasks),
+                "today_orders": len(today_orders),
+            },
+            result=f"sent {sends} briefing(s)",
         )
     return sends
 
