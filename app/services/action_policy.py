@@ -17,6 +17,7 @@ BUSINESS_ACTION_POLICY = {
         "ASSIGN_WASHING": "Create a wash task only when the delivery date is within the configured 3-day window.",
         "ASSIGN_DELIVERY": "Create delivery work only after the order is READY / eligible for delivery.",
         "PAYMENT_REMINDER": "Use the real outstanding balance and signed bill link; never let AI calculate or invent the amount.",
+        "DAILY_STAFF_BRIEFING": "At the configured 10:00 IST standup, send each washer/delivery worker only their pending/today work and send managers a business-wide pending-task and due-delivery summary. Use deterministic DB data; no LLM is required.",
     },
     "marketing": {
         "IDENTIFY_OPPORTUNITY": "Use real customer segments, order value and campaign history before proposing outreach.",
