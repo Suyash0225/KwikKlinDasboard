@@ -212,9 +212,10 @@ async def receive_waha_webhook(
     except json.JSONDecodeError:
         return JSONResponse({"status": "ignored"})
 
-    event_key = await _journal_event(db, "waha", body, event)
-    if event_key is None:
+    journal = await _journal_event(db, "waha", body, event)
+    if journal is None:
         return JSONResponse({"status": "duplicate"})
+    event_key = journal.event_key
 
     try:
         event_name = str(event.get("event") or "")
