@@ -257,6 +257,15 @@ async def create_order(
     except Exception:
         log.exception("lead_convert_hook_failed")
 
+    payment_offer = None
+    try:
+        from app.services import payment_offers as _payment_offers
+        payment_offer = await _payment_offers.create_offer(
+            db, order=order, kind="advance", created_by=created_by
+        )
+    except Exception:
+        log.exception("advance_payment_offer_failed", order_number=order_number)
+
     # Pickup confirmation WITH the bill details (owner's policy 03 Aug).
     from app.services.work_orders import items_summary
 
@@ -291,7 +300,8 @@ async def create_order(
         due=due_s,
         date=date_s,
         # web bill + GPay/PhonePe se payment (services/bill_link.py)
-        bill_line=bill_link.message_line(await bill_link.url_for(db, order)),
+        bill_line=bill_link.message_line(payment_offers.url_for_offer(await bill_link.url_for(db, order), payment_offer) if payment_offer is not None else await bill_link.url_for(db, order)),
+        payment_offer=payment_offer,
     )
 
     # The owner side hears about every new order without asking — unless he
@@ -481,6 +491,15 @@ async def update_status(
         return order
 
     if new_status is OrderStatus.DELIVERED:
+        payment_offer = None
+        try:
+            from app.services import payment_offers as _payment_offers
+            payment_offer = await _payment_offers.create_offer(
+                db, order=order, kind="reminder", created_by=changed_by
+            )
+        except Exception:
+            log.exception("delivery_payment_offer_failed", order_number=order.order_number)
+
         # thank-you + rating buttons (owner's policy 03 Aug)
         from app.services.whatsapp import Button
 
@@ -489,6 +508,7 @@ async def update_status(
             message_key="thankyou_rating",
             template_name="kk_thankyou_rating",
             template_params=[order.order_number],
+            payment_offer=payment_offer,
             buttons=[
                 Button("rate_good", "⭐ Excellent"),
                 Button("rate_mid", "🙂 It was okay"),
@@ -552,6 +572,33 @@ async def record_payment(
     """
     if amount <= 0:
         raise OrderError("payment amount must be positive")
+
+    offer_applied = None
+    try:
+        from app.models import PaymentOffer
+        from app.services.payment_offers import open_offer
+        candidate = (
+            await db.execute(
+                select(PaymentOffer)
+                .where(
+                    PaymentOffer.order_id == order.id,
+                    PaymentOffer.tenant_id == order.tenant_id,
+                    PaymentOffer.offer_amount == amount,
+                )
+                .order_by(PaymentOffer.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        current_due = (order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0"))
+        if candidate is not None and current_due == candidate.original_amount:
+            offer_state = await open_offer(db, candidate)
+            if offer_state.get("active"):
+                order.total_amount = (order.total_amount or Decimal("0")) - candidate.discount_amount
+                order.discount_amount = (order.discount_amount or Decimal("0")) + candidate.discount_amount
+                offer_applied = candidate
+                log.info("payment_offer_applied", order_number=order.order_number, offer=candidate.offer_code, discount=str(candidate.discount_amount))
+    except Exception:
+        log.exception("payment_offer_apply_failed", order_number=order.order_number)
     # Overpayment is ALLOWED — customers round up or pay advance for the next
     # order (owner's rule, 04 Aug). Log it so a genuine typo is still visible.
     if order.total_amount is not None:
@@ -571,7 +618,7 @@ async def record_payment(
             amount=amount,
             method=method,
             recorded_by=recorded_by[:80],
-            note=(note or None),
+            note=((note or "") + (f" | offer:{offer_applied.offer_code}" if offer_applied else "")).strip() or None,
         )
     )
     order.amount_paid = ((order.amount_paid or Decimal("0")) + amount).quantize(
@@ -692,6 +739,7 @@ async def _notify_customer(
     template_name: str,
     template_params: list[str],
     buttons: list | None = None,
+    payment_offer=None,
     **fmt: str,
 ) -> None:
     """Send a notification, degrading gracefully — NEVER raises.
@@ -724,11 +772,15 @@ async def _notify_customer(
         from app.services import bill_link
         from app.services.templates import TEMPLATES
 
+        bill_url = await bill_link.url_for(db, order)
+        if payment_offer is not None:
+            from app.services import payment_offers as _payment_offers
+            bill_url = _payment_offers.url_for_offer(bill_url, payment_offer)
         if "bill_line" not in fmt:
-            fmt["bill_line"] = bill_link.message_line(await bill_link.url_for(db, order))
+            fmt["bill_line"] = bill_link.message_line(bill_url)
         url_param = None
         if TEMPLATES.get(template_name, {}).get("url_button") and order.tenant_id:
-            url_param = order.bill_code or bill_link.make(order.tenant_id, order.id)
+            url_param = bill_url.rsplit("/b/", 1)[-1] if "/b/" in bill_url else (order.bill_code or bill_link.make(order.tenant_id, order.id))
         text_body = get_message(message_key, order_number=order.order_number, **fmt)
         try:
             await send_message(
