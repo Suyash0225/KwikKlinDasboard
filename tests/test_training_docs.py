@@ -16,6 +16,7 @@ from app.services.knowledge import (
 AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
 DOC = "test-pricelist.txt"
 RANK_DOC = "test-ranking.txt"
+STAFF_DOC = "staff-only-policy.txt"
 
 
 @pytest.fixture(autouse=True)
@@ -23,8 +24,8 @@ async def _cleanup():
     yield
     async with async_session_factory() as s:
         await s.execute(
-            sqltext("DELETE FROM doc_chunks WHERE document IN (:a, :b)"),
-            {"a": DOC, "b": RANK_DOC},
+            sqltext("DELETE FROM doc_chunks WHERE document IN (:a, :b, :c)"),
+            {"a": DOC, "b": RANK_DOC, "c": STAFF_DOC},
         )
         await s.commit()
 
