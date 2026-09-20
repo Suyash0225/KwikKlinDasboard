@@ -303,6 +303,25 @@ async def send_campaign(campaign_id) -> None:
                     await db.commit()
                     log.warning("campaign_budget_hit", campaign=str(campaign_id))
                     continue
+
+                # Re-check the safety gate immediately before sending. A customer
+                # can send STOP, place an order, receive another campaign, or
+                # otherwise become ineligible after this campaign was queued.
+                # Never rely only on the queue-time decision.
+                from app.services.leads import check_marketing_eligible
+                eligible_now, reason_now = await check_marketing_eligible(db, cust.id)
+                if not eligible_now:
+                    rec.status = "skipped"
+                    rec.detail = reason_now[:200]
+                    await db.commit()
+                    log.info(
+                        "campaign_recipient_skipped_live_gate",
+                        campaign=str(campaign_id),
+                        customer=str(cust.id),
+                        reason=reason_now,
+                    )
+                    continue
+
                 text = campaign.message_text.replace("{name}", cust.name or "ji")
                 try:
                     # Campaign = MARKETING category: Meta par sabse mehnga
