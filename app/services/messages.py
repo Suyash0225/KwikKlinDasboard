@@ -460,7 +460,7 @@ def get_override(key: str) -> str | None:
 CUSTOMER_KEYS = frozenset({
     "ack_received", "error_fallback",
     "order_confirmed_no_price",
-    "order_confirmed_bill", "lead_day1", "lead_day3", "lead_day7",
+    "order_confirmed_bill", "bill_requested", "lead_day1", "lead_day3", "lead_day7",
     "pickup_done", "pickup_confirmed_customer", "thankyou_rating",
     "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
     "order_ready", "order_out_for_delivery", "order_delivered", "delay_notice",
