@@ -300,7 +300,7 @@ async def create_order(
         due=due_s,
         date=date_s,
         # web bill + GPay/PhonePe se payment (services/bill_link.py)
-        bill_line=bill_link.message_line(payment_offers.url_for_offer(await bill_link.url_for(db, order), payment_offer) if payment_offer is not None else await bill_link.url_for(db, order)),
+        bill_line=bill_link.message_line(_payment_offers.url_for_offer(await bill_link.url_for(db, order), payment_offer) if payment_offer is not None else await bill_link.url_for(db, order)),
         payment_offer=payment_offer,
     )
 
