@@ -3229,7 +3229,7 @@ function renderDocs(docs) {
   DOCS_CACHE = docs;
   $("doc-list").innerHTML = docs.length ? docs.map((d, i) => `
     <div class="sumrow"><span>📄 <b>${esc(d.document)}</b> <span class="tag">${d.chunks} parts</span>
-      <span class="muted">${fmtWhen(d.uploaded_at)}</span></span>
+      <span class="tag">${esc(d.audience || "customer")}</span> <span class="muted">${fmtWhen(d.uploaded_at)}</span></span>
       <button class="btn sm danger" aria-label="Delete document" onclick="delDocAt(${i})">✕</button></div>`).join("")
     : `<p class="muted">No documents yet.</p>`;
 }
