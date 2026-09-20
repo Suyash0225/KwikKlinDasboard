@@ -76,7 +76,7 @@ async def test_bill_creates_wash_task_for_the_least_busy_washer(shop) -> None:
 
 
 async def test_wash_task_waits_until_three_days_before_delivery(shop, sent) -> None:
-    future = date.today() + timedelta(days=7)
+    future = date.today() + timedelta(days=8)
     o = await _order(expected_delivery=future)
     assert await _tasks(o.id) == []
 
