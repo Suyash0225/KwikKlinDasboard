@@ -124,12 +124,16 @@ async def waha_status() -> dict:
         log.warning("waha_status_failed", status=r.status_code)
         raise HTTPException(status_code=502, detail="Could not read WhatsApp connection status")
     data = r.json()
+    me = data.get("me") or {}
+    raw_id = str(me.get("id") or "").split("@", 1)[0]
+    masked = (raw_id[:3] + "******" + raw_id[-2:]) if len(raw_id) > 7 else ""
     return {
         "configured": True,
         "session": data.get("name", settings.WAHA_SESSION),
         "status": data.get("status"),
         "state": (data.get("engine") or {}).get("state"),
-        "me": data.get("me"),
+        "push_name": me.get("pushName"),
+        "number_masked": masked,
     }
 
 
