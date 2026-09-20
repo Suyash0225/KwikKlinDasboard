@@ -473,6 +473,7 @@ const TITLES = {
   expenses: ["Expenses", "Daily spend and categories"],
   reports: ["Reports", "Revenue, expenses and profit"],
   campaigns: ["Campaigns", "Segments, offers and results"],
+  analytics: ["Analytics", "Website, Google Business, WhatsApp & AI"],
   tasks: ["Tasks", "Who was given what — pending, done, and replies"],
   agents: ["Agents", "Your AI employees — health and controls"],
   usage: ["AI usage", "How much AI was used and what it cost"],
@@ -503,7 +504,7 @@ function go(sec, push = true) {
   }
   ({ dashboard: loadDashboard, inbox: loadThreads, newbill: initNewBill, bills: loadBills,
      customers: loadCustomers, expenses: loadExpenses, reports: loadReports,
-     campaigns: loadCampaigns, tasks: loadTasks, agents: loadAgents, usage: loadUsage, training: loadTraining,
+     campaigns: loadCampaigns, analytics: loadAnalytics, tasks: loadTasks, agents: loadAgents, usage: loadUsage, training: loadTraining,
      activity: loadActivity, settings: loadSettings }[sec] || (() => {}))();
 }
 
