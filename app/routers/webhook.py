@@ -188,6 +188,122 @@ async def receive_webhook(
     return JSONResponse({"status": "received"})
 
 
+
+
+@router.post("/webhook/waha")
+async def receive_waha_webhook(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> JSONResponse:
+    """WAHA webhook: normalize message/message.ack into the existing inbox flow.
+
+    WAHA's HMAC-SHA512 is verified when WAHA_WEBHOOK_SECRET is configured.
+    Meta's 24h window and template rules are deliberately not involved.
+    """
+    body = await request.body()
+    secret = settings.WAHA_WEBHOOK_SECRET
+    if secret:
+        provided = request.headers.get("X-Webhook-Hmac", "")
+        expected = hmac.new(secret.encode(), body, hashlib.sha512).hexdigest()
+        if not provided or not hmac.compare_digest(expected, provided):
+            return JSONResponse({"error": "invalid signature"}, status_code=403)
+
+    try:
+        event = json.loads(body)
+    except json.JSONDecodeError:
+        return JSONResponse({"status": "ignored"})
+
+    event_key = await _journal_event(db, "waha", body, event)
+    if event_key is None:
+        return JSONResponse({"status": "duplicate"})
+
+    try:
+        event_name = str(event.get("event") or "")
+        payload = event.get("payload") or {}
+        if event_name == "message":
+            # Ignore our own outbound events. We record them at send time.
+            if payload.get("fromMe") is not True:
+                msg = _waha_to_meta_shape(payload)
+                await _handle_inbound_message(
+                    msg, db,
+                    profile_name=str((payload.get("_data") or {}).get("notifyName") or ""),
+                )
+        elif event_name == "message.ack":
+            status = _waha_ack_status(payload)
+            if status:
+                await _record_delivery_status(db, str(payload.get("id") or ""), status)
+                try:
+                    from app.services.marketing import track_status_update
+                    await track_status_update(db, str(payload.get("id") or ""), status)
+                except Exception:
+                    log.exception("waha_campaign_status_track_failed")
+        await _mark_event(db, event_key, "processed")
+    except Exception as exc:
+        log.exception("waha_webhook_processing_failed")
+        await _mark_event(db, event_key, "failed", error=repr(exc))
+
+    return JSONResponse({"status": "received"})
+
+
+def _waha_to_meta_shape(payload: dict) -> dict:
+    """Translate WAHA message payload to the existing inbound handler shape."""
+    raw_from = str(payload.get("from") or "")
+    wa_id = raw_from.replace("@s.whatsapp.net", "@c.us")
+    msg_id = str(payload.get("id") or "")
+    body = str(payload.get("body") or "")
+    out = {
+        "from": wa_id.split("@")[0],
+        "id": msg_id,
+        "type": "text",
+        "text": {"body": body},
+    }
+    media = payload.get("media") or {}
+    if payload.get("hasMedia") and media:
+        mime = str(media.get("mimetype") or "")
+        if mime.startswith("image/"):
+            out["type"] = "image"
+        elif mime.startswith("audio/"):
+            out["type"] = "audio"
+        elif mime.startswith("video/"):
+            out["type"] = "video"
+        elif mime:
+            out["type"] = "document"
+        out[out["type"]] = {
+            "id": msg_id,
+            "url": media.get("url"),
+            "mimetype": mime,
+            "filename": media.get("filename"),
+            "caption": body,
+        }
+    # WAHA list/button implementations may expose the selected row in
+    # different engine-specific fields. Prefer a stable selected id if present.
+    data = payload.get("_data") or {}
+    selected = (
+        payload.get("selectedRowId")
+        or payload.get("rowId")
+        or data.get("selectedRowId")
+        or data.get("rowId")
+        or data.get("selectedButtonId")
+        or data.get("buttonId")
+    )
+    if selected:
+        out["type"] = "button"
+        out["button"] = {"payload": str(selected), "text": body}
+    return out
+
+
+def _waha_ack_status(payload: dict) -> str | None:
+    name = str(payload.get("ackName") or "").upper()
+    if name == "ERROR":
+        return "failed"
+    if name in ("READ", "PLAYED"):
+        return "read"
+    if name == "DEVICE":
+        return "delivered"
+    if name == "SERVER":
+        return "sent"
+    return None
+
+
 @router.post("/webhook/dotpe")
 async def receive_dotpe_webhook(
     request: Request, db: AsyncSession = Depends(get_db)
