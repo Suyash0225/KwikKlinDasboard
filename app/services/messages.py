@@ -97,8 +97,12 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Your order {order_number} is out for delivery 🛵 — {shop}",
     },
     "order_delivered": {
-        "hi": "Aapka order {order_number} deliver ho gaya ✅ Dhanyawad, {shop} ko mauka dene ke liye! 🙏",
-        "en": "Your order {order_number} has been delivered ✅ Thank you for choosing {shop}! 🙏",
+        "hi": "Aapka order {order_number} deliver ho gaya ✅ Dhanyawad, {shop} ko mauka dene ke liye! 🙏{bill_line}",
+        "en": "Your order {order_number} has been delivered ✅ Thank you for choosing {shop}! 🙏{bill_line}",
+    },
+    "bill_requested": {
+        "hi": "Bilkul! Aapke order {order_number} ka bill yahan hai 🧾\nTotal: ₹{total} | Baaki: ₹{due}{bill_line}\n— {shop}",
+        "en": "Sure! Here is your bill for order {order_number} 🧾\nTotal: ₹{total} | Due: ₹{due}{bill_line}\n— {shop}",
     },
     "delay_notice": {
         "hi": "Namaste, aapke order {order_number} ki expected delivery ab {date} hai. Asuvidha ke liye maafi 🙏 — {shop}",
