@@ -1424,3 +1424,16 @@ async def trigger_standup() -> dict:
 
     sends = await run_standup(force=True)
     return {"sent_to": sends}
+
+
+# ---------------------------------------------------------------------------
+# Owner analytics: one endpoint for the real operating numbers
+# ---------------------------------------------------------------------------
+
+@router.get("/analytics")
+async def analytics_snapshot(
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(default=30, ge=1, le=90),
+) -> dict:
+    from app.services.analytics import owner_snapshot
+    return await owner_snapshot(db, days=days)
