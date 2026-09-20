@@ -117,16 +117,22 @@ async def gbp_performance(db, days: int = 30) -> dict:
     body = r.json() or {}
     totals = {}
     latest = None
-    for series in body.get("multiDailyMetricTimeSeries") or []:
-        metric = str(series.get("dailyMetric") or series.get("dailyMetricSeries", {}).get("dailyMetric") or "")
-        metric = metric or str(series.get("metric") or "")
-        values = series.get("timeSeries", {}).get("datedValues") or series.get("dailyMetricSeries", {}).get("timeSeries", {}).get("datedValues") or []
-        total = 0
-        for v in values:
-            total += int(v.get("value") or 0)
-            latest = max(latest or "", str(v.get("date") or ""))
-        if metric:
-            totals[metric] = total
+    for group in body.get("multiDailyMetricTimeSeries") or []:
+        series_list = group.get("dailyMetricTimeSeries") or []
+        if isinstance(series_list, dict):
+            series_list = [series_list]
+        for series in series_list:
+            metric = str(series.get("dailyMetric") or "")
+            values = (series.get("timeSeries") or {}).get("datedValues") or []
+            total = 0
+            for v in values:
+                total += int(v.get("value") or 0)
+                d = v.get("date") or {}
+                if d:
+                    stamp = f"{d.get('year',0):04d}-{d.get('month',0):02d}-{d.get('day',0):02d}"
+                    latest = max(latest or "", stamp)
+            if metric:
+                totals[metric] = totals.get(metric, 0) + total
     return {"configured": True, "latest_date": latest, "metrics": totals}
 
 
