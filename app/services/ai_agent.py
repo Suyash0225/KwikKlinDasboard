@@ -10,7 +10,6 @@ Safety design — every rule enforced in CODE, not just in the prompt:
   rule-based replies that worked before Phase 4 (ground rule #5).
 """
 
-import asyncio
 import re
 from datetime import datetime as _dt, timezone as _tz
 
