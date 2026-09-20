@@ -35,7 +35,7 @@ async def raise_escalation(
     customer: Customer | None = None,
     order_id: uuid.UUID | None = None,
 ) -> Escalation | None:
-    """Store an escalation and ping the manager. Returns None on failure."""
+    """Store an escalation and alert admin recipients. Returns None on failure."""
     try:
         esc = Escalation(
             customer_id=customer.id if customer else None,
