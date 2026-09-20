@@ -60,13 +60,11 @@ async def raise_escalation(
         phone=customer.phone if customer else "-",
         question=question[:300],
     )
-    # Escalation means the AI could not handle the customer message.
-    # This is an owner/admin alert, not a staff task reminder. Only admin
-    # numbers should receive it; washermen and delivery staff must not get
-    # these alerts.
+    # Escalation is an owner/admin alert, not a staff task reminder.
+    # Keep recipient policy centralized in team.alert_recipients().
     from app.services import team
 
-    recipients = [(phone, "Admin") for phone in await team.admin_phones(db)]
+    recipients = await team.alert_recipients(db)
     log.info("escalation_alert_admin_only", count=len(recipients))
     for to_phone, _name in recipients:
         if not to_phone:
