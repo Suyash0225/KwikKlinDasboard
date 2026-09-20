@@ -1433,6 +1433,34 @@ async def toggle_agent(body: AgentToggleIn, db: AsyncSession = Depends(get_db)) 
     return {"phone": phone, "agent_paused": cust.agent_paused}
 
 
+@router.get("/growth-analytics", dependencies=[Depends(require_feature("reports"))])
+async def growth_analytics(db: AsyncSession = Depends(get_db)) -> dict:
+    """Website realtime + GBP daily performance + local campaign KPIs."""
+    from app.services.analytics import growth_snapshot
+    snap = await growth_snapshot(db)
+    from app.services.marketing import month_send_count
+    from app.models import Campaign, CampaignRecipient
+    month = await month_send_count(db)
+    campaigns = (
+        await db.execute(select(Campaign).order_by(Campaign.created_at.desc()).limit(20))
+    ).scalars().all()
+    return {
+        **snap,
+        "campaign": {
+            "messages_sent_this_month": month,
+            "recent": [
+                {
+                    "name": c.name,
+                    "status": c.status,
+                    "segment": c.segment,
+                    "stats": c.stats or {},
+                }
+                for c in campaigns
+            ],
+        },
+    }
+
+
 @router.get("/whatsapp/stats", dependencies=[Depends(require_feature("reports"))])
 async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
     """Today's WhatsApp traffic (our DB) + live Meta template/quality data."""
