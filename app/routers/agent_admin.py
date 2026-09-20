@@ -96,6 +96,43 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
     return out
 
 
+@router.post("/campaigns/upload-image", dependencies=[Depends(require_feature("campaigns"))])
+async def upload_campaign_image(
+    file: UploadFile = File(...),
+) -> dict:
+    """Store an owner-supplied campaign image as a safe JPEG.
+
+    The upload is not sent anywhere. It becomes the draft's reusable creative
+    and can be replaced before approval.
+    """
+    from pathlib import Path
+    from PIL import Image, ImageOps
+    import io, uuid
+
+    allowed = {"image/jpeg", "image/png", "image/webp"}
+    if file.content_type not in allowed:
+        raise HTTPException(status_code=400, detail="Upload JPG, PNG or WEBP image only")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Image is empty")
+    if len(raw) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image is too large (8MB max)")
+
+    try:
+        image = Image.open(io.BytesIO(raw))
+        image = ImageOps.exif_transpose(image).convert("RGB")
+        image.thumbnail((1600, 1600))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid image file") from exc
+
+    media_dir = Path(__file__).resolve().parent.parent / "media"
+    media_dir.mkdir(exist_ok=True)
+    name = f"campaign-{uuid.uuid4().hex}.jpg"
+    image.save(media_dir / name, "JPEG", quality=90, optimize=True)
+    return {"creative_file": name, "preview_url": f"/admin/media/{name}"}
+
+
 class CampaignIn(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     segment: str
@@ -283,7 +320,7 @@ async def ai_campaign_draft(
 @router.post("/campaigns", dependencies=[Depends(require_feature("campaigns"))], status_code=201)
 async def create_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) -> dict:
     creative = body.creative_file or ""
-    if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\\.png", creative):
+    if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\\.(?:png|jpg|jpeg)", creative):
         raise HTTPException(status_code=400, detail="invalid campaign creative")
     c = Campaign(
         name=body.name, segment=body.segment, message_text=body.message_text,
