@@ -60,13 +60,14 @@ async def raise_escalation(
         phone=customer.phone if customer else "-",
         question=question[:300],
     )
-    # Owner's rule (06 Aug): a customer problem goes to the WHOLE team —
-    # the admins and every active staff member — not just two numbers in
-    # .env. Whoever is free answers first; nobody can say "mujhe pata nahi".
+    # Escalation means the AI could not handle the customer message.
+    # This is an owner/admin alert, not a staff task reminder. Only admin
+    # numbers should receive it; washermen and delivery staff must not get
+    # these alerts.
     from app.services import team
 
-    recipients = await team.alert_recipients(db)
-    log.info("escalation_alert_fanout", count=len(recipients))
+    recipients = [(phone, "Admin") for phone in await team.admin_phones(db)]
+    log.info("escalation_alert_admin_only", count=len(recipients))
     for to_phone, _name in recipients:
         if not to_phone:
             continue
