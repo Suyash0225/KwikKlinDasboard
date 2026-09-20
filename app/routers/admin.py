@@ -204,6 +204,12 @@ async def waha_configure_webhook(request: Request) -> dict:
     body = {
         "name": settings.WAHA_SESSION,
         "config": {
+            "noweb": {
+                "store": {
+                    "enabled": True,
+                    "fullSync": True,
+                }
+            },
             "webhooks": [{
                 "url": f"{settings.SITE_URL.rstrip('/') if settings.SITE_URL else 'https://kwikklin.online'}/webhook/waha",
                 "events": ["message", "message.ack", "session.status"],
