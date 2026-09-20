@@ -162,18 +162,15 @@ async def test_admin_keeps_manager_powers_in_the_webhook(monkeypatch, sent) -> N
 # --- a customer problem reaches everyone ----------------------------------
 
 
-async def test_escalation_reaches_the_owner_and_the_washerman(sent) -> None:
-    """Owner's rule (revised 06 Aug): a customer problem goes to the people
-    who can answer it — the owner and the washermen. The delivery boy was
-    getting escalations he could do nothing about."""
+async def test_escalation_reaches_admins_only(sent) -> None:
+    """AI/customer escalation is an admin alert, never a staff reminder."""
+    admin_phone = "+919999900094"
+    worker_phone = "+919999900095"
     async with async_session_factory() as db:
-        # SUPERVISOR ("Washerman / Manager") bhi dhulai wala hi hai —
-        # customer ki dikkat uske paas bhi jaani chahiye.
-        washers = (
-            await _phones_with_role(db, StaffRole.WASHER)
-            | await _phones_with_role(db, StaffRole.SUPERVISOR)
-        )
-        delivery_only = await _phones_with_role(db, StaffRole.DELIVERY) - washers
+        db.add_all([
+            Staff(phone=admin_phone, name="Test Admin", role=StaffRole.ADMIN, is_active=True),
+            Staff(phone=worker_phone, name="Test Washer", role=StaffRole.WASHER, is_active=True),
+        ])
         cust = Customer(phone=TEST_CUSTOMER_PHONE, name="Pareshan Grahak")
         db.add(cust)
         await db.commit()
@@ -182,14 +179,16 @@ async def test_escalation_reaches_the_owner_and_the_washerman(sent) -> None:
         )
     try:
         reached = {c["to"] for c in sent}
-        assert washers, "kam se kam ek washer hona chahiye"
-        assert ({OWNER} | washers) <= reached, f"sab tak nahi pahuncha: {reached}"
-        assert not (delivery_only & reached),             "delivery boy ko customer escalation nahi jani chahiye"
-        body = next(c["text"] for c in sent if c["to"] in washers)
+        assert OWNER in reached
+        assert admin_phone in reached
+        assert worker_phone not in reached
+        body = next(c["text"] for c in sent if c["to"] == OWNER)
         assert "Pareshan Grahak" in body and "koi jawab nahi" in body
     finally:
         await purge_phones(TEST_CUSTOMER_PHONE)
-
+        async with async_session_factory() as db:
+            await db.execute(delete(Staff).where(Staff.phone.in_([admin_phone, worker_phone])))
+            await db.commit()
 
 async def test_alert_list_has_no_duplicates() -> None:
     async with async_session_factory() as db:
