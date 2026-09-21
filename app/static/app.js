@@ -4223,12 +4223,38 @@ function markRead(phone) {
   localStorage.setItem(seenKey(phone), new Date().toISOString());
   renderThreads(); updateUnreadBadge(); toast("Marked read");
 }
+
+async function deleteThread(phone) {
+  const t = THREADS.find((x) => x.phone === phone) || {};
+  const name = displayName(t.name, phone);
+  openModal(`<h3>🗑️ Delete chat?</h3>
+    <p class="muted">This permanently removes the WhatsApp conversation history for <b>${esc(name)}</b>. Customer/staff profile, orders and payments stay.</p>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn danger" id="delete-chat-go">Delete chat</button></div>`);
+  $("delete-chat-go").onclick = (e) => busy(e.target, async () => {
+    await api(`/admin/api/inbox/thread?phone=${encodeURIComponent(phone)}`, { method: "DELETE" });
+    closeModal();
+    sessionStorage.removeItem("kk_thread_" + phone);
+    localStorage.removeItem(seenKey(phone));
+    if (OPEN_PHONE === phone) {
+      OPEN_PHONE = null; OPEN_THREAD = null; LAST_CHAT_PHONE = null; LAST_CHAT_HTML = "";
+      LAST_HEAD_SIG = ""; $("chat-head").innerHTML = '<span class="muted">Pick a conversation on the left…</span>';
+      $("chat-log").innerHTML = emptyBox("Chat appears here", "💬");
+      closeThreadMobile(false);
+    }
+    LAST_TH_HTML = "";
+    await loadThreads();
+    updateUnreadBadge();
+    toast("Chat deleted");
+  });
+}
 function threadMenu(phone) {
   const t = THREADS.find((x) => x.phone === phone) || {};
   openModal(`<h3>${esc(displayName(t.name, phone))}</h3>
     <div class="frm">
       <button class="btn" onclick="closeModal();openThread('${phone}')">💬 Open chat</button>
       <button class="btn ghost" onclick="closeModal();markRead('${phone}')">✓ Mark read</button>
+      <button class="btn ghost danger" onclick="closeModal();deleteThread('${phone}')">🗑️ Delete chat</button>
       ${t.kind === "customer" ? `<button class="btn ghost" onclick="closeModal();OPEN_PHONE='${phone}';toggleAgentPause()">🤖 Agent on/off (take over)</button>` : ""}
     </div>`);
 }
@@ -4409,6 +4435,7 @@ async function openThread(phone, silent = false, push = true) {
       <div class="muted">${d.phone} · ${d.kind === "staff" ? "Staff 🧑‍🔧" : d.kind === "admin" ? "You 👑" : "Customer"}</div></div>
     <span class="winchip ${d.window.open ? "open" : "closed"}">${d.window.open ? "window open" : "window closed"}</span>
     <button class="btn sm ghost" title="Yaad dilao" onclick="pingThread(this)">🔔 Ping</button>
+    <button class="btn sm ghost danger" title="Delete chat" onclick="deleteThread('${phone}')">🗑️</button>
     ${d.kind === "customer" ? `<button class="btn sm ghost" id="agent-pause-btn" onclick="toggleAgentPause()">🤖 Agent: …</button>` : ""}`;
     refreshPauseBtn();
     LAST_HEAD_SIG = headSig;

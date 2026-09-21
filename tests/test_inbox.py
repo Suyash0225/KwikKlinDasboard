@@ -289,6 +289,21 @@ async def test_threads_are_paged_and_searchable(client, _purge_imported) -> None
     assert [t["phone"] for t in byno["threads"]] == ["+919198881003"]
 
 
+async def test_delete_inbox_thread_keeps_customer_but_removes_history(client) -> None:
+    await _seed_customer(window_open=True)
+    async with async_session_factory() as s:
+        cust = (await s.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        s.add(Conversation(customer_id=cust.id, direction=Direction.OUTBOUND, message_text="reply", wa_message_id="wamid.TESTINBOX-DELETE"))
+        await s.commit()
+
+    r = await client.delete(f"/admin/api/inbox/thread?phone={PHONE}", headers=AUTH)
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == 2
+    assert (await client.get(f"/admin/api/inbox/thread?phone={PHONE}", headers=AUTH)).status_code == 404
+    async with async_session_factory() as s:
+        cust = (await s.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        assert cust.name == "Inbox Grahak"
+        assert cust.last_message_at is None
 async def test_thread_fetch_messages_and_window(client) -> None:
     await _seed_customer(window_open=False)
     r = await client.get(f"/admin/api/inbox/thread?phone={PHONE}", headers=AUTH)
