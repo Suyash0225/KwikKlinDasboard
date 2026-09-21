@@ -291,6 +291,10 @@ async def staff_events(request: Request, kk_staff: str = Cookie(default="")):
     )
 
 
+class StatusUpdateIn(BaseModel):
+    status: OrderStatus
+
+
 class PasswordIn(BaseModel):
     old_password: str = Field(min_length=1, max_length=200)
     new_password: str = Field(min_length=6, max_length=200)
@@ -774,6 +778,37 @@ def _role_or_403(p: StaffPrincipal, roles, what: str) -> None:
         raise HTTPException(status_code=403, detail=f"{what} is not your role's job")
 
 
+@router.post("/orders/{number}/status")
+async def manager_update_status(
+    number: str,
+    body: StatusUpdateIn,
+    p: StaffPrincipal = Depends(require_manager),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Manager/owner status control.
+
+    Internal stages are recorded in real time without customer messages.
+    READY, OUT_FOR_DELIVERY and DELIVERED are customer-facing milestones.
+    """
+    order = await _my_order(db, p, number)
+    from app.services.order_service import InvalidTransitionError, update_status
+
+    notify_customer = body.status in (
+        OrderStatus.READY,
+        OrderStatus.OUT_FOR_DELIVERY,
+        OrderStatus.DELIVERED,
+    )
+    try:
+        await update_status(
+            db, order, body.status,
+            changed_by=p.staff.name,
+            notify=notify_customer,
+        )
+    except InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"order_number": order.order_number, "status": order.status.name}
+
+
 @router.post("/orders/{number}/deliver")
 async def deliver_order(
     number: str,
@@ -825,7 +860,7 @@ async def order_washing(
     _role_or_403(p, _WASH_ROLES, "Washing")
     order = await _my_order(db, p, number)
     try:
-        return await delivery.washing(db, order, by=p.staff.name)
+        return await delivery.washing(db, order, by=p.staff.name, notify=False)
     except delivery.DeliveryError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
