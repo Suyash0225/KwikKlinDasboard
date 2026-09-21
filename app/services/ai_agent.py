@@ -93,7 +93,7 @@ _TOOL_CALL_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "enum": list(CUSTOMER_READ_TOOLS.keys())},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20},
                 },
                 "required": ["name", "limit"],
                 "additionalProperties": False,
@@ -112,6 +112,7 @@ _TOOL_ROUTER_SYSTEM = (
     + "\n".join(f"- {name}: {spec.description}" for name, spec in CUSTOMER_READ_TOOLS.items())
     + "\nRules: order/delivery -> get_customer_orders; bill/invoice/payment due -> "
       "get_customer_bills; price/rate -> get_shop_rate_card; profile -> get_customer_profile. "
+      "Order history is always scoped by the backend to the last 3 months. "
       "Use multiple tools when needed. Greetings may return an empty list."
 )
 
@@ -135,14 +136,14 @@ async def _select_customer_tools(
             if name not in CUSTOMER_READ_TOOLS:
                 continue
             try:
-                limit = max(1, min(int(call.get("limit", 5)), 10))
+                limit = max(1, min(int(call.get("limit", 20)), 20))
             except (TypeError, ValueError):
                 limit = 5
             selected[name] = limit
         return selected
     except LLMError as exc:
         log.warning("ai_tool_router_failed", error=str(exc)[:150])
-        return {name: 5 for name in CUSTOMER_READ_TOOLS}
+        return {name: 20 for name in CUSTOMER_READ_TOOLS}
 
 
 _COMPOSE_SYSTEM = (
@@ -156,7 +157,10 @@ _COMPOSE_SYSTEM = (
     "1. Return intent as exactly one of ORDER_STATUS, NEW_ORDER, PRICE_QUERY, "
     "COMPLAINT, GREETING, OTHER. Return language as hi for Hindi/Hinglish or "
     "en for English.\n"    "2. Facts discipline: prices, order statuses, delivery dates and policies "
-    "come ONLY from FACTS. Never invent numbers, dates, discounts or offers.\n"
+    "come ONLY from FACTS. Never invent numbers, dates, discounts or offers. "
+    "When FACTS contains a bill_url for an order, include that exact bill URL "
+    "when discussing that order, its bill, payment, or delivery status. Never "
+    "invent or alter a bill URL.\n"
     "3. Handle routine service yourself, confidently:\n"
     "   - For a NEW/UNKNOWN customer with no active order, first collect the "
     "customer's name, then their full address+landmark. Do not jump straight "
@@ -677,6 +681,8 @@ async def _build_facts(
                         parts.append(f"expected delivery {o['expected_delivery'][:10]}{suffix}")
                     if o["total_amount"] is not None:
                         parts.append(f"bill ₹{o['total_amount']}, baaki ₹{o['amount_due']}")
+                    if o.get("bill_url"):
+                        parts.append(f"bill_url {o['bill_url']}")
                     lines.append(" | ".join(parts))
             else:
                 lines.append("Customer's recent orders: none.")
@@ -694,6 +700,7 @@ async def _build_facts(
                     lines.append(
                         f"- {bill['order_number']}: total ₹{bill['total_amount']}, "
                         f"paid ₹{bill['amount_paid']}, due ₹{bill['amount_due']}"
+                        + (f" | bill_url {bill['bill_url']}" if bill.get("bill_url") else "")
                     )
             else:
                 lines.append("Customer's unpaid bills: none.")
