@@ -24,7 +24,6 @@ from app.services.escalation import raise_escalation
 from app.services.llm_client import LLMError
 from app.services.messages import CUSTOMER_LANG, get_message, status_label
 from app.services.order_service import get_active_orders_for_phone, send_bill_to_customer
-from app.services.tenant_context import manager_phone
 from app.services.action_policy import ACTION_EXECUTION_RULES, business_policy_text
 
 log = structlog.get_logger()
