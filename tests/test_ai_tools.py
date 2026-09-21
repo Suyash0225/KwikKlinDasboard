@@ -151,7 +151,7 @@ async def test_phase_two_router_only_accepts_registered_read_tools(monkeypatch):
         AsyncMock(), _customer(), "mera order kaha hai?"
     )
 
-    assert selected == {"get_customer_orders"}
+    assert selected == {"get_customer_orders": 5}
 
 
 @pytest.mark.asyncio
@@ -167,4 +167,27 @@ async def test_phase_two_router_falls_back_to_all_read_tools_on_llm_failure(monk
         AsyncMock(), _customer(), "mera bill?"
     )
 
-    assert selected == set(ai_agent.CUSTOMER_READ_TOOLS)
+    assert selected == {name: 5 for name in ai_agent.CUSTOMER_READ_TOOLS}
+
+
+@pytest.mark.asyncio
+async def test_phase_two_router_clamps_tool_limits(monkeypatch):
+    from app.services import ai_agent, llm_client
+
+    async def fake_ask_json(**kwargs):
+        return {
+            "tool_calls": [
+                {"name": "get_customer_orders", "limit": 999},
+                {"name": "get_customer_bills", "limit": 0},
+            ]
+        }
+
+    monkeypatch.setattr(llm_client, "ask_json", fake_ask_json)
+    selected = await ai_agent._select_customer_tools(
+        AsyncMock(), _customer(), "orders and bill"
+    )
+
+    assert selected == {
+        "get_customer_orders": 10,
+        "get_customer_bills": 1,
+    }
