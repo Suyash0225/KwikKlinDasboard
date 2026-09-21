@@ -37,7 +37,7 @@ const STATUS_SEQ = ["RECEIVED", "IN_WASH", "IN_DRY", "IN_IRON", "READY", "OUT_FO
 const SEGMENT_LABEL = {
   new: "New customers", active_regular: "Active regulars", at_risk: "At risk",
   lapsed: "Lapsed (60–120d)", lost: "Lost (120d+)", high_value: "High value",
-  outstanding_dues: "Has dues", all_active: "All customers",
+  outstanding_dues: "Has dues",
 };
 
 /* ============================= core ============================= */
@@ -2964,96 +2964,174 @@ async function dlServer(path, name) {
 }
 
 /* ============================= campaigns ============================= */
-async 
-function loadCampaigns() {
-  $("seg-cards").innerHTML = "";
+async function loadCampaigns() {
+  $("seg-cards").innerHTML = skeleton(2);
+  $("camp-list").innerHTML = skeleton(3);
   try {
-    const [segs, camps] = await Promise.all([api("/admin/api/segments"), api("/admin/api/campaigns")]);
-    renderSegments(segs); renderCampaigns(camps); selectCampaignAudience($("camp-seg")?.value || "all_active", false); updateCampaignPreview();
+    const [segs, camps, coupons] = await Promise.all([
+      api("/admin/api/segments"), api("/admin/api/campaigns"), api("/admin/api/coupons"),
+    ]);
+    renderSegments(segs); renderCampaigns(camps); renderCoupons(coupons);
   } catch (e) { $("camp-list").innerHTML = errBox(e.message, "loadCampaigns"); }
+  tplLoad(); tplPreview();
 }
 function renderSegments(segs) {
+  $("seg-cards").innerHTML = Object.entries(segs.counts)
+    .map(([k, v]) => `<div class="card kpi seg-card" onclick="prefillCampaign('${k}')">
+      <div class="lbl">${SEGMENT_LABEL[k] || k}</div><div class="val">${v}</div>
+      <div class="sub">tap to create a campaign</div></div>`).join("");
   const sel = $("camp-seg");
-  if (sel) {
-    const keys = ["all_active","active_regular","lapsed","high_value"];
-    sel.innerHTML = keys.filter((k) => segs.counts[k] != null).map((k) => '<option value="' + k + '">' + (SEGMENT_LABEL[k] || k) + '</option>').join("");
-  }
-  window.CAMPAIGN_SEG_COUNTS = segs.counts || {}; updateCampaignAudienceCount();
-}
-function selectCampaignAudience(segment, doPreview=true) {
-  const sel = $("camp-seg"); if (sel) sel.value = segment;
-  document.querySelectorAll(".camp-audience").forEach((b) => b.classList.toggle("active", b.dataset.segment === segment));
-  const label = SEGMENT_LABEL[segment] || segment, count = window.CAMPAIGN_SEG_COUNTS?.[segment];
-  if ($("camp-audience-count")) $("camp-audience-count").textContent = count == null ? "Audience unavailable" : count + " customer" + (count === 1 ? "" : "s") + " selected";
-  if ($("camp-summary-audience")) $("camp-summary-audience").textContent = label;
-  if (doPreview) updateCampaignPreview();
-}
-function updateCampaignAudienceCount() {
-  const segment = $("camp-seg")?.value || "all_active"; selectCampaignAudience(segment, false);
-  const count = window.CAMPAIGN_SEG_COUNTS?.[segment];
-  if ($("camp-summary-count")) $("camp-summary-count").textContent = count == null ? "—" : "~ " + count + " customers";
+  if (sel) sel.innerHTML = Object.keys(segs.counts).map((k) => `<option value="${k}">${SEGMENT_LABEL[k] || k}</option>`).join("");
 }
 function prefillCampaign(seg) {
-  selectCampaignAudience(seg, false); $("camp-name").value = (SEGMENT_LABEL[seg] || seg) + " - " + new Date().toISOString().slice(0, 10); updateCampaignPreview();
+  $("camp-seg").value = seg;
+  $("camp-name").value = `${seg}-${new Date().toISOString().slice(0, 10)}`;
   $("camp-name").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 function renderCampaigns(camps) {
-  if (!camps.length) { $("camp-list").innerHTML = emptyBox("No campaigns yet. Create your first campaign above.", "📣"); return; }
+  if (!camps.length) { $("camp-list").innerHTML = emptyBox("No campaigns yet. The agent also suggests one every Monday.", "📣"); return; }
   $("camp-list").innerHTML = camps.map((c) => {
-    const s = c.stats || {}, img = c.creative_file ? '<img class="camp-history-img" src="/admin/media/' + encodeURIComponent(c.creative_file) + '?key=' + encodeURIComponent(KEY) + '" alt="Campaign creative">' : "";
-    return '<div class="camp-history-item"><div class="camp-history-item-top"><div><b>' + esc(c.name) + '</b><div class="muted">' + esc(SEGMENT_LABEL[c.segment] || c.segment) + ' · ' + new Date(c.created_at).toLocaleString() + '</div></div><span class="pill ' + (c.status === "sent" ? "PAID" : c.status === "cancelled" ? "CANCELLED" : "PARTIAL") + '">' + esc(c.status) + '</span></div>' + img +
-      '<div class="camp-history-msg">' + esc(c.message_text) + '</div><div class="camp-history-stats">Sent <b>' + (s.sent || 0) + '</b> · Delivered <b>' + (s.delivered || 0) + '</b> · Read <b>' + (s.read || 0) + '</b> · Replied <b>' + (s.replied || 0) + '</b> · Failed <b>' + (s.failed || 0) + '</b> · Skipped <b>' + (s.skipped || 0) + '</b></div>' +
-      (["draft","suggested"].includes(c.status) ? '<div class="act"><button class="btn sm ok" onclick="approveCampaign(\'' + c.id + '\')">Start sending</button><button class="btn sm ghost" onclick="cancelCampaign(\'' + c.id + '\')">Cancel</button></div>' : '') + '</div>';
+    const s = c.stats || {};
+    return `<div class="card" style="margin-bottom:10px">
+      <div class="r1" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <b>${esc(c.name)}</b>
+        <span><span class="tag">${SEGMENT_LABEL[c.segment] || c.segment}</span>
+        <span class="pill ${c.status === "sent" ? "PAID" : c.status === "cancelled" ? "CANCELLED" : "PARTIAL"}">${c.status}</span></span>
+      </div>
+      ${c.rationale ? `<p class="muted" style="margin:6px 0">${esc(c.rationale)}</p>` : ""}
+      <p style="background:var(--n50);border-radius:8px;padding:8px 10px;font-size:13px;margin:6px 0;white-space:pre-wrap">${esc(c.message_text)}</p>
+      <div class="muted">Sent ${s.sent || 0} · Delivered ${s.delivered || 0} · Read ${s.read || 0} · Replied ${s.replied || 0} · Failed ${s.failed || 0} · Skipped ${s.skipped || 0}
+      ${s.orders_attributed ? ` · <b style="color:var(--ok)">Orders ${s.orders_attributed} (${money(s.revenue_attributed)})</b>` : ""}</div>
+      <div class="act" style="margin-top:8px">
+        ${["draft", "suggested"].includes(c.status) ? `<button class="btn sm ok" onclick="approveCampaign('${c.id}')">Approve & send</button>
+        <button class="btn sm ghost" onclick="cancelCampaign('${c.id}')">Skip</button>` : ""}
+      </div></div>`;
   }).join("");
 }
 function updateCampaignMsgCount() {
-  const el = $("camp-msg"), count = $("camp-msg-count"); if (el && count) count.textContent = el.value.length + "/4000";
+  const el = $("camp-msg");
+  const count = $("camp-msg-count");
+  if (el && count) count.textContent = `${el.value.length}/1000`;
 }
-function updateCampaignPreview() {
-  const msg = $("camp-msg")?.value.trim();
-  if ($("camp-preview-text")) $("camp-preview-text").textContent = msg || "Your campaign message will appear here…";
-  if ($("camp-summary-name")) $("camp-summary-name").textContent = $("camp-name")?.value.trim() || "—";
-  if ($("camp-summary-image")) $("camp-summary-image").textContent = window.CAMPAIGN_CUSTOM_IMAGE ? "1 image attached" : "No image";
-  updateCampaignAudienceCount();
-}
-function resetCampaignForm() {
-  ["camp-name","camp-msg"].forEach((id) => { if ($(id)) $(id).value = ""; }); window.CAMPAIGN_CUSTOM_IMAGE = null;
-  if ($("camp-image")) $("camp-image").value = ""; if ($("camp-image-preview")) $("camp-image-preview").innerHTML = ""; if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
-  updateCampaignMsgCount(); selectCampaignAudience("all_active", false); updateCampaignPreview(); $("camp-name")?.focus();
-}
-function scrollCampaignHistory() { $("camp-history")?.scrollIntoView({ behavior: "smooth", block: "start" }); }
+
 async function uploadCampaignImage(input) {
-  const file = input.files && input.files[0]; if (!file) return;
+  const file = input.files && input.files[0];
+  if (!file) return;
   try {
-    const fd = new FormData(); fd.append("file", file);
+    const fd = new FormData();
+    fd.append("file", file);
     const d = await api("/admin/api/campaigns/upload-image", { method: "POST", body: fd });
-    window.CAMPAIGN_CUSTOM_IMAGE = d.creative_file; const url = "/admin/media/" + encodeURIComponent(d.creative_file) + "?key=" + encodeURIComponent(KEY);
-    $("camp-image-preview").innerHTML = '<div class="camp-image-card"><img src="' + url + '" alt="Campaign image preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';
-    $("camp-preview-image").innerHTML = '<img src="' + url + '" alt="Campaign image">'; updateCampaignPreview(); toast("Campaign image uploaded");
-  } catch (e) { input.value = ""; toast(e.message, true); }
+    window.CAMPAIGN_CUSTOM_IMAGE = d.creative_file;
+    $("camp-image-preview").innerHTML =
+      `<div style="position:relative;display:inline-block">
+        <img src="/admin/media/${encodeURIComponent(d.creative_file)}?key=${encodeURIComponent(KEY)}"
+             alt="Campaign image preview"
+             style="width:220px;max-height:220px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">
+        <button class="btn sm ghost" type="button" onclick="removeCampaignImage()" style="display:block;margin-top:6px">Remove image</button>
+      </div>`;
+    toast("Your campaign image is ready");
+  } catch (e) {
+    input.value = "";
+    toast(e.message, true);
+  }
 }
+
 function removeCampaignImage() {
-  window.CAMPAIGN_CUSTOM_IMAGE = null; if ($("camp-image")) $("camp-image").value = ""; if ($("camp-image-preview")) $("camp-image-preview").innerHTML = ""; if ($("camp-preview-image")) $("camp-preview-image").innerHTML = ""; updateCampaignPreview();
+  window.CAMPAIGN_CUSTOM_IMAGE = null;
+  const input = $("camp-image");
+  if (input) input.value = "";
+  const preview = $("camp-image-preview");
+  if (preview) preview.innerHTML = "";
 }
-async function createCampaign(btn) {
-  const name = $("camp-name").value.trim(), message = $("camp-msg").value.trim(), segment = $("camp-seg").value;
-  if (!name) { toast("Give the campaign a name", true); return; } if (!message) { toast("Paste your campaign message first", true); return; } if (!segment) { toast("Select an audience", true); return; }
-  const count = window.CAMPAIGN_SEG_COUNTS?.[segment] || 0; if (!count) { toast("No customers are available in this audience", true); return; }
+
+async function aiCreateCampaignDraft(btn) {
+  const segment = $("camp-seg").value;
+  if (!segment) { toast("Select an audience segment first", true); return; }
   await busy(btn, async () => {
-    const draft = await api("/admin/api/campaigns", { method: "POST", body: { name, segment, message_text: message, coupon_code: null, creative_file: window.CAMPAIGN_CUSTOM_IMAGE || null }});
-    try { const r = await api("/admin/api/campaigns/" + draft.id + "/approve", { method: "POST" }); toast("Campaign started — " + r.queued + " customers queued"); }
-    catch (e) { toast("Draft saved, but sending could not be started: " + e.message, true); }
-    resetCampaignForm(); loadCampaigns();
+    const d = await api("/admin/api/campaigns/ai-draft", {
+      method: "POST", body: { segment, goal: "increase repeat orders without unnecessary discounting" }
+    });
+    window.CAMPAIGN_AI_DRAFT = d;
+    $("camp-name").value = d.campaign_name || "";
+    $("camp-seg").value = d.segment || segment;
+    $("camp-msg").value = d.message || "";
+    updateCampaignMsgCount();
+    $("camp-coupon").value = d.coupon_code || "";
+    const details = [
+      d.offer_type === "percent" ? `${d.discount_value}% off` :
+        d.offer_type === "flat" ? `₹${d.discount_value} off` :
+        d.offer_type === "no_discount" ? "No discount" : "Service bonus",
+      d.min_order ? `min ₹${d.min_order}` : "",
+      d.validity_days ? `${d.validity_days} days` : "",
+      d.gmb_title ? `GMB: ${d.gmb_title}` : "",
+      d.rationale || "",
+    ].filter(Boolean).join(" · ");
+    const img = d.creative_file
+      ? `<img src="/admin/media/${encodeURIComponent(d.creative_file)}?key=${encodeURIComponent(KEY)}" alt="Google Business campaign creative" style="width:100%;max-width:420px;border-radius:12px;margin:8px 0">`
+      : "";
+    toast("AI offer ready — review it, then Save as draft");
+    openModal(`<h3>✨ AI marketing draft</h3>
+      <p class="muted">${esc(details)}</p>
+      <p><b>Google Business creative</b><br>${esc(d.creative_brief || "Kwik Klin branded laundry visual; no phone number.")}</p>
+      ${img}
+      <p><b>GMB copy</b><br>${esc(d.gmb_body || "")}</p>
+      <div class="btnrow"><button class="btn" onclick="closeModal()">Use this draft</button></div>`);
   });
 }
+async function createCampaign(btn) {
+  const message = $("camp-msg").value.trim();
+  if (!message) { toast("Please add a campaign message", true); return; }
+  await busy(btn, async () => {
+    const creativeFile = window.CAMPAIGN_CUSTOM_IMAGE || window.CAMPAIGN_AI_DRAFT?.creative_file || null;
+    await api("/admin/api/campaigns", { method: "POST", body: {
+      name: $("camp-name").value.trim(), segment: $("camp-seg").value,
+      message_text: message, coupon_code: $("camp-coupon").value.trim() || null,
+      creative_file: creativeFile,
+    }});
+    toast("Campaign saved as draft");
+    $("camp-msg").value = "";
+    $("camp-coupon").value = "";
+    $("camp-name").value = "";
+    window.CAMPAIGN_CUSTOM_IMAGE = null;
+    window.CAMPAIGN_AI_DRAFT = null;
+    removeCampaignImage();
+    updateCampaignMsgCount();
+    loadCampaigns();
+  });
+}
+
 function approveCampaign(id) {
-  confirmDialog("Start this campaign now? Only eligible customers will be messaged, and sending continues on the server.", async () => {
-    try { const r = await api("/admin/api/campaigns/" + id + "/approve", { method: "POST" }); toast("Campaign started — " + r.queued + " customers queued"); loadCampaigns(); } catch (e) { toast(e.message, true); }
+  confirmDialog("Send this campaign now? Only opted-in customers are messaged; quiet hours are respected.", async () => {
+    try { const r = await api(`/admin/api/campaigns/${id}/approve`, { method: "POST" }); toast(`Sending to ${r.queued} customers`); loadCampaigns(); }
+    catch (e) { toast(e.message, true); }
   });
 }
 async function cancelCampaign(id) {
-  try { await api("/admin/api/campaigns/" + id + "/cancel", { method: "POST" }); toast("Campaign cancelled"); loadCampaigns(); } catch (e) { toast(e.message, true); }
+  try { await api(`/admin/api/campaigns/${id}/cancel`, { method: "POST" }); toast("Campaign skipped"); loadCampaigns(); }
+  catch (e) { toast(e.message, true); }
 }
+function renderCoupons(coupons) {
+  $("coupon-list").innerHTML = coupons.length ? coupons.map((c) => `
+    <div class="sumrow"><span><b>${c.code}</b> — ${c.discount_type === "percent" ? c.value + "%" : money(c.value)} off
+      ${c.min_order ? `(min ${money(c.min_order)})` : ""} <span class="tag">${c.used} used</span></span>
+      <button class="btn sm ghost" onclick="toggleCoupon('${c.code}')">${c.active ? "Disable" : "Enable"}</button></div>`).join("")
+    : `<p class="muted">No coupons yet.</p>`;
+}
+async function createCoupon(btn) {
+  await busy(btn, async () => {
+    await api("/admin/api/coupons", { method: "POST", body: {
+      code: $("cp-code").value.trim(), discount_type: $("cp-type").value,
+      value: parseFloat($("cp-val").value), min_order: parseFloat($("cp-min").value) || null,
+      valid_to: $("cp-until").value || null,
+    }});
+    toast("Coupon created"); $("cp-code").value = ""; loadCampaigns();
+  });
+}
+async function toggleCoupon(code) {
+  try { await api(`/admin/api/coupons/${code}/toggle`, { method: "POST" }); loadCampaigns(); }
+  catch (e) { toast(e.message, true); }
+}
+
 /* ============================= template studio ============================= */
 let TPL_BTNS = [];
 function tplAddBtn() {
