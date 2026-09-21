@@ -88,7 +88,7 @@ async def test_customer_orders_marks_overdue_and_hides_future_date_for_delivered
     delivered_result = result[0]
     overdue_result = result[1]
 
-    assert delivered_result["expected_delivery"] == today.isoformat()
+    assert delivered_result["expected_delivery"] is None
     assert delivered_result["actual_delivery"] is None
     assert delivered_result["overdue"] is False
     assert overdue_result["overdue"] is True
