@@ -196,11 +196,10 @@ async def _send_to_assignee(
                     lines.append(f"📅 Delivery: {order.expected_delivery.strftime('%d %b %Y')}")
                 if task.kind in ("pickup", "delivery") and customer and customer.address:
                     lines.append(f"📍 Address: {customer.address.strip()}")
-                # Payment amount and the signed bill/payment link are
-                # sensitive. Only delivery staff, managers, and admins need
-                # this information. Washers and supervisors must not receive
-                # financial details in task assignments/reminders.
-                if staff.role in (StaffRole.DELIVERY, StaffRole.MANAGER, StaffRole.ADMIN):
+                # Financial information is owner/manager-only. Task
+                # WhatsApp messages to operational staff must never expose
+                # customer dues or payment links.
+                if staff.role in (StaffRole.MANAGER, StaffRole.ADMIN):
                     if due > 0:
                         lines.append(f"💰 Due: ₹{due:g}")
                     bill_link = await bill_url_for(db, order)

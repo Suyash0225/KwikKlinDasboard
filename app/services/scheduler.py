@@ -53,7 +53,7 @@ def start() -> None:
             # A tick delayed by event-loop load (up to 5 min) still fires
             # instead of being dropped; queued-up misfires collapse into one.
             "coalesce": True,
-            "misfire_grace_time": 300,
+            "misfire_grace_time": 30,
             "max_instances": 1,
         },
     )
