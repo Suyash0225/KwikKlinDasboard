@@ -229,6 +229,21 @@ def _media_ack(marker: str) -> str | None:
     }.get(kind)
 
 
+def _needs_new_customer_onboarding(
+    intent: str, active_orders: list, lead, customer: Customer
+) -> bool:
+    """Return whether incomplete-profile onboarding should intercept this message."""
+    return (
+        intent != "ORDER_STATUS"
+        and not active_orders
+        and (lead is None or lead.stage in {"CONTACTED", "INTERESTED"})
+        and (
+            not (customer.name or "").strip()
+            or not (customer.address or "").strip()
+        )
+    )
+
+
 async def build_ai_reply(
     db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False
 ) -> str | None:
@@ -363,14 +378,8 @@ async def build_ai_reply(
     # Order-status questions must never be hijacked by new-customer onboarding.
     # A customer may have an incomplete profile but still legitimately ask about
     # an existing/recent order. The FACTS block already contains recent orders.
-    is_new_unknown = (
-        intent != "ORDER_STATUS"
-        and not active_orders
-        and (lead is None or lead.stage in {"CONTACTED", "INTERESTED"})
-        and (
-            not (customer.name or "").strip()
-            or not (customer.address or "").strip()
-        )
+    is_new_unknown = _needs_new_customer_onboarding(
+        intent, active_orders, lead, customer
     )
     if is_new_unknown and not sandbox:
         if not (customer.name or "").strip():
