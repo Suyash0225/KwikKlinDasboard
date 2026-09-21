@@ -2964,8 +2964,7 @@ async function dlServer(path, name) {
 }
 
 /* ============================= campaigns ============================= */
-async 
-function loadCampaigns() {
+async function loadCampaigns() {
   $("seg-cards").innerHTML = "";
   try {
     const [segs, camps] = await Promise.all([api("/admin/api/segments"), api("/admin/api/campaigns")]);
