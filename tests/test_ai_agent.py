@@ -99,6 +99,57 @@ async def test_complaint_escalates_and_apologizes(monkeypatch, esc_sent) -> None
     assert "kharab" in esc_sent[0]["text"]
 
 
+
+async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch) -> None:
+    calls = 0
+
+    async def fake_ask_json(**kw):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            intake = {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False}
+            return {
+                "reply": "Ji, address bhej dijiye.",
+                "intent": "NEW_ORDER", "language": "hi",
+                "action": "CREATE_LEAD", "action_reason": "new enquiry",
+                "escalate": False, "escalation_reason": "", "admin_note": "",
+                "intake": intake,
+            }
+        return {
+            "reply": "Ji, main aapki request note kar leta hoon. — Kwik Klin",
+            "intent": "NEW_ORDER", "language": "hi",
+            "action": "CREATE_LEAD", "action_reason": "profile complete",
+            "escalate": False, "escalation_reason": "", "admin_note": "",
+            "intake": {
+                "name": "Rahul Sharma", "address": "12 Lanka, Varanasi",
+                "items_text": "", "pickup_date": "", "ready": False,
+            },
+        }
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as s:
+        cust = Customer(phone=PHONE, name=None, address=None)
+        s.add(cust)
+        await s.commit()
+
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        reply = await build_ai_reply(db, cust, "mujhe laundry chahiye")
+
+    assert "name" in reply.lower() or "naam" in reply.lower()
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        cust.name = "Rahul Sharma"
+        await db.commit()
+
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        reply = await build_ai_reply(db, cust, "Rahul Sharma, 12 Lanka, Varanasi")
+
+    assert cust.name == "Rahul Sharma"
+    assert cust.address == "12 Lanka, Varanasi"
+    assert reply
+
 async def test_compose_happy_path_no_escalation(monkeypatch) -> None:
     async def fake_ask_json(**kw):
         # the FACTS block must carry customer identity, never notes
