@@ -191,6 +191,13 @@ def test_track_flags_stage_and_promise_delays_with_milestones() -> None:
     fine = SimpleNamespace(**{**order.__dict__, "expected_delivery": date.today() + timedelta(days=2)})
     t2 = turnaround.track(fine, [_h(OrderStatus.IN_WASH, 2, now)], {"IN_WASH": 24}, now)
     assert not t2["delayed"]
+
+    stage_only = SimpleNamespace(**{**fine.__dict__, "expected_delivery": date.today() + timedelta(days=2)})
+    t3 = turnaround.track(stage_only, [_h(OrderStatus.IN_WASH, 30, now)], {"IN_WASH": 24}, now)
+    assert t3["stage_late"] is True
+    assert t3["promise_late"] is False
+    assert t3["delayed"] is False
+
     assert turnaround.clean_bill_seconds("45") == 45 and turnaround.clean_bill_seconds(99999) is None
 
 
