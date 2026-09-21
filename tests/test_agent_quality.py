@@ -85,6 +85,9 @@ async def test_relay_sends_rewritten_question(qa_staff, monkeypatch) -> None:
 
     monkeypatch.setattr(bill_agent, "send_message", fake_send)
     monkeypatch.setattr(tasks_module, "send_message", fake_send)
+    async def fake_compose(raw_message, recipient_type, recipient_name):
+        return raw_message
+    monkeypatch.setattr(bill_agent, "_compose_relay_message", fake_compose)
     async with async_session_factory() as db:
         reply = await bill_agent._apply_relay(
             db, "manager",
@@ -92,6 +95,7 @@ async def test_relay_sends_rewritten_question(qa_staff, monkeypatch) -> None:
                 "relay_to": STAFF_NAME,
                 "relay_message": "Kya aapne Rahul ka pickup kar liya? Update bata dijiye.",
                 "staff_name": "",
+                "recipient_type": "STAFF",
                 "order_number": "",
             },
         )
@@ -99,6 +103,41 @@ async def test_relay_sends_rewritten_question(qa_staff, monkeypatch) -> None:
     body = sent[0]["text"]
     assert "Kya aapne Rahul ka pickup kar liya?" in body
     assert "pucho" not in body.lower()
+    assert reply
+
+
+async def test_customer_instruction_never_becomes_admin_task(monkeypatch) -> None:
+    """'customer ko ...' must route to the customer, never to the sender/admin."""
+    from app.models import Customer
+
+    sent: list[dict] = []
+
+    async def fake_send(db, *, to_phone, text=None, **kw):
+        sent.append({"to": to_phone, "text": text})
+        return "wamid.TESTCUSTOMERROUTE"
+
+    async with async_session_factory() as db:
+        db.add(Customer(phone="+919999900092", name="Rahul Customer", is_active=True))
+        await db.commit()
+        monkeypatch.setattr(bill_agent, "send_message", fake_send)
+        async def fake_compose(raw_message, recipient_type, recipient_name):
+            return "Namaste Rahul ji, aapke payment ke liye kripya check kar lijiye."
+        monkeypatch.setattr(bill_agent, "_compose_relay_message", fake_compose)
+        reply = await bill_agent._apply_relay(
+            db, "manager",
+            {
+                "relay_to": "customer",
+                "relay_message": "payment reminder bhejna hai",
+                "recipient_type": "CUSTOMER",
+                "customer_name": "Rahul Customer",
+                "customer_phone": "",
+                "order_number": "",
+            },
+        )
+
+    assert sent and sent[0]["to"] == "+919999900092"
+    assert "Namaste Rahul" in sent[0]["text"]
+    assert "T-" not in sent[0]["text"]
     assert reply
 
 

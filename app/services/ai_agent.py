@@ -98,7 +98,12 @@ _COMPOSE_SYSTEM = (
     "2. Facts discipline: prices, order statuses, delivery dates and policies "
     "come ONLY from FACTS. Never invent numbers, dates, discounts or offers.\n"
     "3. Handle routine service yourself, confidently:\n"
-    "   - Rate/timing/policy questions -> answer from FACTS.\n"
+    "   - For a NEW/UNKNOWN customer with no active order, first collect the "
+    "customer's name, then their full address+landmark. Do not jump straight "
+    "to selling, billing or creating a lead before the profile is complete. "
+    "Ask only for the missing field.\n"
+    "   - Rate/timing/policy questions -> answer from FACTS once the basic "
+    "new-customer profile is known.\n"
     "   - New order / pickup requests -> collect exactly FOUR things across "
     "the conversation: (a) name, (b) full address+landmark, (c) which "
     "clothes (note heavy items like blanket/curtain/saree), (d) pickup day "
@@ -276,6 +281,43 @@ async def build_ai_reply(
         log.warning("ai_action_rejected", action=action, intent=intent)
         action = "ANSWER"
 
+    # New/unknown lead onboarding is deterministic: the LLM may extract
+    # name/address from the conversation, but code decides when the profile
+    # is complete and when CREATE_LEAD is allowed.
+    intake = out.get("intake") or {}
+    changed_profile = False
+    name = str(intake.get("name") or "").strip()
+    address = str(intake.get("address") or "").strip()
+    if name and not customer.name:
+        customer.name = name[:120]
+        changed_profile = True
+    if address and not customer.address:
+        customer.address = address[:500]
+        changed_profile = True
+    if changed_profile and not sandbox:
+        await db.commit()
+
+    active_orders = await get_active_orders_for_phone(db, customer.phone)
+    from app.models import Lead
+    lead = (
+        await db.execute(select(Lead).where(Lead.phone == customer.phone))
+    ).scalar_one_or_none()
+    is_new_unknown = (
+        not active_orders
+        and (lead is None or lead.stage in {"CONTACTED", "INTERESTED"})
+        and (
+            not (customer.name or "").strip()
+            or not (customer.address or "").strip()
+        )
+    )
+    if is_new_unknown and not sandbox:
+        if not (customer.name or "").strip():
+            log.info("new_lead_profile_needs_name", phone=customer.phone)
+            return "Welcome to Kwik Klin! 😊 May I know your name, please?"
+        if not (customer.address or "").strip():
+            log.info("new_lead_profile_needs_address", phone=customer.phone)
+            return "Thank you! 🙏 Please share your full address with a nearby landmark, so we can assist you properly."
+
     # Execute only actions with deterministic handlers. Everything else stays
     # in its existing domain workflow below.
     if action in {"SEND_BILL", "CREATE_LEAD"} and not sandbox:
@@ -327,7 +369,6 @@ async def build_ai_reply(
         return out.get("reply") or get_message("escalated_ack", lang)
 
     # Pickup intake complete -> the agent CREATES the order itself
-    intake = out.get("intake") or {}
     if intake.get("ready") and all(
         (intake.get(k) or "").strip() for k in ("name", "address", "items_text", "pickup_date")
     ):
