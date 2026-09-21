@@ -17,6 +17,7 @@ def test_token_roundtrip_tamper_and_expiry() -> None:
     tok = bill_link.make(t, o, now=1000)
     assert bill_link.parse(tok, now=1001) == (t, o)
     body, sig = tok.split(".")
+    assert len(body) < 60, "bill token should stay compact"
     other = bill_link.make(t, uuid.uuid4(), now=1000).split(".")[0]
     assert bill_link.parse(f"{other}.{sig}", now=1001) is None      # swapped order
     assert bill_link.parse(tok[:-2] + "AA", now=1001) is None        # broken signature

@@ -695,6 +695,51 @@ async function orderDetailModal(number) {
 /* ─── delivery: sab ya kuch kapde (BUG_008) ─────────────────────────── */
 /* 12 mein se 8 shirt diye — baaki 4 pending rehte hain aur agli baar
    "Deliver rest (4)" dikhta hai. Default: sab chune hue (aam haalat). */
+async function statusMenu(number) {
+  let o;
+  try { o = await api(`/orders/${encodeURIComponent(number)}`); }
+  catch (e) { toast(e.message, true); return; }
+
+  const stages = [
+    ["RECEIVED", "Received", "Order received"],
+    ["PICKUP_ASSIGNED", "Pickup scheduled", "Pickup assigned"],
+    ["PICKED_UP", "Picked up", "Clothes picked up"],
+    ["IN_WASH", "Wash", "Internal update — no customer message"],
+    ["IN_DRY", "Drying", "Internal update — no customer message"],
+    ["IN_IRON", "Iron", "Internal update — no customer message"],
+    ["READY", "Ready", "Customer will be notified"],
+    ["OUT_FOR_DELIVERY", "Out for delivery", "Customer will be notified"],
+    ["DELIVERED", "Delivered", "Thank-you + feedback message"],
+  ];
+  const current = stages.findIndex(([s]) => s === o.status);
+  const options = stages.slice(Math.max(0, current + 1));
+
+  if (!options.length) {
+    openModal(`<div class="status-head"><span class="status-icon">↻</span><div><h3>Status</h3><p class="said">${esc(o.number)} · ${esc(STATUS_WORD[o.status] || o.status)}</p></div></div>
+      <p class="comm-note">This order is already at its latest stage.</p>
+      <div class="btnrow"><button class="btn ghost wide" data-act="close">Close</button></div>`);
+    return;
+  }
+
+  openModal(`<div class="status-head"><span class="status-icon">↻</span><div><h3>Update status</h3><p class="said">${esc(o.number)} · ${esc(o.customer)}</p></div></div>
+    <div class="status-list">
+      ${options.map(([s,label,desc]) => `<button class="status-option" data-status="${s}"><span class="status-dot"></span><span><b>${label}</b><small>${desc}</small></span></button>`).join("")}
+    </div>
+    <div class="btnrow"><button class="btn ghost wide" data-act="close">Cancel</button></div>`);
+
+  $("modal-body").querySelectorAll("[data-status]").forEach((b) => {
+    b.onclick = () => busy(b, async () => {
+      const r = await api(`/orders/${encodeURIComponent(number)}/status`, {
+        method: "POST", body: { status: b.dataset.status }
+      });
+      closeModal();
+      toast(`${number} → ${STATUS_WORD[r.status] || r.status}`);
+      refreshCurrent({ quiet: true });
+      loadToday();
+    });
+  });
+}
+
 async function deliverModal(number) {
   let o;
   try { o = await api(`/orders/${encodeURIComponent(number)}`); }
@@ -1035,10 +1080,10 @@ async function loadBills(opts = {}) {
     + moreBar(BILLS.length, BILLS_TOTAL, "loadBills");
   $("list").querySelectorAll("[data-bill]").forEach((b) => {
     b.onclick = () => {
-      const num = b.closest("[data-num]").dataset.num;
-      if (b.dataset.bill === "share") return shareBill(num);
-      if (b.dataset.bill === "msg") return messageMenu(num, parseFloat(b.closest("[data-num]").dataset.due || "0"));
-      if (b.dataset.bill === "remind") return remindBill(num, b);
+      const row = b.closest("[data-num]");
+      const num = row.dataset.num;
+      if (b.dataset.bill === "msg") return messageMenu(num, parseFloat(row.dataset.due || "0"));
+      if (b.dataset.bill === "status") return statusMenu(num);
       if (b.dataset.bill === "pay") return askCollect(num, parseFloat(b.dataset.due));
     };
   });
@@ -1047,28 +1092,24 @@ async function loadBills(opts = {}) {
 function billRow(b) {
   const w = whenParts(b.delivery);
   const paid = !(b.due > 0);
-  return `<article class="row" data-num="${esc(b.number)}" data-due="${Number(b.due) || 0}">
-    <div class="spine ${paid ? "ready" : w.late ? "late" : "deliver"}"></div>
-    <div class="when ${w.late && !paid ? "late" : ""}">
-      <b>${esc(w.top)}</b>${w.sub ? `<span>${esc(w.sub)}</span>` : ""}
-    </div>
-    <div class="body">
-      <div class="line1">
-        <b>${esc(b.customer)}</b>
-        <span class="amt ${paid ? "" : "due"}">${paid ? money(b.total) : money(b.due) + " due"}</span>
+  return `<article class="bill-card" data-num="${esc(b.number)}" data-due="${Number(b.due) || 0}">
+    <div class="bill-accent ${paid ? "paid" : w.late ? "late" : "active"}"></div>
+    <div class="bill-main">
+      <div class="bill-topline">
+        <div><span class="bill-no">${esc(b.number)}</span><span class="bill-date">${esc(b.created)}</span></div>
+        <span class="bill-due ${paid ? "paid" : ""}">${paid ? "Paid" : money(b.due) + " due"}</span>
       </div>
-      <div class="sub">${esc(b.number)} · ${esc(b.created)}${b.items ? " · " + esc(b.items) : ""}</div>
-      <div class="acts">
-        <button class="btn ghost sm" data-bill="share">🧾 Send</button>
-        <button class="btn ghost sm" data-bill="msg">💬 Message</button>
-        ${b.due > 0 && ME.is_manager ? `<button class="btn ghost sm" data-bill="remind">Remind</button>` : ""}
-        ${ME.features.includes("cod_collection") && b.due > 0
-          ? `<button class="btn money sm" data-bill="pay" data-due="${b.due}">Collect</button>` : ""}
+      <div class="bill-customer"><b>${esc(b.customer)}</b></div>
+      <div class="bill-items">${b.items ? esc(b.items) : "Laundry order"}</div>
+      <div class="bill-progress">${billProgress(b.status)}</div>
+      <div class="bill-actions">
+        <button class="btn ghost sm bill-comm" data-bill="msg">💬 Message</button>
+        ${ME.is_manager ? `<button class="btn ghost sm bill-status" data-bill="status">↻ Status</button>` : ""}
+        ${ME.features.includes("cod_collection") && b.due > 0 ? `<button class="btn money sm" data-bill="pay" data-due="${b.due}">${money(b.due)} collect</button>` : ""}
       </div>
     </div>
   </article>`;
 }
-
 /* ─── bill WhatsApp par ─────────────────────────────────────────────── */
 /* Dukaan ka WhatsApp API juda ho ya na ho, staff ke apne phone ka WhatsApp
    to hai. wa.me link mein number aur bill dono bhare hote hain.
@@ -1130,44 +1171,27 @@ function rawbtUrl(text) {
    Paise ki yaad sirf manager (neeche remindBill), isliye wo yahan tabhi
    jab manager ho aur paisa baaki ho. */
 const MSG_KINDS = [
-  ["delivery_update", "🚚", "Delivery update (with bill link)"],
-  ["payment_thanks", "💚", "Payment received — thank you"],
-  ["service_thanks", "🙏", "Thank you for the service"],
-  ["review_request", "⭐", "Please review us on Google"],
+  ["bill", "🧾", "Share bill"],
+  ["remind", "💰", "Payment reminder"],
+  ["delivery_update", "🚚", "Delivery update"],
+  ["review_request", "⭐", "Feedback request"],
 ];
 function messageMenu(number, due) {
-  const kinds = (ME.is_manager && due > 0 ? [["remind", "💰", "Payment reminder"]] : []).concat(MSG_KINDS);
-  openModal(`<h3>💬 Message — ${esc(number)}</h3>
-    <p class="said">You see the message before it goes.</p>
-    ${kinds.map(([k, ico, label]) => `<button class="btn ghost wide" data-msg="${k}">${ico} ${label}</button>`).join("")}
-    <div class="btnrow"><button class="btn ghost" data-act="close">Cancel</button></div>`);
+  const kinds = MSG_KINDS.filter(([k]) => k !== "remind" || (ME.is_manager && due > 0));
+  openModal(`<div class="comm-head"><span class="comm-icon">💬</span><div><h3>Customer communication</h3><p class="said">${esc(number)}</p></div></div>
+    <p class="comm-note">Choose a ready-to-send professional message.</p>
+    <div class="comm-menu">
+      ${kinds.map(([k, ico, label]) => `<button class="comm-option" data-msg="${k}"><span class="comm-option-icon">${ico}</span><span><b>${label}</b><small>${k === "bill" ? "Bill + secure payment link" : k === "remind" ? "Polite reminder for pending payment" : k === "delivery_update" ? "Share the current delivery status" : "Ask for customer feedback"}</small></span><span class="comm-arrow">›</span></button>`).join("")}
+    </div>
+    <div class="btnrow"><button class="btn ghost wide" data-act="close">Close</button></div>`);
   $("modal-body").querySelectorAll("[data-msg]").forEach((b) => {
     b.onclick = () => {
       if (b.dataset.msg === "remind") { closeModal(); return remindBill(number, null); }
+      if (b.dataset.msg === "bill") { closeModal(); return shareBill(number); }
       return busy(b, () => composeMessage(number, b.dataset.msg));
     };
   });
 }
-async function composeMessage(number, kind) {
-  let r;
-  try { r = await api(`/orders/${encodeURIComponent(number)}/message?kind=${kind}`); }
-  catch (e) { toast(e.message, true); return; }
-  const label = (MSG_KINDS.find((x) => x[0] === kind) || [])[2] || "Message";
-  SHARE_TEXT = r.text;
-  openModal(`<h3>${esc(label)}</h3>
-    <p class="said">To ${esc(r.name)}</p>
-    <pre class="sharetext">${esc(r.text)}</pre>
-    <div class="btnrow">
-      <a class="btn go" href="${esc(waUrl(r.phone, r.text))}" target="_blank" rel="noopener" data-act="close">📲 Open WhatsApp</a>
-      <button class="btn ghost" id="m-copy">Copy</button>
-    </div>
-    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
-  $("m-copy").onclick = async () => {
-    try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied"); }
-    catch (e) { toast("Could not copy — select the text above", true); }
-  };
-}
-
 /* ─── paise ki yaad ─────────────────────────────────────────────────── */
 /* Scheduler khud 3 din / 15 din par yaad dilata hai, par wo maanta hai ki
    order deliver ho chuka hai AUR dukaan ka WhatsApp API juda hai. Counter

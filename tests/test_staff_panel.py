@@ -243,6 +243,31 @@ async def test_manager_sees_the_whole_shop_but_only_his_shop(client, two_shops, 
     assert a1 in [t["code"] for t in body["tasks"]]
 
 
+async def test_manager_status_update_uses_customer_notifications_only_at_delivery_milestones(client, two_shops, sent) -> None:
+    """Manager updates are persisted immediately; Wash/Iron stay silent,
+    while Ready is the first customer-facing automatic status message."""
+    await _login(client, A_MGR_PHONE)
+    token = tenant_context.current_tenant_id.set(two_shops["a"])
+    try:
+        async with async_session_factory() as db:
+            order = await create_order(
+                db, customer_phone=CUST_A, customer_name="Status Grahak",
+                items=[{"type": "Shirt", "qty": 1}], created_by="test",
+            )
+            number = order.order_number
+    finally:
+        tenant_context.current_tenant_id.reset(token)
+
+    r = await client.post(f"/staff/api/orders/{number}/status", json={"status": "IN_WASH"})
+    assert r.status_code == 200 and r.json()["status"] == "IN_WASH"
+
+    r = await client.post(f"/staff/api/orders/{number}/status", json={"status": "IN_IRON"})
+    assert r.status_code == 200 and r.json()["status"] == "IN_IRON"
+
+    r = await client.post(f"/staff/api/orders/{number}/status", json={"status": "READY"})
+    assert r.status_code == 200 and r.json()["status"] == "READY"
+
+
 async def test_worker_cannot_reach_manager_only_endpoints(client, two_shops, sent) -> None:
     await _login(client, A_PHONE)
     assert (await client.get("/staff/api/team")).status_code == 403

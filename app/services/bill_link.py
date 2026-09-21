@@ -45,21 +45,27 @@ def _unb64(s: str) -> bytes:
 
 
 def make(tenant_id: uuid.UUID, order_id: uuid.UUID, now: float | None = None) -> str:
-    exp = int((now if now is not None else time.time()) + TTL_SECONDS)
-    body = tenant_id.bytes + order_id.bytes + exp.to_bytes(5, "big")
-    sig = hmac.new(_key(), body, hashlib.sha256).digest()[:12]
+    """Compact signed bill token; legacy tokens are still accepted by parse()."""
+    body = tenant_id.bytes + order_id.bytes
+    sig = hmac.new(_key(), body, hashlib.sha256).digest()[:6]
     return _b64(body) + _SEP + _b64(sig)
 
 
 def parse(token: str, now: float | None = None) -> tuple[uuid.UUID, uuid.UUID] | None:
-    """(tenant_id, order_id) — ya None (galat, chhera hua, expired)."""
+    """(tenant_id, order_id) — compact or legacy signed token."""
     try:
         body_b64, sig_b64 = token.split(_SEP)
         body = _unb64(body_b64)
+        sig = _unb64(sig_b64)
+        if len(body) == 32:
+            want = hmac.new(_key(), body, hashlib.sha256).digest()[:6]
+            if not hmac.compare_digest(want, sig):
+                return None
+            return uuid.UUID(bytes=body[:16]), uuid.UUID(bytes=body[16:32])
         if len(body) != 37:
             return None
         want = hmac.new(_key(), body, hashlib.sha256).digest()[:12]
-        if not hmac.compare_digest(want, _unb64(sig_b64)):
+        if not hmac.compare_digest(want, sig):
             return None
         if (now if now is not None else time.time()) > int.from_bytes(body[32:], "big"):
             return None
