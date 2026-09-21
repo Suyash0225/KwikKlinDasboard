@@ -76,7 +76,7 @@ async def get_customer_orders(
                 "order_number": order.order_number,
                 "status": order.status.name,
                 "status_label": status_label(order.status),
-                "expected_delivery": (\n                    None if order.status is OrderStatus.DELIVERED else (expected.isoformat() if expected else None)\n                ),
+                "expected_delivery": (\n                    None\n                    if order.status is OrderStatus.DELIVERED\n                    else (expected.isoformat() if expected else None)\n                ),
                 "actual_delivery": actual.isoformat() if actual else None,
                 "overdue": overdue,
                 "total_amount": str(order.total_amount) if order.total_amount is not None else None,
