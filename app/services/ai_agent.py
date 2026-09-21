@@ -298,8 +298,17 @@ async def build_ai_reply(
         await db.commit()
 
     active_orders = await get_active_orders_for_phone(db, customer.phone)
-    is_new_unknown = not active_orders and (
-        not (customer.name or "").strip() or not (customer.address or "").strip()
+    from app.models import Lead
+    lead = (
+        await db.execute(select(Lead).where(Lead.phone == customer.phone))
+    ).scalar_one_or_none()
+    is_new_unknown = (
+        not active_orders
+        and (lead is None or lead.stage in {"CONTACTED", "INTERESTED"})
+        and (
+            not (customer.name or "").strip()
+            or not (customer.address or "").strip()
+        )
     )
     if is_new_unknown and not sandbox:
         if not (customer.name or "").strip():
