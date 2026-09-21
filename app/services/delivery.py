@@ -217,13 +217,13 @@ async def picked_up(db: AsyncSession, order: Order, *, by: str) -> dict:
 WASH_STARTABLE = (OrderStatus.RECEIVED, OrderStatus.PICKED_UP)
 
 
-async def washing(db: AsyncSession, order: Order, *, by: str) -> dict:
+async def washing(db: AsyncSession, order: Order, *, by: str, notify: bool = False) -> dict:
     """Washerman ne kapde machine mein daale — RECEIVED/PICKED_UP -> IN_WASH."""
     from app.services.order_service import update_status
 
     if order.status not in WASH_STARTABLE:
         raise DeliveryError(f"{order.order_number} is {order.status.name} — washing cannot start from here")
-    await update_status(db, order, OrderStatus.IN_WASH, changed_by=by)
+    await update_status(db, order, OrderStatus.IN_WASH, changed_by=by, notify=notify)
     return {"order_number": order.order_number, "status": order.status.name}
 
 
