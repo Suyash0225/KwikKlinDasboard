@@ -211,6 +211,10 @@ async def _send_to_assignee(
     head = "🔴 URGENT" if task.urgent else "📋 KAAM ASSIGNMENT"
     if task.kind == "wash":
         head = "🧺 WASHING KAAM"
+    elif task.kind == "dry":
+        head = "💨 DRYING KAAM"
+    elif task.kind == "iron":
+        head = "👔 IRONING KAAM"
     elif task.kind == "pickup":
         head = "🛵 PICKUP KAAM"
     elif task.kind == "delivery":
@@ -225,8 +229,17 @@ async def _send_to_assignee(
             f"— Kwik Klin"
         )
     else:
+        reminder_head = "⏰ KAAM KA REMINDER"
+        if order is not None and order.expected_delivery is not None:
+            days_left = (order.expected_delivery - datetime.now(IST).date()).days
+            if days_left <= 0:
+                reminder_head = "🚨 DELIVERY DEADLINE — URGENT REMINDER"
+            elif days_left == 1:
+                reminder_head = "🟠 DELIVERY KAL — URGENT REMINDER"
+            elif days_left == 2:
+                reminder_head = "🟡 DELIVERY 2 DIN MEIN — REMINDER"
         body = (
-            f"⏰ KAAM KA REMINDER [{task.code}]{order_bit}\n"
+            f"{reminder_head} [{task.code}]{order_bit}\n"
             f"━━━━━━━━━━━━━━━━\n"
             f"{task.title}\n"
             f"{order_details}\n"
@@ -714,6 +727,21 @@ async def note_reply(db: AsyncSession, staff_id, text: str) -> Task | None:
     return task
 
 
+def _task_ping_gap_hours(task: Task, order: Order | None, now_ist: datetime) -> int:
+    """Deadline-aware cadence: as delivery approaches, reminders get tighter."""
+    if order is not None and order.expected_delivery is not None:
+        days_left = (order.expected_delivery - now_ist.date()).days
+        if days_left <= 0:
+            return 1
+        if days_left == 1:
+            return 1
+        if days_left == 2:
+            return 2
+        if days_left == 3:
+            return 4
+    return URGENT_PING_AFTER_HOURS if task.urgent else PING_AFTER_HOURS
+
+
 async def run_task_followups() -> int:
     """Scheduler entry: nudge assignees who owe an answer, escalate the
     stubborn ones to the manager. Returns how many messages went out."""
@@ -737,13 +765,13 @@ async def run_task_followups() -> int:
             .all()
         )
         for task in tasks:
-            gap_hours = URGENT_PING_AFTER_HOURS if task.urgent else PING_AFTER_HOURS
-            since = task.last_ping_at or task.created_at
-            if (now - since) < timedelta(hours=gap_hours):
-                continue
-
             staff = await db.get(Staff, task.assigned_staff_id)
             if staff is None or not staff.is_active:
+                continue
+            order = await db.get(Order, task.order_id) if task.order_id else None
+            gap_hours = _task_ping_gap_hours(task, order, now_ist)
+            since = task.last_ping_at or task.created_at
+            if (now - since) < timedelta(hours=gap_hours):
                 continue
 
             if task.ping_count >= ESCALATE_AFTER_PINGS and task.escalated_at is None:
