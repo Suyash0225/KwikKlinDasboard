@@ -135,6 +135,30 @@ def test_phase_one_read_registry_is_explicit_and_read_only():
     assert all(tool.handler.__name__.startswith(("get_",)) for tool in CUSTOMER_READ_TOOLS.values())
 
 
+def test_order_status_does_not_trigger_new_customer_onboarding():
+    from app.services.ai_agent import _needs_new_customer_onboarding
+
+    customer = _customer()
+    customer.name = ""
+    customer.address = ""
+
+    assert not _needs_new_customer_onboarding(
+        "ORDER_STATUS", [], None, customer
+    )
+
+
+def test_new_order_still_triggers_new_customer_onboarding():
+    from app.services.ai_agent import _needs_new_customer_onboarding
+
+    customer = _customer()
+    customer.name = ""
+    customer.address = ""
+
+    assert _needs_new_customer_onboarding(
+        "NEW_ORDER", [], None, customer
+    )
+
+
 @pytest.mark.asyncio
 async def test_phase_two_router_only_accepts_registered_read_tools(monkeypatch):
     from app.services import ai_agent, llm_client
