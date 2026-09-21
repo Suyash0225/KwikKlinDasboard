@@ -360,8 +360,12 @@ async def build_ai_reply(
     lead = (
         await db.execute(select(Lead).where(Lead.phone == customer.phone))
     ).scalar_one_or_none()
+    # Order-status questions must never be hijacked by new-customer onboarding.
+    # A customer may have an incomplete profile but still legitimately ask about
+    # an existing/recent order. The FACTS block already contains recent orders.
     is_new_unknown = (
-        not active_orders
+        intent != "ORDER_STATUS"
+        and not active_orders
         and (lead is None or lead.stage in {"CONTACTED", "INTERESTED"})
         and (
             not (customer.name or "").strip()
