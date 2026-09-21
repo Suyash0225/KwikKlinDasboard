@@ -1,8 +1,8 @@
 """Turnaround — har order kitni der se kis stage par hai, aur kab "delayed" (IMP_006).
 
-Do tarah ki deri:
-  stage    order ek stage (jaise IN_WASH) par `stage_limit_hours` se zyada ruka
-  promise  grahak ki delivery date (expected_delivery) nikal gayi
+Do alag signals:
+  stage    current stage kitni der se chal rahi hai — staff reminder ke liye
+  promise  grahak ki delivery date (expected_delivery) nikal gayi — actual overdue
 
 Milestones order_status_history se banti hain — naya column nahi: har
 status kab aaya, kisne kiya, us stage mein kitne ghante rahe.
@@ -101,11 +101,15 @@ def track(order: Order, history: list, stage_limits: dict, now: datetime | None 
         "stage": status, "stage_label": STAGE_LABEL.get(status, status),
         "stage_since": since.isoformat(), "stage_hours": stage_hours, "stage_limit": limit,
         "stage_late": stage_late, "promise_late": promise_late, "due_today": due_today,
-        "delayed": stage_late or promise_late,
+        # Dashboard "Delayed" means the customer promise was missed.
+        # Stage lateness remains a separate operational warning/reminder signal.
+        "delayed": promise_late,
         "delay_reason": (
-            f"{STAGE_LABEL.get(status, status)} for {stage_hours:g}h (limit {limit}h)" if stage_late
-            else f"Delivery date {order.expected_delivery.strftime('%d %b')} passed" if promise_late
-            else ""
+            f"Delivery date {order.expected_delivery.strftime('%d %b')} passed" if promise_late
+            else (
+                f"{STAGE_LABEL.get(status, status)} for {stage_hours:g}h (limit {limit}h)"
+                if stage_late else ""
+            )
         ),
         "total_hours": total_hours,
         "bill_seconds": order.bill_seconds,
@@ -145,9 +149,9 @@ async def run_delay_alerts(db: AsyncSession) -> int:
     fresh = []
     for o in orders:
         t = tracked[o.id]
-        if not t["delayed"]:
+        if not t["promise_late"]:
             continue
-        key = f"{o.order_number}:{t['stage']}:{'stage' if t['stage_late'] else 'promise'}"
+        key = f"{o.order_number}:{t['stage']}:promise"
         seen = (
             await db.execute(
                 select(AuditLog.id).where(
