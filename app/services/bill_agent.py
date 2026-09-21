@@ -182,7 +182,7 @@ _EXTRACT_SCHEMA = {
         "action": {
             "type": "string",
             "enum": [
-                "new_bill", "delay_update", "status_update", "relay",
+                "new_bill", "delay_update", "change_delivery_date", "status_update", "relay",
                 "set_priority", "assign_staff", "add_note", "record_payment",
                 "standup_reply", "other",
             ],
@@ -242,8 +242,7 @@ _EXTRACT_SYSTEM = (
     "advance = money already taken (0 if unsaid). Dates in ISO YYYY-MM-DD "
     "using TODAY for words like kal/parso; '' if unsaid. customer_phone: "
     "digits only as written, '' if unsaid.\n"
-    "- delay_update: an order (KK-...) will be late — extract order_number, "
-    "new_date (ISO, '' if unsaid) and the internal reason.\n"
+    "- delay_update / change_delivery_date: change an order delivery promise — extract order_number when given; otherwise extract customer_name. Extract new_date as ISO YYYY-MM-DD. Resolve relative dates such as kal/parso/Friday from TODAY in India (IST). If multiple active orders match a customer name, execution must ask for the order number. Extract internal reason.\n"
     "- status_update: they state an order's new stage (dhul gaya, ready hai, "
     "nikal gaya, deliver ho gaya...) — map to one of the status names.\n"
     "- relay: first understand the OWNER/STAFF instruction, then identify the "
@@ -1004,7 +1003,7 @@ async def _extract(
     card = "\n".join(
         f"- service={r.service!r} garment={r.garment!r} ₹{r.rate}/{r.unit}" for r in rates
     )
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
     prompt = f"RATE CARD:\n{card}\nTODAY: {today}\n"
     if history:
         prompt += f"{history}\n"
@@ -1333,7 +1332,25 @@ async def _finalize_bill(
 
 
 async def _apply_delay(db: AsyncSession, sender_label: str, extracted: dict) -> str:
-    number = extracted["order_number"].upper()
+    number = (extracted.get("order_number") or "").strip().upper()
+    customer_name = (extracted.get("customer_name") or "").strip()
+    if not number and customer_name:
+        rows = (
+            await db.execute(
+                select(Order)
+                .join(Customer, Customer.id == Order.customer_id)
+                .where(
+                    Customer.name.ilike(customer_name),
+                    Order.status.in_(ACTIVE_STATUSES),
+                )
+                .order_by(Order.created_at.desc())
+            )
+        ).scalars().all()
+        if len(rows) == 1:
+            number = rows[0].order_number
+        elif len(rows) > 1:
+            nums = ", ".join(o.order_number for o in rows[:5])
+            return f"⚠️ {customer_name} ke {len(rows)} active orders hain ({nums}). Order number bata dijiye."
     if not number:
         return get_message("staff_cmd_unknown")
     try:
