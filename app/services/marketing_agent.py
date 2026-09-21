@@ -64,27 +64,43 @@ _MIN_SEGMENT_SIZE = 3
 _PRIOR_RESPONSE_RATE = 0.08
 _PRIOR_WEIGHT = 20
 
-# The owner's seasonal calendar — copy rides whatever Varanasi is doing.
+# The owner's seasonal calendar — copy should reflect the current season,
+# not blindly use the same generic campaign every month.
 _SEASONS = {
-    9: "Diwali safai: parde, sofa cover, carpet",
-    10: "Diwali safai: parde, sofa cover, carpet",
-    11: "Kambal-razai + shaadi season (saree, sherwani, lehenga)",
-    12: "Kambal-razai + shaadi season",
-    1: "Kambal-razai + shaadi season",
-    2: "Kambal-razai + shaadi season",
-    3: "Holi ke baad daag safai + winter clothes storage",
-    4: "Holi ke baad daag safai + storage",
-    5: "Garmi: bedsheet, AC cover, curtain",
-    6: "Garmi: bedsheet, AC cover, curtain",
-    7: "Barish: hum dho kar, sukha kar, press karke denge",
-    8: "Barish: sukha ke denge wala angle",
+    9: "September freshness after monsoon: moisture, damp smell and stains; fresh-start cleaning",
+    10: "festive cleaning: curtains, sofa covers, carpets and occasion wear",
+    11: "winter/shaadi season: blankets, sarees, sherwanis and lehengas",
+    12: "winter cleaning and shaadi season",
+    1: "winter cleaning and shaadi season",
+    2: "winter/shaadi season",
+    3: "post-Holi stain cleaning and winter-clothes storage",
+    4: "post-Holi stain cleaning and storage",
+    5: "summer cleaning: bedsheets, AC covers and curtains",
+    6: "summer cleaning: bedsheets, AC covers and curtains",
+    7: "monsoon moisture and drying-care angle",
+    8: "monsoon freshness and drying-care angle",
 }
 
 _COPY_SYSTEM = (
-    "You write ONE short WhatsApp marketing message (max 3 lines) for Kwik "
-    "Klin laundry, Varanasi, in warm, simple English. Use {name} as the customer "
-    "name placeholder. Mention the offer EXACTLY as given — never invent "
-    "discounts, prices or dates. End with '— Kwik Klin'. No links."
+    "You write a polished WhatsApp marketing campaign for Kwik Klin laundry, Varanasi. "
+    "Do NOT compress it into 3 lines. Use the campaign format below, adapting it naturally "
+    "to the supplied season, segment and offer. Preserve every supplied offer detail exactly "
+    "and never invent a discount, price, validity date, phone number, link or guarantee. "
+    "Use Hindi/Hinglish naturally, with clear English terms where useful. Use emojis sparingly. "
+    "Return ONLY the campaign copy, no explanation, no markdown code fence.\n\n"
+    "FORMAT:\n"
+    "🍂 [Campaign theme/title]\n\n"
+    "[Short emotional hook or problem relevant to the season]\n\n"
+    "✨ [Offer headline]\n"
+    "[Eligibility/condition exactly from the offer]\n\n"
+    "[2-3 short lines explaining the customer benefit/service]\n\n"
+    "🚚 [Pickup/delivery or service benefit only if supported by business policy]\n"
+    "✨ [Second service benefit if supported]\n"
+    "📞 [CTA — ask customer to order/reply; never invent contact details]\n\n"
+    "Kwik Klin – Fresh Clothes. Better Care.\n\n"
+    "[Validity only when supplied]\n\n"
+    "Use line breaks exactly so it is easy to scan in WhatsApp. "
+    "Do not add {name} unless personalization is explicitly requested."
 )
 
 # Fire-and-forget sends need a strong reference. asyncio only holds a WEAK
@@ -256,9 +272,15 @@ def _rationale(pick: dict) -> str:
 
 
 async def _draft_copy(segment: str, offer: str) -> str:
+    season_hint = _SEASONS.get(date.today().month, "fresh clothes and professional care")
     fallback = (
-        "Hello {name}! It's been a while — whenever you need washing or dry "
-        f"cleaning, remember us. {offer}. — Kwik Klin"
+        f"🍂 {season_hint.title()}\n\n"
+        f"Apne kapdon ko dein professional care.\n\n"
+        f"✨ {offer}\n\n"
+        "🧺 Quality laundry & dry cleaning\n"
+        "🚚 Pickup & delivery available\n\n"
+        "📞 Order karne ke liye WhatsApp karein.\n\n"
+        "Kwik Klin – Fresh Clothes. Better Care."
     )
     # owner's style rules from AI training (hot-reloaded, optional)
     extra = ""
