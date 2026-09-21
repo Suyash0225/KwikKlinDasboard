@@ -243,7 +243,6 @@ _EXTRACT_SYSTEM = (
     "using TODAY for words like kal/parso; '' if unsaid. customer_phone: "
     "digits only as written, '' if unsaid.\n"
     "- delay_update / change_delivery_date: change an order delivery promise — extract order_number when given; otherwise extract customer_name. Extract new_date as ISO YYYY-MM-DD. Resolve relative dates such as kal/parso/Friday from TODAY in India (IST). If multiple active orders match a customer name, execution must ask for the order number. Extract internal reason.\n"
-    "new_date (ISO, '' if unsaid) and the internal reason.\n"
     "- status_update: they state an order's new stage (dhul gaya, ready hai, "
     "nikal gaya, deliver ho gaya...) — map to one of the status names.\n"
     "- relay: first understand the OWNER/STAFF instruction, then identify the "
@@ -1333,7 +1332,25 @@ async def _finalize_bill(
 
 
 async def _apply_delay(db: AsyncSession, sender_label: str, extracted: dict) -> str:
-    number = extracted["order_number"].upper()
+    number = (extracted.get("order_number") or "").strip().upper()
+    customer_name = (extracted.get("customer_name") or "").strip()
+    if not number and customer_name:
+        rows = (
+            await db.execute(
+                select(Order)
+                .join(Customer, Customer.id == Order.customer_id)
+                .where(
+                    Customer.name.ilike(customer_name),
+                    Order.status.in_(ACTIVE_STATUSES),
+                )
+                .order_by(Order.created_at.desc())
+            )
+        ).scalars().all()
+        if len(rows) == 1:
+            number = rows[0].order_number
+        elif len(rows) > 1:
+            nums = ", ".join(o.order_number for o in rows[:5])
+            return f"⚠️ {customer_name} ke {len(rows)} active orders hain ({nums}). Order number bata dijiye."
     if not number:
         return get_message("staff_cmd_unknown")
     try:
