@@ -24,7 +24,7 @@ from app.services.escalation import raise_escalation
 from app.services.llm_client import LLMError
 from app.services.messages import CUSTOMER_LANG, get_message, status_label
 from app.services.order_service import get_active_orders_for_phone, send_bill_to_customer
-from app.services.ai_tools import run_customer_tool
+from app.services.ai_tools import CUSTOMER_READ_TOOLS, run_customer_tool
 from app.services.action_policy import ACTION_EXECUTION_RULES, business_policy_text
 
 log = structlog.get_logger()
@@ -84,6 +84,58 @@ ACTION_DECISION_SCHEMA = {
     "required": ["action", "reason"],
     "additionalProperties": False,
 }
+_TOOL_CALL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tool_calls": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "enum": list(CUSTOMER_READ_TOOLS.keys())},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+                },
+                "required": ["name", "limit"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["tool_calls"],
+    "additionalProperties": False,
+}
+
+_TOOL_ROUTER_SYSTEM = (
+    "You are a read-only tool router for a laundry customer-support AI. "
+    "Choose only the minimum tools needed to answer the customer's message. "
+    "The backend executes tools against the authenticated customer. Never request SQL, "
+    "another customer's data, or an action. Available tools:\n"
+    + "\n".join(f"- {name}: {spec.description}" for name, spec in CUSTOMER_READ_TOOLS.items())
+    + "\nRules: order/delivery -> get_customer_orders; bill/invoice/payment due -> "
+      "get_customer_bills; price/rate -> get_shop_rate_card; profile -> get_customer_profile. "
+      "Use multiple tools when needed. Greetings may return an empty list."
+)
+
+async def _select_customer_tools(db: AsyncSession, customer: Customer, text: str) -> set[str]:
+    """LLM selects read-only tools; backend remains the execution boundary."""
+    del db, customer
+    try:
+        with llm_client.track("tool_router"):
+            out = await llm_client.ask_json(
+                system=_TOOL_ROUTER_SYSTEM,
+                user_text=f"Customer message:\n{text[:1000]}",
+                schema=_TOOL_CALL_SCHEMA,
+                model=llm_client.MODEL_CHEAP,
+                max_tokens=300,
+            )
+        return {
+            call.get("name")
+            for call in (out.get("tool_calls") or [])
+            if call.get("name") in CUSTOMER_READ_TOOLS
+        }
+    except LLMError as exc:
+        log.warning("ai_tool_router_failed", error=str(exc)[:150])
+        return set(CUSTOMER_READ_TOOLS)
+
 
 _COMPOSE_SYSTEM = (
     "You are the WhatsApp assistant of Kwik Klin, a laundry shop in Varanasi, \n"    "Return the safest useful action in the action field. Action is a recommendation only; backend code validates and executes it.\n"
@@ -238,7 +290,8 @@ async def build_ai_reply(
     # safety decisions in code; the model only returns structured intent,
     # language and wording.
     try:
-        ctx = await _gather_context(db, customer, text)
+        selected_tools = await _select_customer_tools(db, customer, text)
+        ctx = await _gather_context(db, customer, text, selected_tools)
     except Exception:
         # No facts means the model could invent prices/dates. Deterministic
         # webhook rules will handle the message instead.
@@ -401,7 +454,7 @@ async def build_ai_reply(
 
 
 async def _gather_context(
-    db: AsyncSession, customer: Customer, text: str
+    db: AsyncSession, customer: Customer, text: str, tool_names: set[str] | None = None
 ) -> tuple[str, str, str]:
     """Everything the model gets to read: (facts, knowledge, history).
 
@@ -411,7 +464,7 @@ async def _gather_context(
     """
     from app.services.knowledge import knowledge_block, relevant_knowledge, thread_history
 
-    facts = await _build_facts(db, customer)
+    facts = await _build_facts(db, customer, tool_names=tool_names)
     try:
         faqs, corrections, doc_chunks = await relevant_knowledge(
             db, text, audience="customer"
@@ -552,25 +605,23 @@ async def _open_question(db: AsyncSession, customer: Customer, text: str) -> Non
         log.exception("open_question_store_failed")
 
 
-async def _build_facts(db: AsyncSession, customer: Customer) -> str:
-    """Build the model FACTS block through the customer-safe tool boundary.
+async def _build_facts(
+    db: AsyncSession, customer: Customer, *, tool_names: set[str] | None = None
+) -> str:
+    """Build facts only from customer-safe tools selected by the router."""
+    lines: list[str] = []
+    selected = set(CUSTOMER_READ_TOOLS) if tool_names is None else set(tool_names)
 
-    The LLM never gets a DB session or arbitrary SQL. Each business read is
-    a named tool with an explicit scope and output contract.
-    """
-    lines = []
-
-    try:
-        profile = await run_customer_tool(db, customer, "get_customer_profile")
-        lines.append(
-            f"Customer: {profile['name'] or '(name unknown)'} ({profile['phone']})"
-        )
-    except Exception:
-        log.exception("customer_profile_tool_failed")
-        lines.append(f"Customer: {customer.name or '(name unknown)'} ({customer.phone})")
+    if "get_customer_profile" in selected:
+        try:
+            profile = await run_customer_tool(db, customer, "get_customer_profile")
+            lines.append(
+                f"Customer: {profile['name'] or '(name unknown)'} ({profile['phone']})"
+            )
+        except Exception:
+            log.exception("customer_profile_tool_failed")
 
     from app.services import app_settings
-
     try:
         cfg = await app_settings.get_many(
             db, "turnaround_days", "shop_hours", "shop_address", "shop_contact_phone"
@@ -587,59 +638,54 @@ async def _build_facts(db: AsyncSession, customer: Customer) -> str:
     except Exception:
         log.exception("shop_profile_facts_failed")
 
-    try:
-        orders = await run_customer_tool(
-            db, customer, "get_customer_orders", limit=5
-        )
-        active = [
-            o for o in orders
-            if o["status"] not in {"DELIVERED", "CANCELLED"}
-        ]
-        if active:
-            lines.append("Customer's current orders:")
-        else:
-            lines.append("Customer's current orders: none in progress.")
+    if "get_customer_orders" in selected:
+        try:
+            orders = await run_customer_tool(db, customer, "get_customer_orders", limit=5)
+            active = [o for o in orders if o["status"] not in {"DELIVERED", "CANCELLED"}]
+            lines.append("Customer's current orders:" if active else "Customer's current orders: none in progress.")
+            if orders:
+                lines.append("Customer's recent orders:")
+                for o in orders:
+                    parts = [f"- {o['order_number']}: {o['status_label']}"]
+                    if o["status"] == "DELIVERED" and o["actual_delivery"]:
+                        parts.append(f"delivered on {o['actual_delivery'][:10]}")
+                    elif o["status"] != "CANCELLED" and o["expected_delivery"]:
+                        suffix = " (OVERDUE)" if o["overdue"] else ""
+                        parts.append(f"expected delivery {o['expected_delivery'][:10]}{suffix}")
+                    if o["total_amount"] is not None:
+                        parts.append(f"bill ₹{o['total_amount']}, baaki ₹{o['amount_due']}")
+                    lines.append(" | ".join(parts))
+            else:
+                lines.append("Customer's recent orders: none.")
+        except Exception:
+            log.exception("customer_orders_tool_failed")
 
-        if orders:
-            lines.append("Customer's recent orders:")
-            for o in orders:
-                parts = [
-                    f"- {o['order_number']}: {o['status_label']}",
-                ]
-                if o["status"] == "DELIVERED" and o["actual_delivery"]:
-                    parts.append(f"delivered on {o['actual_delivery'][:10]}")
-                elif o["status"] != "CANCELLED" and o["expected_delivery"]:
-                    if o["overdue"]:
-                        parts.append(
-                            f"expected delivery {o['expected_delivery'][:10]} (OVERDUE)"
-                        )
-                    else:
-                        parts.append(
-                            f"expected delivery {o['expected_delivery'][:10]}"
-                        )
-                if o["total_amount"] is not None:
-                    parts.append(
-                        f"bill ₹{o['total_amount']}, baaki ₹{o['amount_due']}"
+    if "get_customer_bills" in selected:
+        try:
+            bills = await run_customer_tool(db, customer, "get_customer_bills", limit=5)
+            if bills:
+                lines.append("Customer's unpaid bills:")
+                for bill in bills:
+                    lines.append(
+                        f"- {bill['order_number']}: total ₹{bill['total_amount']}, "
+                        f"paid ₹{bill['amount_paid']}, due ₹{bill['amount_due']}"
                     )
-                lines.append(" | ".join(parts))
-        else:
-            lines.append("Customer's recent orders: none.")
-    except Exception:
-        log.exception("customer_orders_tool_failed")
-        return "\n".join(lines)
+            else:
+                lines.append("Customer's unpaid bills: none.")
+        except Exception:
+            log.exception("customer_bills_tool_failed")
 
-    try:
-        rates = await run_customer_tool(
-            db, customer, "get_shop_rate_card"
-        )
-        if rates:
-            lines.append("Rate card (per piece unless /kg):")
-            lines.extend(
-                f"- {r['service']}{' / ' + r['garment'] if r['garment'] else ''}: "
-                f"₹{r['rate']}/{r['unit']}"
-                for r in rates
-            )
-    except Exception:
-        log.exception("shop_rate_card_tool_failed")
+    if "get_shop_rate_card" in selected:
+        try:
+            rates = await run_customer_tool(db, customer, "get_shop_rate_card")
+            if rates:
+                lines.append("Rate card (per piece unless /kg):")
+                lines.extend(
+                    f"- {r['service']}{' / ' + r['garment'] if r['garment'] else ''}: "
+                    f"₹{r['rate']}/{r['unit']}"
+                    for r in rates
+                )
+        except Exception:
+            log.exception("shop_rate_card_tool_failed")
 
     return "\n".join(lines)
