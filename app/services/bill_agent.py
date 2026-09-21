@@ -172,7 +172,7 @@ _EMPTY_EXTRACT: dict = {
     "action": "other", "customer_name": "", "customer_phone": "", "items": [],
     "advance": 0, "expected_delivery": "", "order_number": "", "new_date": "",
     "reason": "", "new_status": "NONE", "relay_to": "", "relay_message": "",
-    "priority": "NONE", "staff_name": "", "note": "", "amount": 0,
+    "priority": "NONE", "staff_name": "", "recipient_type": "UNKNOWN", "note": "", "amount": 0,
     "method": "NONE", "done_refs": [], "pending_refs": [], "problem": "",
 }
 
@@ -211,6 +211,7 @@ _EXTRACT_SCHEMA = {
         "new_status": {"type": "string", "enum": [*_STATUS_NAMES, "NONE"]},
         "relay_to": {"type": "string"},
         "relay_message": {"type": "string"},
+        "recipient_type": {"type": "string", "enum": ["STAFF", "CUSTOMER", "MANAGER", "SELF", "UNKNOWN"]},
         "priority": {"type": "string", "enum": ["urgent", "normal", "NONE"]},
         "staff_name": {"type": "string"},
         "note": {"type": "string"},
@@ -224,7 +225,7 @@ _EXTRACT_SCHEMA = {
     "required": [
         "action", "customer_name", "customer_phone", "items", "advance",
         "expected_delivery", "order_number", "new_date", "reason", "new_status",
-        "relay_to", "relay_message", "priority", "staff_name", "note",
+        "relay_to", "relay_message", "recipient_type", "priority", "staff_name", "note",
         "amount", "method", "done_refs", "pending_refs", "problem",
     ],
     "additionalProperties": False,
@@ -245,15 +246,18 @@ _EXTRACT_SYSTEM = (
     "new_date (ISO, '' if unsaid) and the internal reason.\n"
     "- status_update: they state an order's new stage (dhul gaya, ready hai, "
     "nikal gaya, deliver ho gaya...) — map to one of the status names.\n"
-    "- relay: they ask to pass a message or a question to a person — staff, "
-    "manager OR a customer (e.g. 'Ravi ko bata do ...', 'Anmol ko bolo kal "
-    "tak ho jayega', 'Superman se pucho pickup hua ya nahi'). relay_to = the "
-    "person's name as written; relay_message = the message REWRITTEN as if "
-    "speaking DIRECTLY to that person (aap/tum form). NEVER copy the "
-    "sender's imperative words (pucho/bolo/bata do/usse) into "
-    "relay_message. Example: 'Superman se pucho kya usne Rahul ka pickup "
-    "kia' -> relay_message: 'Kya aapne Rahul ka pickup kar liya? Update "
-    "bata dijiye.'\n"
+    "- relay: first understand the OWNER/STAFF instruction, then identify the "
+    "recipient_type as exactly STAFF, CUSTOMER, MANAGER, SELF or UNKNOWN. "
+    "Words such as 'customer ko', 'grahak ko', 'customer', 'customer se', "
+    "'buyer ko' ALWAYS mean CUSTOMER, never STAFF or SELF. 'manager/boss/malik' "
+    "means MANAGER. A named staff member means STAFF. If ambiguous, use UNKNOWN "
+    "and do not create a task for the sender.\n"
+    "  relay_to is the named recipient when known. relay_message is the intended "
+    "meaning, not a copy of the command. Never include 'bolo/bata do/pucho/usse/' "
+    "in relay_message. The sending layer will make the message professional "
+    "before it is sent. Example: 'Ajit se pucho Rahul ka pickup hua?' -> "
+    "recipient_type=STAFF, relay_to=Ajit, relay_message='Rahul ka pickup hua "
+    "ya nahi? Kripya update bata dijiye.'\n"
     "- set_priority: an order is urgent / no longer urgent ('Sharma ji ka "
     "urgent hai') — order_number (if named) + customer_name + priority.\n"
     "- assign_staff: give an order to a staff member ('ye Ravi ko de do') — "
@@ -2103,116 +2107,163 @@ async def _relay_target_exists(db: AsyncSession, target: str) -> bool:
     ) == 1
 
 
+_RELAY_COMPOSE_SCHEMA = {
+    "type": "object",
+    "properties": {"message": {"type": "string"}},
+    "required": ["message"],
+    "additionalProperties": False,
+}
+
+
+async def _compose_relay_message(
+    raw_message: str, recipient_type: str, recipient_name: str
+) -> str:
+    """Turn an extracted instruction into one professional WhatsApp message."""
+    if not raw_message:
+        return ""
+    try:
+        with llm_client.track("relay_compose"):
+            out = await llm_client.ask_json(
+                system=(
+                    "You are the message writer for Kwik Klin laundry. "
+                    "Rewrite the supplied instruction into one concise, professional "
+                    "WhatsApp message addressed directly to the recipient. Preserve "
+                    "the exact operational meaning. Do not invent names, dates, prices, "
+                    "orders or promises. Do not mention AI, prompts, internal rules, "
+                    "or that you rewrote anything. For STAFF use polite professional "
+                    "Hinglish/English and ask for a clear action/update. For CUSTOMER "
+                    "use warm customer-facing language. Return only the final message."
+                ),
+                user_text=(
+                    f"RECIPIENT TYPE: {recipient_type}\n"
+                    f"RECIPIENT: {recipient_name or 'unknown'}\n"
+                    f"INSTRUCTION MEANING: {raw_message[:1000]}"
+                ),
+                schema=_RELAY_COMPOSE_SCHEMA,
+                model=llm_client.MODEL_CHEAP,
+                max_tokens=220,
+            )
+        message = str(out.get("message") or "").strip()
+        return message[:1200] if message else raw_message[:1200]
+    except LLMError:
+        log.warning("relay_compose_failed")
+        return raw_message[:1200]
+
+
 async def _apply_relay(
     db: AsyncSession, sender_label: str, extracted: dict, sender_text: str = "",
     sender_phone: str = "",
 ) -> str:
-    """Forward a message to a staff member or the manager — known phones only."""
-    target = extracted["relay_to"].strip()
-    message = extracted["relay_message"].strip()
-    if not target or not message:
+    """Route an instruction to the correct recipient without turning customer work into admin tasks."""
+    target = (extracted.get("relay_to") or "").strip()
+    raw_message = (extracted.get("relay_message") or "").strip()
+    recipient_type = (extracted.get("recipient_type") or "UNKNOWN").strip().upper()
+    if not raw_message:
         return get_message("staff_cmd_unknown")
 
-    if sender_text and not _sender_named(target, sender_text):
-        names = ", ".join(
-            s.name for s in (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
-            if s.name
-        ) or "-"
-        log.info("relay_target_not_named", guessed=target, text=sender_text[:80])
-        return f"Kisko bhejun? Naam likh dijiye 🙏\nStaff: {names}"
-
-    if sender_text and len(_leftover_words(target, sender_text)) < 4:
-        # Naam to hai, baat nahi — model se baat mangwane ke bajaye khud
-        # poochho, warna wo pichhla koi bhi text utha leta hai. (Anjaan
-        # naam par ye nahi poochhte — "wo hai hi nahi" batana zyada kaam ka
-        # hai, isliye wo faisla neeche wale rasta karta hai.)
-        if await _relay_target_exists(db, target):
-            if sender_phone:
-                _PENDING[sender_phone] = PendingRelay(target=target)
-            log.info("relay_message_missing", target=target, text=sender_text[:80])
-            return f"{target} ko kya bhejun? Baat likh dijiye 🙏"
-
-    is_customer_target = False
-    if target.lower() in ("manager", "boss", "malik"):
-        to_phone, to_name = manager_phone(), "Manager"
-    else:
-        staff_rows = (await db.execute(select(Staff))).scalars().all()
+    if recipient_type == "UNKNOWN":
+        staff_rows = (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
         matches = [
             s for s in staff_rows
-            if s.name and (s.name.lower() in target.lower() or target.lower() in s.name.lower())
+            if s.name and target and (
+                s.name.lower() in target.lower() or target.lower() in s.name.lower()
+            )
         ]
         if len(matches) == 1:
-            # A message to STAFF is work, not chatter: make it a tracked task
-            # so the agent chases it and the dashboard shows who owes what.
-            from app.services import tasks as task_service
-
-            urgent = bool(_URGENT_RE.search(message))
-            order = await _order_in_text(db, f"{message} {extracted.get('order_number', '')}")
-            if order is None and extracted.get("customer_name"):
-                # "Shaurya ka aaj urgent chahiye, Ajit ko bol do" — no order
-                # number typed, so find it the same way every other command does
-                order, _err = await _find_order_flex(db, extracted)
-            task = await task_service.create_task(
-                db, title=message, staff=matches[0], order=order,
-                urgent=urgent, created_by=sender_label,
-            )
-            # "urgent" must land in the DATA too, not only in a WhatsApp
-            # message — otherwise the dashboard and the morning standup
-            # still show it as an ordinary order.
-            note = ""
-            if order is not None and urgent and order.priority != "urgent":
-                order.priority = "urgent"
-                stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-                line = f"[{stamp} {sender_label}] URGENT: {message}"
-                order.notes = f"{order.notes}\n{line}" if order.notes else line
-                await db.commit()
-                note = f"\n🔴 {order.order_number} ko URGENT mark kar diya."
-                log.info(
-                    "relay_marked_order_urgent",
-                    order_number=order.order_number, by=sender_label,
-                )
-            # last_ping_at is only stamped when the message actually went out
-            key = "task_assigned" if task.last_ping_at else "task_assigned_undelivered"
-            return get_message(
-                key, name=matches[0].name, code=task.code, message=message
-            ) + note
-        elif sender_label == "manager":
-            # Only the ADMIN may message customers through the bot.
-            cust_matches = (
-                (
-                    await db.execute(
-                        select(Customer)
-                        .where(Customer.name.ilike(f"%{target}%"), Customer.is_active)
-                        .limit(3)
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            if len(cust_matches) != 1:
-                names = ", ".join(s.name for s in staff_rows if s.name) or "-"
-                return get_message("relay_target_unknown", target=target, names=names)
-            to_phone, to_name = cust_matches[0].phone, cust_matches[0].name or cust_matches[0].phone
-            is_customer_target = True
+            recipient_type = "STAFF"
+        elif target.lower() in {"manager", "boss", "malik"}:
+            recipient_type = "MANAGER"
+        elif target.lower() in {"customer", "grahak", "buyer", "client"}:
+            recipient_type = "CUSTOMER"
         else:
+            return "Kisko bhejna hai? Customer ya staff ka naam bata dijiye. 🙏"
+
+    if recipient_type == "STAFF":
+        staff_rows = (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
+        matches = [
+            s for s in staff_rows
+            if s.name and target and (
+                s.name.lower() in target.lower() or target.lower() in s.name.lower()
+            )
+        ]
+        if len(matches) != 1:
             names = ", ".join(s.name for s in staff_rows if s.name) or "-"
-            return get_message("relay_target_unknown", target=target, names=names)
+            return f"Kis staff member ko bhejna hai? Naam bata dijiye. 🙏\nStaff: {names}"
+
+        staff = matches[0]
+        message = await _compose_relay_message(raw_message, "STAFF", staff.name)
+        urgent = bool(_URGENT_RE.search(message))
+        order = await _order_in_text(
+            db, f"{raw_message} {extracted.get('order_number', '')}"
+        )
+        if order is None and extracted.get("customer_name"):
+            order, _err = await _find_order_flex(db, extracted)
+
+        from app.services import tasks as task_service
+
+        task = await task_service.create_task(
+            db, title=message, staff=staff, order=order,
+            urgent=urgent, created_by=sender_label,
+        )
+        note = ""
+        if order is not None and urgent and order.priority != "urgent":
+            order.priority = "urgent"
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+            line = f"[{stamp} {sender_label}] URGENT: {message}"
+            order.notes = f"{order.notes}\n{line}" if order.notes else line
+            await db.commit()
+            note = f"\n🔴 {order.order_number} ko URGENT mark kar diya."
+        key = "task_assigned" if task.last_ping_at else "task_assigned_undelivered"
+        return get_message(key, name=staff.name, code=task.code, message=message) + note
+
+    if recipient_type == "MANAGER":
+        to_phone, to_name = manager_phone(), "Manager"
+        message = await _compose_relay_message(raw_message, "MANAGER", to_name)
+    elif recipient_type == "CUSTOMER":
+        cust_matches = []
+        if extracted.get("customer_phone"):
+            try:
+                phone = normalize_phone(extracted["customer_phone"])
+                cust = (
+                    await db.execute(select(Customer).where(Customer.phone == phone))
+                ).scalar_one_or_none()
+                if cust is not None:
+                    cust_matches = [cust]
+            except ValueError:
+                pass
+        if not cust_matches and extracted.get("customer_name"):
+            cust_matches = list((
+                await db.execute(
+                    select(Customer).where(
+                        Customer.name.ilike(f"%{extracted['customer_name'].strip()}%"),
+                        Customer.is_active,
+                    ).limit(3)
+                )
+            ).scalars().all())
+        if not cust_matches and extracted.get("order_number"):
+            order = await _order_in_text(db, extracted["order_number"])
+            if order is not None:
+                cust = await db.get(Customer, order.customer_id)
+                if cust is not None:
+                    cust_matches = [cust]
+        if len(cust_matches) != 1:
+            return "Customer ka naam ya order number bata dijiye, taaki main sahi customer ko message bhej sakun. 🙏"
+        to_phone = cust_matches[0].phone
+        to_name = cust_matches[0].name or to_phone
+        message = await _compose_relay_message(raw_message, "CUSTOMER", to_name)
+    elif recipient_type == "SELF":
+        to_phone = sender_phone or manager_phone()
+        to_name = sender_label
+        message = await _compose_relay_message(raw_message, "SELF", to_name)
+    else:
+        return get_message("staff_cmd_unknown")
 
     try:
-        out_text = (
-            get_message("relay_message_customer", message=message)
-            if is_customer_target
-            else get_message("relay_message", sender=sender_label, message=message)
-        )
-        await send_message(db, to_phone=to_phone, text=out_text)
+        await send_message(db, to_phone=to_phone, text=message)
     except WindowClosedError:
-        if is_customer_target:
-            # the staff template is wrong for customers — be honest instead
+        if recipient_type == "CUSTOMER":
             return get_message("relay_window_closed", name=to_name)
-        # Window shut -> fall back to the pre-approved template. If Meta
-        # hasn't approved it yet this raises SendError and we say so.
         try:
-            # template params must be single-line (Meta rejects newlines)
             await send_message(
                 db, to_phone=to_phone,
                 template_name="kk_staff_alert",
@@ -2221,14 +2272,12 @@ async def _apply_relay(
         except SendError:
             log.warning("relay_template_failed", to=to_phone)
             return get_message("relay_window_closed", name=to_name)
-        log.info("relay_sent_via_template", to=to_phone, by=sender_label)
         return get_message("relay_done_template", name=to_name, message=message)
     except SendError:
         log.warning("relay_send_failed", to=to_phone)
         return get_message("relay_failed", name=to_name)
 
-    if is_customer_target:
-        # answering a customer closes their open question threads
+    if recipient_type == "CUSTOMER":
         from app.models import OpenQuestion
 
         open_rows = (
@@ -2238,9 +2287,7 @@ async def _apply_relay(
                     .join(Customer, Customer.id == OpenQuestion.customer_id)
                     .where(Customer.phone == to_phone, OpenQuestion.status == "open")
                 )
-            )
-            .scalars()
-            .all()
+            ).scalars().all()
         )
         for oq in open_rows:
             oq.status = "answered"
@@ -2248,9 +2295,10 @@ async def _apply_relay(
             oq.answered_at = datetime.now(timezone.utc)
         if open_rows:
             await db.commit()
-            log.info("open_questions_closed", count=len(open_rows), customer=to_phone)
-    log.info("relay_sent", to=to_phone, by=sender_label, kind="customer" if is_customer_target else "staff")
+    log.info("relay_sent", to=to_phone, by=sender_label, kind=recipient_type.lower())
     return get_message("relay_done", name=to_name, message=message)
+
+
 
 
 # Role scoping (owner's spec): washerman delivery ka status nahi badal
