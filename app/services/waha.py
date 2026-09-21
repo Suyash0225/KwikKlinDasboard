@@ -42,6 +42,22 @@ def _url(path: str) -> str:
     return f"{base}{path}"
 
 
+async def _get(path: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(_url(path), headers=_headers())
+    except httpx.TransportError as exc:
+        raise WahaError(f"WAHA network error: {exc}", transient=True) from exc
+    if r.status_code >= 500 or r.status_code == 429:
+        raise WahaError(f"WAHA temporary error {r.status_code}: {r.text[:300]}", transient=True)
+    if r.status_code >= 400:
+        raise WahaError(f"WAHA rejected request {r.status_code}: {r.text[:500]}", transient=False)
+    try:
+        return r.json()
+    except ValueError:
+        return {"raw": r.text}
+
+
 async def _post(path: str, payload: dict) -> dict:
     try:
         async with httpx.AsyncClient(timeout=45) as client:
@@ -56,6 +72,35 @@ async def _post(path: str, payload: dict) -> dict:
         return r.json()
     except ValueError:
         return {"raw": r.text}
+
+
+async def resolve_lid(lid: str) -> str | None:
+    """Resolve a WAHA @lid chat id to its phone-number JID.
+
+    NOWEB can emit @lid for inbound messages. The LIDs API maps that
+    identifier to the corresponding @c.us JID when the mapping is known.
+    """
+    value = str(lid or "").strip()
+    if not value:
+        return None
+    if not value.endswith("@lid"):
+        return value if value.endswith("@c.us") else f"{value}@c.us"
+
+    from urllib.parse import quote
+
+    encoded = quote(value, safe="")
+    try:
+        data = await _get(f"/api/{settings.WAHA_SESSION}/lids/{encoded}")
+    except WahaError as exc:
+        if exc.transient:
+            raise
+        return None
+
+    pn = data.get("pn") if isinstance(data, dict) else None
+    if isinstance(pn, str) and pn:
+        return pn.replace("@s.whatsapp.net", "@c.us")
+
+    return None
 
 
 def _message_id(data: dict) -> str:
