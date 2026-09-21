@@ -477,11 +477,12 @@ async def _notify_admin_fyi(db: AsyncSession, customer: Customer, note: str) -> 
     """One-line 'maine ye sambhal liya' to the owner. Never raises."""
     try:
         from app.services.whatsapp import SendError, send_message
+        from app.services import team
 
         who = customer.name or customer.phone
         try:
             await send_message(
-                db, to_phone=manager_phone(),
+                db, to_phone=await team.primary_admin_phone(db),
                 text=f"ℹ️ FYI — {who}: {note[:400]}",
             )
         except SendError:
