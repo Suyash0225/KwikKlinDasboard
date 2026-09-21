@@ -632,9 +632,9 @@ async def _build_facts(
     """Build facts only from customer-safe tools selected by the router."""
     lines: list[str] = []
     selected = (
-        {name: 5 for name in CUSTOMER_READ_TOOLS}
+        {name: 20 for name in CUSTOMER_READ_TOOLS}
         if tool_names is None
-        else {name: max(1, min(int(limit), 10)) for name, limit in tool_names.items() if name in CUSTOMER_READ_TOOLS}
+        else {name: max(1, min(int(limit), 20)) for name, limit in tool_names.items() if name in CUSTOMER_READ_TOOLS}
     )
 
     if "get_customer_profile" in selected:
