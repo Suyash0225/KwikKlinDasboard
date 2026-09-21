@@ -8,10 +8,12 @@ ka pickup chat), create_order ke andar yahi agent chalta hai:
      task (wahi "kab tak?" wali baat-cheet, tasks.py)
   3. Status aage badhe to purana kaam band, agla kaam khud:
        PICKED_UP -> pickup task done
-       READY     -> wash task done, delivery task bane (sabse khaali boy)
+       IN_DRY    -> wash task done, drying task bane
+       IN_IRON   -> drying task done, ironing task bane
+       READY     -> ironing task done, delivery task bane
        DELIVERED -> delivery task done
        CANCELLED / ON_HOLD -> saare khule kaam band
-  4. Washerman panel par wash task "done" kare -> order READY
+  4. Washerman panel par stage task "done" kare -> order agle processing stage par
   5. Har ghante: jin kaamon ka aadmi hata diya gaya/inactive hai, unhe
      doosre ko de do (rebalance)
 
@@ -48,9 +50,22 @@ _ORDER_FIELD = {"WASHER": "assigned_washer_id", "DELIVERY": "assigned_delivery_i
 # Ye statuses aane par ye kaam poore maane jaate hain
 _DONE_ON = {
     OrderStatus.PICKED_UP: ("pickup",),
-    OrderStatus.READY: ("pickup", "wash"),
-    OrderStatus.OUT_FOR_DELIVERY: ("pickup", "wash"),
-    OrderStatus.DELIVERED: ("pickup", "wash", "delivery"),
+    OrderStatus.IN_DRY: ("wash",),
+    OrderStatus.IN_IRON: ("wash", "dry"),
+    OrderStatus.READY: ("pickup", "wash", "dry", "iron"),
+    OrderStatus.OUT_FOR_DELIVERY: ("pickup", "wash", "dry", "iron"),
+    OrderStatus.DELIVERED: ("pickup", "wash", "dry", "iron", "delivery"),
+}
+
+_STAGE_TASKS = {
+    OrderStatus.IN_DRY: {
+        "kind": "dry",
+        "title": "{who} — drying: {items} | delivery {delivery}",
+    },
+    OrderStatus.IN_IRON: {
+        "kind": "iron",
+        "title": "{who} — ironing: {items} | delivery {delivery}",
+    },
 }
 _WASHABLE = (OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
              OrderStatus.IN_DRY, OrderStatus.IN_IRON)
@@ -230,6 +245,51 @@ async def plan_due_wash_tasks(db: AsyncSession, *, today=None) -> int:
     return created
 
 
+async def _ensure_stage_task(db: AsyncSession, order: Order, status: OrderStatus) -> Task | None:
+    """Create the next processing task exactly once for the assigned washer."""
+    cfg = _STAGE_TASKS.get(status)
+    if cfg is None or not await enabled(db):
+        return None
+
+    from app.models import Customer
+    from app.services import tasks as task_service
+    from app.services.work_orders import items_summary
+
+    if await _open_tasks(db, order.id, (cfg["kind"],)):
+        return None
+
+    washer = await pick_staff(db, "WASHER", order)
+    if washer is None:
+        return None
+    if order.assigned_washer_id is None:
+        order.assigned_washer_id = washer.id
+        db.add(order)
+        await db.commit()
+
+    customer = await db.get(Customer, order.customer_id)
+    who = (customer.name or customer.phone) if customer else "Customer"
+    delivery = order.expected_delivery.strftime("%d %b") if order.expected_delivery else "date confirm"
+    urgent = bool(
+        order.priority == "urgent"
+        or (
+            order.expected_delivery is not None
+            and order.expected_delivery <= date.today() + timedelta(days=1)
+        )
+    )
+    return await task_service.create_task(
+        db,
+        title=cfg["title"].format(
+            who=who, items=items_summary(order)[:160], delivery=delivery
+        ),
+        staff=washer,
+        order=order,
+        urgent=urgent,
+        created_by="ops-agent",
+        kind=cfg["kind"],
+        notify=True,
+    )
+
+
 async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStatus, by: str) -> None:
     """Order aage badha — jo kaam ho chuka use band karo, ruka to sab band."""
     num = order.order_number
@@ -247,24 +307,35 @@ async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStat
                 db, t, reply=f"order {new_status.name.lower().replace('_', ' ')}", by=by or "ops-agent",
                 advance_order=False,
             )
+
+        # Manual/status-driven moves must also create the next processing task.
+        if new_status in _STAGE_TASKS:
+            await _ensure_stage_task(db, order, new_status)
     except Exception:
         await db.rollback()
         log.exception("ops_agent_status_hook_failed", order=num)
 
 
 async def on_task_done(db: AsyncSession, task: Task, by: str) -> None:
-    """Washerman ne wash task done kiya = kapde taiyar -> order READY.
-    (READY khud delivery task banata hai.)"""
-    if task.kind != "wash" or task.order_id is None:
+    """A processing task is a real workflow step, not a shortcut to READY."""
+    targets = {
+        "wash": (OrderStatus.IN_WASH, OrderStatus.IN_DRY),
+        "dry": (OrderStatus.IN_DRY, OrderStatus.IN_IRON),
+        "iron": (OrderStatus.IN_IRON, OrderStatus.READY),
+    }
+    if task.kind not in targets or task.order_id is None:
         return
+    expected, target = targets[task.kind]
     try:
         from app.services import order_service
 
         order = await db.get(Order, task.order_id)
-        if order is not None and order.status in _WASHABLE:
-            await order_service.update_status(db, order, OrderStatus.READY, changed_by=f"staff:{by}")
+        if order is not None and order.status is expected:
+            await order_service.update_status(
+                db, order, target, changed_by=f"staff:{by}"
+            )
     except Exception:
-        log.exception("ops_agent_wash_done_failed", code=task.code)
+        log.exception("ops_agent_stage_done_failed", code=task.code, kind=task.kind)
 
 
 async def rebalance(db: AsyncSession) -> int:
@@ -285,7 +356,7 @@ async def rebalance(db: AsyncSession) -> int:
             )
         ).all()
         for task, old in rows:
-            role = "WASHER" if task.kind == "wash" else "DELIVERY"
+            role = "WASHER" if task.kind in ("wash", "dry", "iron") else "DELIVERY"
             order = await db.get(Order, task.order_id) if task.order_id else None
             if order is not None and getattr(order, _ORDER_FIELD[role]) == old.id:
                 setattr(order, _ORDER_FIELD[role], None)
