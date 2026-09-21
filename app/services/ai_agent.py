@@ -24,7 +24,6 @@ from app.services.escalation import raise_escalation
 from app.services.llm_client import LLMError
 from app.services.messages import CUSTOMER_LANG, get_message, status_label
 from app.services.order_service import get_active_orders_for_phone, send_bill_to_customer
-from app.services.tenant_context import manager_phone
 from app.services.action_policy import ACTION_EXECUTION_RULES, business_policy_text
 
 log = structlog.get_logger()
@@ -477,11 +476,12 @@ async def _notify_admin_fyi(db: AsyncSession, customer: Customer, note: str) -> 
     """One-line 'maine ye sambhal liya' to the owner. Never raises."""
     try:
         from app.services.whatsapp import SendError, send_message
+        from app.services import team
 
         who = customer.name or customer.phone
         try:
             await send_message(
-                db, to_phone=manager_phone(),
+                db, to_phone=await team.primary_admin_phone(db),
                 text=f"ℹ️ FYI — {who}: {note[:400]}",
             )
         except SendError:

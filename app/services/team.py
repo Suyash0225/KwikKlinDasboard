@@ -47,6 +47,25 @@ async def admins(db: AsyncSession) -> list[Staff]:
     return [s for s in await active_staff(db) if s.role is StaffRole.ADMIN]
 
 
+async def primary_admin_phone(db: AsyncSession) -> str:
+    """The single human owner the AI should consult.
+    
+    Prefer an active Staff row with ADMIN role. If several exist, an exact
+    name "Admin" wins; otherwise the oldest active ADMIN is the primary.
+    The configured tenant owner is only the fallback for legacy deployments
+    that have not created an ADMIN staff user yet.
+    """
+    rows = await admins(db)
+    named = [s for s in rows if (s.name or "").strip().casefold() == "admin"]
+    candidates = named or rows
+    if candidates:
+        candidates.sort(key=lambda s: s.created_at)
+        phone = _norm(candidates[0].phone)
+        if phone:
+            return phone
+    return _norm(manager_phone())
+
+
 async def admin_phones(db: AsyncSession) -> list[str]:
     """Admin numbers, manager first. Never empty — MANAGER_PHONE is always in."""
     out = [_norm(manager_phone())]
@@ -63,12 +82,9 @@ async def is_admin_phone(db: AsyncSession, phone: str) -> bool:
 
 
 async def alert_recipients(db: AsyncSession) -> list[tuple[str, str]]:
-    """(phone, name) for customer/AI escalation alerts.
-
-    Escalation alerts are owner/admin notifications only. Never include
-    washermen, delivery staff, or other non-admin staff here.
-    """
-    return [(phone, "Admin") for phone in await admin_phones(db)]
+    """The single primary admin for customer/AI escalation alerts."""
+    phone = await primary_admin_phone(db)
+    return [(phone, "Admin")] if phone else []
 
 
 async def notify_admins(db: AsyncSession, text: str, *, skip_phone: str = "") -> int:

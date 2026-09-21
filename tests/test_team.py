@@ -92,6 +92,20 @@ async def test_the_owner_always_carries_owner_powers() -> None:
         assert OWNER in await team.admin_phones(db)
 
 
+async def test_primary_admin_is_the_ai_owner() -> None:
+    """AI escalation/FYI routing chooses the explicit ADMIN user."""
+    phone = "+919999900096"
+    try:
+        async with async_session_factory() as db:
+            db.add(Staff(phone=phone, name="Admin", role=StaffRole.ADMIN, is_active=True))
+            await db.commit()
+            assert await team.primary_admin_phone(db) == phone
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Staff).where(Staff.phone == phone))
+            await db.commit()
+
+
 async def test_an_admin_staff_row_gets_owner_powers() -> None:
     """DB mein ADMIN likha ho to us number ko bhi owner ki taakat milti hai.
 
