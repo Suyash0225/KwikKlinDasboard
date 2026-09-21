@@ -41,6 +41,8 @@ def _order(
     row.status = status
     row.expected_delivery = expected_delivery
     row.actual_delivery = actual_delivery
+    row.tenant_id = __import__("uuid").uuid4()
+    row.id = __import__("uuid").uuid4()
     row.total_amount = Decimal(total) if total is not None else None
     row.amount_paid = Decimal(paid)
     row.created_at = None
@@ -193,7 +195,7 @@ async def test_phase_two_router_falls_back_to_all_read_tools_on_llm_failure(monk
         AsyncMock(), _customer(), "mera bill?"
     )
 
-    assert selected == {name: 5 for name in ai_agent.CUSTOMER_READ_TOOLS}
+    assert selected == {name: 20 for name in ai_agent.CUSTOMER_READ_TOOLS}
 
 
 @pytest.mark.asyncio
@@ -214,6 +216,32 @@ async def test_phase_two_router_clamps_tool_limits(monkeypatch):
     )
 
     assert selected == {
-        "get_customer_orders": 10,
+        "get_customer_orders": 20,
         "get_customer_bills": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_customer_orders_include_bill_url_and_use_recent_window(monkeypatch):
+    from app.services import bill_link
+
+    monkeypatch.setattr(bill_link, "url", lambda order: "https://kwikklin.online/b/test.sig")
+
+    recent = _order(
+        status=OrderStatus.IN_WASH,
+        expected_delivery=date.today(),
+    )
+
+    class ScalarResult:
+        def all(self):
+            return [recent]
+
+    db = AsyncMock()
+    db.execute.return_value = MagicMock()
+    db.execute.return_value.scalars.return_value = ScalarResult()
+
+    result = await get_customer_orders(db, _customer(), limit=20)
+
+    assert result[0]["bill_url"] == "https://kwikklin.online/b/test.sig"
+    stmt = db.execute.call_args.args[0]
+    assert "created_at" in str(stmt)
