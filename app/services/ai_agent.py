@@ -453,11 +453,12 @@ async def build_ai_reply(
         await audit.record(
             actor_role="customer", actor=customer.phone, action="ai_reply",
             args={"intent": intent, "fyi": bool(admin_note)}, result=out["reply"][:200],
-        )    return out.get("reply") or None
+        )
+    return out.get("reply") or None
 
 
 async def _gather_context(
-    db: AsyncSession, customer: Customer, text: str, tool_names: set[str] | None = None
+    db: AsyncSession, customer: Customer, text: str, tool_names: dict[str, int] | None = None
 ) -> tuple[str, str, str]:
     """Everything the model gets to read: (facts, knowledge, history).
 
@@ -658,7 +659,8 @@ async def _build_facts(
                     parts = [f"- {o['order_number']}: {o['status_label']}"]
                     if o["status"] == "DELIVERED" and o["actual_delivery"]:
                         parts.append(f"delivered on {o['actual_delivery'][:10]}")
-                    elif o["status"] != "CANCELLED" and o["expected_delivery"]:                        suffix = " (OVERDUE)" if o["overdue"] else ""
+                    elif o["status"] != "CANCELLED" and o["expected_delivery"]:
+                        suffix = " (OVERDUE)" if o["overdue"] else ""
                         parts.append(f"expected delivery {o['expected_delivery'][:10]}{suffix}")
                     if o["total_amount"] is not None:
                         parts.append(f"bill ₹{o['total_amount']}, baaki ₹{o['amount_due']}")
