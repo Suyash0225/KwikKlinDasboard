@@ -131,3 +131,40 @@ def test_phase_one_read_registry_is_explicit_and_read_only():
         "get_shop_rate_card",
     }
     assert all(tool.handler.__name__.startswith(("get_",)) for tool in CUSTOMER_READ_TOOLS.values())
+
+
+@pytest.mark.asyncio
+async def test_phase_two_router_only_accepts_registered_read_tools(monkeypatch):
+    from app.services import ai_agent, llm_client
+
+    async def fake_ask_json(**kwargs):
+        assert kwargs["schema"] is ai_agent._TOOL_CALL_SCHEMA
+        return {
+            "tool_calls": [
+                {"name": "get_customer_orders", "limit": 5},
+                {"name": "run_arbitrary_sql", "limit": 5},
+            ]
+        }
+
+    monkeypatch.setattr(llm_client, "ask_json", fake_ask_json)
+    selected = await ai_agent._select_customer_tools(
+        AsyncMock(), _customer(), "mera order kaha hai?"
+    )
+
+    assert selected == {"get_customer_orders"}
+
+
+@pytest.mark.asyncio
+async def test_phase_two_router_falls_back_to_all_read_tools_on_llm_failure(monkeypatch):
+    from app.services import ai_agent, llm_client
+    from app.services.llm_client import LLMError
+
+    async def failing_ask_json(**kwargs):
+        raise LLMError("router unavailable")
+
+    monkeypatch.setattr(llm_client, "ask_json", failing_ask_json)
+    selected = await ai_agent._select_customer_tools(
+        AsyncMock(), _customer(), "mera bill?"
+    )
+
+    assert selected == set(ai_agent.CUSTOMER_READ_TOOLS)
