@@ -132,12 +132,16 @@ async def send_text(
 
 
 async def send_list(phone: str, text: str, rows: list[dict], *, button: str = "Choose") -> str:
+    # WAHA expects list-message fields inside the "message" object.
+    # NOWEB otherwise sees message=undefined and crashes on description.
     payload = {
         "session": settings.WAHA_SESSION,
         "chatId": chat_id(phone),
-        "description": text,
-        "button": button,
-        "sections": [{"title": "Options", "rows": rows}],
+        "message": {
+            "description": text,
+            "button": button,
+            "sections": [{"title": "Options", "rows": rows}],
+        },
     }
     data = await _post("/api/sendList", payload)
     return _message_id(data)
