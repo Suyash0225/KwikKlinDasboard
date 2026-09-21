@@ -526,7 +526,7 @@ async def _alert_owner_with_hold(db: AsyncSession, order: Order, text: str) -> N
     from app.services import team
     from app.services.whatsapp import Button
 
-    owner = "+" + manager_phone().lstrip("+")
+    owner = await team.primary_admin_phone(db)
     buttons = [
         Button(f"hold:{order.order_number}:yes", "🛑 Order rok do"),
         Button(f"hold:{order.order_number}:no", "▶️ Chalne do"),
