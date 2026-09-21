@@ -95,15 +95,15 @@ async def test_the_owner_always_carries_owner_powers() -> None:
 async def test_primary_admin_is_the_ai_owner() -> None:
     """AI escalation/FYI routing chooses the explicit ADMIN user."""
     phone = "+919999900096"
-    async with async_session_factory() as db:
-        db.add(Staff(phone=phone, name="Admin", role=StaffRole.ADMIN, is_active=True))
-        await db.commit()
-        assert await team.primary_admin_phone(db) == phone
-    finally_db = async_session_factory
-
-    async with finally_db() as db:
-        await db.execute(delete(Staff).where(Staff.phone == phone))
-        await db.commit()
+    try:
+        async with async_session_factory() as db:
+            db.add(Staff(phone=phone, name="Admin", role=StaffRole.ADMIN, is_active=True))
+            await db.commit()
+            assert await team.primary_admin_phone(db) == phone
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Staff).where(Staff.phone == phone))
+            await db.commit()
 
 
 async def test_an_admin_staff_row_gets_owner_powers() -> None:
