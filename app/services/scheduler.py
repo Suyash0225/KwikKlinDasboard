@@ -763,8 +763,10 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
 
         open_tasks = (
             await db.execute(
-                select(Task, Staff)
+                select(Task, Staff, Order, Customer)
                 .outerjoin(Staff, Staff.id == Task.assigned_staff_id)
+                .outerjoin(Order, Order.id == Task.order_id)
+                .outerjoin(Customer, Customer.id == Order.customer_id)
                 .where(Task.status == TASK_OPEN)
                 .order_by(Task.urgent.desc(), Task.created_at)
                 .limit(30)
@@ -803,11 +805,80 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
 
             if open_tasks:
                 manager_text.append("")
-                manager_text.append("📋 Pending tasks:")
-                for task, assignee in open_tasks:
+                manager_text.append("📌 ACTION REQUIRED — pending tasks:")
+                manager_text.append("Payment/billing aur delivery ka kaam alag rakha hai, taaki priority clear rahe.")
+
+                payment_tasks = []
+                delivery_tasks = []
+                other_tasks = []
+
+                for task, assignee, order, customer in open_tasks:
                     who = assignee.name if assignee else "Unassigned"
                     flag = " 🔴 URGENT" if task.urgent else ""
-                    manager_text.append(f"• {task.code} — {who} — {task.title[:150]}{flag}")
+                    title = (task.title or "").strip()
+                    low = title.casefold()
+                    if any(k in low for k in ("payment", "paisa", "due", "bill", "billing", "payment reminder")):
+                        payment_tasks.append((task, who, order, customer, flag))
+                    elif any(k in low for k in ("delivery", "deliver", "pickup", "status", "ready")):
+                        delivery_tasks.append((task, who, order, customer, flag))
+                    else:
+                        other_tasks.append((task, who, order, customer, flag))
+
+                def _task_line(row):
+                    task, who, order, customer, flag = row
+                    customer_name = (customer.name or customer.phone) if customer else ""
+                    order_no = order.order_number if order else ""
+                    due = ""
+                    if order and order.total_amount is not None:
+                        paid = order.amount_paid or Decimal("0")
+                        due_amount = order.total_amount - paid
+                        if due_amount > 0:
+                            due = f" · Due ₹{due_amount:g}"
+                    context = " · ".join(x for x in (order_no, customer_name) if x)
+                    context = f" · {context}" if context else ""
+                    return f"• {task.code} · {who} · {title[:140]}{context}{due}{flag}"
+
+                if payment_tasks:
+                    manager_text.append("")
+                    manager_text.append("💰 PAYMENT / BILLING:")
+                    for row in payment_tasks:
+                        task, who, order, customer, flag = row
+                        title = (task.title or "").strip()
+                        customer_name = (customer.name or customer.phone) if customer else ""
+                        order_no = order.order_number if order else ""
+                        due = ""
+                        if order and order.total_amount is not None:
+                            paid = order.amount_paid or Decimal("0")
+                            due_amount = order.total_amount - paid
+                            if due_amount > 0:
+                                due = f" · Due ₹{due_amount:g}"
+                        context = " · ".join(x for x in (order_no, customer_name) if x)
+                        context = f" · {context}" if context else ""
+                        manager_text.append(f"• {task.code} · {who} · {title[:140]}{context}{due}{flag}")
+
+                if delivery_tasks:
+                    manager_text.append("")
+                    manager_text.append("🚚 DELIVERY / CUSTOMER FOLLOW-UP:")
+                    for row in delivery_tasks:
+                        task, who, order, customer, flag = row
+                        title = (task.title or "").strip()
+                        customer_name = (customer.name or customer.phone) if customer else ""
+                        order_no = order.order_number if order else ""
+                        context = " · ".join(x for x in (order_no, customer_name) if x)
+                        context = f" · {context}" if context else ""
+                        manager_text.append(f"• {task.code} · {who} · {title[:140]}{context}{flag}")
+
+                if other_tasks:
+                    manager_text.append("")
+                    manager_text.append("📋 OTHER TASKS:")
+                    for row in other_tasks:
+                        task, who, order, customer, flag = row
+                        title = (task.title or "").strip()
+                        customer_name = (customer.name or customer.phone) if customer else ""
+                        order_no = order.order_number if order else ""
+                        context = " · ".join(x for x in (order_no, customer_name) if x)
+                        context = f" · {context}" if context else ""
+                        manager_text.append(f"• {task.code} · {who} · {title[:140]}{context}{flag}")
 
             if today_orders:
                 manager_text.append("")
