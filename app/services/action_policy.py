@@ -22,7 +22,7 @@ BUSINESS_ACTION_POLICY = {
     "marketing": {
         "IDENTIFY_OPPORTUNITY": "Use real customer segments, order value and campaign history before proposing outreach.",
         "CREATE_OFFER": "Choose an offer for the business goal, subject to the configured maximum discount and validity limits.",
-        "DRAFT_CAMPAIGN": "Generate concise personalized copy and a creative brief using the current season and owner style.",
+        "DRAFT_CAMPAIGN": "Generate a WhatsApp-ready campaign with a clear seasonal headline, problem/hook, offer headline + eligibility, 2-3 service benefits, CTA, business contact only if configured, brand sign-off and validity only when supplied. Use readable line breaks and natural Hindi/Hinglish; do not compress the campaign into 3 lines or invent offer details.",
         "SEND_CAMPAIGN": "Never send merely because AI suggested it; respect owner approval/autonomy, opt-outs, frequency caps, budget and quiet hours.",
         "LEAD_FOLLOWUP": "Prioritize genuine enquiries and interested leads before cold/re-engagement outreach.",
         "REFERRAL": "Ask existing happy customers for referrals only when the business rules permit it.",
