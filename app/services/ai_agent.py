@@ -180,25 +180,25 @@ async def _run_agentic_customer_turn(
 
         profile = await run_customer_tool(db, customer, "get_customer_profile")
         transcript = (
-            f"RUNTIME DATE: {_dt.now(_tz.utc).date().isoformat()}\\n"
-            f"AUTHENTICATED CUSTOMER PROFILE:\\n{profile}\\n"
-            f"CONVERSATION HISTORY:\\n{history}\\n"
-            f"KNOWLEDGE:\\n{kb}\\n"
-            f"CUSTOMER MESSAGE:\\n{text[:1500]}"
+            f"RUNTIME DATE: {_dt.now(_tz.utc).date().isoformat()}\n"
+            f"AUTHENTICATED CUSTOMER PROFILE:\n{profile}\n"
+            f"CONVERSATION HISTORY:\n{history}\n"
+            f"KNOWLEDGE:\n{kb}\n"
+            f"CUSTOMER MESSAGE:\n{text[:1500]}"
         )
         if sandbox:
-            transcript += "\\nSANDBOX: do not perform real side effects."
+            transcript += "\nSANDBOX: do not perform real side effects."
 
         tool_results: list[str] = []
         for step in range(5):
             user_payload = transcript
             if tool_results:
                 user_payload += (
-                    "\\n\\nTOOL RESULTS FROM PREVIOUS STEPS:\\n"
-                    + "\\n".join(tool_results)
+                    "\n\nTOOL RESULTS FROM PREVIOUS STEPS:\n"
+                    + "\n".join(tool_results)
                 )
                 user_payload += (
-                    "\\n\\nContinue the same task. Use another tool if needed; "
+                    "\n\nContinue the same task. Use another tool if needed; "
                     "otherwise give the final customer reply."
                 )
 
@@ -216,7 +216,7 @@ async def _run_agentic_customer_turn(
                 final = (out.get("final") or "").strip()
                 if final:
                     return final + (
-                        "\\n🧪 (sandbox: no real action was executed)"
+                        "\n🧪 (sandbox: no real action was executed)"
                         if sandbox else ""
                     )
                 if out.get("done"):
