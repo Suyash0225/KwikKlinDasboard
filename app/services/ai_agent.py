@@ -615,7 +615,7 @@ async def _build_facts(db: AsyncSession, customer: Customer) -> str:
                         )
                     else:
                         parts.append(
-                            f"expected delivery {o['expected_delivery'][:10']}"
+                            f"expected delivery {o['expected_delivery'][:10]}"
                         )
                 if o["total_amount"] is not None:
                     parts.append(
