@@ -320,7 +320,14 @@ async def dashboard_data(db: AsyncSession = Depends(get_db)) -> dict:
             "by_status": {s.name: c for s, c in by_status_rows},
             "active_total": sum(c for _, c in by_status_rows),
             "today_new": today_new,
-            "delayed": sum(1 for t in tracked.values() if t["delayed"]),
+            "delayed": sum(1 for t in tracked.values() if t["promise_late"]),
+            "due_today": sum(1 for t in tracked.values() if t["due_today"]),
+            "due_soon": sum(
+                1 for o, _ in active_orders
+                if o.expected_delivery is not None
+                and not tracked[o.id]["promise_late"]
+                and (o.expected_delivery - datetime.now(timezone.utc).date()).days in (1, 2)
+            ),
             "unpaid_delivered": len(unpaid_delivered),
         },
         "active_orders": [_row(o, cu, tracked[o.id]) for o, cu in active_orders],
