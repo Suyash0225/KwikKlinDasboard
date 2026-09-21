@@ -10,7 +10,7 @@ action_registry.py.
 """
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy import select
@@ -42,15 +42,19 @@ async def get_customer_orders(
     db: AsyncSession,
     customer: Customer,
     *,
-    limit: int = 5,
+    limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """Return this customer's recent orders with canonical status facts only."""
-    limit = max(1, min(int(limit), 10))
+    """Return this customer's orders from the last 3 months with canonical facts."""
+    limit = max(1, min(int(limit), 20))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
     rows = list(
         (
             await db.execute(
                 select(Order)
-                .where(Order.customer_id == customer.id)
+                .where(
+                    Order.customer_id == customer.id,
+                    Order.created_at >= cutoff,
+                )
                 .order_by(Order.created_at.desc())
                 .limit(limit)
             )
@@ -71,6 +75,9 @@ async def get_customer_orders(
             and expected < today
         )
 
+        from app.services import bill_link
+        bill_url = bill_link.url(order)
+
         result.append(
             {
                 "order_number": order.order_number,
@@ -90,6 +97,7 @@ async def get_customer_orders(
                     if order.total_amount is not None
                     else None
                 ),
+                "bill_url": bill_url or None,
             }
         )
     return result
@@ -99,7 +107,7 @@ async def get_customer_bills(
     db: AsyncSession,
     customer: Customer,
     *,
-    limit: int = 5,
+    limit: int = 20,
 ) -> list[dict[str, Any]]:
     """Return unpaid bill facts for this customer; no payment secrets."""
     orders = await get_customer_orders(db, customer, limit=limit)
@@ -110,6 +118,7 @@ async def get_customer_bills(
             "amount_paid": row["amount_paid"],
             "amount_due": row["amount_due"],
             "status": row["status"],
+            "bill_url": row["bill_url"],
         }
         for row in orders
         if row["amount_due"] is not None and float(row["amount_due"]) > 0
