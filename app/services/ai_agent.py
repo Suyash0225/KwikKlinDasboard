@@ -17,7 +17,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Customer, Rate
+from app.models import Customer, Order, OrderStatus, Rate
 from app.config import settings
 from app.services import llm_client
 from app.services.escalation import raise_escalation
@@ -580,18 +580,37 @@ async def _build_facts(db: AsyncSession, customer: Customer) -> str:
         log.exception("shop_profile_facts_failed")
 
     active = await get_active_orders_for_phone(db, customer.phone)
+    recent = list(
+        (
+            await db.execute(
+                select(Order)
+                .where(Order.customer_id == customer.id)
+                .order_by(Order.created_at.desc())
+                .limit(5)
+            )
+        ).scalars().all()
+    )
     if active:
         lines.append("Customer's current orders:")
-        for o in active:
+    else:
+        lines.append("Customer's current orders: none in progress.")
+
+    # Also expose the customer's recent completed orders so the model cannot
+    # quote a stale expected-delivery date after an order has been delivered.
+    if recent:
+        lines.append("Customer's recent orders:")
+        for o in recent:
             parts = [f"- {o.order_number}: {status_label(o.status)}"]
-            if o.expected_delivery:
+            if o.status not in {OrderStatus.DELIVERED, OrderStatus.CANCELLED} and o.expected_delivery:
                 parts.append(f"expected delivery {o.expected_delivery.strftime('%d %b %Y')}")
+            if o.status is OrderStatus.DELIVERED and o.actual_delivery:
+                parts.append(f"delivered on {o.actual_delivery.strftime('%d %b %Y')}")
             if o.total_amount is not None:
                 due = o.total_amount - (o.amount_paid or 0)
                 parts.append(f"bill ₹{o.total_amount}, baaki ₹{max(due, 0)}")
             lines.append(" | ".join(parts))
-    else:
-        lines.append("Customer's current orders: none in progress.")
+    elif not active:
+        lines.append("Customer's recent orders: none.")
 
     rates = (
         (
