@@ -138,7 +138,8 @@ DEFAULTS: dict[str, Any] = {
     # chunkar order-linked kaam banata hai, sabse kam load wale ko
     "agent_auto_assign": True,
     # Turnaround (services/turnaround.py): har stage ki hadd GHANTON mein —
-    # isse zyada ruka to order "delayed", dashboard par laal, manager ko alert
+    # isse zyada ruka to stage reminder/warning tight hota hai. Customer-facing
+    # "Delayed" dashboard count sirf expected delivery date cross hone par hota hai.
     "stage_limit_hours": {
         "RECEIVED": 6, "PICKUP_ASSIGNED": 6, "PICKED_UP": 12, "IN_WASH": 24,
         "IN_DRY": 12, "IN_IRON": 12, "READY": 24, "OUT_FOR_DELIVERY": 6, "ON_HOLD": 48,
