@@ -13,6 +13,7 @@ PHONE = "+919999900099"
 
 
 async def test_change_delivery_date_resolves_unique_customer_name(sent):
+    from tests.conftest import purge_phones
     async with async_session_factory() as db:
         order = await create_order(
             db,
@@ -42,9 +43,11 @@ async def test_change_delivery_date_resolves_unique_customer_name(sent):
         assert fresh.expected_delivery == new_date
         assert order.order_number in reply
         assert new_date.strftime("%d %b %Y") in reply
+    await purge_phones(PHONE)
 
 
 async def test_change_delivery_date_does_not_guess_multiple_orders(sent):
+    from tests.conftest import purge_phones
     async with async_session_factory() as db:
         await create_order(
             db,
@@ -74,3 +77,5 @@ async def test_change_delivery_date_does_not_guess_multiple_orders(sent):
 
         assert "active orders" in reply
         assert "Order number bata dijiye" in reply
+    await purge_phones(PHONE)
+    await purge_phones("+919999900098")
