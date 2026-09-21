@@ -115,8 +115,10 @@ _TOOL_ROUTER_SYSTEM = (
       "Use multiple tools when needed. Greetings may return an empty list."
 )
 
-async def _select_customer_tools(db: AsyncSession, customer: Customer, text: str) -> set[str]:
-    """LLM selects read-only tools; backend remains the execution boundary."""
+async def _select_customer_tools(
+    db: AsyncSession, customer: Customer, text: str
+) -> dict[str, int]:
+    """LLM selects read-only tools; backend validates args and executes them."""
     del db, customer
     try:
         with llm_client.track("tool_router"):
@@ -127,14 +129,20 @@ async def _select_customer_tools(db: AsyncSession, customer: Customer, text: str
                 model=llm_client.MODEL_CHEAP,
                 max_tokens=300,
             )
-        return {
-            call.get("name")
-            for call in (out.get("tool_calls") or [])
-            if call.get("name") in CUSTOMER_READ_TOOLS
-        }
+        selected: dict[str, int] = {}
+        for call in out.get("tool_calls") or []:
+            name = call.get("name")
+            if name not in CUSTOMER_READ_TOOLS:
+                continue
+            try:
+                limit = max(1, min(int(call.get("limit", 5)), 10))
+            except (TypeError, ValueError):
+                limit = 5
+            selected[name] = limit
+        return selected
     except LLMError as exc:
         log.warning("ai_tool_router_failed", error=str(exc)[:150])
-        return set(CUSTOMER_READ_TOOLS)
+        return {name: 5 for name in CUSTOMER_READ_TOOLS}
 
 
 _COMPOSE_SYSTEM = (
@@ -147,8 +155,7 @@ _COMPOSE_SYSTEM = (
     "the customer says):\n"
     "1. Return intent as exactly one of ORDER_STATUS, NEW_ORDER, PRICE_QUERY, "
     "COMPLAINT, GREETING, OTHER. Return language as hi for Hindi/Hinglish or "
-    "en for English.\n"
-    "2. Facts discipline: prices, order statuses, delivery dates and policies "
+    "en for English.\n"    "2. Facts discipline: prices, order statuses, delivery dates and policies "
     "come ONLY from FACTS. Never invent numbers, dates, discounts or offers.\n"
     "3. Handle routine service yourself, confidently:\n"
     "   - For a NEW/UNKNOWN customer with no active order, first collect the "
@@ -297,7 +304,6 @@ async def build_ai_reply(
         return None
 
     prompt = _build_prompt(ctx, text, "auto")
-
     try:
         with llm_client.track("reply"):
             out = await llm_client.ask_json(
@@ -447,8 +453,7 @@ async def build_ai_reply(
         await audit.record(
             actor_role="customer", actor=customer.phone, action="ai_reply",
             args={"intent": intent, "fyi": bool(admin_note)}, result=out["reply"][:200],
-        )
-    return out.get("reply") or None
+        )    return out.get("reply") or None
 
 
 async def _gather_context(
@@ -604,11 +609,15 @@ async def _open_question(db: AsyncSession, customer: Customer, text: str) -> Non
 
 
 async def _build_facts(
-    db: AsyncSession, customer: Customer, *, tool_names: set[str] | None = None
+    db: AsyncSession, customer: Customer, *, tool_names: dict[str, int] | None = None
 ) -> str:
     """Build facts only from customer-safe tools selected by the router."""
     lines: list[str] = []
-    selected = set(CUSTOMER_READ_TOOLS) if tool_names is None else set(tool_names)
+    selected = (
+        {name: 5 for name in CUSTOMER_READ_TOOLS}
+        if tool_names is None
+        else {name: max(1, min(int(limit), 10)) for name, limit in tool_names.items() if name in CUSTOMER_READ_TOOLS}
+    )
 
     if "get_customer_profile" in selected:
         try:
@@ -638,7 +647,9 @@ async def _build_facts(
 
     if "get_customer_orders" in selected:
         try:
-            orders = await run_customer_tool(db, customer, "get_customer_orders", limit=5)
+            orders = await run_customer_tool(
+                db, customer, "get_customer_orders", limit=selected["get_customer_orders"]
+            )
             active = [o for o in orders if o["status"] not in {"DELIVERED", "CANCELLED"}]
             lines.append("Customer's current orders:" if active else "Customer's current orders: none in progress.")
             if orders:
@@ -647,8 +658,7 @@ async def _build_facts(
                     parts = [f"- {o['order_number']}: {o['status_label']}"]
                     if o["status"] == "DELIVERED" and o["actual_delivery"]:
                         parts.append(f"delivered on {o['actual_delivery'][:10]}")
-                    elif o["status"] != "CANCELLED" and o["expected_delivery"]:
-                        suffix = " (OVERDUE)" if o["overdue"] else ""
+                    elif o["status"] != "CANCELLED" and o["expected_delivery"]:                        suffix = " (OVERDUE)" if o["overdue"] else ""
                         parts.append(f"expected delivery {o['expected_delivery'][:10]}{suffix}")
                     if o["total_amount"] is not None:
                         parts.append(f"bill ₹{o['total_amount']}, baaki ₹{o['amount_due']}")
@@ -660,7 +670,9 @@ async def _build_facts(
 
     if "get_customer_bills" in selected:
         try:
-            bills = await run_customer_tool(db, customer, "get_customer_bills", limit=5)
+            bills = await run_customer_tool(
+                db, customer, "get_customer_bills", limit=selected["get_customer_bills"]
+            )
             if bills:
                 lines.append("Customer's unpaid bills:")
                 for bill in bills:
