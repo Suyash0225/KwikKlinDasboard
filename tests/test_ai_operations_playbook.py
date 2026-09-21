@@ -1,27 +1,75 @@
 """AI Operations Playbook code-alignment tests."""
 
 from datetime import date, timedelta
+from decimal import Decimal
+import uuid
+
+from sqlalchemy import select, text as sqltext
 
 from app.database import async_session_factory
-from app.models import Order, OrderStatus
+from app.models import Customer, Order
 from app.services.bill_agent import _apply_delay
-from app.services.order_service import create_order
-from sqlalchemy import select
+from app.services import tenant_context
 
 
 PHONE = "+919999900099"
+PHONE_2 = "+919999900098"
+
+
+async def _seed_order(db, phone: str, name: str, item_type: str) -> Order:
+    """Seed an order directly because the live DB has a legacy NOT NULL bill_code.
+
+    The application Order model no longer owns bill_code, so this test-only
+    insert supplies the legacy DB column without changing production code.
+    """
+    tenant_id = await tenant_context.get_home_tenant_id()
+    customer = Customer(
+        phone=phone,
+        name=name,
+        tenant_id=tenant_id,
+    )
+    db.add(customer)
+    await db.flush()
+
+    order_id = uuid.uuid4()
+    order_number = f"KK-TEST-{uuid.uuid4().hex[:10].upper()}"
+    bill_code = f"TEST-{uuid.uuid4().hex[:12].upper()}"
+
+    await db.execute(
+        sqltext(
+            """
+            INSERT INTO orders (
+                id, order_number, customer_id, status, items,
+                amount_paid, payment_status, priority, bill_code, tenant_id
+            )
+            VALUES (
+                :id, :order_number, :customer_id, 'RECEIVED',
+                CAST(:items AS jsonb), :amount_paid, 'UNPAID',
+                'normal', :bill_code, :tenant_id
+            )
+            """
+        ),
+        {
+            "id": str(order_id),
+            "order_number": order_number,
+            "customer_id": str(customer.id),
+            "items": f'[{{"type":"{item_type}","qty":1}}]',
+            "amount_paid": Decimal("0"),
+            "bill_code": bill_code,
+            "tenant_id": str(tenant_id),
+        },
+    )
+    await db.commit()
+    return (
+        await db.execute(select(Order).where(Order.id == order_id))
+    ).scalar_one()
 
 
 async def test_change_delivery_date_resolves_unique_customer_name(sent):
     from tests.conftest import purge_phones
+
     async with async_session_factory() as db:
-        order = await create_order(
-            db,
-            customer_phone=PHONE,
-            customer_name="Shikhar",
-            items=[{"type": "shirt", "qty": 1}],
-            created_by="test",
-        )
+        order = await _seed_order(db, PHONE, "Shikhar", "shirt")
         new_date = date.today() + timedelta(days=4)
 
         reply = await _apply_delay(
@@ -48,21 +96,10 @@ async def test_change_delivery_date_resolves_unique_customer_name(sent):
 
 async def test_change_delivery_date_does_not_guess_multiple_orders(sent):
     from tests.conftest import purge_phones
+
     async with async_session_factory() as db:
-        await create_order(
-            db,
-            customer_phone=PHONE,
-            customer_name="Shikhar",
-            items=[{"type": "shirt", "qty": 1}],
-            created_by="test",
-        )
-        await create_order(
-            db,
-            customer_phone="+919999900098",
-            customer_name="Shikhar",
-            items=[{"type": "pant", "qty": 1}],
-            created_by="test",
-        )
+        await _seed_order(db, PHONE, "Shikhar", "shirt")
+        await _seed_order(db, PHONE_2, "Shikhar", "pant")
 
         reply = await _apply_delay(
             db,
@@ -78,4 +115,4 @@ async def test_change_delivery_date_does_not_guess_multiple_orders(sent):
         assert "active orders" in reply
         assert "Order number bata dijiye" in reply
     await purge_phones(PHONE)
-    await purge_phones("+919999900098")
+    await purge_phones(PHONE_2)
