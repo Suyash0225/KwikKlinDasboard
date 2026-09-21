@@ -155,7 +155,13 @@ async def on_order_created(db: AsyncSession, order: Order) -> dict:
                 # washer yet — the scheduler will create the task in the
                 # preparation window. This keeps WhatsApp quiet and avoids
                 # unnecessary staff messages.
-                if order.expected_delivery is None or order.expected_delivery <= date.today() + timedelta(days=3):
+                if (
+                    order.status in (OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH)
+                    and (
+                        order.expected_delivery is None
+                        or order.expected_delivery <= date.today() + timedelta(days=3)
+                    )
+                ):
                     task = await task_service.create_task(
                         db,
                         title=f"{who} — wash & iron: {items_summary(order)[:160]}",
@@ -332,6 +338,18 @@ async def on_task_done(db: AsyncSession, task: Task, by: str) -> None:
         from app.services import order_service
 
         order = await db.get(Order, task.order_id)
+        if order is None:
+            return
+
+        # A drop-off order can start at RECEIVED; record IN_WASH before
+        # moving the completed wash into drying. Pickup orders reach
+        # IN_WASH after the pickup/status transition.
+        if task.kind == "wash" and order.status in (OrderStatus.RECEIVED, OrderStatus.PICKED_UP):
+            await order_service.update_status(
+                db, order, OrderStatus.IN_WASH, changed_by=f"staff:{by}"
+            )
+            order = await db.get(Order, task.order_id)
+
         if order is not None and order.status is expected:
             await order_service.update_status(
                 db, order, target, changed_by=f"staff:{by}"
