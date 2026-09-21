@@ -1975,6 +1975,31 @@ async def inbox_thread(
     }
 
 
+@router.delete("/api/inbox/thread", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
+async def delete_inbox_thread(phone: str = Query(...), db: AsyncSession = Depends(get_db)) -> dict:
+    """Delete only chat history; keep the customer/staff profile and business records."""
+    try:
+        phone = normalize_phone(phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    customer = (await db.execute(select(Customer).where(Customer.phone == phone))).scalar_one_or_none()
+    staff = (await db.execute(select(Staff).where(Staff.phone == phone))).scalar_one_or_none()
+    conditions = []
+    if customer is not None:
+        conditions.append(Conversation.customer_id == customer.id)
+    if staff is not None:
+        conditions.append(Conversation.staff_id == staff.id)
+    if not conditions:
+        raise HTTPException(status_code=404, detail="chat not found")
+    result = await db.execute(delete(Conversation).where(or_(*conditions)))
+    if customer is not None:
+        customer.last_message_at = None
+    if staff is not None:
+        staff.last_message_at = None
+    await db.commit()
+    log.info("inbox_thread_deleted", deleted_messages=result.rowcount or 0)
+    return {"deleted": result.rowcount or 0, "phone": phone}
+
 class InboxSendIn(BaseModel):
     phone: str
     text: str = Field(min_length=1, max_length=4000)
