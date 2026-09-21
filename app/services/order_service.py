@@ -34,6 +34,7 @@ from app.models import (
     OrderStatus,
     OrderStatusHistory,
     PaymentMethod,
+    PaymentStatus,
 )
 from app.services.messages import get_message
 from app.services.whatsapp import SendError, WindowClosedError, send_message
