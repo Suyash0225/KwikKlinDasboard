@@ -103,16 +103,38 @@ async def test_pickup_bill_gives_pickup_task_to_delivery_boy_without_double_mess
     assert len(to_boy) == 1 and "Kab tak" in (to_boy[0]["text"] or ""), to_boy
 
 
-async def test_wash_done_makes_order_ready_and_agent_hands_delivery_to_boy(shop) -> None:
+async def test_wash_dry_iron_pipeline_hands_delivery_to_boy(shop) -> None:
     o = await _order()
     wash = (await _tasks(o.id))[0]
+
     async with async_session_factory() as db:
         t = await db.get(Task, wash.id)
         await task_service.complete_task(db, t, by="Opswash Two")
+
+    async with async_session_factory() as db:
+        assert (await db.get(Order, o.id)).status is OrderStatus.IN_DRY
+    kinds = {t.kind: t for t in await _tasks(o.id)}
+    assert kinds["wash"].status == "DONE"
+    assert kinds["dry"].status == "OPEN"
+
+    async with async_session_factory() as db:
+        t = await db.get(Task, kinds["dry"].id)
+        await task_service.complete_task(db, t, by="Opswash Two")
+
+    async with async_session_factory() as db:
+        assert (await db.get(Order, o.id)).status is OrderStatus.IN_IRON
+    kinds = {t.kind: t for t in await _tasks(o.id)}
+    assert kinds["dry"].status == "DONE"
+    assert kinds["iron"].status == "OPEN"
+
+    async with async_session_factory() as db:
+        t = await db.get(Task, kinds["iron"].id)
+        await task_service.complete_task(db, t, by="Opswash Two")
+
     async with async_session_factory() as db:
         assert (await db.get(Order, o.id)).status is OrderStatus.READY
     kinds = {t.kind: t for t in await _tasks(o.id)}
-    assert kinds["wash"].status == "DONE"
+    assert kinds["iron"].status == "DONE"
     assert kinds["delivery"].status == "OPEN" and kinds["delivery"].assigned_staff_id == shop["d1"]
 
     async with async_session_factory() as db:
@@ -170,6 +192,20 @@ def test_track_flags_stage_and_promise_delays_with_milestones() -> None:
     t2 = turnaround.track(fine, [_h(OrderStatus.IN_WASH, 2, now)], {"IN_WASH": 24}, now)
     assert not t2["delayed"]
     assert turnaround.clean_bill_seconds("45") == 45 and turnaround.clean_bill_seconds(99999) is None
+
+
+def test_deadline_reminder_cadence_gets_tighter() -> None:
+    now = datetime.now(timezone.utc)
+    now_ist = now.astimezone(task_service.IST)
+    task = SimpleNamespace(urgent=False)
+    order = SimpleNamespace(expected_delivery=now_ist.date() + timedelta(days=3))
+    assert task_service._task_ping_gap_hours(task, order, now_ist) == 4
+    order.expected_delivery = now_ist.date() + timedelta(days=2)
+    assert task_service._task_ping_gap_hours(task, order, now_ist) == 2
+    order.expected_delivery = now_ist.date() + timedelta(days=1)
+    assert task_service._task_ping_gap_hours(task, order, now_ist) == 1
+    order.expected_delivery = now_ist.date()
+    assert task_service._task_ping_gap_hours(task, order, now_ist) == 1
 
 
 async def test_delay_alert_goes_once_per_order_stage(shop, sent) -> None:
