@@ -95,7 +95,9 @@ async def compute_segments(db: AsyncSession) -> dict[str, list[dict]]:
     paid_values = sorted((Decimal(s["lifetime_paid"]) for s in stats), reverse=True)
     cutoff = paid_values[max(0, len(paid_values) // 5 - 1)] if paid_values else Decimal("0")
     result: dict[str, list[dict]] = {s: [] for s in SEGMENTS}
+    result["all_active"] = []
     for st in stats:
+        result["all_active"].append(st)
         for seg in _classify(st, now, cutoff):
             result[seg].append(st)
     return result
