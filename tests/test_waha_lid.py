@@ -6,7 +6,7 @@ from app.services import waha
 @pytest.mark.asyncio
 async def test_resolve_lid_returns_phone_jid(monkeypatch):
     async def fake_get(path):
-        assert "/lids/123456@lid" in path
+        assert "/lids/123456%40lid" in path
         return {"lid": "123456@lid", "pn": "919876543210@c.us"}
 
     monkeypatch.setattr(waha, "_get", fake_get)
