@@ -43,7 +43,7 @@ def esc_sent(monkeypatch) -> list[dict]:
 
 async def _seed_customer() -> Customer:
     async with async_session_factory() as s:
-        cust = Customer(phone=PHONE, name="AI Grahak")
+        cust = Customer(phone=PHONE, name="AI Grahak", address="Test Address, Varanasi")
         s.add(cust)
         await s.commit()
         return cust
