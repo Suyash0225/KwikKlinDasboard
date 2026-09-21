@@ -283,12 +283,10 @@ async def build_ai_reply(
             "(for example, KK-YYYYMMDD-01), and I'll check it. — " + settings.SHOP_NAME
         )
 
-    # One model call does both intent classification and reply composition.
-    # The old pipeline spent two LLM calls on almost every message: CHEAP
-    # classifier -> SMART composer. The composer already had all the context,
-    # so the classifier was redundant. We keep all transactional actions and
-    # safety decisions in code; the model only returns structured intent,
-    # language and wording.
+    # Phase 2 uses a small CHEAP router call to select read-only tools, then
+    # a SMART composer call receives only the facts those tools returned.
+    # The backend executes the selected tools; the model never gets SQL or a
+    # database session. Transactional actions and safety decisions remain in code.
     try:
         selected_tools = await _select_customer_tools(db, customer, text)
         ctx = await _gather_context(db, customer, text, selected_tools)
