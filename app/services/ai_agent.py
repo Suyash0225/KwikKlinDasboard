@@ -17,13 +17,14 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Customer, Order, OrderStatus, Rate
+from app.models import Customer, OrderStatus
 from app.config import settings
 from app.services import llm_client
 from app.services.escalation import raise_escalation
 from app.services.llm_client import LLMError
 from app.services.messages import CUSTOMER_LANG, get_message, status_label
 from app.services.order_service import get_active_orders_for_phone, send_bill_to_customer
+from app.services.ai_tools import run_customer_tool
 from app.services.action_policy import ACTION_EXECUTION_RULES, business_policy_text
 
 log = structlog.get_logger()
@@ -552,17 +553,24 @@ async def _open_question(db: AsyncSession, customer: Customer, text: str) -> Non
 
 
 async def _build_facts(db: AsyncSession, customer: Customer) -> str:
-    """Everything the model is allowed to know — and nothing more.
+    """Build the model FACTS block through the customer-safe tool boundary.
 
-    Deliberately EXCLUDED: orders.notes (internal), other customers' data.
+    The LLM never gets a DB session or arbitrary SQL. Each business read is
+    a named tool with an explicit scope and output contract.
     """
-    lines = [f"Customer: {customer.name or '(name unknown)'} ({customer.phone})"]
+    lines = []
+
+    try:
+        profile = await run_customer_tool(db, customer, "get_customer_profile")
+        lines.append(
+            f"Customer: {profile['name'] or '(name unknown)'} ({profile['phone']})"
+        )
+    except Exception:
+        log.exception("customer_profile_tool_failed")
+        lines.append(f"Customer: {customer.name or '(name unknown)'} ({customer.phone})")
 
     from app.services import app_settings
 
-    # One round trip for the whole shop profile. Without these the bot
-    # could not answer "dukaan kab khulti hai" or "kahan hai", the two
-    # things a new customer asks first.
     try:
         cfg = await app_settings.get_many(
             db, "turnaround_days", "shop_hours", "shop_address", "shop_contact_phone"
@@ -579,52 +587,59 @@ async def _build_facts(db: AsyncSession, customer: Customer) -> str:
     except Exception:
         log.exception("shop_profile_facts_failed")
 
-    active = await get_active_orders_for_phone(db, customer.phone)
-    recent = list(
-        (
-            await db.execute(
-                select(Order)
-                .where(Order.customer_id == customer.id)
-                .order_by(Order.created_at.desc())
-                .limit(5)
-            )
-        ).scalars().all()
-    )
-    if active:
-        lines.append("Customer's current orders:")
-    else:
-        lines.append("Customer's current orders: none in progress.")
-
-    # Also expose the customer's recent completed orders so the model cannot
-    # quote a stale expected-delivery date after an order has been delivered.
-    if recent:
-        lines.append("Customer's recent orders:")
-        for o in recent:
-            parts = [f"- {o.order_number}: {status_label(o.status)}"]
-            if o.status not in {OrderStatus.DELIVERED, OrderStatus.CANCELLED} and o.expected_delivery:
-                parts.append(f"expected delivery {o.expected_delivery.strftime('%d %b %Y')}")
-            if o.status is OrderStatus.DELIVERED and o.actual_delivery:
-                parts.append(f"delivered on {o.actual_delivery.strftime('%d %b %Y')}")
-            if o.total_amount is not None:
-                due = o.total_amount - (o.amount_paid or 0)
-                parts.append(f"bill ₹{o.total_amount}, baaki ₹{max(due, 0)}")
-            lines.append(" | ".join(parts))
-    elif not active:
-        lines.append("Customer's recent orders: none.")
-
-    rates = (
-        (
-            await db.execute(
-                select(Rate).where(Rate.is_active).order_by(Rate.service, Rate.garment)
-            )
+    try:
+        orders = await run_customer_tool(
+            db, customer, "get_customer_orders", limit=5
         )
-        .scalars()
-        .all()
-    )
-    if rates:
-        lines.append("Rate card (per piece unless /kg):")
-        lines += [
-            f"- {r.service}{' / ' + r.garment if r.garment else ''}: ₹{r.rate}/{r.unit}"
-            for r in rates
+        active = [
+            o for o in orders
+            if o["status"] not in {"DELIVERED", "CANCELLED"}
         ]
+        if active:
+            lines.append("Customer's current orders:")
+        else:
+            lines.append("Customer's current orders: none in progress.")
+
+        if orders:
+            lines.append("Customer's recent orders:")
+            for o in orders:
+                parts = [
+                    f"- {o['order_number']}: {o['status_label']}",
+                ]
+                if o["status"] == "DELIVERED" and o["actual_delivery"]:
+                    parts.append(f"delivered on {o['actual_delivery'][:10]}")
+                elif o["status"] != "CANCELLED" and o["expected_delivery"]:
+                    if o["overdue"]:
+                        parts.append(
+                            f"expected delivery {o['expected_delivery'][:10']} (OVERDUE)"
+                        )
+                    else:
+                        parts.append(
+                            f"expected delivery {o['expected_delivery'][:10']}"
+                        )
+                if o["total_amount"] is not None:
+                    parts.append(
+                        f"bill ₹{o['total_amount']}, baaki ₹{o['amount_due']}"
+                    )
+                lines.append(" | ".join(parts))
+        else:
+            lines.append("Customer's recent orders: none.")
+    except Exception:
+        log.exception("customer_orders_tool_failed")
+        return "\n".join(lines)
+
+    try:
+        rates = await run_customer_tool(
+            db, customer, "get_shop_rate_card"
+        )
+        if rates:
+            lines.append("Rate card (per piece unless /kg):")
+            lines.extend(
+                f"- {r['service']}{' / ' + r['garment'] if r['garment'] else ''}: "
+                f"₹{r['rate']}/{r['unit']}"
+                for r in rates
+            )
+    except Exception:
+        log.exception("shop_rate_card_tool_failed")
+
     return "\n".join(lines)
