@@ -651,8 +651,9 @@ function renderChips() {
   // upar likha comment bhi), sirf yahan lagaya nahi gaya tha.
   const cnt = (n) => `<span class="cnt">${n}</span>`;
   const chips = [["", `All active${cnt(DASH.counts.active_total)}`]]
-    // IMP_006: stage ki hadd ya delivery date nikal gayi — sabse pehle yahi dikhe
-    .concat((DASH.counts.delayed || 0) ? [["DELAYED", `⏱ Delayed${cnt(DASH.counts.delayed)}`]] : [])
+    .concat((DASH.counts.delayed || 0) ? [["DELAYED", `🚨 Overdue${cnt(DASH.counts.delayed)}`]] : [])
+    .concat((DASH.counts.due_today || 0) ? [["DUE_TODAY", `🔴 Due today${cnt(DASH.counts.due_today)}`]] : [])
+    .concat((DASH.counts.due_soon || 0) ? [["DUE_SOON", `🟠 Due soon${cnt(DASH.counts.due_soon)}`]] : [])
     .concat(STATUS_SEQ.filter((s) => s !== "DELIVERED")
       .map((s) => [s, `${statusName(s)}${cnt(by[s] || 0)}`]))
     // Delivered par paisa baaki — kaam khatam par hisaab nahi; yahin se collect/message
@@ -668,8 +669,15 @@ function dashOrder(num) {
   return ((d.active_orders || []).concat(d.unpaid_orders || [])).find((x) => x.order_number === num);
 }
 function orderMatches(o) {
-  if (dashFilter.status === "DELAYED") { if (!(o.tracking && o.tracking.delayed)) return false; }
-  else if (dashFilter.status === "UNPAID") { /* alag list, sab rows */ }
+  if (dashFilter.status === "DELAYED") {
+    if (!(o.tracking && o.tracking.promise_late)) return false;
+  } else if (dashFilter.status === "DUE_TODAY") {
+    if (!(o.tracking && o.tracking.due_today)) return false;
+  } else if (dashFilter.status === "DUE_SOON") {
+    const due = o.expected_delivery ? new Date(o.expected_delivery + "T00:00:00") : null;
+    const days = due ? Math.round((due - new Date(new Date().toDateString())) / 86400000) : null;
+    if (days !== 1 && days !== 2) return false;
+  } else if (dashFilter.status === "UNPAID") { /* alag list, sab rows */ }
   else if (dashFilter.status && o.status !== dashFilter.status) return false;
   if (dashFilter.pay && o.payment_status !== dashFilter.pay) return false;
   const q = dashFilter.q.toLowerCase();
