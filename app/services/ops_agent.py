@@ -69,6 +69,8 @@ _STAGE_TASKS = {
 }
 _WASHABLE = (OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
              OrderStatus.IN_DRY, OrderStatus.IN_IRON)
+# Only these stages can legitimately be waiting for a new wash task.
+_WASH_PLANNABLE = (OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH)
 
 
 async def enabled(db: AsyncSession) -> bool:
@@ -206,7 +208,7 @@ async def plan_due_wash_tasks(db: AsyncSession, *, today=None) -> int:
                 Order.expected_delivery.isnot(None),
                 Order.expected_delivery <= cutoff,
                 Order.expected_delivery >= today,
-                Order.status.in_(_WASHABLE),
+                Order.status.in_(_WASH_PLANNABLE),
             )
         )
     ).scalars().all()
