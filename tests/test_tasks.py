@@ -61,6 +61,8 @@ async def test_create_task_messages_the_assignee(worker, sent) -> None:
     body = sent[0]["text"]
     assert task.code in body and "Sharma ji" in body
     assert f"done {task.code}" in body, "they must be told how to close it"
+    assert "Due:" not in body
+    assert "Bill & payment:" not in body
 
 
 async def test_owner_saying_bol_do_creates_a_tracked_task(worker, sent, monkeypatch) -> None:

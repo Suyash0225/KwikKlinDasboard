@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session_factory
-from app.models import TASK_CANCELLED, TASK_DONE, TASK_OPEN, Order, Staff, Task
+from app.models import TASK_CANCELLED, TASK_DONE, TASK_OPEN, Order, Staff, StaffRole, Task
 from app.services import audit
 from app.services.whatsapp import SendError, WindowClosedError, send_message
 from app.services.tenant_context import manager_phone
@@ -196,11 +196,16 @@ async def _send_to_assignee(
                     lines.append(f"📅 Delivery: {order.expected_delivery.strftime('%d %b %Y')}")
                 if task.kind in ("pickup", "delivery") and customer and customer.address:
                     lines.append(f"📍 Address: {customer.address.strip()}")
-                if due > 0:
-                    lines.append(f"💰 Due: ₹{due:g}")
-                bill_link = await bill_url_for(db, order)
-                if bill_link:
-                    lines.append(f"🧾 Bill & payment: {bill_link}")
+                # Payment amount and the signed bill/payment link are
+                # sensitive. Only delivery staff, managers, and admins need
+                # this information. Washers and supervisors must not receive
+                # financial details in task assignments/reminders.
+                if staff.role in (StaffRole.DELIVERY, StaffRole.MANAGER, StaffRole.ADMIN):
+                    if due > 0:
+                        lines.append(f"💰 Due: ₹{due:g}")
+                    bill_link = await bill_url_for(db, order)
+                    if bill_link:
+                        lines.append(f"🧾 Bill & payment: {bill_link}")
                 order_details = "\n" + "\n".join(lines) + "\n"
             except Exception:
                 log.exception("task_order_context_failed", code=task.code)
