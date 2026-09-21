@@ -180,6 +180,7 @@ async def _run_agentic_customer_turn(
 
         profile = await run_customer_tool(db, customer, "get_customer_profile")
         transcript = (
+            f"RUNTIME DATE: {_dt.now(_tz.utc).date().isoformat()}\\n"
             f"AUTHENTICATED CUSTOMER PROFILE:\\n{profile}\\n"
             f"CONVERSATION HISTORY:\\n{history}\\n"
             f"KNOWLEDGE:\\n{kb}\\n"
