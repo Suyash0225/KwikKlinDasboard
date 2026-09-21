@@ -2,7 +2,7 @@
 
 from datetime import date
 from decimal import Decimal
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -81,6 +81,7 @@ async def test_customer_orders_marks_overdue_and_hides_future_date_for_delivered
             return [delivered, overdue]
 
     db = AsyncMock()
+    db.execute.return_value = MagicMock()
     db.execute.return_value.scalars.return_value = ScalarResult()
 
     result = await get_customer_orders(db, _customer(), limit=5)
@@ -107,6 +108,7 @@ async def test_customer_orders_keeps_delivered_canonical_status():
             return [delivered]
 
     db = AsyncMock()
+    db.execute.return_value = MagicMock()
     db.execute.return_value.scalars.return_value = ScalarResult()
 
     result = await get_customer_orders(db, _customer())
