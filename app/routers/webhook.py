@@ -44,6 +44,7 @@ from app.services.order_service import (
     get_order,
 )
 from app.services.whatsapp import SendError, send_message
+from app.services import waha
 from app.utils.phone import normalize_phone
 from app.services.tenant_context import manager_phone
 
@@ -223,7 +224,38 @@ async def receive_waha_webhook(
         if event_name == "message":
             # Ignore our own outbound events. We record them at send time.
             if payload.get("fromMe") is not True:
-                msg = _waha_to_meta_shape(payload)
+                raw_from = str(payload.get("from") or "")
+                resolved_from = raw_from
+                if raw_from.endswith("@lid"):
+                    try:
+                        resolved_from = await waha.resolve_lid(raw_from) or ""
+                    except waha.WahaError:
+                        log.exception("waha_lid_resolution_failed", raw_from=raw_from)
+                        resolved_from = ""
+
+                    if not resolved_from:
+                        # Some NOWEB payloads expose a canonical phone JID in
+                        # the nested message key even when `from` is @lid.
+                        data = payload.get("_data") or {}
+                        key = data.get("key") or {}
+                        alternate = (
+                            key.get("remoteJidAlt")
+                            or data.get("remoteJidAlt")
+                            or key.get("remoteJid")
+                        )
+                        if isinstance(alternate, str) and alternate.endswith(("@c.us", "@s.whatsapp.net")):
+                            resolved_from = alternate.replace("@s.whatsapp.net", "@c.us")
+
+                    if not resolved_from:
+                        log.warning(
+                            "inbound_lid_unresolved",
+                            raw_from=raw_from,
+                            wa_message_id=payload.get("id"),
+                        )
+                        await _mark_event(db, event_key, "processed")
+                        return JSONResponse({"status": "received"})
+
+                msg = _waha_to_meta_shape(payload, resolved_from=resolved_from)
                 await _handle_inbound_message(
                     msg, db,
                     profile_name=str((payload.get("_data") or {}).get("notifyName") or ""),
@@ -245,9 +277,9 @@ async def receive_waha_webhook(
     return JSONResponse({"status": "received"})
 
 
-def _waha_to_meta_shape(payload: dict) -> dict:
+def _waha_to_meta_shape(payload: dict, *, resolved_from: str | None = None) -> dict:
     """Translate WAHA message payload to the existing inbound handler shape."""
-    raw_from = str(payload.get("from") or "")
+    raw_from = str(resolved_from or payload.get("from") or "")
     wa_id = raw_from.replace("@s.whatsapp.net", "@c.us")
     msg_id = str(payload.get("id") or "")
     body = str(payload.get("body") or "")
