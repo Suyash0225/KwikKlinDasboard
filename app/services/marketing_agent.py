@@ -35,12 +35,12 @@ _PLAYBOOK: dict[str, tuple[float, str, str]] = {
     "lapsed": (
         1.00,
         "60+ din se koi order nahi — win-back offer se wapas laao",
-        "10% off agle order par, 7 din valid",
+        "MAX 15% OFF on orders above ₹700",
     ),
     "at_risk": (
         0.90,
         "regular customer thande pad rahe hain — yaad dilao",
-        "5% off agle order par, 10 din valid",
+        "MAX 15% OFF on orders above ₹700",
     ),
     "outstanding_dues": (
         0.70,
