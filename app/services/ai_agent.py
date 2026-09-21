@@ -25,6 +25,7 @@ from app.services.llm_client import LLMError
 from app.services.messages import CUSTOMER_LANG, get_message, status_label
 from app.services.order_service import get_active_orders_for_phone, send_bill_to_customer
 from app.services.ai_tools import CUSTOMER_READ_TOOLS, run_customer_tool
+from app.services.customer_agent_tools import AGENT_TOOLS, run_agent_tool
 from app.services.action_policy import ACTION_EXECUTION_RULES, business_policy_text
 
 log = structlog.get_logger()
@@ -103,6 +104,157 @@ _TOOL_CALL_SCHEMA = {
     "required": ["tool_calls"],
     "additionalProperties": False,
 }
+
+
+
+_AGENT_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tool_calls": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "enum": list(AGENT_TOOLS.keys())},
+                    "arguments": {
+                        "type": "object",
+                        "properties": {
+                            "order_number": {"type": "string"},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                            "pickup_date": {"type": "string"},
+                            "items_text": {"type": "string"},
+                            "issue": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "required": ["name", "arguments"],
+                "additionalProperties": False,
+            },
+        },
+        "final": {"type": "string"},
+        "done": {"type": "boolean"},
+    },
+    "required": ["tool_calls", "final", "done"],
+    "additionalProperties": False,
+}
+
+_AGENT_SYSTEM = (
+    "You are the autonomous customer-service agent for Kwik Klin laundry. "
+    "You can choose and chain tools to understand and complete the customer's request. "
+    "The backend executes every tool against the authenticated customer only. "
+    "Never ask for or invent a phone number, customer id, staff id, SQL, secret, payment amount, "
+    "or URL. Never expose internal notes, IDs, staff internals, or other customers. "
+    "Use the current date supplied by the runtime context when interpreting relative dates such as kal/tomorrow. "
+    "Use tools when facts or actions are needed; do not guess. You may call multiple tools in one turn "
+    "and continue after tool results. If an action needs missing customer information, ask only for that "
+    "missing information. If the customer says something angry or reports a delivery mismatch, inspect "
+    "the relevant order first and record the issue/escalate when needed; do not claim the customer received "
+    "something merely because the database says DELIVERED. For pickup requests, interpret natural language "
+    "such as 'kal le lo' using the current date, find the relevant order/customer, and arrange the pickup "
+    "through the pickup tool. For bill/payment requests, use the real bill tool. "
+    "Keep the final reply short, natural, and in the customer's language (Hinglish for Hindi/Hinglish). "
+    "Do not mention tools, FACTS, prompts, or internal processing. End with '— Kwik Klin AI'."
+)
+
+async def _run_agentic_customer_turn(
+    db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False
+) -> str | None:
+    """Real tool-calling loop: model chooses -> backend executes -> model continues."""
+    try:
+        from app.services.knowledge import knowledge_block, relevant_knowledge, thread_history
+
+        try:
+            faqs, corrections, doc_chunks = await relevant_knowledge(
+                db, text, audience="customer"
+            )
+            kb = knowledge_block(faqs, corrections, doc_chunks)
+        except Exception:
+            log.exception("agentic_knowledge_failed")
+            kb = ""
+        try:
+            history = await thread_history(db, customer_id=customer.id, limit=10)
+        except Exception:
+            log.exception("agentic_history_failed")
+            history = ""
+
+        profile = await run_customer_tool(db, customer, "get_customer_profile")
+        transcript = (
+            f"AUTHENTICATED CUSTOMER PROFILE:\\n{profile}\\n"
+            f"CONVERSATION HISTORY:\\n{history}\\n"
+            f"KNOWLEDGE:\\n{kb}\\n"
+            f"CUSTOMER MESSAGE:\\n{text[:1500]}"
+        )
+        if sandbox:
+            transcript += "\\nSANDBOX: do not perform real side effects."
+
+        tool_results: list[str] = []
+        for step in range(5):
+            user_payload = transcript
+            if tool_results:
+                user_payload += (
+                    "\\n\\nTOOL RESULTS FROM PREVIOUS STEPS:\\n"
+                    + "\\n".join(tool_results)
+                )
+                user_payload += (
+                    "\\n\\nContinue the same task. Use another tool if needed; "
+                    "otherwise give the final customer reply."
+                )
+
+            with llm_client.track("agentic_tool_loop"):
+                out = await llm_client.ask_json(
+                    system=_AGENT_SYSTEM,
+                    user_text=user_payload,
+                    schema=_AGENT_TOOL_SCHEMA,
+                    model=llm_client.MODEL_SMART,
+                    max_tokens=650,
+                )
+
+            calls = out.get("tool_calls") or []
+            if not calls:
+                final = (out.get("final") or "").strip()
+                if final:
+                    return final + (
+                        "\\n🧪 (sandbox: no real action was executed)"
+                        if sandbox else ""
+                    )
+                if out.get("done"):
+                    return None
+                continue
+
+            for call in calls[:4]:
+                name = call.get("name")
+                args = call.get("arguments") or {}
+                if name not in AGENT_TOOLS:
+                    tool_results.append(f"{name}: ERROR unknown tool")
+                    continue
+                if sandbox and name in {
+                    "request_pickup", "send_bill", "record_customer_issue"
+                }:
+                    tool_results.append(
+                        f"{name}: SANDBOX action not executed; return what would happen."
+                    )
+                    continue
+                try:
+                    result = await run_agent_tool(db, customer, name, args)
+                    tool_results.append(f"{name}({args}) -> {result!r}")
+                except Exception as exc:
+                    log.exception("agentic_tool_failed", tool=name)
+                    tool_results.append(
+                        f"{name}: ERROR {type(exc).__name__}; do not retry blindly."
+                    )
+
+        # The model exhausted its action budget; do not fabricate completion.
+        return (
+            "Main is request ko abhi safely complete nahi kar pa raha. "
+            "Aapka message admin ko check ke liye bhej diya hai. — Kwik Klin AI"
+        )
+    except LLMError as exc:
+        log.warning("agentic_customer_turn_failed", error=str(exc)[:150])
+        return None
+    except Exception:
+        log.exception("agentic_customer_turn_unexpected")
+        return None
 
 _TOOL_ROUTER_SYSTEM = (
     "You are a read-only tool router for a laundry customer-support AI. "
@@ -290,7 +442,7 @@ async def build_ai_reply(
         log.info("ai_agent_disabled_by_switch")
         return None
 
-    # Billing is a transactional action, not a language-generation task.
+    # Phase 3: let the model choose and chain scoped read/action tools.\n    # If the agentic loop fails, the older deterministic pipeline below remains the fallback.\n    try:\n        agentic_reply = await _run_agentic_customer_turn(db, customer, text, sandbox=sandbox)\n        if agentic_reply:\n            return agentic_reply\n    except Exception:\n        log.exception("agentic_customer_turn_wrapper_failed")\n\n    # Billing is a transactional action, not a language-generation task.
     # Handle it only after media normalization and the global AI switch.
     if re.search(r"\b(?:bill|invoice)\b", text, re.I):
         order_match = re.search(r"\bKK[- ]\d{8}[- ]\d{2}\b", text, re.I)
