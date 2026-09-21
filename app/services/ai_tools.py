@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Customer, Order, OrderStatus, Rate
+from app.services.messages import status_label
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,7 @@ async def get_customer_orders(
             {
                 "order_number": order.order_number,
                 "status": order.status.name,
-                "status_label": str(order.status),
+                "status_label": status_label(order.status),
                 "expected_delivery": expected.isoformat() if expected else None,
                 "actual_delivery": actual.isoformat() if actual else None,
                 "overdue": overdue,
