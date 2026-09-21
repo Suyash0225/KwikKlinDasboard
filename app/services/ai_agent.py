@@ -611,7 +611,7 @@ async def _build_facts(db: AsyncSession, customer: Customer) -> str:
                 elif o["status"] != "CANCELLED" and o["expected_delivery"]:
                     if o["overdue"]:
                         parts.append(
-                            f"expected delivery {o['expected_delivery'][:10']} (OVERDUE)"
+                            f"expected delivery {o['expected_delivery'][:10]} (OVERDUE)"
                         )
                     else:
                         parts.append(
