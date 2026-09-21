@@ -138,6 +138,10 @@ async def request_pickup(
     if order.status in {OrderStatus.DELIVERED, OrderStatus.CANCELLED}:
         return {"ok": False, "needs_input": True, "error": "order_is_not_pickup_eligible"}
 
+    order.pickup_date = pickup_day
+    db.add(order)
+    await db.commit()
+
     if order.status is OrderStatus.RECEIVED:
         await update_status(
             db, order, OrderStatus.PICKUP_ASSIGNED, changed_by="customer-ai", notify=False
@@ -157,7 +161,6 @@ async def request_pickup(
         "order_number": order.order_number,
         "pickup_date": pickup_day.isoformat(),
         "task_code": task.code,
-        "assigned_staff_id": str(order.assigned_delivery_id) if order.assigned_delivery_id else None,
         "message": "Pickup task created through the normal task/ops workflow.",
     }
 
@@ -193,7 +196,7 @@ async def record_customer_issue(
         db, question=question, customer=customer,
         order_id=order.id if order else None,
     )
-    return {"ok": esc is not None, "escalation_id": str(esc.id) if esc else None}
+    return {"ok": esc is not None}
 
 
 async def run_agent_tool(
