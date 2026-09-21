@@ -32,7 +32,7 @@ from typing import NamedTuple
 
 import httpx
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -305,7 +305,7 @@ async def send_message(
                     db, to_phone,
                     {"text": text, "buttons": [[b.id, b.title] for b in buttons] if buttons else None,
                      "list_rows": [[r.id, r.title, r.description] for r in list_rows] if list_rows else None,
-                     "sent_by": sent_by, "reply_to": reply_to, "category": category},
+                     "list_button": list_button, "sent_by": sent_by, "reply_to": reply_to, "category": category},
                 )
             raise SendError(str(exc), transient=exc.transient) from exc
         await _record_outbound(
@@ -715,12 +715,26 @@ async def drain_outbound_queue() -> int:
             p = row.payload or {}
             raw_buttons = p.get("buttons") or []
             buttons = [Button(b[0], b[1]) for b in raw_buttons] or None
+            raw_list_rows = p.get("list_rows") or []
+            list_rows = [
+                ListRow(r[0], r[1], r[2] if len(r) > 2 else "")
+                for r in raw_list_rows
+            ] or None
+
+            # send_message/_enqueue_outbound may commit before raising. Keep
+            # these values before that commit so expired ORM attributes are
+            # never lazily loaded from this scheduler coroutine.
+            row_id = row.id
+            attempts_before = int(row.attempts or 0)
+
             try:
                 await send_message(
                     db,
                     to_phone=row.to_phone,
                     text=p.get("text"),
                     buttons=buttons,
+                    list_rows=list_rows,
+                    list_button=p.get("list_button") or "Chuniye",
                     template_name=p.get("template_name"),
                     template_params=p.get("template_params"),
                     template_url_param=p.get("template_url_param"),
@@ -728,37 +742,78 @@ async def drain_outbound_queue() -> int:
                     enqueue_on_fail=False,
                 )
             except WindowClosedError as exc:
-                # A 24h window REOPENS the moment they message again, so a
-                # closed window is a wait, not a failure. Keep retrying on
-                # the normal backoff until the attempt cap.
+                attempts = attempts_before + 1
                 await db.rollback()
-                row.attempts += 1
-                row.last_error = f"window closed: {exc}"[:500]
-                if row.attempts >= MAX_OUTBOUND_ATTEMPTS:
-                    row.status = "dead"
-                    log.info("outbound_dead_window_never_opened", to=row.to_phone)
-                else:
-                    row.next_attempt_at = now + timedelta(seconds=min(900 * row.attempts, 21_600))
+                status = "dead" if attempts >= MAX_OUTBOUND_ATTEMPTS else "queued"
+                next_attempt = (
+                    None
+                    if status == "dead"
+                    else now + timedelta(seconds=min(900 * attempts, 21_600))
+                )
+                await db.execute(
+                    update(OutboundMessage)
+                    .where(OutboundMessage.id == row_id)
+                    .values(
+                        attempts=attempts,
+                        last_error=f"window closed: {exc}"[:500],
+                        status=status,
+                        next_attempt_at=next_attempt,
+                    )
+                )
+                if status == "dead":
+                    log.info("outbound_dead_window_never_opened", to=p.get("to_phone") or "queued")
+                await db.commit()
+                continue
+
             except SendError as exc:
+                attempts = attempts_before + 1
                 await db.rollback()
-                row.attempts += 1
-                row.last_error = str(exc)[:500]
-                if not exc.transient or row.attempts >= MAX_OUTBOUND_ATTEMPTS:
-                    row.status = "dead"
-                    log.error("outbound_dead_lettered", to=row.to_phone, error=row.last_error)
-                else:
-                    backoff = min(300 * (2 ** row.attempts), 21_600)
-                    row.next_attempt_at = now + timedelta(seconds=backoff)
+                dead = (not exc.transient) or attempts >= MAX_OUTBOUND_ATTEMPTS
+                await db.execute(
+                    update(OutboundMessage)
+                    .where(OutboundMessage.id == row_id)
+                    .values(
+                        attempts=attempts,
+                        last_error=str(exc)[:500],
+                        status="dead" if dead else "queued",
+                        next_attempt_at=(
+                            None
+                            if dead
+                            else now + timedelta(seconds=min(300 * (2 ** attempts), 21_600))
+                        ),
+                    )
+                )
+                if dead:
+                    log.error(
+                        "outbound_dead_lettered",
+                        to=p.get("to_phone") or "queued",
+                        error=str(exc)[:500],
+                    )
+                await db.commit()
+                continue
+
             except Exception:
+                attempts = attempts_before + 1
                 await db.rollback()
-                log.exception("outbound_drain_unexpected", to=row.to_phone)
-                row.attempts += 1
-                row.status = "dead" if row.attempts >= MAX_OUTBOUND_ATTEMPTS else "queued"
-                row.next_attempt_at = now + timedelta(seconds=600)
+                log.exception("outbound_drain_unexpected", to=p.get("to_phone") or "queued")
+                await db.execute(
+                    update(OutboundMessage)
+                    .where(OutboundMessage.id == row_id)
+                    .values(
+                        attempts=attempts,
+                        status="dead" if attempts >= MAX_OUTBOUND_ATTEMPTS else "queued",
+                        next_attempt_at=now + timedelta(seconds=600),
+                    )
+                )
+                await db.commit()
+                continue
+
             else:
-                row.status = "sent"
-                row.sent_at = now
+                await db.execute(
+                    update(OutboundMessage)
+                    .where(OutboundMessage.id == row_id)
+                    .values(status="sent", sent_at=now)
+                )
+                await db.commit()
                 sent += 1
-            db.add(row)
-            await db.commit()
     return sent
