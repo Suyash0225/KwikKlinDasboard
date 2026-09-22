@@ -252,12 +252,12 @@ async def _openrouter_generate(
         # A 200 with empty content is not a usable answer. Treat it as a
         # transient model failure so the caller can try the feature-aware
         # OpenRouter free router.
-        raise LLMUnavailable("openrouter returned empty text")
+        raise LLMError("openrouter returned empty text")
     if schema is not None:
         try:
             json.loads(text)
         except (TypeError, json.JSONDecodeError):
-            raise LLMUnavailable("openrouter returned invalid JSON")
+            raise LLMError("openrouter returned invalid JSON")
 
     usage = data.get("usage") or {}
     latency_ms = int((time.monotonic() - started) * 1000)
