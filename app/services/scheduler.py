@@ -260,12 +260,13 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
             await run_follow_up_pings()
     except Exception:
         log.exception("follow_up_pings_failed")
-    # assigned tasks: chase whoever owes an answer, hourly (the service
-    # itself decides who is actually due, and respects quiet hours)
+    # Staff task follow-ups: only 3 fixed windows per day.
+    # 10:00 AM, 3:00 PM and 6:00 PM IST — never on the other hourly ticks.
     try:
-        from app.services.tasks import run_task_followups
+        if now_ist.hour in (10, 15, 18):
+            from app.services.tasks import run_task_followups
 
-        await run_task_followups()
+            await run_task_followups()
     except Exception:
         log.exception("task_followups_failed")
     # Ops agent: delivery promise ke 3 din pehle hi washer ko actual
