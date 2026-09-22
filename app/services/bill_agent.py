@@ -2117,7 +2117,8 @@ async def _handle_open_task_reply(
             f"RECENT WHATSAPP HISTORY:\n{history[-2500:] if history else '(none)'}\n\n"
             f"NEW STAFF MESSAGE:\n{text[:1500]}"
         )
-        out = await llm_client.ask_json(
+        with llm_client.track("task_reply"):
+            out = await llm_client.ask_json(
             system=(
                 "You are Kwik Klin's staff task interpreter. Decide whether the new "
                 "message is a natural response/update to the staff member's OPEN TASK. "
@@ -2133,8 +2134,8 @@ async def _handle_open_task_reply(
             user_text=prompt,
             schema=_TASK_REPLY_SCHEMA,
             model=llm_client.MODEL_SMART,
-            max_tokens=260,
-        )
+                max_tokens=260,
+            )
     except LLMError:
         return None
 
