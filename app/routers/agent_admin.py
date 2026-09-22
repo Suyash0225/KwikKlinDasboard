@@ -1414,7 +1414,11 @@ async def agents_overview(db: AsyncSession = Depends(get_db)) -> dict:
 
 
 # Settings whose values are credentials — never sent back to the browser.
-_SECRET_SETTINGS = {"ig_access_token", "gbp_connection"}
+_SECRET_SETTINGS = {
+    "ig_access_token", "gbp_connection",
+    "ai_service_api_key", "ai_marketing_api_key",
+    "ai_decision_api_key", "ai_task_api_key",
+}
 # Sirf vendor Control panel likhta hai (routers/control.py) — dukaan ke
 # dashboard ke generic settings PUT se nahi, warna koi token/listing badal de.
 _READONLY_SETTINGS = {"gbp_connection", "gbp_reviews", "ig_user_id", "ig_access_token"}
@@ -1435,6 +1439,28 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> dict:
 class SettingIn(BaseModel):
     key: str
     value: object
+
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter configuration
+# ---------------------------------------------------------------------------
+
+class AITestIn(BaseModel):
+    api_key: str = Field(min_length=10, max_length=300)
+    model: str = Field(min_length=3, max_length=200)
+
+
+@router.post("/ai-config/test")
+async def test_ai_config(body: AITestIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Test an OpenRouter key/model without saving the credential."""
+    from app.services.llm_client import test_openrouter_connection
+
+    result = await test_openrouter_connection(
+        api_key=body.api_key.strip(),
+        model=body.model.strip(),
+    )
+    return result
 
 
 @router.put("/settings")
