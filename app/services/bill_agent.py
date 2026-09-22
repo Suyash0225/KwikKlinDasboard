@@ -2332,7 +2332,8 @@ async def _apply_relay(
         return get_message(key, name=staff.name, code=task.code, message=message) + note
 
     if recipient_type == "MANAGER":
-        to_phone, to_name = manager_phone(), "Manager"
+        from app.services import team
+        to_phone, to_name = await team.primary_admin_phone(db), "Manager"
         message = await _compose_relay_message(raw_message, "MANAGER", to_name)
     elif recipient_type == "CUSTOMER":
         cust_matches = []
