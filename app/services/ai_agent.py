@@ -26,7 +26,6 @@ from app.services.llm_client import LLMError
 from app.services.messages import CUSTOMER_LANG, get_message, status_label
 from app.services.order_service import get_active_orders_for_phone, send_bill_to_customer
 from app.services.ai_tools import CUSTOMER_READ_TOOLS, run_customer_tool
-from app.services import ai_qa
 from app.services.customer_agent_tools import AGENT_TOOLS, run_agent_tool
 from app.services.action_policy import ACTION_EXECUTION_RULES, business_policy_text
 
@@ -622,18 +621,6 @@ async def build_ai_reply(
 
     log.info("ai_reply_composed", intent=intent, chars=len(out["reply"]), sandbox=sandbox)
     if not sandbox:
-        # QA is intentionally fire-and-forget: OpenAI must never add latency to
-        # the WhatsApp reply or become a second point of failure.
-        asyncio.create_task(
-            ai_qa.judge_customer_turn(
-                customer_phone=customer.phone,
-                customer_text=text,
-                facts=ctx[0],
-                knowledge=ctx[1],
-                history=ctx[2],
-                agent_output=out,
-            )
-        )
         await audit.record(
             actor_role="customer", actor=customer.phone, action="ai_reply",
             args={"intent": intent, "fyi": bool(admin_note)}, result=out["reply"][:200],
