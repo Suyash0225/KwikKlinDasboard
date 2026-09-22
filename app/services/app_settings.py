@@ -62,7 +62,7 @@ DEFAULTS: dict[str, Any] = {
     "ai_task_model": "nvidia/nemotron-3.5-lightning:free",
     # Separate OpenAI quality judge. Never used in the customer reply path.
     "ai_qa_api_key": "",
-    "ai_qa_model": "gpt-5.6-luna",
+    "ai_qa_model": "gemini-3.5-flash-lite",
     # operations
     "standup_hour": 10,             # daily staff standup (Asia/Kolkata hour)
     "turnaround_days": 2,           # default delivery = today + this
