@@ -37,6 +37,7 @@ from anthropic import (
 )
 
 from app.config import settings
+from app.services import app_settings
 
 log = structlog.get_logger()
 
@@ -101,6 +102,170 @@ async def _with_retry(call, *, provider: str, model: str):
 
 
 _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+
+
+def _agent_slot(purpose: str) -> str:
+    """Map existing LLM call purposes onto the admin-configured agents."""
+    p = (purpose or "other").lower()
+    if p.startswith("marketing") or p == "social":
+        return "marketing"
+    if p in {"tool_router", "agentic_tool_loop", "intent", "extract", "query"}:
+        return "decision"
+    if p.startswith("task") or p in {"standup", "followup", "voice"}:
+        return "task"
+    return "service"
+
+
+async def _openrouter_config() -> dict | None:
+    """Read the selected agent key/model from hot settings.
+
+    Empty agent keys intentionally fall back to the legacy provider so the
+    deployment can be switched over one agent at a time.
+    """
+    try:
+        from app.database import async_session_factory
+
+        keys = (
+            "ai_service_api_key", "ai_service_model",
+            "ai_marketing_api_key", "ai_marketing_model",
+            "ai_decision_api_key", "ai_decision_model",
+            "ai_task_api_key", "ai_task_model",
+        )
+        async with async_session_factory() as db:
+            values = await app_settings.get_many(db, *keys)
+        slot = _agent_slot(_purpose.get())
+        key = str(values.get(f"ai_{slot}_api_key") or "").strip()
+        model = str(values.get(f"ai_{slot}_model") or "").strip()
+        if not key:
+            return None
+        return {"slot": slot, "api_key": key, "model": model}
+    except Exception:
+        log.exception("openrouter_config_read_failed")
+        return None
+
+
+async def _openrouter_post(
+    *, api_key: str, model: str, system: str, user_text: str,
+    max_tokens: int, schema: dict | None = None,
+    image: tuple[str, bytes] | None = None,
+) -> httpx.Response:
+    user_content: str | list[dict] = user_text
+    if image is not None:
+        mime_type, blob = image
+        user_content = [
+            {"type": "text", "text": user_text},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime_type};base64,{base64.b64encode(blob).decode()}"
+                },
+            },
+        ]
+    payload: dict = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ],
+        "max_tokens": max_tokens,
+    }
+    if schema is not None:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "kwikklin_response",
+                "strict": True,
+                "schema": schema,
+            },
+        }
+    async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+        return await client.post(
+            f"{_OPENROUTER_BASE}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+
+
+async def _openrouter_generate(
+    system: str,
+    user_text: str,
+    model: str,
+    max_tokens: int,
+    schema: dict | None,
+    image: tuple[str, bytes] | None,
+    *,
+    api_key: str,
+) -> str:
+    started = time.monotonic()
+    try:
+        resp = await _openrouter_post(
+            api_key=api_key, model=model, system=system, user_text=user_text,
+            max_tokens=max_tokens, schema=schema, image=image,
+        )
+    except httpx.HTTPError as exc:
+        raise LLMUnavailable(str(exc)) from exc
+
+    if resp.status_code in (401, 403):
+        log.error("llm_auth_failed", provider="openrouter", model=model)
+        raise LLMAuthError("invalid OPENROUTER API key")
+    if resp.status_code == 429:
+        log.warning("llm_unavailable", provider="openrouter", model=model, status=429)
+        raise LLMRateLimited("openrouter HTTP 429")
+    if resp.status_code >= 500:
+        raise LLMUnavailable(f"openrouter HTTP {resp.status_code}")
+    if resp.status_code != 200:
+        log.error(
+            "llm_rejected", provider="openrouter", model=model,
+            status=resp.status_code, error=resp.text[:250],
+        )
+        raise LLMError(f"openrouter HTTP {resp.status_code}: {resp.text[:180]}")
+
+    data = resp.json()
+    try:
+        text = data["choices"][0]["message"].get("content") or ""
+    except (KeyError, IndexError, TypeError) as exc:
+        raise LLMError(f"openrouter returned no text: {str(data)[:120]}") from exc
+    if not text:
+        raise LLMError("openrouter returned empty text")
+
+    usage = data.get("usage") or {}
+    latency_ms = int((time.monotonic() - started) * 1000)
+    log.info(
+        "llm_call", provider="openrouter", model=model,
+        kind="json" if schema is not None else "text",
+        latency_ms=latency_ms,
+        input_tokens=usage.get("prompt_tokens"),
+        output_tokens=usage.get("completion_tokens"),
+    )
+    try:
+        await _record_usage(
+            "openrouter", model, usage.get("prompt_tokens") or 0,
+            usage.get("completion_tokens") or 0, latency_ms, True,
+        )
+    except Exception:
+        log.exception("llm_usage_record_crashed", model=model)
+    return text
+
+
+async def test_openrouter_connection(*, api_key: str, model: str) -> dict:
+    """Small live health check used by the admin Settings page."""
+    if not api_key.startswith("sk-or-"):
+        raise LLMAuthError("OpenRouter key should start with sk-or-")
+    text = await _openrouter_generate(
+        "You are a connection test. Reply with exactly: OK",
+        "Reply with exactly OK.",
+        model,
+        16,
+        None,
+        None,
+        api_key=api_key,
+    )
+    return {"ok": True, "model": model, "reply": text[:40]}
 
 
 class LLMError(Exception):
@@ -206,6 +371,19 @@ async def _generate_with_fallback(
         await check_ai_quota()
     except QuotaExceeded as exc:
         raise LLMAuthError(str(exc)) from exc
+
+    # Admin-configured OpenRouter is selected per agent/purpose. Legacy
+    # Gemini/Anthropic remains the fallback until that agent gets a key.
+    runtime = await _openrouter_config()
+    if runtime:
+        return await _with_retry(
+            lambda: _openrouter_generate(
+                system, user_text, runtime["model"], max_tokens, schema, image,
+                api_key=runtime["api_key"],
+            ),
+            provider="openrouter",
+            model=runtime["model"],
+        )
 
     def _attempt(m: str):
         return lambda: _generate(system, user_text, m, max_tokens, schema, image)
