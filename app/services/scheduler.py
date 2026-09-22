@@ -421,6 +421,7 @@ async def run_follow_up_pings() -> int:
     6h+ stale -> manager escalation. Idempotent per scheduled window."""
     from app.models import OrderStatusHistory
     from app.services.work_orders import send_work_order
+    from app.services import team
 
     from app.models import TASK_OPEN, Task
     from app.services.tasks import JOB_KINDS
@@ -453,11 +454,13 @@ async def run_follow_up_pings() -> int:
                     if await _claim(f"esc6h:{o.order_number}:{now_ist.strftime('%Y-%m-%d')}"):
                         try:
                             await send_message(
-                                db, to_phone=manager_phone(),
+                                db, to_phone=await team.primary_admin_phone(db),
                                 text=(
-                                    f"🚨 ESCALATION — {o.order_number}\n"
-                                    f"Status: {o.status.name}, {int(stale_hours)} ghante se atka hai.\n"
-                                    f"Staff jawab nahi de raha — khud dekh lein."
+                                    f"🚨 *ESCALATION — {o.order_number}*\n"
+                                    f"━━━━━━━━━━━━━━\n"
+                                    f"📌 *Status:* {o.status.name}\n"
+                                    f"⏱️ *Stuck:* {int(stale_hours)} ghante\n"
+                                    f"⚠️ Staff ka response nahi aaya — please check."
                                 ),
                             )
                         except SendError as exc:
