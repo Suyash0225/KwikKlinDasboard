@@ -184,10 +184,6 @@ async def _openrouter_post(
         ],
         "max_tokens": max_tokens,
     }
-    if model != "openrouter/free":
-        # Keep the selected model first; OpenRouter can fail over to another
-        # free model if the selected endpoint is unavailable/rate-limited.
-        payload["models"] = [model, "openrouter/free"]
     if schema is not None:
         payload["response_format"] = {
             "type": "json_schema",
@@ -404,30 +400,17 @@ async def _generate_with_fallback(
     # Gemini/Anthropic remains the fallback until that agent gets a key.
     runtime = await _openrouter_config()
     if runtime:
-        try:
-            return await _with_retry(
-                lambda: _openrouter_generate(
-                    system, user_text, runtime["model"], max_tokens, schema, image, audio,
-                    api_key=runtime["api_key"],
-                ),
-                provider="openrouter",
-                model=runtime["model"],
-            )
-        except LLMUnavailable:
-            log.warning(
-                "openrouter_agent_fallback",
-                slot=runtime["slot"],
-                from_model=runtime["model"],
-                fallback_model="openrouter/free",
-            )
-            return await _with_retry(
-                lambda: _openrouter_generate(
-                    system, user_text, "openrouter/free", max_tokens, schema, image, audio,
-                    api_key=runtime["api_key"],
-                ),
-                provider="openrouter",
-                model="openrouter/free",
-            )
+        # One customer message = one configured OpenRouter request.
+        # Do NOT silently jump to openrouter/free: on free-tier pressure that
+        # creates a second slow/rate-limited request and hides which agent failed.
+        return await _with_retry(
+            lambda: _openrouter_generate(
+                system, user_text, runtime["model"], max_tokens, schema, image, audio,
+                api_key=runtime["api_key"],
+            ),
+            provider="openrouter",
+            model=runtime["model"],
+        )
 
     def _attempt(m: str):
         return lambda: _generate(system, user_text, m, max_tokens, schema, image)
