@@ -17,7 +17,7 @@ from app.services import audit
 from app.services.messages import get_message
 from app.services.order_service import ACTIVE_STATUSES
 from app.services.whatsapp import SendError, send_message
-from app.services.tenant_context import manager_phone
+from app.services.tenant_context import manager_phone, primary_admin_phone
 
 log = structlog.get_logger()
 
@@ -70,6 +70,25 @@ async def note_inquiry(db: AsyncSession, customer: Customer, text: str) -> None:
                 actor_role="system", actor="marketing", action="lead_created",
                 args={"phone": customer.phone, "text": text[:120]}, result="CONTACTED",
             )
+            # New lead: notify the configured primary admin immediately.
+            # Do not use the public/shop WhatsApp number as the owner alert target.
+            try:
+                await send_message(
+                    db,
+                    to_phone=primary_admin_phone(),
+                    text=(
+                        "*🔔 NEW LEAD*\n"
+                        "━━━━━━━━━━━━━━\n"
+                        f"*Name:* {customer.name or 'Unknown'}\n"
+                        f"*Phone:* {customer.phone}\n"
+                        f"*Message:* {text[:700]}\n"
+                        "━━━━━━━━━━━━━━\n"
+                        "AI has replied to the customer. Please follow up if needed."
+                    ),
+                    sent_by="bot",
+                )
+            except SendError:
+                log.exception("new_lead_admin_alert_failed", phone=customer.phone)
         elif lead.stage in ("CONTACTED", "LOST"):
             # they replied — ladder stops, humans/AI talk normally
             lead.stage = "INTERESTED"
