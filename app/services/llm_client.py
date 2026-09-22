@@ -113,8 +113,10 @@ def _agent_slot(purpose: str) -> str:
         return "marketing"
     if p in {"tool_router", "agentic_tool_loop", "intent", "extract", "query"}:
         return "decision"
-    if p.startswith("task") or p in {"standup", "followup", "voice"}:
+    if p.startswith("task") or p in {"standup", "followup", "voice", "staff_voice"}:
         return "task"
+    if p in {"customer_voice", "customer_image", "vision"}:
+        return "service"
     return "service"
 
 
@@ -150,6 +152,7 @@ async def _openrouter_post(
     *, api_key: str, model: str, system: str, user_text: str,
     max_tokens: int, schema: dict | None = None,
     image: tuple[str, bytes] | None = None,
+    audio: tuple[str, bytes] | None = None,
 ) -> httpx.Response:
     user_content: str | list[dict] = user_text
     if image is not None:
@@ -162,6 +165,16 @@ async def _openrouter_post(
                     "url": f"data:{mime_type};base64,{base64.b64encode(blob).decode()}"
                 },
             },
+        ]
+    elif audio is not None:
+        mime_type, blob = audio
+        audio_format = (mime_type.split("/", 1)[-1].split(";", 1)[0] or "ogg").lower()
+        audio_format = {"mpeg": "mp3", "mp4": "mp4", "x-m4a": "m4a", "ogg": "ogg", "wav": "wav", "webm": "webm"}.get(audio_format, "ogg")
+        user_content = [
+            {"type": "text", "text": user_text},
+            {"type": "input_audio", "input_audio": {
+                "data": base64.b64encode(blob).decode(), "format": audio_format
+            }},
         ]
     payload: dict = {
         "model": model,
@@ -202,6 +215,7 @@ async def _openrouter_generate(
     max_tokens: int,
     schema: dict | None,
     image: tuple[str, bytes] | None,
+    audio: tuple[str, bytes] | None = None,
     *,
     api_key: str,
 ) -> str:
@@ -342,6 +356,7 @@ async def _generate(
     max_tokens: int,
     schema: dict | None = None,
     image: tuple[str, bytes] | None = None,
+    audio: tuple[str, bytes] | None = None,
 ) -> str:
     """Provider dispatch — one place, so fallback logic stays tiny."""
     if PROVIDER == "gemini":
@@ -382,7 +397,7 @@ async def _generate_with_fallback(
     if runtime:
         return await _with_retry(
             lambda: _openrouter_generate(
-                system, user_text, runtime["model"], max_tokens, schema, image,
+                system, user_text, runtime["model"], max_tokens, schema, image, audio,
                 api_key=runtime["api_key"],
             ),
             provider="openrouter",
@@ -474,16 +489,16 @@ _TRANSCRIBE_SYSTEM = (
 )
 
 
-async def transcribe_audio(audio_bytes: bytes, mime_type: str) -> str | None:
+async def transcribe_audio(audio_bytes: bytes, mime_type: str, *, purpose: str = "voice") -> str | None:
     """Turn a voice note into text, or None if it can't be understood.
 
     None means "we genuinely don't know what they said" — the caller must
     fall back to acknowledging the note rather than inventing a message.
     """
-    if not SUPPORTS_AUDIO:
+    if not SUPPORTS_AUDIO and not await _openrouter_config():
         return None
     try:
-        with track("voice"):
+        with track(purpose):
             # Baaki har jagah ki tarah yahan bhi fallback chahiye. Free tier
             # SMART model ko pehle throttle karta hai (429); ye seedha
             # _generate par tha, isliye us waqt transcript None aa jaata —
@@ -492,7 +507,7 @@ async def transcribe_audio(audio_bytes: bytes, mime_type: str) -> str | None:
             # kam sundar transcript deta hai, par kuch na hone se behtar.
             out = await _generate_with_fallback(
                 _TRANSCRIBE_SYSTEM, "Transcribe this voice note.",
-                MODEL_SMART, 400, None, (mime_type, audio_bytes),
+                MODEL_SMART, 700, None, None, (mime_type, audio_bytes),
             )
     except LLMError:
         log.warning("voice_transcribe_failed", mime=mime_type)
