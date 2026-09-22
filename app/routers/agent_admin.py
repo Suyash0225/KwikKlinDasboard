@@ -1474,10 +1474,10 @@ class AIQATestIn(BaseModel):
 
 @router.post("/ai-config/test-qa")
 async def test_qa_ai_config(body: AIQATestIn, db: AsyncSession = Depends(get_db)) -> dict:
-    """Test the separate OpenAI quality-judge credential."""
-    from app.services.ai_qa import _call_openai
+    """Test the separate Gemini quality-judge credential."""
+    from app.services.ai_qa import _call_gemini
     try:
-        result = await _call_openai(
+        result = await _call_gemini(
             api_key=body.api_key.strip(),
             model=body.model.strip(),
             prompt=(
