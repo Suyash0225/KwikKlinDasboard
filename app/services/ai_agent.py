@@ -208,7 +208,7 @@ async def _run_agentic_customer_turn(
                     user_text=user_payload,
                     schema=_AGENT_TOOL_SCHEMA,
                     model=llm_client.MODEL_SMART,
-                    max_tokens=650,
+                    max_tokens=1200,
                 )
 
             calls = out.get("tool_calls") or []
@@ -483,7 +483,7 @@ async def build_ai_reply(
                 user_text=prompt,
                 schema=_REPLY_SCHEMA,
                 model=llm_client.MODEL_SMART,
-                max_tokens=450,
+                max_tokens=1200,
             )
     except LLMError as exc:
         log.warning("ai_compose_failed", error=str(exc)[:150])
