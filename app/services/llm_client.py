@@ -223,7 +223,7 @@ async def _openrouter_generate(
     try:
         resp = await _openrouter_post(
             api_key=api_key, model=model, system=system, user_text=user_text,
-            max_tokens=max_tokens, schema=schema, image=image,
+            max_tokens=max_tokens, schema=schema, image=image, audio=audio,
         )
     except httpx.HTTPError as exc:
         raise LLMUnavailable(str(exc)) from exc
