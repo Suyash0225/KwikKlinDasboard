@@ -840,12 +840,6 @@ async def handle_staff_message(
     if pickup_reply is not None:
         return pickup_reply
 
-    # Natural-language reply to the latest assigned task — task context first,
-    # so staff does not need to repeat the task code.
-    task_reply = await _handle_open_task_reply(db, sender_phone, sender_label, text or "")
-    if task_reply is not None:
-        return task_reply
-
     # Order par dikkat — LLM se pehle, kyunki ye khone wali baat nahi hai.
     problem = await _handle_order_problem(db, sender_phone, sender_label, text or "")
     if problem is not None:
@@ -856,6 +850,12 @@ async def handle_staff_message(
     worklist = await _staff_worklist(db, sender_phone, sender_label, text or "")
     if worklist is not None:
         return worklist
+
+    # Natural-language reply to the latest assigned task — task context first,
+    # so staff does not need to repeat the task code.
+    task_reply = await _handle_open_task_reply(db, sender_phone, sender_label, text or "")
+    if task_reply is not None:
+        return task_reply
 
     # Campaign approvals are deterministic commands, no LLM needed.
     if sender_label == "manager" and text:
