@@ -67,13 +67,22 @@ async def primary_admin_phone(db: AsyncSession) -> str:
 
 
 async def admin_phones(db: AsyncSession) -> list[str]:
-    """Admin numbers, manager first. Never empty — MANAGER_PHONE is always in."""
-    out = [_norm(manager_phone())]
-    for st in await admins(db):
+    """Actual active ADMIN staff are the owner recipients.
+
+    MANAGER_PHONE is only a legacy fallback when no ADMIN staff row exists.
+    This prevents alerts being sent both to the public/shop contact number
+    and the owner's admin WhatsApp number.
+    """
+    rows = await admins(db)
+    out: list[str] = []
+    for st in rows:
         p = _norm(st.phone)
         if p and p not in out:
             out.append(p)
-    return [p for p in out if p]
+    if out:
+        return out
+    fallback = _norm(manager_phone())
+    return [fallback] if fallback else []
 
 
 async def is_admin_phone(db: AsyncSession, phone: str) -> bool:
