@@ -376,6 +376,7 @@ async def _generate_with_fallback(
     max_tokens: int,
     schema: dict | None = None,
     image: tuple[str, bytes] | None = None,
+    audio: tuple[str, bytes] | None = None,
 ) -> str:
     """SMART model down/rate-limited -> one retry on CHEAP before giving up.
 
