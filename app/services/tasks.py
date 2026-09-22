@@ -777,11 +777,14 @@ async def run_task_followups() -> int:
             if task.ping_count >= ESCALATE_AFTER_PINGS and task.escalated_at is None:
                 waited = int((now - task.created_at).total_seconds() // 3600)
                 try:
+                    from app.services import team
                     await send_message(
-                        db, to_phone=manager_phone(),
+                        db, to_phone=await team.primary_admin_phone(db),
                         text=(
-                            f"🚨 {staff.name} ne {task.code} ka jawab nahi diya "
-                            f"({waited} ghante ho gaye).\n{task.title}\n"
+                            f"🚨 *{staff.name} — {task.code} ka response pending*\n"
+                            f"━━━━━━━━━━━━━━\n"
+                            f"⏱️ {waited} ghante se jawab nahi aaya.\n"
+                            f"📌 *Task:* {task.title}\n"
                             f"Khud dekh lijiye ya kisi aur ko de dijiye."
                         ),
                     )
