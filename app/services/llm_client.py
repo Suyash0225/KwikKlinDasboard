@@ -171,6 +171,10 @@ async def _openrouter_post(
         ],
         "max_tokens": max_tokens,
     }
+    if model != "openrouter/free":
+        # Keep the selected model first; OpenRouter can fail over to another
+        # free model if the selected endpoint is unavailable/rate-limited.
+        payload["models"] = [model, "openrouter/free"]
     if schema is not None:
         payload["response_format"] = {
             "type": "json_schema",
