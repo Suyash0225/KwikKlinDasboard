@@ -3359,6 +3359,19 @@ function renderAIConfigs(settings) {
       '</div></div>'
     ].join("");
   }).join("") + [
+    '<div class="card" style="margin:10px 0;padding:12px;border:1px solid var(--line)">',
+    '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">',
+    '<div><b>🧪 OpenAI AI Quality Agent</b><div class="muted">Reads production AI decisions/replies and marks PASS, FAIL or REVIEW. Never blocks customer replies.</div></div>',
+    '<span class="muted" id="ai-status-qa">' + (settings.ai_qa_api_key ? "Key saved" : "Not configured") + '</span>',
+    '</div>',
+    '<div class="split2" style="margin-top:10px">',
+    '<div><label>OpenAI API key</label><input id="ai-key-qa" type="password" autocomplete="new-password" placeholder="' + (settings.ai_qa_api_key ? "Saved •••••••• — enter a new key to replace" : "sk-...") + '"></div>',
+    '<div><label>Model</label><input id="ai-model-qa" value="' + esc(settings.ai_qa_model || "gpt-5.6-luna") + '" placeholder="gpt-5.6-luna"></div>',
+    '</div>',
+    '<div class="btnrow" style="margin-top:8px">',
+    '<button class="btn ghost" type="button" onclick="testQAConfig(this)">Test connection</button>',
+    '<button class="btn" type="button" onclick="saveQAConfig(this)">Save</button>',
+    '</div></div>',
     '<datalist id="openrouter-free-models">',
     '<option value="qwen/qwen3.8-27b:free">Qwen3.8 27B — free</option>',
     '<option value="google/gemma-4-31b-it:free">Gemma 4 31B — free</option>',
@@ -3368,6 +3381,30 @@ function renderAIConfigs(settings) {
     '<option value="openrouter/free">OpenRouter Free Router</option>',
     '</datalist>'
   ].join("");
+}
+
+async function saveQAConfig(btn) {
+  await busy(btn, async () => {
+    const key = $("ai-key-qa").value.trim();
+    const model = $("ai-model-qa").value.trim() || "gpt-5.6-luna";
+    if (key) await api("/admin/api/settings", { method: "PUT", body: { key: "ai_qa_api_key", value: key } });
+    await api("/admin/api/settings", { method: "PUT", body: { key: "ai_qa_model", value: model } });
+    const fresh = await api("/admin/api/settings");
+    renderAIConfigs(fresh);
+    toast("🧪 OpenAI AI QA saved — live immediately");
+  });
+}
+
+async function testQAConfig(btn) {
+  await busy(btn, async () => {
+    const key = $("ai-key-qa").value.trim();
+    const model = $("ai-model-qa").value.trim() || "gpt-5.6-luna";
+    const result = key
+      ? await api("/admin/api/ai-config/test-qa", { method: "POST", body: { api_key: key, model } })
+      : await api("/admin/api/ai-config/test-qa-saved", { method: "POST" });
+    toast("🧪 OpenAI QA: " + result.status + " (" + result.model + ")");
+    $("ai-status-qa").textContent = "✓ Connection OK — " + result.status;
+  });
 }
 
 async function saveAIConfig(slot, btn) {
