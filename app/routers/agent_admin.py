@@ -1467,6 +1467,52 @@ async def test_ai_config(body: AITestIn, db: AsyncSession = Depends(get_db)) -> 
 
 
 
+class AIQATestIn(BaseModel):
+    api_key: str = Field(min_length=10, max_length=300)
+    model: str = Field(min_length=3, max_length=200)
+
+
+@router.post("/ai-config/test-qa")
+async def test_qa_ai_config(body: AIQATestIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Test the separate OpenAI quality-judge credential."""
+    from app.services.ai_qa import _call_openai
+    try:
+        result = await _call_openai(
+            api_key=body.api_key.strip(),
+            model=body.model.strip(),
+            prompt=(
+                "Test request. Customer said: 'Aap laundry service dete ho?' "
+                "Production reply: 'Haan, pickup aur delivery available hai.' "
+                "Facts: laundry service is available. Return PASS if this is supported."
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)[:300]) from exc
+    return {"ok": True, "model": body.model.strip(), "status": result.get("status")}
+
+
+@router.post("/ai-config/test-qa-saved")
+async def test_saved_qa_ai_config(db: AsyncSession = Depends(get_db)) -> dict:
+    from app.services.ai_qa import _call_openai
+    key = await app_settings.get(db, "ai_qa_api_key")
+    model = await app_settings.get(db, "ai_qa_model")
+    if not key:
+        raise HTTPException(status_code=400, detail="No API key saved for AI QA agent")
+    try:
+        result = await _call_openai(
+            api_key=str(key),
+            model=str(model),
+            prompt=(
+                "Test request. Customer said: 'Aap laundry service dete ho?' "
+                "Production reply: 'Haan, pickup aur delivery available hai.' "
+                "Facts: laundry service is available. Return PASS if this is supported."
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)[:300]) from exc
+    return {"ok": True, "model": str(model), "status": result.get("status")}
+
+
 @router.post("/ai-config/test-saved/{slot}")
 async def test_saved_ai_config(slot: str, db: AsyncSession = Depends(get_db)) -> dict:
     """Test an already-saved agent credential without returning the secret."""
