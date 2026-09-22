@@ -249,7 +249,15 @@ async def _openrouter_generate(
     except (KeyError, IndexError, TypeError) as exc:
         raise LLMError(f"openrouter returned no text: {str(data)[:120]}") from exc
     if not text:
-        raise LLMError("openrouter returned empty text")
+        # A 200 with empty content is not a usable answer. Treat it as a
+        # transient model failure so the caller can try the feature-aware
+        # OpenRouter free router.
+        raise LLMUnavailable("openrouter returned empty text")
+    if schema is not None:
+        try:
+            json.loads(text)
+        except (TypeError, json.JSONDecodeError):
+            raise LLMUnavailable("openrouter returned invalid JSON")
 
     usage = data.get("usage") or {}
     latency_ms = int((time.monotonic() - started) * 1000)
@@ -396,14 +404,30 @@ async def _generate_with_fallback(
     # Gemini/Anthropic remains the fallback until that agent gets a key.
     runtime = await _openrouter_config()
     if runtime:
-        return await _with_retry(
-            lambda: _openrouter_generate(
-                system, user_text, runtime["model"], max_tokens, schema, image, audio,
-                api_key=runtime["api_key"],
-            ),
-            provider="openrouter",
-            model=runtime["model"],
-        )
+        try:
+            return await _with_retry(
+                lambda: _openrouter_generate(
+                    system, user_text, runtime["model"], max_tokens, schema, image, audio,
+                    api_key=runtime["api_key"],
+                ),
+                provider="openrouter",
+                model=runtime["model"],
+            )
+        except LLMUnavailable:
+            log.warning(
+                "openrouter_agent_fallback",
+                slot=runtime["slot"],
+                from_model=runtime["model"],
+                fallback_model="openrouter/free",
+            )
+            return await _with_retry(
+                lambda: _openrouter_generate(
+                    system, user_text, "openrouter/free", max_tokens, schema, image, audio,
+                    api_key=runtime["api_key"],
+                ),
+                provider="openrouter",
+                model="openrouter/free",
+            )
 
     def _attempt(m: str):
         return lambda: _generate(system, user_text, m, max_tokens, schema, image)
