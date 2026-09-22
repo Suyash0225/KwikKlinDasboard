@@ -716,8 +716,8 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
                 continue
 
             lines = [
-                f"{_greeting(now_ist)}, {st.name} ji 👋",
-                "📋 Aaj ka pending kaam:",
+                f"*{_greeting(now_ist)}, {st.name} ji* 👋",
+                "📋 *AAJ KA PENDING KAAM*",
             ]
 
             if task_rows:
@@ -802,15 +802,15 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
 
         if managers:
             manager_text = [
-                f"{_greeting(now_ist)}, Manager ji 👋",
-                "📊 Aaj ka Kwik Klin work briefing",
+                f"*{_greeting(now_ist)}, Manager ji* 👋",
+                "📊 *AAJ KA KWIK KLIN WORK BRIEFING*",
                 f"Open tasks: {len(open_tasks)}",
                 f"Aaj/overdue delivery orders: {len(today_orders)}",
             ]
 
             if open_tasks:
                 manager_text.append("")
-                manager_text.append("📌 ACTION REQUIRED — pending tasks:")
+                manager_text.append("📌 *ACTION REQUIRED — PENDING TASKS*")
                 manager_text.append("Payment/billing aur delivery ka kaam alag rakha hai, taaki priority clear rahe.")
 
                 payment_tasks = []
@@ -845,7 +845,7 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
 
                 if payment_tasks:
                     manager_text.append("")
-                    manager_text.append("💰 PAYMENT / BILLING:")
+                    manager_text.append("💰 *PAYMENT / BILLING*")
                     for row in payment_tasks:
                         task, who, order, customer, flag = row
                         title = (task.title or "").strip()
@@ -863,7 +863,7 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
 
                 if delivery_tasks:
                     manager_text.append("")
-                    manager_text.append("🚚 DELIVERY / CUSTOMER FOLLOW-UP:")
+                    manager_text.append("🚚 *DELIVERY / CUSTOMER FOLLOW-UP*")
                     for row in delivery_tasks:
                         task, who, order, customer, flag = row
                         title = (task.title or "").strip()
@@ -875,7 +875,7 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
 
                 if other_tasks:
                     manager_text.append("")
-                    manager_text.append("📋 OTHER TASKS:")
+                    manager_text.append("📋 *OTHER TASKS*")
                     for row in other_tasks:
                         task, who, order, customer, flag = row
                         title = (task.title or "").strip()
@@ -887,7 +887,7 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
 
             if today_orders:
                 manager_text.append("")
-                manager_text.append("🚚 Aaj/overdue delivery:")
+                manager_text.append("🚚 *AAJ / OVERDUE DELIVERY*")
                 for order, customer in today_orders[:15]:
                     manager_text.append(
                         f"• {order.order_number} — {customer.name or customer.phone} — "
