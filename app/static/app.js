@@ -3206,6 +3206,7 @@ async function loadTraining() {
     $("tr-cust-inst").value = settings.customer_instructions || "";
     $("tr-staff-inst").value = settings.staff_instructions || "";
     $("tr-mkt-inst").value = settings.marketing_instructions || "";
+    renderAIConfigs(settings);
     renderFaqs(faqs); renderCorrections(corr); renderTeachme(teach); renderDocs(docs);
   } catch (e) { $("faq-list").innerHTML = errBox(e.message, "loadTraining"); }
 }
@@ -3326,6 +3327,106 @@ async function answerTeach(id, send) {
     loadTraining();
   } catch (e) { toast(e.message, true); }
 }
+
+const AI_AGENT_CONFIGS = [
+  { slot: "service", label: "🧑‍💼 Service Agent", desc: "Customer WhatsApp replies, order/bill questions", key: "ai_service_api_key", model: "ai_service_model", defaultModel: "qwen/qwen3.8-27b:free" },
+  { slot: "marketing", label: "📣 Marketing Agent", desc: "Campaign copy, offers, social marketing", key: "ai_marketing_api_key", model: "ai_marketing_model", defaultModel: "google/gemma-4-31b-it:free" },
+  { slot: "decision", label: "🧠 Decision Agent", desc: "Intent, routing, structured decisions", key: "ai_decision_api_key", model: "ai_decision_model", defaultModel: "nvidia/nemotron-3-ultra-550b-a55b:free" },
+  { slot: "task", label: "📋 Task Agent", desc: "Staff replies, task understanding, follow-ups", key: "ai_task_api_key", model: "ai_task_model", defaultModel: "nvidia/nemotron-3.5-lightning:free" },
+];
+
+function renderAIConfigs(settings) {
+  const root = $("ai-config-list");
+  if (!root) return;
+  root.innerHTML = AI_AGENT_CONFIGS.map((x) => {
+    const saved = !!settings[x.key];
+    const model = settings[x.model] || x.defaultModel;
+    return [
+      '<div class="card" style="margin:10px 0;padding:12px">',
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">',
+      '<div><b>' + esc(x.label) + '</b><div class="muted">' + esc(x.desc) + '</div></div>',
+      '<span class="muted" id="ai-status-' + x.slot + '">' + (saved ? "Key saved" : "Not configured") + '</span>',
+      '</div>',
+      '<div class="split2" style="margin-top:10px">',
+      '<div><label>OpenRouter API key</label><input id="ai-key-' + x.slot + '" type="password" autocomplete="new-password" placeholder="' +
+        (saved ? "Saved •••••••• — enter a new key to replace" : "sk-or-v1-...") + '"></div>',
+      '<div><label>Model</label><input id="ai-model-' + x.slot + '" list="openrouter-free-models" value="' +
+        esc(model) + '" placeholder="' + esc(x.defaultModel) + '"></div>',
+      '</div>',
+      '<div class="btnrow" style="margin-top:8px">',
+      '<button class="btn ghost" type="button" onclick="testAIConfig(\'' + x.slot + '\', this)">Test connection</button>',
+      '<button class="btn" type="button" onclick="saveAIConfig(\'' + x.slot + '\', this)">Save</button>',
+      '</div></div>'
+    ].join("");
+  }).join("") + [
+    '<datalist id="openrouter-free-models">',
+    '<option value="qwen/qwen3.8-27b:free">Qwen3.8 27B — free</option>',
+    '<option value="google/gemma-4-31b-it:free">Gemma 4 31B — free</option>',
+    '<option value="google/gemma-4-26b-a4b-it:free">Gemma 4 26B A4B — free</option>',
+    '<option value="nvidia/nemotron-3-ultra-550b-a55b:free">Nemotron 3 Ultra — free</option>',
+    '<option value="nvidia/nemotron-3.5-lightning:free">Nemotron 3.5 Lightning — free</option>',
+    '<option value="openrouter/free">OpenRouter Free Router</option>',
+    '</datalist>'
+  ].join("");
+}
+
+async function saveAIConfig(slot, btn) {
+  const x = AI_AGENT_CONFIGS.find((v) => v.slot === slot);
+  if (!x) return;
+  await busy(btn, async () => {
+    const keyInput = $("ai-key-" + slot);
+    const modelInput = $("ai-model-" + slot);
+    const keyValue = keyInput.value.trim();
+    const model = modelInput.value.trim() || x.defaultModel;
+    if (keyValue) {
+      await api("/admin/api/settings", { method: "PUT", body: { key: x.key, value: keyValue } });
+    }
+    await api("/admin/api/settings", { method: "PUT", body: { key: x.model, value: model } });
+    const fresh = await api("/admin/api/settings");
+    renderAIConfigs(fresh);
+    toast(x.label + " saved — live immediately");
+  });
+}
+
+async function testAIConfig(slot, btn) {
+  const x = AI_AGENT_CONFIGS.find((v) => v.slot === slot);
+  if (!x) return;
+  await busy(btn, async () => {
+    const typedKey = $("ai-key-" + slot).value.trim();
+    const model = $("ai-model-" + slot).value.trim() || x.defaultModel;
+    const result = typedKey
+      ? await api("/admin/api/ai-config/test", { method: "POST", body: { api_key: typedKey, model } })
+      : await api("/admin/api/ai-config/test-saved/" + slot, { method: "POST" });
+    toast(x.label + ": connection OK (" + result.model + ")");
+    $("ai-status-" + slot).textContent = "✓ Connection OK";
+  });
+}
+
+async function testAllAIConfigs(btn) {
+  await busy(btn, async () => {
+    let ok = 0, configured = 0;
+    for (const x of AI_AGENT_CONFIGS) {
+      const keyInput = $("ai-key-" + x.slot);
+      const modelInput = $("ai-model-" + x.slot);
+      if (!keyInput || !modelInput) continue;
+      try {
+        const typedKey = keyInput.value.trim();
+        const model = modelInput.value.trim() || x.defaultModel;
+        const result = typedKey
+          ? await api("/admin/api/ai-config/test", { method: "POST", body: { api_key: typedKey, model } })
+          : await api("/admin/api/ai-config/test-saved/" + x.slot, { method: "POST" });
+        configured++;
+        ok++;
+        $("ai-status-" + x.slot).textContent = "✓ OK — " + result.model;
+      } catch (e) {
+        configured++;
+        $("ai-status-" + x.slot).textContent = "✗ " + e.message;
+      }
+    }
+    toast(configured ? ok + "/" + configured + " AI connections OK" : "No AI keys configured");
+  });
+}
+
 async function saveAgentSettings(btn) {
   await busy(btn, async () => {
     await api("/admin/api/settings", { method: "PUT", body: { key: "agent_enabled", value: $("agent-toggle").checked } });
