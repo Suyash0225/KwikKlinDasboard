@@ -7,7 +7,6 @@ and reply, then records PASS/FAIL and the concrete reason in AuditLog.
 import json
 import time
 
-import base64
 import httpx
 import structlog
 
@@ -40,7 +39,6 @@ _QA_SCHEMA = {
 
 
 async def _call_gemini(*, api_key: str, model: str, prompt: str) -> dict:
-    started = time.monotonic()
     payload = {
         "system_instruction": {
             "parts": [{
@@ -122,7 +120,7 @@ async def judge_customer_turn(
 
         await audit.record(
                 actor_role="system",
-                actor="openai-qa",
+                actor="gemini-qa",
                 action="ai_qa",
                 args={
                     "phone": customer_phone,
