@@ -1466,6 +1466,24 @@ async def test_ai_config(body: AITestIn, db: AsyncSession = Depends(get_db)) -> 
     return result
 
 
+
+@router.post("/ai-config/test-saved/{slot}")
+async def test_saved_ai_config(slot: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Test an already-saved agent credential without returning the secret."""
+    allowed = {"service", "marketing", "decision", "task"}
+    if slot not in allowed:
+        raise HTTPException(status_code=400, detail="invalid AI agent slot")
+    key = await app_settings.get(db, f"ai_{slot}_api_key")
+    model = await app_settings.get(db, f"ai_{slot}_model")
+    if not key:
+        raise HTTPException(status_code=400, detail=f"No API key saved for {slot} agent")
+    from app.services.llm_client import test_openrouter_connection
+    try:
+        return await test_openrouter_connection(api_key=str(key), model=str(model))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)[:300]) from exc
+
+
 @router.put("/settings")
 async def put_setting(body: SettingIn, db: AsyncSession = Depends(get_db)) -> dict:
     # Saving the mask back would overwrite the real secret with dots.
