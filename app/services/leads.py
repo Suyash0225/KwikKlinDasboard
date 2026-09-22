@@ -17,7 +17,8 @@ from app.services import audit
 from app.services.messages import get_message
 from app.services.order_service import ACTIVE_STATUSES
 from app.services.whatsapp import SendError, send_message
-from app.services.tenant_context import manager_phone, primary_admin_phone
+from app.services.tenant_context import manager_phone
+from app.services.team import primary_admin_phone
 
 log = structlog.get_logger()
 
@@ -75,7 +76,7 @@ async def note_inquiry(db: AsyncSession, customer: Customer, text: str) -> None:
             try:
                 await send_message(
                     db,
-                    to_phone=primary_admin_phone(),
+                    to_phone=await primary_admin_phone(db),
                     text=(
                         "*🔔 NEW LEAD*\n"
                         "━━━━━━━━━━━━━━\n"
@@ -263,7 +264,7 @@ async def check_marketing_eligible_bulk(
     db: AsyncSession, customer_ids: list
 ) -> dict:
     """Same gate as check_marketing_eligible, for a whole segment at once.
-
+    
     The per-customer version costs ~6 queries; queueing a 500-person
     campaign was 3000 round trips before the first message went out. This
     is a fixed 5, whatever the reach. Reasons match the single-customer
