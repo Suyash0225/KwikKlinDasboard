@@ -253,9 +253,10 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
                         await _unclaim(f"mktreport:{now_ist.strftime('%Y-%m')}")
     except Exception:
         log.exception("lead_jobs_failed")
-    # every 2 hours 08-20: stale-order follow-up pings (owner's spec)
+    # Fixed staff follow-up windows: 10:00, 15:00, 18:00 IST only.
+    # No stale-order follow-up ping is sent at the other hourly ticks.
     try:
-        if 8 <= now_ist.hour <= 20 and now_ist.hour % 2 == 0:
+        if now_ist.hour in (10, 15, 18):
             await run_follow_up_pings()
     except Exception:
         log.exception("follow_up_pings_failed")
@@ -416,8 +417,8 @@ _PING_RULES = {
 
 
 async def run_follow_up_pings() -> int:
-    """Every 2h (08-21 IST): ping the responsible person on stale orders;
-    6h+ stale -> manager escalation. Idempotent per 2h window."""
+    """At 10:00, 15:00, and 18:00 IST: ping responsible staff on stale orders;
+    6h+ stale -> manager escalation. Idempotent per scheduled window."""
     from app.models import OrderStatusHistory
     from app.services.work_orders import send_work_order
 
