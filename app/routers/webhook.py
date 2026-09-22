@@ -744,9 +744,15 @@ async def _handle_inbound_message(
                 # A voice note is a message, not an attachment — transcribe it
                 # so the agent can act on what was actually said.
                 if mtype in ("audio", "voice"):
-                    said = await _transcribe(Path(media_dir) / fname, part)
+                    said = await _transcribe(Path(media_dir) / fname, part, purpose="customer_voice")
                     if said:
                         extra = said
+                elif mtype in ("image", "sticker"):
+                    # Customer photos are conversational input, not only bill photos.
+                    # Read the image immediately so the customer AI can answer from it.
+                    visual = await _describe_customer_image(Path(media_dir) / fname, part)
+                    if visual:
+                        extra = f"Image content: {visual}"
                 if extra:
                     text += f" {extra}"
 
@@ -979,7 +985,7 @@ async def _handle_inbound_message(
         try:
             from app.services.leads import note_inquiry
 
-            await note_inquiry(db, customer, text or "")
+            await note_inquiry(db, customer, spoken or text or "")
         except Exception:
             log.exception("lead_capture_failed")
 
@@ -1064,7 +1070,55 @@ def _status_reply(order) -> str:
 _MEDIA_TYPES = ("image", "sticker", "audio", "voice", "video", "document")
 
 
-async def _transcribe(path, part: dict) -> str | None:
+async def _describe_customer_image(path, part: dict) -> str | None:
+    """Read a customer image with the configured tenant vision model.
+
+    This is deliberately generic: bill/photo/address/contact-card/receipt/product
+    photos can all be understood by the customer agent. Never invent details.
+    """
+    try:
+        from pathlib import Path as _Path
+        from app.services import llm_client
+
+        blob = _Path(path).read_bytes()
+        mime = str(part.get("mimetype") or "image/jpeg").split(";")[0].strip()
+        schema = {
+            "type": "object",
+            "properties": {
+                "description": {"type": "string"},
+                "text": {"type": "string"},
+                "relevant_details": {"type": "string"},
+            },
+            "required": ["description", "text", "relevant_details"],
+            "additionalProperties": False,
+        }
+        with llm_client.track("customer_image"):
+            out = await llm_client.ask_json_image(
+                system=(
+                    "You are Kwik Klin's customer image reader. Examine the customer's image. "
+                    "Describe only what is actually visible. Extract readable text, names, phone "
+                    "numbers, addresses, order/bill numbers and other details when clearly visible. "
+                    "Do not guess blurry text. Keep the answer concise in Latin-script Hinglish. "
+                    "This is context for another customer-support agent, not a final reply."
+                ),
+                user_text=(
+                    "Read this customer image and return useful factual context. "
+                    f"Caption: {str(part.get('caption') or '')[:500]}"
+                ),
+                image_bytes=blob,
+                mime_type=mime,
+                schema=schema,
+                max_tokens=1200,
+            )
+        bits = [str(out.get(k) or "").strip() for k in ("description", "text", "relevant_details")]
+        result = " | ".join(x for x in bits if x and x.lower() not in {"none", "n/a"})
+        return result[:2500] or None
+    except Exception:
+        log.exception("customer_image_read_failed")
+        return None
+
+
+async def _transcribe(path, part: dict, *, purpose: str = "voice") -> str | None:
     """Read a downloaded voice note and turn it into text. Never raises —
     an unreadable note falls back to the plain acknowledgement."""
     try:
@@ -1074,7 +1128,7 @@ async def _transcribe(path, part: dict) -> str | None:
         if not blob or len(blob) > 15_000_000:  # Gemini inline-data ceiling
             return None
         mime = (part.get("mime_type") or "audio/ogg").split(";")[0].strip()
-        return await transcribe_audio(blob, mime)
+        return await transcribe_audio(blob, mime, purpose=purpose)
     except Exception:
         log.exception("voice_transcribe_error")
         return None
