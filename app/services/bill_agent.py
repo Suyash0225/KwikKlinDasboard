@@ -298,7 +298,7 @@ async def _handle_task_button(
     if not m:
         return None
     code, action = m.group(1).upper(), m.group(2).lower()
-    from app.services import tasks as task_service
+    from app.services import tasks as task_service, team
 
     task = await task_service.get_by_code(db, code)
     if task is None:
@@ -839,6 +839,12 @@ async def handle_staff_message(
     pickup_reply = await _handle_pickup_exchange(db, sender_phone, sender_label, text or "")
     if pickup_reply is not None:
         return pickup_reply
+
+    # Natural-language reply to the latest assigned task — task context first,
+    # so staff does not need to repeat the task code.
+    task_reply = await _handle_open_task_reply(db, sender_phone, sender_label, text or "")
+    if task_reply is not None:
+        return task_reply
 
     # Order par dikkat — LLM se pehle, kyunki ye khone wali baat nahi hai.
     problem = await _handle_order_problem(db, sender_phone, sender_label, text or "")
@@ -1703,7 +1709,8 @@ async def _apply_standup_reply(
     if unclear:
         summary.append(f"❓ Samajh nahi aaya: {', '.join(unclear)}")
     try:
-        await send_message(db, to_phone=manager_phone(), text="\n".join(summary))
+        from app.services import team
+        await send_message(db, to_phone=await team.primary_admin_phone(db), text="\n".join(summary))
     except SendError:
         log.warning("standup_summary_not_sent")
 
@@ -2057,12 +2064,103 @@ async def _close_task_by_code(
     try:
         staff = await db.get(Staff, task.assigned_staff_id) if task.assigned_staff_id else None
         await send_message(
-            db, to_phone=manager_phone(),
+            db, to_phone=await team.primary_admin_phone(db),
             text=f"✅ {staff.name if staff else sender_label} ne {task.code} kar diya: {task.title}",
         )
     except SendError:
         log.info("task_done_owner_notify_failed", code=task.code)
     return get_message("task_done_ack", code=task.code)
+
+
+_TASK_REPLY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "is_task_reply": {"type": "boolean"},
+        "status": {"type": "string", "enum": ["UPDATE", "DONE", "BLOCKED", "QUESTION", "NOT_RELATED"]},
+        "summary": {"type": "string"},
+    },
+    "required": ["is_task_reply", "status", "summary"],
+    "additionalProperties": False,
+}
+
+async def _handle_open_task_reply(
+    db: AsyncSession, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """Understand a free-text reply in the context of the staff member's latest open task.
+
+    Staff often replies naturally instead of typing a task code. The task title
+    and the latest conversation are supplied to the model so messages such as
+    "Aaj RV, Pooja, BHU aur Samneghat pickup" are treated as an update to the
+    pending pickup-details task instead of an unrelated command.
+    """
+    if sender_label == "manager" or not text or text.startswith("["):
+        return None
+    from app.services import tasks as task_service, team
+
+    staff = (
+        await db.execute(select(Staff).where(Staff.phone == sender_phone))
+    ).scalar_one_or_none()
+    if staff is None or not staff.is_active:
+        return None
+
+    open_tasks = await task_service.open_tasks_for_staff(db, staff.id)
+    if not open_tasks:
+        return None
+    task = open_tasks[0]
+
+    try:
+        history = await _sender_history(db, sender_phone)
+        prompt = (
+            f"STAFF NAME: {staff.name}\n"
+            f"OPEN TASK: [{task.code}] {task.title}\n"
+            f"PREVIOUS TASK REPLY: {task.reply or '(none)'}\n"
+            f"RECENT WHATSAPP HISTORY:\n{history[-2500:] if history else '(none)'}\n\n"
+            f"NEW STAFF MESSAGE:\n{text[:1500]}"
+        )
+        out = await llm_client.ask_json(
+            system=(
+                "You are Kwik Klin's staff task interpreter. Decide whether the new "
+                "message is a natural response/update to the staff member's OPEN TASK. "
+                "Use the task title and recent history, not just keywords. Hinglish, "
+                "Hindi, abbreviations, place names and informal wording are normal. "
+                "A message listing pickup places, customers, delivery points, progress "
+                "or a partial result can be a valid UPDATE even without the task code. "
+                "Do not invent missing facts. Mark DONE only when the message clearly "
+                "says the whole task is completed. Mark BLOCKED when the staff says the "
+                "task cannot proceed. If it is unrelated to the task, use NOT_RELATED. "
+                "Return a short factual summary in the staff's language."
+            ),
+            user_text=prompt,
+            schema=_TASK_REPLY_SCHEMA,
+            model=llm_client.MODEL_SMART,
+            max_tokens=260,
+        )
+    except LLMError:
+        return None
+
+    if not out.get("is_task_reply") or out.get("status") == "NOT_RELATED":
+        return None
+
+    summary = str(out.get("summary") or text).strip()[:500]
+    await task_service.note_reply(db, staff.id, text)
+
+    status = str(out.get("status") or "UPDATE").upper()
+    if status == "DONE":
+        await task_service.complete_task(db, task, by=staff.name or sender_label)
+        return f"✅ *{task.code} — Task complete!*\nSamajh gaya: {summary}"
+    if status == "BLOCKED":
+        await team.notify_admins(
+            db,
+            f"⚠️ *{task.code} — {staff.name} ki dikkat*\n{summary}",
+        )
+        return f"⚠️ *{task.code}* ka update note kar liya. Owner ko bata diya: {summary}"
+    if status == "QUESTION":
+        return f"👍 *{task.code}* ka message samajh gaya. {summary}\nAgar task complete hai to *done {task.code}* bhej dena."
+    return (
+        f"👍 *{task.code} — Update noted*\n"
+        f"{summary}\n\n"
+        f"Kaam complete hone par *done {task.code}* bhej dena."
+    )
 
 
 async def _order_in_text(db: AsyncSession, text: str) -> Order | None:
