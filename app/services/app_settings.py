@@ -60,6 +60,9 @@ DEFAULTS: dict[str, Any] = {
     "ai_decision_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
     "ai_task_api_key": "",
     "ai_task_model": "nvidia/nemotron-3.5-lightning:free",
+    # Separate OpenAI quality judge. Never used in the customer reply path.
+    "ai_qa_api_key": "",
+    "ai_qa_model": "gpt-5.6-luna",
     # operations
     "standup_hour": 10,             # daily staff standup (Asia/Kolkata hour)
     "turnaround_days": 2,           # default delivery = today + this
@@ -203,7 +206,7 @@ DEFAULTS: dict[str, Any] = {
 # Settings that contain credentials. They are encrypted before reaching JSONB.
 SECRET_KEYS = {
     "ai_service_api_key", "ai_marketing_api_key",
-    "ai_decision_api_key", "ai_task_api_key",
+    "ai_decision_api_key", "ai_task_api_key", "ai_qa_api_key",
 }
 
 
