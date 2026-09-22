@@ -51,6 +51,15 @@ DEFAULTS: dict[str, Any] = {
     "llm_daily_request_cap": 0,
     # What you're willing to spend per month on AI (USD). 0 = no budget set.
     "llm_monthly_budget_usd": 0.0,
+    # --- OpenRouter agent credentials/models (secrets are encrypted at rest) ---
+    "ai_service_api_key": "",
+    "ai_service_model": "qwen/qwen3.8-27b:free",
+    "ai_marketing_api_key": "",
+    "ai_marketing_model": "google/gemma-4-31b-it:free",
+    "ai_decision_api_key": "",
+    "ai_decision_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "ai_task_api_key": "",
+    "ai_task_model": "nvidia/nemotron-3.5-lightning:free",
     # operations
     "standup_hour": 10,             # daily staff standup (Asia/Kolkata hour)
     "turnaround_days": 2,           # default delivery = today + this
@@ -191,6 +200,12 @@ DEFAULTS: dict[str, Any] = {
     "public_url_fixed": False,
 }
 
+# Settings that contain credentials. They are encrypted before reaching JSONB.
+SECRET_KEYS = {
+    "ai_service_api_key", "ai_marketing_api_key",
+    "ai_decision_api_key", "ai_task_api_key",
+}
+
 
 def _effective_tenant_id():
     """Kis tenant ki settings — request ctx ka tenant, warna home.
@@ -219,7 +234,11 @@ async def get(db: AsyncSession, key: str) -> Any:
     ).scalar_one_or_none()
     if row is None:
         return default
-    return row.value.get("v", default)
+    value = row.value.get("v", default)
+    if key in SECRET_KEYS:
+        from app.services.secrets import decrypt
+        return decrypt(value)
+    return value
 
 
 async def get_many(db: AsyncSession, *keys: str) -> dict[str, Any]:
@@ -243,7 +262,11 @@ async def get_many(db: AsyncSession, *keys: str) -> dict[str, Any]:
     ).scalars().all()
     for r in rows:
         if r.key in out:
-            out[r.key] = r.value.get("v", out[r.key])
+            value = r.value.get("v", out[r.key])
+            if r.key in SECRET_KEYS:
+                from app.services.secrets import decrypt
+                value = decrypt(value)
+            out[r.key] = value
     return out
 
 
@@ -259,10 +282,14 @@ async def set_value(db: AsyncSession, key: str, value: Any) -> None:
             )
         )
     ).scalar_one_or_none()
+    stored = value
+    if key in SECRET_KEYS:
+        from app.services.secrets import encrypt
+        stored = encrypt(value)
     if row is None:
-        db.add(SettingKV(key=key, value={"v": value}, tenant_id=tid))
+        db.add(SettingKV(key=key, value={"v": stored}, tenant_id=tid))
     else:
-        row.value = {"v": value}
+        row.value = {"v": stored}
     await db.commit()
     log.info("setting_updated", key=key)
 
@@ -277,5 +304,9 @@ async def all_settings(db: AsyncSession) -> dict[str, Any]:
     merged = dict(DEFAULTS)
     for r in rows:
         if r.key in merged:
-            merged[r.key] = r.value.get("v", merged[r.key])
+            value = r.value.get("v", merged[r.key])
+            if r.key in SECRET_KEYS:
+                from app.services.secrets import decrypt
+                value = decrypt(value)
+            merged[r.key] = value
     return merged
