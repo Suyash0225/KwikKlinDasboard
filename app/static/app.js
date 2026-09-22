@@ -3361,12 +3361,12 @@ function renderAIConfigs(settings) {
   }).join("") + [
     '<div class="card" style="margin:10px 0;padding:12px;border:1px solid var(--line)">',
     '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">',
-    '<div><b>🧪 OpenAI AI Quality Agent</b><div class="muted">Reads production AI decisions/replies and marks PASS, FAIL or REVIEW. Never blocks customer replies.</div></div>',
+    '<div><b>🧪 Gemini AI Quality Agent</b><div class="muted">Reads production AI decisions/replies and marks PASS, FAIL or REVIEW. Never blocks customer replies.</div></div>',
     '<span class="muted" id="ai-status-qa">' + (settings.ai_qa_api_key ? "Key saved" : "Not configured") + '</span>',
     '</div>',
     '<div class="split2" style="margin-top:10px">',
-    '<div><label>OpenAI API key</label><input id="ai-key-qa" type="password" autocomplete="new-password" placeholder="' + (settings.ai_qa_api_key ? "Saved •••••••• — enter a new key to replace" : "sk-...") + '"></div>',
-    '<div><label>Model</label><input id="ai-model-qa" value="' + esc(settings.ai_qa_model || "gpt-5.6-luna") + '" placeholder="gpt-5.6-luna"></div>',
+    '<div><label>Gemini API key</label><input id="ai-key-qa" type="password" autocomplete="new-password" placeholder="' + (settings.ai_qa_api_key ? "Saved •••••••• — enter a new key to replace" : "AIza...") + '"></div>',
+    '<div><label>Model</label><input id="ai-model-qa" value="' + esc(settings.ai_qa_model || "gemini-3.5-flash-lite") + '" placeholder="gpt-5.6-luna"></div>',
     '</div>',
     '<div class="btnrow" style="margin-top:8px">',
     '<button class="btn ghost" type="button" onclick="testQAConfig(this)">Test connection</button>',
@@ -3391,7 +3391,7 @@ async function saveQAConfig(btn) {
     await api("/admin/api/settings", { method: "PUT", body: { key: "ai_qa_model", value: model } });
     const fresh = await api("/admin/api/settings");
     renderAIConfigs(fresh);
-    toast("🧪 OpenAI AI QA saved — live immediately");
+    toast("🧪 Gemini AI QA saved — live immediately");
   });
 }
 
@@ -3402,7 +3402,7 @@ async function testQAConfig(btn) {
     const result = key
       ? await api("/admin/api/ai-config/test-qa", { method: "POST", body: { api_key: key, model } })
       : await api("/admin/api/ai-config/test-qa-saved", { method: "POST" });
-    toast("🧪 OpenAI QA: " + result.status + " (" + result.model + ")");
+    toast("🧪 Gemini QA: " + result.status + " (" + result.model + ")");
     $("ai-status-qa").textContent = "✓ Connection OK — " + result.status;
   });
 }
