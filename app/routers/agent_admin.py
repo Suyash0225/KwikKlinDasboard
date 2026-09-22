@@ -1456,10 +1456,13 @@ async def test_ai_config(body: AITestIn, db: AsyncSession = Depends(get_db)) -> 
     """Test an OpenRouter key/model without saving the credential."""
     from app.services.llm_client import test_openrouter_connection
 
-    result = await test_openrouter_connection(
-        api_key=body.api_key.strip(),
-        model=body.model.strip(),
-    )
+    try:
+        result = await test_openrouter_connection(
+            api_key=body.api_key.strip(),
+            model=body.model.strip(),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)[:300]) from exc
     return result
 
 
