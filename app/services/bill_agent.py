@@ -2119,21 +2119,21 @@ async def _handle_open_task_reply(
         )
         with llm_client.track("task_reply"):
             out = await llm_client.ask_json(
-            system=(
-                "You are Kwik Klin's staff task interpreter. Decide whether the new "
-                "message is a natural response/update to the staff member's OPEN TASK. "
-                "Use the task title and recent history, not just keywords. Hinglish, "
-                "Hindi, abbreviations, place names and informal wording are normal. "
-                "A message listing pickup places, customers, delivery points, progress "
-                "or a partial result can be a valid UPDATE even without the task code. "
-                "Do not invent missing facts. Mark DONE only when the message clearly "
-                "says the whole task is completed. Mark BLOCKED when the staff says the "
-                "task cannot proceed. If it is unrelated to the task, use NOT_RELATED. "
-                "Return a short factual summary in the staff's language."
-            ),
-            user_text=prompt,
-            schema=_TASK_REPLY_SCHEMA,
-            model=llm_client.MODEL_SMART,
+                system=(
+                    "You are Kwik Klin's staff task interpreter. Decide whether the new "
+                    "message is a natural response/update to the staff member's OPEN TASK. "
+                    "Use the task title and recent history, not just keywords. Hinglish, "
+                    "Hindi, abbreviations, place names and informal wording are normal. "
+                    "A message listing pickup places, customers, delivery points, progress "
+                    "or a partial result can be a valid UPDATE even without the task code. "
+                    "Do not invent missing facts. Mark DONE only when the message clearly "
+                    "says the whole task is completed. Mark BLOCKED when the staff says the "
+                    "task cannot proceed. If it is unrelated to the task, use NOT_RELATED. "
+                    "Return a short factual summary in the staff's language."
+                ),
+                user_text=prompt,
+                schema=_TASK_REPLY_SCHEMA,
+                model=llm_client.MODEL_SMART,
                 max_tokens=260,
             )
     except LLMError:
