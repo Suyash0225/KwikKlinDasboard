@@ -1414,11 +1414,7 @@ async def agents_overview(db: AsyncSession = Depends(get_db)) -> dict:
 
 
 # Settings whose values are credentials — never sent back to the browser.
-_SECRET_SETTINGS = {
-    "ig_access_token", "gbp_connection",
-    "ai_service_api_key", "ai_marketing_api_key",
-    "ai_decision_api_key", "ai_task_api_key",
-}
+_SECRET_SETTINGS = {"ig_access_token", "gbp_connection"}
 # Sirf vendor Control panel likhta hai (routers/control.py) — dukaan ke
 # dashboard ke generic settings PUT se nahi, warna koi token/listing badal de.
 _READONLY_SETTINGS = {"gbp_connection", "gbp_reviews", "ig_user_id", "ig_access_token"}
@@ -1443,93 +1439,6 @@ class SettingIn(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# OpenRouter configuration
-# ---------------------------------------------------------------------------
-
-class AITestIn(BaseModel):
-    api_key: str = Field(min_length=10, max_length=300)
-    model: str = Field(min_length=3, max_length=200)
-
-
-@router.post("/ai-config/test")
-async def test_ai_config(body: AITestIn, db: AsyncSession = Depends(get_db)) -> dict:
-    """Test an OpenRouter key/model without saving the credential."""
-    from app.services.llm_client import test_openrouter_connection
-
-    try:
-        result = await test_openrouter_connection(
-            api_key=body.api_key.strip(),
-            model=body.model.strip(),
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)[:300]) from exc
-    return result
-
-
-
-class AIQATestIn(BaseModel):
-    api_key: str = Field(min_length=10, max_length=300)
-    model: str = Field(min_length=3, max_length=200)
-
-
-@router.post("/ai-config/test-qa")
-async def test_qa_ai_config(body: AIQATestIn, db: AsyncSession = Depends(get_db)) -> dict:
-    """Test the separate Gemini quality-judge credential."""
-    from app.services.ai_qa import _call_gemini
-    try:
-        result = await _call_gemini(
-            api_key=body.api_key.strip(),
-            model=body.model.strip(),
-            prompt=(
-                "Test request. Customer said: 'Aap laundry service dete ho?' "
-                "Production reply: 'Haan, pickup aur delivery available hai.' "
-                "Facts: laundry service is available. Return PASS if this is supported."
-            ),
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)[:300]) from exc
-    return {"ok": True, "model": body.model.strip(), "status": result.get("status")}
-
-
-@router.post("/ai-config/test-qa-saved")
-async def test_saved_qa_ai_config(db: AsyncSession = Depends(get_db)) -> dict:
-    from app.services.ai_qa import _call_openai
-    key = await app_settings.get(db, "ai_qa_api_key")
-    model = await app_settings.get(db, "ai_qa_model")
-    if not key:
-        raise HTTPException(status_code=400, detail="No API key saved for AI QA agent")
-    try:
-        result = await _call_openai(
-            api_key=str(key),
-            model=str(model),
-            prompt=(
-                "Test request. Customer said: 'Aap laundry service dete ho?' "
-                "Production reply: 'Haan, pickup aur delivery available hai.' "
-                "Facts: laundry service is available. Return PASS if this is supported."
-            ),
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)[:300]) from exc
-    return {"ok": True, "model": str(model), "status": result.get("status")}
-
-
-@router.post("/ai-config/test-saved/{slot}")
-async def test_saved_ai_config(slot: str, db: AsyncSession = Depends(get_db)) -> dict:
-    """Test an already-saved agent credential without returning the secret."""
-    allowed = {"service", "marketing", "decision", "task"}
-    if slot not in allowed:
-        raise HTTPException(status_code=400, detail="invalid AI agent slot")
-    key = await app_settings.get(db, f"ai_{slot}_api_key")
-    model = await app_settings.get(db, f"ai_{slot}_model")
-    if not key:
-        raise HTTPException(status_code=400, detail=f"No API key saved for {slot} agent")
-    from app.services.llm_client import test_openrouter_connection
-    try:
-        return await test_openrouter_connection(api_key=str(key), model=str(model))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)[:300]) from exc
-
-
 @router.put("/settings")
 async def put_setting(body: SettingIn, db: AsyncSession = Depends(get_db)) -> dict:
     # Saving the mask back would overwrite the real secret with dots.
