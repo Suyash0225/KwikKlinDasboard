@@ -324,8 +324,30 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     # --- work orders & admin power commands (Phase overnight) ---
     "work_order": {
-        "hi": "🧺 {headline}!\nOrder: {order_number}\nCustomer: {customer_name}\nKapde: {items}\nDelivery: {delivery}\nPriority: {priority}\nInstruction: {extra}",
-        "en": "🧺 {headline}!\nOrder: {order_number}\nCustomer: {customer_name}\nItems: {items}\nDelivery: {delivery}\nPriority: {priority}\nInstruction: {extra}",
+        "hi": (
+            "🧺 *{headline}*\n"
+            "━━━━━━━━━━━━━━\n"
+            "📦 *Order:* {order_number}\n"
+            "👤 *Customer:* {customer_name}\n"
+            "👕 *Kapde:* {items}\n"
+            "📅 *Delivery:* {delivery}\n"
+            "⚡ *Priority:* {priority}\n\n"
+            "📌 *Instruction:* {extra}\n"
+            "━━━━━━━━━━━━━━\n"
+            "✅ Kaam ho jaye to *Done* button dabayein."
+        ),
+        "en": (
+            "🧺 *{headline}*\n"
+            "━━━━━━━━━━━━━━\n"
+            "📦 *Order:* {order_number}\n"
+            "👤 *Customer:* {customer_name}\n"
+            "👕 *Items:* {items}\n"
+            "📅 *Delivery:* {delivery}\n"
+            "⚡ *Priority:* {priority}\n\n"
+            "📌 *Instruction:* {extra}\n"
+            "━━━━━━━━━━━━━━\n"
+            "✅ Tap *Done* when completed."
+        ),
     },
     "relay_message_customer": {
         "hi": "{message}\n— {shop}",
