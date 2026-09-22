@@ -120,9 +120,7 @@ async def judge_customer_turn(
         )
         result = await _call_openai(api_key=api_key, model=model, prompt=prompt)
 
-        async with async_session_factory() as db:
-            await audit.record(
-                db,
+        await audit.record(
                 actor_role="system",
                 actor="openai-qa",
                 action="ai_qa",
