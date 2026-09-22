@@ -1,4 +1,4 @@
-"""Non-blocking AI quality judge for customer-facing AI replies.
+"""Non-blocking Gemini quality judge for customer-facing AI replies.
 
 This agent is deliberately outside the customer reply path. It reads the
 customer message + facts/knowledge/history + the production agent decision
@@ -7,6 +7,7 @@ and reply, then records PASS/FAIL and the concrete reason in AuditLog.
 import json
 import time
 
+import base64
 import httpx
 import structlog
 
@@ -15,7 +16,7 @@ from app.services import app_settings, audit
 
 log = structlog.get_logger()
 
-_OPENAI_URL = "https://api.openai.com/v1/responses"
+_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 _QA_SCHEMA = {
     "type": "object",
@@ -38,51 +39,50 @@ _QA_SCHEMA = {
 }
 
 
-async def _call_openai(*, api_key: str, model: str, prompt: str) -> dict:
+async def _call_gemini(*, api_key: str, model: str, prompt: str) -> dict:
     started = time.monotonic()
     payload = {
-        "model": model,
-        "store": False,
-        "instructions": (
-            "You are Kwik Klin's AI Quality Judge. Review production AI behavior, "
-            "not the customer. Be strict and factual. Use ONLY the supplied facts, "
-            "knowledge and conversation. Do not invent business rules. A response "
-            "is FAIL if it states unsupported prices/dates/policies, misunderstands "
-            "the customer's intent, misses a clear lead, or contains a material "
-            "customer-support error. If the evidence is insufficient, use REVIEW."
-        ),
-        "input": prompt,
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "kwikklin_ai_qa",
-                "strict": True,
-                "schema": _QA_SCHEMA,
-            }
+        "system_instruction": {
+            "parts": [{
+                "text": (
+                    "You are Kwik Klin's AI Quality Judge. Review production AI behavior, "
+                    "not the customer. Be strict and factual. Use ONLY the supplied facts, "
+                    "knowledge and conversation. Do not invent business rules. A response "
+                    "is FAIL if it states unsupported prices/dates/policies, misunderstands "
+                    "the customer's intent, misses a clear lead, or contains a material "
+                    "customer-support error. If evidence is insufficient, use REVIEW."
+                )
+            }]
         },
-        "max_output_tokens": 700,
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": _QA_SCHEMA,
+            "maxOutputTokens": 2048,
+        },
     }
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.post(
-            _OPENAI_URL,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json=payload,
-        )
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                f"{_GEMINI_BASE}/{model}:generateContent",
+                params={"key": api_key},
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"Gemini connection error: {str(exc)[:180]}") from exc
     if resp.status_code != 200:
-        raise RuntimeError(f"OpenAI HTTP {resp.status_code}: {resp.text[:250]}")
+        raise RuntimeError(f"Gemini HTTP {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
-    text = str(data.get("output_text") or "").strip()
+    candidates = data.get("candidates") or []
+    parts = ((candidates[0].get("content") or {}).get("parts") if candidates else None) or []
+    text = "".join(str(p.get("text") or "") for p in parts).strip()
     if not text:
-        # Responses API output can be nested; keep a defensive extractor.
-        chunks = []
-        for item in data.get("output") or []:
-            for part in item.get("content") or []:
-                if part.get("type") == "output_text":
-                    chunks.append(part.get("text") or "")
-        text = "".join(chunks).strip()
+        raise RuntimeError("Gemini returned empty QA response")
     result = json.loads(text)
     log.info(
         "ai_qa_completed",
+        provider="gemini",
         model=model,
         status=result.get("status"),
         severity=result.get("severity"),
@@ -105,7 +105,7 @@ async def judge_customer_turn(
     try:
         async with async_session_factory() as db:
             api_key = str(await app_settings.get(db, "ai_qa_api_key") or "").strip()
-            model = str(await app_settings.get(db, "ai_qa_model") or "gpt-5.6-luna").strip()
+            model = str(await app_settings.get(db, "ai_qa_model") or "gemini-3.5-flash-lite").strip()
             if not api_key:
                 return
 
@@ -118,7 +118,7 @@ async def judge_customer_turn(
             f"PRODUCTION AGENT DECISION:\n{json.dumps(agent_output, ensure_ascii=False)[:5000]}\n\n"
             "Judge whether the decision and customer-facing reply are correct."
         )
-        result = await _call_openai(api_key=api_key, model=model, prompt=prompt)
+        result = await _call_gemini(api_key=api_key, model=model, prompt=prompt)
 
         await audit.record(
                 actor_role="system",
