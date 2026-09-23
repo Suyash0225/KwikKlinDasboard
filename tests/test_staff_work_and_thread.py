@@ -410,3 +410,69 @@ async def test_a_bill_that_needs_pickup_reaches_the_delivery_boy(
         async with async_session_factory() as db:
             await db.execute(sqltext("DELETE FROM rate_card WHERE service = 'PickSvc'"))
             await db.commit()
+
+
+async def test_staff_can_lookup_task_bill_and_follow_up(
+    client, test_washer, two_shops, sent  # noqa: F811
+) -> None:
+    """Staff can ask a task/bill reference and then ask a context-only follow-up."""
+    from app.models import Customer
+    from app.services import tasks as task_service
+    from app.services.bill_agent import handle_staff_message
+    from tests.conftest import TEST_WASHER_NAME, TEST_WASHER_PHONE
+
+    tok = tenant_context.current_tenant_id.set(two_shops["a"])
+    try:
+        async with async_session_factory() as db:
+            staff = await db.get(Staff, test_washer)
+            customer = Customer(
+                phone="+919999901234",
+                name="Keeran",
+                address="BHU Gate, Varanasi",
+            )
+            db.add(customer)
+            await db.flush()
+            order = Order(
+                order_number="KK-20260923-77",
+                customer_id=customer.id,
+                status=OrderStatus.PICKUP_ASSIGNED,
+                items=[{"type": "Blanket", "qty": 2}],
+                total_amount=300,
+                amount_paid=100,
+            )
+            db.add(order)
+            await db.flush()
+            task = await task_service.create_task(
+                db,
+                title="Keeran ke yahan se pickup karna hai",
+                staff=staff,
+                order=order,
+                notify=False,
+            )
+
+            reply = await handle_staff_message(
+                db,
+                sender_phone=TEST_WASHER_PHONE,
+                sender_label=TEST_WASHER_NAME,
+                text=f"{task.code} kis jagah ka pickup hai?",
+            )
+            assert "BHU Gate, Varanasi" in reply
+            assert task.code in reply
+
+            reply = await handle_staff_message(
+                db,
+                sender_phone=TEST_WASHER_PHONE,
+                sender_label=TEST_WASHER_NAME,
+                text="aur kitne pcs hain?",
+            )
+            assert "2 x Blanket" in reply or "2x Blanket" in reply
+
+            reply = await handle_staff_message(
+                db,
+                sender_phone=TEST_WASHER_PHONE,
+                sender_label=TEST_WASHER_NAME,
+                text="bill number kya hai?",
+            )
+            assert "KK-20260923-77" in reply
+    finally:
+        tenant_context.current_tenant_id.reset(tok)
