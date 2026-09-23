@@ -976,11 +976,11 @@ async def _handle_inbound_message(
         except Exception:
             log.exception("reply_build_failed", phone=phone)
             reply = get_message("error_fallback")
+        # Final kill-switch check: the LLM may have taken several seconds.
+        # If the owner switched the Service Agent OFF while it was thinking,
+        # do not send the stale automated reply.
         if reply:
-            try:
-                await send_message(db, to_phone=phone, text=reply)
-            except SendError:
-                log.exception("reply_send_failed", phone=phone)
+            await _send_customer_agent_reply(db, phone, reply)
         # first-contact numbers with no orders -> lead pipeline (never raises)
         try:
             from app.services.leads import note_inquiry
@@ -988,6 +988,29 @@ async def _handle_inbound_message(
             await note_inquiry(db, customer, spoken or text or "")
         except Exception:
             log.exception("lead_capture_failed")
+
+
+async def _send_customer_agent_reply(
+    db: AsyncSession, phone: str, reply: str
+) -> bool:
+    """Send a customer-agent reply only while the tenant Service Agent is ON.
+
+    This is intentionally checked immediately before WhatsApp send. The
+    earlier webhook gate prevents new work from starting, while this second
+    gate closes the race where an LLM call was already running when the owner
+    switched the agent OFF.
+    """
+    from app.services import app_settings as _as
+
+    if not await _as.get(db, "agent_enabled"):
+        log.info("agent_disabled_before_send", phone=phone)
+        return False
+    try:
+        await send_message(db, to_phone=phone, text=reply)
+        return True
+    except SendError:
+        log.exception("reply_send_failed", phone=phone)
+        return False
 
 
 async def _newer_inbound_exists(db: AsyncSession, customer_id, convo: Conversation) -> bool:
