@@ -165,6 +165,14 @@ _PENDING: dict[str, PendingBill | PendingPayment] = {}
 # ('test customer' se on, 'test band' se off; sikhao: se Correction banti hai)
 _TEST_MODE: dict[str, dict] = {}
 
+# Staff reference memory: when a staff member asks "T-123 kahan hai?" and
+# immediately follows with "kitne pcs?", the second message must still refer
+# to T-123. This is short-lived, per phone, and never replaces DB truth.
+_STAFF_REF_CONTEXT: dict[str, tuple[str, str, datetime]] = {}
+_STAFF_REF_TTL = timedelta(minutes=20)
+_TASK_REF_RE = re.compile(r"\bT\s*-?\s*(\d+)\b", re.I)
+_ORDER_REF_RE_STAFF = re.compile(r"\bKK-\d{8}-\d{2,}\b", re.I)
+
 _STATUS_NAMES = [s.name for s in OrderStatus]
 
 # Khali extraction — jab hum khud (bina LLM ke) koi action banate hain.
@@ -787,6 +795,144 @@ async def _unclaimed_orders(
     return out
 
 
+async def _staff_reference_lookup(
+    db: AsyncSession, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """Answer a staff's Task/Bill reference question from live DB facts.
+
+    This is deliberately deterministic. A staff member asking "T-123 kahan
+    ka pickup hai?" must never depend on an LLM remembering which task the
+    code belongs to. A short-lived reference context also makes follow-ups
+    such as "aur kitne pcs hain?" unambiguous.
+    """
+    if sender_label == "manager" or not text or text.startswith("["):
+        return None
+    if _PENDING.get(sender_phone) is not None:
+        return None
+
+    staff = (
+        await db.execute(select(Staff).where(Staff.phone == sender_phone))
+    ).scalar_one_or_none()
+    if staff is None or not staff.is_active:
+        return None
+
+    raw = text.strip()
+    task_match = _TASK_REF_RE.search(raw)
+    order_match = _ORDER_REF_RE_STAFF.search(raw)
+
+    ref_kind = ref_value = None
+    if task_match:
+        ref_kind, ref_value = "task", f"T-{task_match.group(1)}"
+    elif order_match:
+        ref_kind, ref_value = "order", order_match.group(0).upper()
+    else:
+        saved = _STAFF_REF_CONTEXT.get(sender_phone)
+        if saved and datetime.now(timezone.utc) - saved[2] <= _STAFF_REF_TTL:
+            ref_kind, ref_value = saved[0], saved[1]
+        else:
+            _STAFF_REF_CONTEXT.pop(sender_phone, None)
+            return None
+
+    low = raw.casefold()
+
+    if ref_kind == "task":
+        from app.services import tasks as task_service
+
+        task = await task_service.get_by_code(db, ref_value)
+        if task is None:
+            return f"❌ {ref_value} ka koi task nahi mila. Task No. check karke bhej dijiye."
+        if task.assigned_staff_id != staff.id:
+            return f"ℹ️ {ref_value} aapke naam par assigned nahi hai, isliye main uski details nahi dikha sakta."
+
+        _STAFF_REF_CONTEXT[sender_phone] = ("task", task.code, datetime.now(timezone.utc))
+        order = await db.get(Order, task.order_id) if task.order_id else None
+
+        if order is None:
+            if re.search(r"kahan|pata|address|location|pickup", low):
+                return f"📍 *{task.code}*\n{task.title}\n\nIs task ke saath koi bill/order linked nahi hai."
+            return (
+                f"📝 *{task.code}*\n"
+                f"*Kaam:* {task.title}\n"
+                f"*Status:* {task.status}"
+                + (f"\n*Reply:* {task.reply}" if task.reply else "")
+            )
+
+        cust = await db.get(Customer, order.customer_id)
+        from app.services.work_orders import items_summary
+
+        customer_name = (cust.name or cust.phone) if cust else "Customer"
+        address = cust.address if cust else None
+        items = items_summary(order)
+        due = max(
+            (order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0")),
+            Decimal("0"),
+        )
+
+        if re.search(r"kahan|pata|address|location|pickup|delivery", low):
+            place = address or "Address database mein save nahi hai."
+            return (
+                f"📍 *{task.code} — Location*\n"
+                f"*Customer:* {customer_name}\n"
+                f"*Address:* {place}"
+            )
+        if re.search(r"kitne|pcs|piece|kapde|items|quantity", low):
+            return f"👕 *{task.code} — Items:* {items}"
+        if re.search(r"bill|order|amount|paisa|rupay|₹", low):
+            return (
+                f"🧾 *{task.code}*\n"
+                f"*Bill:* {order.order_number}\n"
+                f"*Amount:* ₹{order.total_amount or 0:.0f}\n"
+                f"*Paid:* ₹{order.amount_paid or 0:.0f}\n"
+                f"*Due:* ₹{due:.0f}\n"
+                f"*Status:* {status_label(order.status)}"
+            )
+        return (
+            f"📋 *{task.code} DETAILS*\n"
+            f"*Customer:* {customer_name}\n"
+            f"*Address:* {address or 'save nahi hai'}\n"
+            f"*Bill:* {order.order_number}\n"
+            f"*Items:* {items}\n"
+            f"*Amount:* ₹{order.total_amount or 0:.0f} | *Due:* ₹{due:.0f}\n"
+            f"*Order Status:* {status_label(order.status)}\n"
+            f"*Task:* {task.status}"
+        )
+
+    # Direct Bill/Order reference.
+    try:
+        order = await get_order(db, ref_value)
+    except OrderNotFoundError:
+        return f"❌ {ref_value} ka koi bill/order nahi mila. Number check karke bhej dijiye."
+
+    _STAFF_REF_CONTEXT[sender_phone] = ("order", order.order_number, datetime.now(timezone.utc))
+    cust = await db.get(Customer, order.customer_id)
+    from app.services.work_orders import items_summary
+
+    customer_name = (cust.name or cust.phone) if cust else "Customer"
+    address = cust.address if cust else None
+    items = items_summary(order)
+    due = max(
+        (order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0")),
+        Decimal("0"),
+    )
+
+    if re.search(r"kahan|pata|address|location|pickup|delivery", low):
+        return (
+            f"📍 *{order.order_number} — Location*\n"
+            f"*Customer:* {customer_name}\n"
+            f"*Address:* {address or 'Address database mein save nahi hai.'}"
+        )
+    if re.search(r"kitne|pcs|piece|kapde|items|quantity", low):
+        return f"👕 *{order.order_number} — Items:* {items}"
+    return (
+        f"🧾 *{order.order_number} DETAILS*\n"
+        f"*Customer:* {customer_name}\n"
+        f"*Address:* {address or 'save nahi hai'}\n"
+        f"*Items:* {items}\n"
+        f"*Amount:* ₹{order.total_amount or 0:.0f} | *Paid:* ₹{order.amount_paid or 0:.0f} | *Due:* ₹{due:.0f}\n"
+        f"*Status:* {status_label(order.status)}"
+    )
+
+
 async def handle_staff_message(
     db: AsyncSession, *, sender_phone: str, sender_label: str, text: str
 ) -> str | None:
@@ -844,6 +990,15 @@ async def handle_staff_message(
     problem = await _handle_order_problem(db, sender_phone, sender_label, text or "")
     if problem is not None:
         return problem
+
+    # Explicit Task/Bill references get deterministic DB lookup before the
+    # generic task-context classifier. This makes "T-123 kahan hai?" and
+    # "bill KK-... ka detail" answerable without asking staff to repeat context.
+    ref_reply = await _staff_reference_lookup(
+        db, sender_phone, sender_label, text or ""
+    )
+    if ref_reply is not None:
+        return ref_reply
 
     # "order details do" — staff apna kaam poochh raha hai. Ye pickup ke
     # baad aata hai taaki chal rahi baat-cheet beech mein na kate.
