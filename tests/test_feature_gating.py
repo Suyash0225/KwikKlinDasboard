@@ -161,3 +161,30 @@ async def test_meters_count_per_tenant() -> None:
         assert await quota.ai_calls_this_month(db, ghost) == 0
         assert await quota.wa_messages_this_month(db, ghost) == 0
     assert home_ai >= 0 and home_wa >= 0
+
+
+async def test_service_agent_final_kill_switch_blocks_customer_send(monkeypatch) -> None:
+    """OFF must block the final WhatsApp send even after reply generation."""
+    from app.routers import webhook
+    from app.services import app_settings
+
+    sent = []
+
+    async def fake_send(*args, **kwargs):
+        sent.append(kwargs)
+        return "fake-wa-id"
+
+    async def fake_get(db, key):
+        assert key == "agent_enabled"
+        return False
+
+    monkeypatch.setattr(webhook, "send_message", fake_send)
+    monkeypatch.setattr(app_settings, "get", fake_get)
+
+    async with async_session_factory() as db:
+        ok = await webhook._send_customer_agent_reply(
+            db, "+919999900999", "AI generated reply"
+        )
+
+    assert ok is False
+    assert sent == []
