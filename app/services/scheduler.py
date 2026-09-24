@@ -456,13 +456,44 @@ async def run_follow_up_pings() -> int:
                         try:
                             await send_message(
                                 db, to_phone=await team.primary_admin_phone(db),
-                                text=(
-                                    f"🚨 *ESCALATION — {o.order_number}*\n"
-                                    f"━━━━━━━━━━━━━━\n"
-                                    f"📌 *Status:* {o.status.name}\n"
-                                    f"⏱️ *Stuck:* {int(stale_hours)} ghante\n"
-                                    f"⚠️ Staff ka response nahi aaya — please check."
-                                ),
+                                cust = await db.get(Customer, o.customer_id)
+                                staff_name = "Unassigned"
+                                staff_role = role
+                                if role == "DELIVERY" and o.assigned_delivery_id:
+                                    assigned = await db.get(Staff, o.assigned_delivery_id)
+                                    if assigned:
+                                        staff_name = assigned.name
+                                elif role == "WASHER" and o.assigned_washer_id:
+                                    assigned = await db.get(Staff, o.assigned_washer_id)
+                                    if assigned:
+                                        staff_name = assigned.name
+                                items = items_summary(o)
+                                text_lines = [
+                                    f"🚨 *ESCALATION — {o.order_number}*",
+                                    "━━━━━━━━━━━━━━",
+                                    "",
+                                    "📌 *What is stuck?*",
+                                    f"*Status:* {o.status.name}",
+                                    f"*Customer:* {(cust.name or cust.phone) if cust else 'Unknown'}",
+                                    f"*Work:* {question}",
+                                    f"*Assigned to:* {staff_name} ({staff_role})",
+                                    f"*Items:* {items[:220]}",
+                                    f"*Delivery date:* {o.expected_delivery.strftime('%d %b %Y') if o.expected_delivery else 'Not set'}",
+                                    "",
+                                    f"⏱️ *Stuck for:* {int(stale_hours)} hours",
+                                    "⚠️ *Staff response nahi aaya.*",
+                                    "",
+                                    "👉 *Please check:*",
+                                    "1. Staff ne task receive/acknowledge kiya ya nahi",
+                                    "2. Pickup / processing actually hua ya nahi",
+                                    "3. Zarurat ho to task reassign karein",
+                                ]
+                                text_lines.extend([
+                                    "",
+                                    "━━━━━━━━━━━━━━",
+                                    "🔎 *Dashboard → Tasks / Inbox* par order check karein.",
+                                ])
+                                text="\n".join(text_lines),
                             )
                         except SendError as exc:
                             log.info("esc6h_not_sent")
