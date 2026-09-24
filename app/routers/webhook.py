@@ -375,8 +375,12 @@ async def _human_handoff_waiting(
             .limit(1)
         )
     ).scalar_one_or_none()
-    if latest_human is None or latest_human.created_at >= inbound.created_at:
+    if latest_human is None:
         return False
+
+    # Human replied after this customer message: suppress AI immediately.
+    if latest_human.created_at >= inbound.created_at:
+        return True
 
     minutes = int(await app_settings.get(db, "human_handoff_grace_minutes") or 15)
     return minutes > 0 and (
