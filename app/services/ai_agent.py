@@ -18,7 +18,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Customer, OrderStatus
+from app.models import AuditLog, Customer, OrderStatus
 from app.config import settings
 from app.services import llm_client
 from app.services.escalation import raise_escalation
