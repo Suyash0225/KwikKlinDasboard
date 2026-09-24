@@ -181,9 +181,17 @@ async def test_service_agent_final_kill_switch_blocks_customer_send(monkeypatch)
     monkeypatch.setattr(webhook, "send_message", fake_send)
     monkeypatch.setattr(app_settings, "get", fake_get)
 
+    from app.models import Customer
+    from app.services import tenant_context
+
     async with async_session_factory() as db:
+        c = Customer(
+            phone="+919999900999",
+            name="Kill Switch Test",
+            tenant_id=tenant_context.cached_home_tenant_id(),
+        )
         ok = await webhook._send_customer_agent_reply(
-            db, "+919999900999", "AI generated reply"
+            db, c, "+919999900999", "AI generated reply"
         )
 
     assert ok is False
