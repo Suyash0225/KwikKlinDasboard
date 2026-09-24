@@ -717,37 +717,45 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
 
             lines = [
                 f"*{_greeting(now_ist)}, {st.name} ji* 👋",
+                "",
                 "📋 *AAJ KA PENDING KAAM*",
+                "━━━━━━━━━━━━━━",
             ]
 
             if task_rows:
+                lines.append("")
+                lines.append("🛠️ *Tasks*")
+                lines.append("")
                 for t in task_rows:
-                    flag = " 🔴 URGENT" if t.urgent else ""
-                    lines.append(f"• {t.code} — {t.title[:180]}{flag}")
+                    flag = " 🔴 *URGENT*" if t.urgent else ""
+                    lines.append(f"• *{t.code}* — {t.title[:180]}{flag}")
 
             if orders:
-                lines.append("")
-                lines.append("🧺 Aaj/ongoing orders:")
+                lines.extend(["", "🧺 *Aaj / Ongoing Orders*", ""])
                 for i, o in enumerate(orders[:10], 1):
                     cust = await db.get(Customer, o.customer_id)
                     flags = []
                     if o.priority == "urgent":
                         flags.append("🔴 URGENT")
                     if o.expected_delivery and o.expected_delivery <= date.today():
-                        flags.append("aaj delivery")
+                        flags.append("📅 Aaj delivery")
                     lines.append(
-                        f"{i}. {o.order_number} — "
-                        f"{cust.name or cust.phone if cust else '?'} — "
-                        f"{items_summary(o)} — {status_label(o.status)}"
-                        + (f" [{', '.join(flags)}]" if flags else "")
+                        f"*{i}. {o.order_number}*\\n"
+                        f"👤 {cust.name or cust.phone if cust else '?'}\\n"
+                        f"👕 {items_summary(o)}\\n"
+                        f"📌 {status_label(o.status)}"
+                        + (f" — {' · '.join(flags)}" if flags else "")
                     )
 
             lines.extend([
                 "",
-                "Kaam complete hone par WhatsApp par task code ke saath reply karein: "
-                "done T-123",
+                "━━━━━━━━━━━━━━",
+                "✅ *Kaam complete hone par* task code ke saath reply karein:",
+                "👉 done T-123",
+                "",
                 "— Kwik Klin",
             ])
+
             text = "\n".join(lines)
 
             try:
