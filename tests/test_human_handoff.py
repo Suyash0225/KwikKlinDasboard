@@ -42,7 +42,6 @@ async def test_human_handoff_waits_after_customer_inbound(monkeypatch):
         assert key == "human_handoff_grace_minutes"
         return 15
 
-    monkeypatch.setattr(webhook.app_settings, "get", fake_get, raising=False)
     # The helper imports app_settings inside the function, so patch the module
     # object it resolves to.
     from app.services import app_settings
