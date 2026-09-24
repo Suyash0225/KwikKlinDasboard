@@ -260,7 +260,7 @@ async def send_message(
 
     if text:
         text = _wa_format(text)
-        if customer is not None and sent_by != "manager":
+        if customer is not None and sent_by not in {"manager", "human"}:
             text = sign_ai(text)
 
     # ---------------- WAHA ----------------
