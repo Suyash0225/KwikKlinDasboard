@@ -147,29 +147,14 @@ async def _reply_one(db: AsyncSession, customer: Customer, inbound: Conversation
 
 async def run_human_handoff() -> int:
     """Take over customer turns that have waited the configured grace period."""
-    try:
-        grace_minutes = int(
-            await app_settings.get(
-                _db_for_settings := await async_session_factory().__aenter__(),
-                "human_handoff_grace_minutes",
-            )
-            or 15
-        )
-    except Exception:
-        grace_minutes = 15
-    finally:
-        # The temporary session above is deliberately avoided below; settings
-        # are read again in the tenant-scoped worker using the real session.
-        try:
-            await _db_for_settings.close()
-        except Exception:
-            pass
-
-    if grace_minutes <= 0:
-        return 0
-
     sent = 0
     async with async_session_factory() as db:
+        grace_minutes = int(
+            await app_settings.get(db, "human_handoff_grace_minutes") or 15
+        )
+        if grace_minutes <= 0:
+            return 0
+
         customers = (
             await db.execute(
                 select(Customer).where(
@@ -178,12 +163,6 @@ async def run_human_handoff() -> int:
                 )
             )
         ).scalars().all()
-
-        # Re-read per-tenant settings in the active tenant context. This also
-        # keeps the function safe when called from the scheduler's tenant loop.
-        grace_minutes = int(
-            await app_settings.get(db, "human_handoff_grace_minutes") or 15
-        )
 
         for customer in customers:
             inbound = await _latest_inbound(db, customer.id)
