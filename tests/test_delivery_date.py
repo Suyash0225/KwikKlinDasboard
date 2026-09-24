@@ -9,8 +9,9 @@ def test_normal_delivery_counts_working_days():
 
 
 def test_sunday_is_skipped():
-    # Friday + 4 working days: Mon, Tue, Wed, Thu.
-    assert calculate(date(2026, 9, 25)) == date(2026, 10, 1)
+    # Saturday is a working day for the shop; Sunday is skipped.
+    # Friday + 4 working days: Sat, Mon, Tue, Wed.
+    assert calculate(date(2026, 9, 25)) == date(2026, 9, 30)
 
 
 def test_heavy_item_uses_five_working_days():
