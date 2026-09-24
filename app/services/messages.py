@@ -41,11 +41,11 @@ MESSAGES: dict[str, dict[str, str]] = {
     # broken, so the money line is simply left out until we know it.
     "order_confirmed_no_price": {
         "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nKapde aate hi bill bana ke bhej denge.\nDelivery: {date}\n— {shop}",
-        "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nWe'll send the bill once the clothes reach us.\nDelivery: {date}\n— {shop}",
+        "en": "*Order Received* 🧺\n\n*Order:* {order_number}\n*Items:* {items}\n\nWe'll send the bill once the clothes reach us.\n\n*Delivery:* {date}\n\n— {shop}",
     },
     "order_confirmed_bill": {
         "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Baaki: ₹{due}\nDelivery: {date}{bill_line}\n— {shop}",
-        "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Due: ₹{due}\nDelivery: {date}{bill_line}\n— {shop}",
+        "en": "*Order Received* 🧺\n\n*Order:* {order_number}\n*Items:* {items}\n\n*Total:* ₹{total}\n*Advance:* ₹{advance}\n*Due:* ₹{due}\n\n*Delivery:* {date}{bill_line}\n\n— {shop}",
     },
     # --- lead follow-up ladder (Marketing Agent spec) ---
     "lead_day1": {
@@ -66,11 +66,11 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "pickup_confirmed_customer": {
         "hi": "Namaste {name} ji! Aapka order {order_number} confirm ho gaya 🧺 Pickup: {pickup}. Delivery pickup ke baad {sla} din mein. — {shop}",
-        "en": "Hello {name}! Your order {order_number} is confirmed 🧺 Pickup: {pickup}. Delivery within {sla} days of pickup. — {shop}",
+        "en": "*Order Confirmed* 🧺\n\nHello {name}! Your order *{order_number}* is confirmed.\n\n📦 *Pickup:* {pickup}\n📅 *Delivery:* Within {sla} days of pickup\n\n— {shop}",
     },
     "thankyou_rating": {
         "hi": "Aapka order {order_number} deliver ho gaya ✅ Dhanyawad, {shop} ko mauka dene ke liye! 🙏\nHamari seva kaisi lagi?",
-        "en": "Your order {order_number} has been delivered ✅ Thank you for choosing {shop}! 🙏\nHow was our service?",
+        "en": "*Order Delivered* ✅\n\nYour order *{order_number}* has been delivered.\n\nThank you for choosing {shop}! 🙏\n\n⭐ *How was our service?*",
     },
     "rate_good_reply": {
         "hi": "Bahut-bahut dhanyawad! ⭐ Aap jaise customers se hi {shop} chalta hai. Agli baar bhi yaad kijiyega 🙏",
@@ -90,11 +90,11 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "order_ready": {
         "hi": "Khushkhabri! Aapka order {order_number} taiyar hai ✨ Jald hi delivery hogi.{bill_line}\n— {shop}",
-        "en": "Good news! Your order {order_number} is ready ✨ Delivery soon.{bill_line}\n— {shop}",
+        "en": "*Good News!* ✨\n\nYour order *{order_number}* is ready.\n\n🛵 Delivery soon.{bill_line}\n\n— {shop}",
     },
     "order_out_for_delivery": {
         "hi": "Aapka order {order_number} delivery ke liye nikal chuka hai 🛵 — {shop}",
-        "en": "Your order {order_number} is out for delivery 🛵 — {shop}",
+        "en": "*Out for Delivery* 🛵\n\nYour order *{order_number}* is on the way.\n\n— {shop}",
     },
     "order_delivered": {
         "hi": "Aapka order {order_number} deliver ho gaya ✅ Dhanyawad, {shop} ko mauka dene ke liye! 🙏{bill_line}",
@@ -102,11 +102,11 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "bill_requested": {
         "hi": "Bilkul! Aapke order {order_number} ka bill yahan hai 🧾\nTotal: ₹{total} | Baaki: ₹{due}{bill_line}\n— {shop}",
-        "en": "Sure! Here is your bill for order {order_number} 🧾\nTotal: ₹{total} | Due: ₹{due}{bill_line}\n— {shop}",
+        "en": "*Bill & Payment Details* 🧾\n\n*Order:* {order_number}\n*Total:* ₹{total}\n*Due:* ₹{due}{bill_line}\n\n— {shop}",
     },
     "delay_notice": {
         "hi": "Namaste, aapke order {order_number} ki expected delivery ab {date} hai. Asuvidha ke liye maafi 🙏 — {shop}",
-        "en": "Hello, the expected delivery for order {order_number} is now {date}. Sorry for the inconvenience 🙏 — {shop}",
+        "en": "*Delivery Update* 📅\n\nThe expected delivery for order *{order_number}* is now *{date}*.\n\nSorry for the inconvenience 🙏\n\n— {shop}",
     },
     # --- rule-based status replies (webhook) ---
     "status_reply": {
@@ -128,7 +128,7 @@ MESSAGES: dict[str, dict[str, str]] = {
     # --- AI agent / escalations (Phase 4) ---
     "complaint_ack": {
         "hi": "Maaf kijiye aapko pareshani hui 🙏 Humne aapki baat turant apne manager tak pahuncha di hai — wo jald hi aapse sampark karenge. — {shop}",
-        "en": "We're sorry for the trouble 🙏 Your message has been passed to our manager — they will contact you shortly. — {shop}",
+        "en": "*We're Sorry* 🙏\n\nYour message has been passed to our manager.\n\nThey will contact you shortly.\n\n— {shop}",
     },
     "escalated_ack": {
         "hi": "Humne aapki baat manager tak pahuncha di hai, wo jald hi aapse sampark karenge 🙏 — {shop}",
