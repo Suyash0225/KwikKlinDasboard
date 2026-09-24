@@ -1438,9 +1438,19 @@ async def _finalize_bill(
         except ValueError:
             exp = None
     if exp is None:
-        # default = today + the shop's standard turnaround (Settings)
-        days = int(await app_settings.get(db, "turnaround_days"))
-        exp = date.today() + timedelta(days=days)
+        # Automatic promise: use the same working-day calculator as the
+        # dashboard/staff bill flow. Never trust the legacy turnaround_days value.
+        from app.services.delivery_date import calculate as calculate_delivery_date
+        cfg = await app_settings.get_many(
+            db, "delivery_normal_days", "delivery_heavy_days", "delivery_holidays"
+        )
+        exp = calculate_delivery_date(
+            date.today(),
+            d["items"],
+            normal_days=int(cfg.get("delivery_normal_days") or 4),
+            heavy_days=int(cfg.get("delivery_heavy_days") or 5),
+            holidays=cfg.get("delivery_holidays") or [],
+        )
 
     total = Decimal(str(d["total"])) if d["total"] else None
     order_items = [
