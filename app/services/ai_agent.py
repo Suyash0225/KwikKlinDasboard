@@ -444,7 +444,18 @@ async def build_ai_reply(
         log.info("ai_agent_disabled_by_switch")
         return None
 
-    # Phase 3: let the model choose and chain scoped read/action tools.\n    # If the agentic loop fails, the older deterministic pipeline below remains the fallback.\n    try:\n        agentic_reply = await _run_agentic_customer_turn(db, customer, text, sandbox=sandbox)\n        if agentic_reply:\n            return agentic_reply\n    except Exception:\n        log.exception("agentic_customer_turn_wrapper_failed")\n\n    # Billing is a transactional action, not a language-generation task.
+    # Phase 3: let the model choose and chain scoped read/action tools.
+    # If the agentic loop fails, the older deterministic pipeline below remains the fallback.
+    try:
+        agentic_reply = await _run_agentic_customer_turn(db, customer, text, sandbox=sandbox)
+        if agentic_reply:
+            from app.services.lead_onboarding_guard import enforce as enforce_lead_onboarding
+            return await enforce_lead_onboarding(
+                db, customer, text, agentic_reply, sandbox=sandbox
+            )
+    except Exception:
+        log.exception("agentic_customer_turn_wrapper_failed")
+\n    # Billing is a transactional action, not a language-generation task.
     # Handle it only after media normalization and the global AI switch.
     if re.search(r"\b(?:bill|invoice)\b", text, re.I):
         order_match = re.search(r"\bKK[- ]\d{8}[- ]\d{2}\b", text, re.I)
