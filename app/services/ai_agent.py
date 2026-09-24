@@ -552,10 +552,10 @@ async def build_ai_reply(
     if is_new_unknown and not sandbox:
         if not (customer.name or "").strip():
             log.info("new_lead_profile_needs_name", phone=customer.phone)
-            return "Welcome to Kwik Klin! 😊 May I know your name, please?"
+            return "*Welcome to Kwik Klin!* 😊\n\nMay I know your name, please?\n\n— Kwik Klin AI"
         if not (customer.address or "").strip():
             log.info("new_lead_profile_needs_address", phone=customer.phone)
-            return "Thank you! 🙏 Please share your full address with a nearby landmark, so we can assist you properly."
+            return "*Thank you!* 🙏\n\nPlease share your *full address + nearby landmark* so we can assist you properly.\n\n— Kwik Klin AI"
 
     # Execute only actions with deterministic handlers. Everything else stays
     # in its existing domain workflow below.
