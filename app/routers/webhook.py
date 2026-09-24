@@ -1139,6 +1139,40 @@ async def _send_customer_agent_reply(
         if not await _as.get(db, "agent_enabled"):
             log.info("agent_disabled_before_send", phone=phone)
             return False
+
+        # Final human-takeover race guard: the owner may have replied from
+        # the phone while the LLM was thinking. Never send AI over that reply.
+        latest_inbound = (
+            await db.execute(
+                select(Conversation)
+                .where(
+                    Conversation.customer_id == customer.id,
+                    Conversation.direction == Direction.INBOUND,
+                )
+                .order_by(Conversation.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        latest_human = (
+            await db.execute(
+                select(Conversation)
+                .where(
+                    Conversation.customer_id == customer.id,
+                    Conversation.direction == Direction.OUTBOUND,
+                    Conversation.sent_by == "human",
+                )
+                .order_by(Conversation.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if (
+            latest_inbound is not None
+            and latest_human is not None
+            and latest_human.created_at >= latest_inbound.created_at
+        ):
+            log.info("human_replied_before_ai_send", phone=phone)
+            return False
+
         try:
             await send_message(db, to_phone=phone, text=reply, sent_by="ai")
             return True
