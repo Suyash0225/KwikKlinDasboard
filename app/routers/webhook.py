@@ -222,8 +222,12 @@ async def receive_waha_webhook(
         event_name = str(event.get("event") or "")
         payload = event.get("payload") or {}
         if event_name == "message":
-            # Ignore our own outbound events. We record them at send time.
-            if payload.get("fromMe") is not True:
+            # WAHA emits our own messages too. API-generated messages are
+            # already recorded by send_message(); phone/app messages are not.
+            if payload.get("fromMe") is True:
+                if str(payload.get("source") or "").lower() != "api":
+                    await _record_waha_manual_outbound(db, payload)
+            else:
                 raw_from = str(payload.get("from") or "")
                 resolved_from = raw_from
                 if raw_from.endswith("@lid"):
@@ -275,6 +279,109 @@ async def receive_waha_webhook(
         await _mark_event(db, event_key, "failed", error=repr(exc))
 
     return JSONResponse({"status": "received"})
+
+
+async def _record_waha_manual_outbound(db: AsyncSession, payload: dict) -> None:
+    """Record a WhatsApp-phone reply as a human takeover signal.
+
+    WAHA marks phone/app-originated messages with fromMe=true and source=app.
+    Messages sent through our API are source=api and are already recorded by
+    send_message(), so they must never pause the AI.
+    """
+    from app.models import Direction
+
+    wa_message_id = str(payload.get("id") or "")
+    if not wa_message_id:
+        return
+
+    # Defensive dedupe: an API message can race the webhook, and retries can
+    # replay the same event. If our outbound row already exists, it is not a
+    # manual takeover.
+    existing = (
+        await db.execute(
+            select(Conversation).where(Conversation.wa_message_id == wa_message_id)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+
+    raw_to = str(payload.get("to") or "")
+    data = payload.get("_data") or {}
+    key = data.get("key") or {}
+    if not raw_to:
+        raw_to = str(key.get("remoteJid") or "")
+    if raw_to.endswith("@lid"):
+        alternate = key.get("remoteJidAlt") or data.get("remoteJidAlt")
+        if isinstance(alternate, str):
+            raw_to = alternate
+    if not raw_to or raw_to.endswith(("@g.us", "@newsletter", "@broadcast")):
+        return
+
+    try:
+        phone = normalize_phone(raw_to.split("@", 1)[0])
+    except ValueError:
+        log.warning("waha_manual_outbound_unparseable_recipient", raw_to=raw_to)
+        return
+
+    customer = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if customer is None:
+        # Do not create customers merely because someone sent a message from
+        # the phone. If the conversation is not known to us, there is nothing
+        # for the service agent to take over.
+        return
+
+    body = str(payload.get("body") or "").strip()
+    if not body and payload.get("hasMedia"):
+        body = "[human sent media]"
+
+    # WAHA timestamp is the actual phone-send time; fall back to DB/server time.
+    ts = payload.get("timestamp")
+    try:
+        sent_at = datetime.fromtimestamp(float(ts), tz=timezone.utc) if ts else datetime.now(timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        sent_at = datetime.now(timezone.utc)
+
+    db.add(
+        Conversation(
+            customer_id=customer.id,
+            direction=Direction.OUTBOUND,
+            message_text=body or "[human reply]",
+            wa_message_id=wa_message_id,
+            sent_by="human",
+            status="sent",
+        )
+    )
+    await db.commit()
+    log.info("human_whatsapp_takeover", phone=phone, wa_message_id=wa_message_id)
+
+
+async def _human_handoff_waiting(
+    db: AsyncSession, customer: Customer, inbound: Conversation
+) -> bool:
+    """True while a human gets the grace period after a customer message."""
+    from app.services import app_settings
+
+    latest_human = (
+        await db.execute(
+            select(Conversation)
+            .where(
+                Conversation.customer_id == customer.id,
+                Conversation.direction == Direction.OUTBOUND,
+                Conversation.sent_by == "human",
+            )
+            .order_by(Conversation.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if latest_human is None or latest_human.created_at >= inbound.created_at:
+        return False
+
+    minutes = int(await app_settings.get(db, "human_handoff_grace_minutes") or 15)
+    return minutes > 0 and (
+        datetime.now(timezone.utc) - inbound.created_at
+    ) < timedelta(minutes=minutes)
 
 
 def _waha_to_meta_shape(payload: dict, *, resolved_from: str | None = None) -> dict:
@@ -915,6 +1022,13 @@ async def _handle_inbound_message(
             except SendError:
                 log.exception("start_confirm_send_failed", phone=phone)
             return
+        # Human phone reply gets a short, per-message grace period.
+        # During it the customer can continue talking without AI talking over
+        # the owner. The scheduler takes over after the grace period expires.
+        if await _human_handoff_waiting(db, customer, convo):
+            log.info("human_handoff_waiting", phone=phone)
+            return
+
         if customer.agent_paused:
             # Pause hamesha ke liye nahi. Complaint par bot chup hota hai
             # taaki insaan sambhal le — par utne ghante baad customer ka
