@@ -41,6 +41,36 @@ const SEGMENT_LABEL = {
 };
 
 /* ============================= core ============================= */
+const DELIVERY_HEAVY_WORDS = [
+  "blanket", "kambal", "razai", "quilt", "curtain", "parda",
+  "carpet", "sofa", "saree", "lehenga", "sherwani"
+];
+function nbAutoDeliveryDate() {
+  const urgent = NB_URG && NB_URG.on;
+  if (urgent) return isoInDays(urgCfg().days);
+  const holidays = new Set((SETTINGS_CACHE.delivery_holidays || []).map(String));
+  const heavy = realLines().some(([l]) =>
+    DELIVERY_HEAVY_WORDS.some(w => String(l.service || "").toLowerCase().includes(w))
+  );
+  const days = Number(
+    heavy ? SETTINGS_CACHE.delivery_heavy_days : SETTINGS_CACHE.delivery_normal_days
+  ) || (heavy ? 5 : 4);
+  const d = new Date();
+  let left = Math.max(1, days);
+  while (left > 0) {
+    d.setDate(d.getDate() + 1);
+    const iso = d.toISOString().slice(0, 10);
+    if (d.getDay() === 0 || holidays.has(iso)) continue;
+    left -= 1;
+  }
+  return isoDateLocal(d);
+}
+function isoDateLocal(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return y + "-" + m + "-" + day;
+}
 let KEY = localStorage.getItem("kk_admin_key") || "";
 const qs = new URLSearchParams(location.search);
 if (qs.get("key")) {
@@ -1086,8 +1116,7 @@ async function initNewBill() {
   if (!LINES.length) addLine();
   if ($("nb-newrate")) $("nb-newrate").style.display = canEditRates() ? "" : "none";
   renderLines();
-  const days = NB_URG.on ? urgCfg().days : (parseInt(SETTINGS_CACHE.turnaround_days) || 2);
-  $("nb-date").value = isoInDays(days);
+  $("nb-date").value = nbAutoDeliveryDate();
   nbPaintUrgent();
   $("nb-gst").checked = !!SETTINGS_CACHE.gst_default_on;
   $("nb-preset").innerHTML = '<option value="">No discount</option>' +
@@ -1188,8 +1217,7 @@ function nbToggleUrgent(force) {
   NB_URG.on = force === undefined ? !NB_URG.on : !!force;
   NB_URG.manual = false;
   const c = urgCfg();
-  const normalDays = parseInt((SETTINGS_CACHE || {}).turnaround_days) || 2;
-  $("nb-date").value = isoInDays(NB_URG.on ? c.days : normalDays);
+  $("nb-date").value = nbAutoDeliveryDate();
   nbPaintUrgent();
   calcBill();
 }

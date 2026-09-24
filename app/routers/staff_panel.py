@@ -1393,17 +1393,22 @@ async def create_bill(
     if body.advance > float(total):
         raise HTTPException(status_code=400, detail="Advance cannot be more than the bill")
 
-    # Delivery date dashboard wale bill ki tarah: aaj + turnaround.
-    # Bina iske customer se "kab milega" ka koi jawab hi nahi hota tha.
-    # Urgent = owner ki "urgent delivery days" (default kal).
-    try:
-        turnaround = int(await app_settings.get(db, "turnaround_days"))
-    except Exception:
-        turnaround = 2
-    delivery = (
-        urgent_svc.delivery_date(urgent_cfg) if body.urgent
-        else _date.today() + _td(days=max(turnaround, 1))
-    )
+    # Delivery promise is shared with the dashboard/AI flow:
+    # working days, Sunday/holidays skipped, heavy items get the heavy SLA.
+    if body.urgent:
+        delivery = urgent_svc.delivery_date(urgent_cfg)
+    else:
+        from app.services.delivery_date import calculate as calculate_delivery_date
+        cfg = await app_settings.get_many(
+            db, "delivery_normal_days", "delivery_heavy_days", "delivery_holidays"
+        )
+        delivery = calculate_delivery_date(
+            _date.today(),
+            [{"type": x["type"], "qty": x["qty"]} for x in items],
+            normal_days=int(cfg.get("delivery_normal_days") or 4),
+            heavy_days=int(cfg.get("delivery_heavy_days") or 5),
+            holidays=cfg.get("delivery_holidays") or [],
+        )
     order = await create_order(
         db,
         customer_phone=normalize_phone(phone),
