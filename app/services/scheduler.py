@@ -61,6 +61,11 @@ def start() -> None:
     # ideal, but cron needs a static hour — so we check inside and run the
     # trigger hourly, firing only when the configured hour matches.
     _scheduler.add_job(_hourly_tick, CronTrigger(minute=0, timezone=IST), id="hourly")
+    # Customer human-handoff timer: once a minute, let AI take over a
+    # conversation only after the configured grace period has elapsed.
+    _scheduler.add_job(
+        _human_handoff_tick, CronTrigger(minute="*/1", timezone=IST), id="human-handoff"
+    )
     _scheduler.add_job(
         _nightly_tick, CronTrigger(hour=21, minute=30, timezone=IST), id="nightly"
     )
@@ -78,7 +83,7 @@ def start() -> None:
         _gbp_reviews_tick, CronTrigger(hour="*/6", minute=20, timezone=IST), id="gbp-reviews"
     )
     _scheduler.start()
-    log.info("scheduler_started", jobs=["hourly", "nightly", "tunnel-guard", "durability", "gbp-reviews"])
+    log.info("scheduler_started", jobs=["hourly", "human-handoff", "nightly", "tunnel-guard", "durability", "gbp-reviews"])
 
 
 def shutdown() -> None:
@@ -127,6 +132,15 @@ async def _unclaim(event_key: str) -> None:
             await s.commit()
     except Exception:
         log.exception("unclaim_failed", event_key=event_key)
+
+
+async def _human_handoff_tick() -> None:
+    """One-minute worker for customer conversations paused by a human reply."""
+    try:
+        from app.services.human_handoff import run_human_handoff
+        await _for_each_tenant("human-handoff", lambda _now: run_human_handoff())
+    except Exception:
+        log.exception("human_handoff_job_failed")
 
 
 async def _durability_tick() -> None:
