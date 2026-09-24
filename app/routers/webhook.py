@@ -945,9 +945,7 @@ async def _handle_inbound_message(
         # liye wo "band" nahi lagta. Message store ho chuka hai; owner
         # Inbox se khud jawab dega. STOP/START upar handle ho chuke hain
         # (compliance kabhi band nahi hota).
-        from app.services import app_settings as _as
-
-        if not await _as.get(db, "agent_enabled"):
+        if not await _customer_agent_enabled(db, customer):
             log.info("agent_disabled_no_autoreply", phone=phone)
             return
         # Ek baat, ek jawab. Jaldi-jaldi aaye messages ("11 iron" ... 7s
@@ -980,7 +978,7 @@ async def _handle_inbound_message(
         # If the owner switched the Service Agent OFF while it was thinking,
         # do not send the stale automated reply.
         if reply:
-            await _send_customer_agent_reply(db, phone, reply)
+            await _send_customer_agent_reply(db, customer, phone, reply)
         # first-contact numbers with no orders -> lead pipeline (never raises)
         try:
             from app.services.leads import note_inquiry
@@ -990,27 +988,48 @@ async def _handle_inbound_message(
             log.exception("lead_capture_failed")
 
 
-async def _send_customer_agent_reply(
-    db: AsyncSession, phone: str, reply: str
-) -> bool:
-    """Send a customer-agent reply only while the tenant Service Agent is ON.
+async def _customer_agent_enabled(db: AsyncSession, customer: Customer) -> bool:
+    """Read the kill switch using THIS customer's tenant, never a guessed/home tenant."""
+    from app.services import app_settings as _as, tenant_context
 
-    This is intentionally checked immediately before WhatsApp send. The
-    earlier webhook gate prevents new work from starting, while this second
-    gate closes the race where an LLM call was already running when the owner
-    switched the agent OFF.
-    """
-    from app.services import app_settings as _as
-
-    if not await _as.get(db, "agent_enabled"):
-        log.info("agent_disabled_before_send", phone=phone)
-        return False
+    tid = getattr(customer, "tenant_id", None)
+    token = tenant_context.current_tenant_id.set(tid) if tid is not None else None
     try:
-        await send_message(db, to_phone=phone, text=reply)
-        return True
-    except SendError:
-        log.exception("reply_send_failed", phone=phone)
-        return False
+        return bool(await _as.get(db, "agent_enabled"))
+    finally:
+        if token is not None:
+            tenant_context.current_tenant_id.reset(token)
+
+
+async def _send_customer_agent_reply(
+    db: AsyncSession, customer: Customer, phone: str, reply: str
+) -> bool:
+    """Final service-agent gate immediately before WhatsApp send.
+
+    Uses the customer row's tenant_id so the switch cannot accidentally be
+    read from the home shop when WAHA/webhook requests have no browser
+    session. This also closes the race where the LLM was already running
+    when the owner switched the agent OFF.
+    """
+    from app.services import tenant_context
+
+    tid = getattr(customer, "tenant_id", None)
+    token = tenant_context.current_tenant_id.set(tid) if tid is not None else None
+    try:
+        from app.services import app_settings as _as
+
+        if not await _as.get(db, "agent_enabled"):
+            log.info("agent_disabled_before_send", phone=phone)
+            return False
+        try:
+            await send_message(db, to_phone=phone, text=reply, sent_by="ai")
+            return True
+        except SendError:
+            log.exception("reply_send_failed", phone=phone)
+            return False
+    finally:
+        if token is not None:
+            tenant_context.current_tenant_id.reset(token)
 
 
 async def _newer_inbound_exists(db: AsyncSession, customer_id, convo: Conversation) -> bool:
