@@ -548,3 +548,25 @@ async def test_selected_campaign_empty_selection_cannot_start(sent) -> None:
 
         assert exc.value.status_code == 400
         assert "no recipients" in str(exc.value.detail)
+
+
+async def test_selected_campaign_creation_persists_valid_customer_ids(sent) -> None:
+    from app.routers.agent_admin import CampaignIn, create_campaign
+
+    try:
+        customer = await _make_marketing_customer(SELECTED_PHONE_A, "Creation Test")
+        async with async_session_factory() as db:
+            body = CampaignIn(
+                name="test-selected-create",
+                segment="selected",
+                message_text="Hi {name}! — Kwik Klin",
+                selected_customer_ids=[str(customer.id)],
+            )
+            result = await create_campaign(body, db)
+            campaign = await db.get(Campaign, result["id"])
+
+        assert campaign is not None
+        assert campaign.stats["selected_customer_ids"] == [str(customer.id)]
+    finally:
+        from tests.conftest import purge_phones
+        await purge_phones(SELECTED_PHONE_A)
