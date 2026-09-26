@@ -358,9 +358,16 @@
             <button type="button" class="camp-audience active" data-segment="all_active" onclick="selectCampaignAudience('all_active')"><span>👥</span><b>All customers</b><small>All active customers</small></button>
             <button type="button" class="camp-audience" data-segment="active_regular" onclick="selectCampaignAudience('active_regular')"><span>👑</span><b>Regular customers</b><small>Customers with 2+ orders</small></button>
             <button type="button" class="camp-audience" data-segment="lapsed" onclick="selectCampaignAudience('lapsed')"><span>◷</span><b>Inactive customers</b><small>No order for 60–120 days</small></button>
-            <button type="button" class="camp-audience" data-segment="high_value" onclick="selectCampaignAudience('high_value')"><span>☷</span><b>High value</b><small>Your top-value customers</small></button>
+            <button type="button" class="camp-audience" data-segment="high_value" onclick="selectCampaignAudience('high_value')"><span>💎</span><b>High value</b><small>Your top-value customers</small></button>
+            <button type="button" class="camp-audience camp-audience-custom" data-segment="selected" onclick="selectCampaignAudience('selected')"><span>☑</span><b>Selected customers</b><small>Choose exactly who gets this message</small></button>
           </div>
           <select id="camp-seg" style="display:none"></select>
+          <div id="camp-selected-picker" class="camp-selected-picker" hidden>
+            <div class="camp-picker-head"><div><b>Choose customers</b><small>Search by name or mobile number and select one or more.</small></div><span id="camp-selected-count">0 selected</span></div>
+            <div class="camp-picker-search"><span>⌕</span><input id="camp-customer-search" type="search" placeholder="Search customer name or mobile…" oninput="searchCampaignCustomers(this.value)"></div>
+            <div id="camp-customer-results" class="camp-customer-results"><div class="muted">Start typing to find customers.</div></div>
+            <div id="camp-selected-list" class="camp-selected-list"></div>
+          </div>
           <div class="camp-audience-meta"><span id="camp-audience-count">Loading audience…</span><span>Opt-outs are skipped automatically</span></div>
         </div>
 
