@@ -1140,6 +1140,13 @@ async def _send_customer_agent_reply(
             log.info("agent_disabled_before_send", phone=phone)
             return False
 
+        # Final per-customer OFF switch. The owner can disable AI for this
+        # customer from Inbox; this must win even if an LLM reply was already
+        # being generated.
+        if customer.agent_paused:
+            log.info("customer_agent_paused_before_send", phone=phone)
+            return False
+
         # Final human-takeover race guard: the owner may have replied from
         # the phone while the LLM was thinking. Never send AI over that reply.
         latest_inbound = (
