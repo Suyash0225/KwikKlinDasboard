@@ -339,13 +339,27 @@
 
         <div class="camp-preview-card camp-live-preview">
           <div class="camp-preview-head"><span>🟢</span><b>Live WhatsApp preview</b><small>Typing and image changes appear here instantly.</small></div>
-          <div class="camp-phone">
-            <div class="camp-phone-head"><span>‹</span><b>🟠 Kwik Klin</b><span>⋮</span></div>
-            <div class="camp-phone-chat">
-              <div id="camp-preview-image"></div>
-              <div class="camp-bubble"><div id="camp-preview-text">Your campaign message will appear here…</div><small>11:30 AM ✓✓</small></div>
+          <div class="camp-phone" aria-label="WhatsApp-style campaign preview">
+            <div class="camp-phone-speaker"></div>
+            <div class="camp-phone-head">
+              <span class="camp-wa-back">‹</span>
+              <span class="camp-wa-avatar">KK</span>
+              <span class="camp-wa-profile"><b>Kwik Klin</b><small><i></i>online</small></span>
+              <span class="camp-wa-actions">⌕ ⋮</span>
             </div>
-            <div class="camp-phone-input">☺ <span>Type a message…</span> 📎 🎙️</div>
+            <div class="camp-phone-chat">
+              <div class="camp-chat-date">TODAY</div>
+              <div class="camp-bubble">
+                <div id="camp-preview-image"></div>
+                <div id="camp-preview-text">Your campaign message will appear here…</div>
+                <small><span id="camp-preview-time">11:30 PM</span> <b>✓✓</b></small>
+              </div>
+            </div>
+            <div class="camp-phone-input">
+              <span class="camp-composer-emoji">☺</span>
+              <span class="camp-composer-field">Type a message…</span>
+              <span>📎</span><span>🎙</span>
+            </div>
           </div>
           <div class="camp-good">✓ <b>Live preview</b><span>Customer ko exactly yahi image + message milega.</span></div>
         </div>
@@ -365,6 +379,10 @@
           <div id="camp-selected-picker" class="camp-selected-picker" hidden>
             <div class="camp-picker-head"><div><b>Choose customers</b><small>Search by name or mobile number and select one or more.</small></div><span id="camp-selected-count">0 selected</span></div>
             <div class="camp-picker-search"><span>⌕</span><input id="camp-customer-search" type="search" placeholder="Search customer name or mobile…" oninput="searchCampaignCustomers(this.value)"></div>
+            <div class="camp-picker-actions">
+              <button type="button" class="btn ghost sm" onclick="selectAllVisibleCampaignCustomers()">Select all visible</button>
+              <button type="button" class="btn ghost sm" onclick="clearCampaignSelection()">Clear selection</button>
+            </div>
             <div id="camp-customer-results" class="camp-customer-results"><div class="muted">Start typing to find customers.</div></div>
             <div id="camp-selected-list" class="camp-selected-list"></div>
           </div>
