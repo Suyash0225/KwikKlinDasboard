@@ -1688,7 +1688,11 @@ async def _apply_priority(db: AsyncSession, sender_label: str, extracted: dict) 
     return get_message(key, order_number=order.order_number, priority=priority.upper())
 
 
-async def _apply_assign(db: AsyncSession, sender_label: str, extracted: dict) -> str:
+async def _apply_assign(db: AsyncSession, sender_label: str, extracted: dict) -> str | None:
+    # Only the owner/manager can assign work to another staff member.
+    if sender_label != "manager":
+        log.info("staff_assign_ignored", sender=sender_label)
+        return None
     from app.services.work_orders import send_work_order
 
     order, err = await _find_order_flex(db, extracted)
@@ -2434,8 +2438,15 @@ async def _compose_relay_message(
 async def _apply_relay(
     db: AsyncSession, sender_label: str, extracted: dict, sender_text: str = "",
     sender_phone: str = "",
-) -> str:
-    """Route an instruction to the correct recipient without turning customer work into admin tasks."""
+) -> str | None:
+    """Route an owner instruction; staff messages must never create new tasks."""
+    # A staff member's free-form message can be misclassified by the LLM as
+    # a relay instruction. Never allow that path to create a new Task. Staff
+    # messages are handled by the existing-task interpreter above instead.
+    if sender_label != "manager":
+        log.info("staff_relay_ignored_no_task_creation", sender=sender_label)
+        return None
+
     target = (extracted.get("relay_to") or "").strip()
     raw_message = (extracted.get("relay_message") or "").strip()
     recipient_type = (extracted.get("recipient_type") or "UNKNOWN").strip().upper()
