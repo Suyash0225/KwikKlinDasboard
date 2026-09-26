@@ -222,7 +222,12 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
     verdicts = await check_marketing_eligible_bulk(db, [st["id"] for st in targets])
     eligible_ids = [st["id"] for st in targets if verdicts.get(st["id"], (False, ""))[0]]
 
-    holdout_pct = int(await app_settings.get(db, "marketing_holdout_percent"))
+    # Owner-picked campaigns are already a controlled audience. Do not
+    # silently carve a subset into the global holdout; compliance, budget and
+    # frequency caps still apply below.
+    holdout_pct = 0 if campaign.segment == "selected" else int(
+        await app_settings.get(db, "marketing_holdout_percent")
+    )
     if len(eligible_ids) < MIN_REACH_FOR_HOLDOUT:
         holdout_pct = 0
 
@@ -368,8 +373,15 @@ async def send_campaign(campaign_id) -> None:
         campaign.status = "sent"
         campaign.sent_at = datetime.now(timezone.utc)
         final_stats = await campaign_stats(db, campaign.id)
-        if (campaign.stats or {}).get("creative_file"):
-            final_stats["creative_file"] = campaign.stats["creative_file"]
+        prior_stats = campaign.stats or {}
+        if prior_stats.get("creative_file"):
+            final_stats["creative_file"] = prior_stats["creative_file"]
+        if campaign.segment == "selected":
+            # campaign_stats replaces the runtime snapshot, so explicitly
+            # retain the persisted owner selection after sending.
+            final_stats["selected_customer_ids"] = list(
+                prior_stats.get("selected_customer_ids") or []
+            )
         campaign.stats = final_stats
         await db.commit()
         await audit.record(

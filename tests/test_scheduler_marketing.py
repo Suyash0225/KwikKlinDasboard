@@ -440,3 +440,133 @@ async def test_standup_greeting_follows_the_clock(sched_sent, sent, test_washer)
     assert "morning" in _greeting(datetime(2026, 8, 9, 9, 0, tzinfo=IST)).lower()
     assert "evening" in _greeting(datetime(2026, 8, 9, 18, 0, tzinfo=IST)).lower()
     assert "morning" not in _greeting(datetime(2026, 8, 9, 18, 0, tzinfo=IST)).lower()
+
+
+SELECTED_PHONE_A = "+919999900451"
+SELECTED_PHONE_B = "+919999900452"
+
+
+async def _make_marketing_customer(phone: str, name: str, *, opted_out: bool = False) -> Customer:
+    async with async_session_factory() as db:
+        customer = Customer(
+            phone=phone,
+            name=name,
+            is_active=True,
+            opted_out=opted_out,
+            marketing_opt_out=opted_out,
+        )
+        db.add(customer)
+        await db.commit()
+        await db.refresh(customer)
+        return customer
+
+
+async def test_selected_campaign_persists_selection_and_queues_only_selected(sent) -> None:
+    try:
+        selected = await _make_marketing_customer(SELECTED_PHONE_A, "Selected One")
+        other = await _make_marketing_customer(SELECTED_PHONE_B, "Not Selected")
+        async with async_session_factory() as db:
+            campaign = Campaign(
+                name="test-selected-only",
+                segment="selected",
+                message_text="Hi {name}! — Kwik Klin",
+                status="approved",
+                created_by="test",
+                stats={"selected_customer_ids": [str(selected.id)]},
+            )
+            db.add(campaign)
+            await db.commit()
+            queued = await queue_campaign(db, campaign)
+            cid = campaign.id
+            stored = await db.get(Campaign, cid)
+            recipients = (
+                await db.execute(
+                    select(CampaignRecipient.customer_id, CampaignRecipient.status)
+                    .where(CampaignRecipient.campaign_id == cid)
+                )
+            ).all()
+
+        assert queued == 1
+        assert stored.stats["selected_customer_ids"] == [str(selected.id)]
+        assert recipients == [(selected.id, "queued")]
+        assert other.id not in {row[0] for row in recipients}
+    finally:
+        from tests.conftest import purge_phones
+        await purge_phones(SELECTED_PHONE_A, SELECTED_PHONE_B)
+
+
+async def test_selected_campaign_skips_opted_out_but_never_queues_unselected(sent) -> None:
+    try:
+        selected = await _make_marketing_customer(SELECTED_PHONE_A, "Allowed")
+        blocked = await _make_marketing_customer(SELECTED_PHONE_B, "Opted Out", opted_out=True)
+        async with async_session_factory() as db:
+            campaign = Campaign(
+                name="test-selected-optout",
+                segment="selected",
+                message_text="Hi {name}! — Kwik Klin",
+                status="approved",
+                created_by="test",
+                stats={"selected_customer_ids": [str(selected.id), str(blocked.id)]},
+            )
+            db.add(campaign)
+            await db.commit()
+            queued = await queue_campaign(db, campaign)
+            rows = (
+                await db.execute(
+                    select(CampaignRecipient.customer_id, CampaignRecipient.status, CampaignRecipient.detail)
+                    .where(CampaignRecipient.campaign_id == campaign.id)
+                )
+            ).all()
+
+        assert queued == 1
+        assert (selected.id, "queued", None) in rows
+        assert (blocked.id, "skipped", "opted_out") in rows
+    finally:
+        from tests.conftest import purge_phones
+        await purge_phones(SELECTED_PHONE_A, SELECTED_PHONE_B)
+
+
+async def test_selected_campaign_empty_selection_cannot_start(sent) -> None:
+    from fastapi import HTTPException
+    from app.routers.agent_admin import approve_campaign
+
+    async with async_session_factory() as db:
+        campaign = Campaign(
+            name="test-selected-empty",
+            segment="selected",
+            message_text="Hi {name}! — Kwik Klin",
+            status="draft",
+            created_by="test",
+            stats={"selected_customer_ids": []},
+        )
+        db.add(campaign)
+        await db.commit()
+        cid = campaign.id
+
+        with pytest.raises(HTTPException) as exc:
+            await approve_campaign(str(cid), db)
+
+        assert exc.value.status_code == 400
+        assert "no recipients" in str(exc.value.detail)
+
+
+async def test_selected_campaign_creation_persists_valid_customer_ids(sent) -> None:
+    from app.routers.agent_admin import CampaignIn, create_campaign
+
+    try:
+        customer = await _make_marketing_customer(SELECTED_PHONE_A, "Creation Test")
+        async with async_session_factory() as db:
+            body = CampaignIn(
+                name="test-selected-create",
+                segment="selected",
+                message_text="Hi {name}! — Kwik Klin",
+                selected_customer_ids=[str(customer.id)],
+            )
+            result = await create_campaign(body, db)
+            campaign = await db.get(Campaign, result["id"])
+
+        assert campaign is not None
+        assert campaign.stats["selected_customer_ids"] == [str(customer.id)]
+    finally:
+        from tests.conftest import purge_phones
+        await purge_phones(SELECTED_PHONE_A)
