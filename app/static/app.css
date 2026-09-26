@@ -1981,3 +1981,118 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
     min-height:260px;
   }
 }
+
+/* Modern WhatsApp campaign preview + selected-customer picker */
+#sec-campaigns .camp-live-preview{
+  background:linear-gradient(145deg,#f4fbf7,#ffffff 58%);
+  border:1px solid #d7eee0;
+  box-shadow:0 14px 38px rgba(22,55,39,.09);
+}
+#sec-campaigns .camp-live-preview .camp-phone{
+  width:min(100%,390px);
+  max-width:none;
+  border:7px solid #101827;
+  border-radius:28px;
+  background:#101827;
+  box-shadow:0 20px 45px rgba(16,24,39,.22);
+  overflow:hidden;
+}
+#sec-campaigns .camp-live-preview .camp-phone-head{
+  height:54px;
+  background:#111827;
+  color:#fff;
+  padding:0 15px;
+  font-size:13px;
+  border-bottom:1px solid rgba(255,255,255,.08);
+}
+#sec-campaigns .camp-live-preview .camp-phone-head b{
+  display:flex;align-items:center;gap:7px;font-size:13px;
+}
+#sec-campaigns .camp-live-preview .camp-phone-head b:before{
+  content:"";width:9px;height:9px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.12);
+}
+#sec-campaigns .camp-live-preview .camp-phone-chat{
+  min-height:390px;
+  max-height:500px;
+  padding:18px 12px 22px;
+  background:
+    radial-gradient(circle at 20% 10%,rgba(255,255,255,.55),transparent 28%),
+    #e9ded4;
+}
+#sec-campaigns .camp-live-preview .camp-bubble{
+  max-width:88%;
+  margin:8px 0 0 auto;
+  border-radius:10px 3px 10px 10px;
+  background:#dcf8c6;
+  padding:10px 11px 7px;
+  color:#182116;
+  box-shadow:0 2px 5px rgba(0,0,0,.10);
+  font-size:13px;
+  line-height:1.55;
+}
+#sec-campaigns .camp-live-preview .camp-bubble small{font-size:9px;color:#607060}
+#sec-campaigns .camp-live-preview .camp-phone-chat img{
+  max-height:245px;
+  width:100%;
+  object-fit:cover;
+  border-radius:9px 9px 2px 2px;
+}
+#sec-campaigns .camp-live-preview .camp-phone-input{
+  background:#f1f5f4;
+  padding:9px;
+  color:#77847f;
+  border-top:1px solid #d7dedb;
+}
+#sec-campaigns .camp-live-preview .camp-phone-input span{
+  background:#fff;border:1px solid #e1e7e4;padding:8px 11px;
+}
+#sec-campaigns .camp-selected-picker{
+  margin-top:14px;
+  padding:14px;
+  border:1px solid #e1e8f0;
+  border-radius:14px;
+  background:#f8fafc;
+}
+#sec-campaigns .camp-picker-head{
+  display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:10px;
+}
+#sec-campaigns .camp-picker-head small{display:block;color:#778398;margin-top:3px}
+#sec-campaigns .camp-picker-head>span{
+  flex:none;background:#eaf7ef;color:#177245;border:1px solid #ccebd8;
+  border-radius:999px;padding:5px 9px;font-size:11px;font-weight:700;
+}
+#sec-campaigns .camp-picker-search{
+  display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #dce3eb;
+  border-radius:11px;padding:0 11px;
+}
+#sec-campaigns .camp-picker-search span{font-size:18px;color:#8792a2}
+#sec-campaigns .camp-picker-search input{border:0!important;box-shadow:none!important;background:transparent!important;padding:11px 2px!important}
+#sec-campaigns .camp-customer-results{margin-top:8px;display:grid;gap:6px;max-height:230px;overflow:auto}
+#sec-campaigns .camp-customer-row{
+  display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;text-align:left;
+  border:1px solid #e5eaf0;border-radius:11px;background:#fff;cursor:pointer;
+}
+#sec-campaigns .camp-customer-row:hover,#sec-campaigns .camp-customer-row.selected{
+  border-color:#9fd6b6;background:#f0fbf4;
+}
+#sec-campaigns .camp-customer-avatar{
+  width:34px;height:34px;border-radius:50%;display:grid;place-items:center;
+  background:#edf1f6;color:#465268;font-weight:700;flex:none;
+}
+#sec-campaigns .camp-customer-row>span:nth-child(2){min-width:0;flex:1}
+#sec-campaigns .camp-customer-row b,#sec-campaigns .camp-customer-row small{display:block}
+#sec-campaigns .camp-customer-row small{color:#7a8595;margin-top:2px}
+#sec-campaigns .camp-customer-row strong{font-size:18px;color:#20a05a}
+#sec-campaigns .camp-selected-list{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+#sec-campaigns .camp-selected-chip{
+  display:inline-flex;align-items:center;gap:6px;border:1px solid #cfe8d8;
+  background:#effaf3;color:#1c5635;border-radius:999px;padding:6px 9px;cursor:pointer;
+}
+#sec-campaigns .camp-selected-chip b{font-size:11px}
+#sec-campaigns .camp-selected-chip small{font-size:10px;color:#648071}
+#sec-campaigns .camp-selected-chip i{font-style:normal;color:#7b8b82;font-size:15px;margin-left:2px}
+#sec-campaigns .camp-audience-custom{border-style:dashed!important}
+@media (max-width:600px){
+  #sec-campaigns .camp-live-preview .camp-phone-chat{min-height:330px;max-height:430px}
+  #sec-campaigns .camp-live-preview .camp-phone{border-width:5px;border-radius:23px}
+}
