@@ -3099,10 +3099,13 @@ function updateCampaignAudienceCount() {
   const count = segment === "selected"
     ? CAMPAIGN_SELECTED_CUSTOMERS.length
     : window.CAMPAIGN_SEG_COUNTS?.[segment];
+  if ($("camp-summary-count-label")) {
+    $("camp-summary-count-label").textContent = segment === "selected" ? "Selected customers" : "Recipients";
+  }
   if ($("camp-summary-count")) {
     $("camp-summary-count").textContent = count == null
       ? "—"
-      : segment === "selected" ? count + " customers selected" : "~ " + count + " customers";
+      : segment === "selected" ? String(count) : "~ " + count + " customers";
   }
 }
 function prefillCampaign(seg) {
