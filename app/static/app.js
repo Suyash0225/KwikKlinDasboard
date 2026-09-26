@@ -3051,16 +3051,42 @@ function resetCampaignForm() {
 function scrollCampaignHistory() { $("camp-history")?.scrollIntoView({ behavior: "smooth", block: "start" }); }
 async function uploadCampaignImage(input) {
   const file = input.files && input.files[0]; if (!file) return;
+
+  // Show the selected image immediately — don't wait for the server upload.
+  // This keeps the WhatsApp preview feeling live while the final creative is uploaded.
+  if (window.CAMPAIGN_PREVIEW_URL) URL.revokeObjectURL(window.CAMPAIGN_PREVIEW_URL);
+  window.CAMPAIGN_PREVIEW_URL = URL.createObjectURL(file);
+  const localUrl = window.CAMPAIGN_PREVIEW_URL;
+  $("camp-image-preview").innerHTML = '<div class="camp-image-card"><img src="' + localUrl + '" alt="Campaign image preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';
+  $("camp-preview-image").innerHTML = '<img src="' + localUrl + '" alt="Campaign image">';
+  updateCampaignPreview();
+
   try {
     const fd = new FormData(); fd.append("file", file);
     const d = await api("/admin/api/campaigns/upload-image", { method: "POST", body: fd });
-    window.CAMPAIGN_CUSTOM_IMAGE = d.creative_file; const url = "/admin/media/" + encodeURIComponent(d.creative_file) + "?key=" + encodeURIComponent(KEY);
+    window.CAMPAIGN_CUSTOM_IMAGE = d.creative_file;
+    const url = "/admin/media/" + encodeURIComponent(d.creative_file) + "?key=" + encodeURIComponent(KEY);
+    // Keep the already-visible preview in place, then switch it to the saved creative URL.
     $("camp-image-preview").innerHTML = '<div class="camp-image-card"><img src="' + url + '" alt="Campaign image preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';
-    $("camp-preview-image").innerHTML = '<img src="' + url + '" alt="Campaign image">'; updateCampaignPreview(); toast("Campaign image uploaded");
-  } catch (e) { input.value = ""; toast(e.message, true); }
+    $("camp-preview-image").innerHTML = '<img src="' + url + '" alt="Campaign image">';
+    updateCampaignPreview(); toast("Campaign image uploaded");
+  } catch (e) {
+    input.value = "";
+    window.CAMPAIGN_CUSTOM_IMAGE = null;
+    if ($("camp-image-preview")) $("camp-image-preview").innerHTML = "";
+    if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
+    if (window.CAMPAIGN_PREVIEW_URL) { URL.revokeObjectURL(window.CAMPAIGN_PREVIEW_URL); window.CAMPAIGN_PREVIEW_URL = null; }
+    updateCampaignPreview();
+    toast(e.message, true);
+  }
 }
 function removeCampaignImage() {
-  window.CAMPAIGN_CUSTOM_IMAGE = null; if ($("camp-image")) $("camp-image").value = ""; if ($("camp-image-preview")) $("camp-image-preview").innerHTML = ""; if ($("camp-preview-image")) $("camp-preview-image").innerHTML = ""; updateCampaignPreview();
+  window.CAMPAIGN_CUSTOM_IMAGE = null;
+  if ($("camp-image")) $("camp-image").value = "";
+  if ($("camp-image-preview")) $("camp-image-preview").innerHTML = "";
+  if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
+  if (window.CAMPAIGN_PREVIEW_URL) { URL.revokeObjectURL(window.CAMPAIGN_PREVIEW_URL); window.CAMPAIGN_PREVIEW_URL = null; }
+  updateCampaignPreview();
 }
 async function createCampaign(btn) {
   const name = $("camp-name").value.trim(), message = $("camp-msg").value.trim(), segment = $("camp-seg").value;
