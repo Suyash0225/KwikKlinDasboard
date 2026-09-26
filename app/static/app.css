@@ -2096,3 +2096,178 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   #sec-campaigns .camp-live-preview .camp-phone-chat{min-height:330px;max-height:430px}
   #sec-campaigns .camp-live-preview .camp-phone{border-width:5px;border-radius:23px}
 }
+
+
+/* Campaign preview polish: lightweight WhatsApp-style conversation shell. */
+#sec-campaigns .camp-live-preview .camp-phone{
+  position:relative;
+  width:min(100%,390px);
+  border:7px solid #0b1220;
+  border-radius:30px;
+  background:#0b1220;
+  box-shadow:0 24px 55px rgba(15,23,42,.24);
+}
+#sec-campaigns .camp-live-preview .camp-phone-speaker{
+  position:absolute;
+  z-index:4;
+  top:7px;
+  left:50%;
+  transform:translateX(-50%);
+  width:74px;
+  height:18px;
+  border-radius:0 0 12px 12px;
+  background:#0b1220;
+}
+#sec-campaigns .camp-live-preview .camp-phone-head{
+  position:relative;
+  z-index:2;
+  height:60px;
+  display:flex;
+  align-items:center;
+  gap:9px;
+  padding:9px 12px;
+  background:#075e54;
+  color:#fff;
+  border-bottom:1px solid rgba(255,255,255,.12);
+}
+#sec-campaigns .camp-live-preview .camp-wa-back{
+  font-size:29px;
+  line-height:1;
+  margin-top:-3px;
+}
+#sec-campaigns .camp-live-preview .camp-wa-avatar{
+  width:35px;height:35px;border-radius:50%;
+  display:grid;place-items:center;flex:none;
+  background:#d9fdd3;color:#075e54;font-size:11px;font-weight:800;
+}
+#sec-campaigns .camp-live-preview .camp-wa-profile{
+  min-width:0;flex:1;display:flex;flex-direction:column;line-height:1.15;
+}
+#sec-campaigns .camp-live-preview .camp-wa-profile b{
+  font-size:13px;font-weight:700;
+}
+#sec-campaigns .camp-live-preview .camp-wa-profile b:before{display:none!important}
+#sec-campaigns .camp-live-preview .camp-wa-profile small{
+  margin-top:3px;font-size:9px;color:rgba(255,255,255,.78);
+}
+#sec-campaigns .camp-live-preview .camp-wa-profile small i{
+  display:inline-block;width:6px;height:6px;margin-right:4px;border-radius:50%;
+  background:#4ade80;vertical-align:1px;
+}
+#sec-campaigns .camp-live-preview .camp-wa-actions{
+  font-size:18px;letter-spacing:7px;white-space:nowrap;
+}
+#sec-campaigns .camp-live-preview .camp-phone-chat{
+  min-height:390px;
+  max-height:500px;
+  display:flex;
+  flex-direction:column;
+  justify-content:flex-end;
+  gap:9px;
+  padding:14px 11px 18px;
+  background-color:#efe7de;
+  background-image:
+    radial-gradient(circle at 15px 15px,rgba(255,255,255,.38) 1px,transparent 1.5px),
+    radial-gradient(circle at 55px 45px,rgba(130,108,90,.08) 1px,transparent 1.5px);
+  background-size:48px 48px,70px 70px;
+}
+#sec-campaigns .camp-live-preview .camp-chat-date{
+  align-self:center;
+  padding:5px 10px;
+  border-radius:8px;
+  background:rgba(255,255,255,.76);
+  color:#778078;
+  font-size:8px;
+  font-weight:800;
+  letter-spacing:.6px;
+  box-shadow:0 1px 2px rgba(0,0,0,.06);
+}
+#sec-campaigns .camp-live-preview .camp-bubble{
+  position:relative;
+  max-width:88%;
+  margin:0 0 0 auto;
+  border-radius:10px 3px 10px 10px;
+  background:#d9fdd3;
+  padding:5px 7px 6px;
+  color:#182116;
+  box-shadow:0 1px 2px rgba(0,0,0,.14);
+  font-size:13px;
+  line-height:1.5;
+  overflow:hidden;
+}
+#sec-campaigns .camp-live-preview .camp-bubble:before{
+  content:"";
+  position:absolute;right:-6px;top:0;
+  border-top:7px solid #d9fdd3;
+  border-right:7px solid transparent;
+}
+#sec-campaigns .camp-live-preview #camp-preview-text{
+  padding:5px 4px 0;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+}
+#sec-campaigns .camp-live-preview #camp-preview-image:empty{display:none}
+#sec-campaigns .camp-live-preview #camp-preview-image img{
+  display:block;
+  width:100%;
+  max-height:235px;
+  object-fit:cover;
+  border-radius:7px;
+  margin-bottom:3px;
+}
+#sec-campaigns .camp-live-preview .camp-bubble small{
+  display:block;
+  text-align:right;
+  margin:2px 2px 0 0;
+  color:#66756a;
+  font-size:8px;
+}
+#sec-campaigns .camp-live-preview .camp-bubble small b{
+  color:#53a7d8;
+  font-size:10px;
+  letter-spacing:-2px;
+  margin-left:2px;
+}
+#sec-campaigns .camp-live-preview .camp-phone-input{
+  min-height:50px;
+  display:flex;
+  align-items:center;
+  gap:7px;
+  padding:7px 8px;
+  background:#f0f2f5;
+  color:#63717b;
+  border-top:1px solid #d7dadd;
+  font-size:16px;
+}
+#sec-campaigns .camp-live-preview .camp-composer-field{
+  flex:1;
+  min-width:0;
+  padding:8px 12px;
+  border-radius:18px;
+  background:#fff;
+  color:#9aa2a7;
+  font-size:11px;
+}
+#sec-campaigns .camp-live-preview .camp-composer-emoji{font-size:18px}
+#sec-campaigns .camp-picker-actions{
+  display:flex;
+  justify-content:flex-end;
+  gap:7px;
+  margin-top:8px;
+}
+#sec-campaigns .camp-picker-actions .btn{padding:6px 9px;font-size:10px}
+#sec-campaigns .camp-history-audience{
+  display:inline-block;
+  margin-top:8px;
+  padding:5px 8px;
+  border-radius:999px;
+  background:#effaf3;
+  color:#236c43;
+  font-size:10px;
+}
+@media(max-width:600px){
+  #sec-campaigns .camp-live-preview .camp-phone{border-width:5px;border-radius:24px}
+  #sec-campaigns .camp-live-preview .camp-phone-chat{min-height:330px;max-height:430px}
+  #sec-campaigns .camp-picker-actions{justify-content:stretch}
+  #sec-campaigns .camp-picker-actions .btn{flex:1}
+}
