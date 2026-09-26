@@ -681,11 +681,17 @@ async def customers_search(
             .limit(limit)
         )
     ).scalars().all()
+    def _mask_phone(phone: str) -> str:
+        digits = re.sub(r"\D", "", phone or "")
+        if len(digits) >= 10:
+            return f"+91 •••• ••{digits[-4:]}"
+        return phone or ""
+
     return [
         {
-            "name": c.name,
-            "phone": c.phone,
-            "address": c.address,
+            "ref": str(c.id),
+            "name": c.name or "Customer",
+            "phone_masked": _mask_phone(c.phone),
             "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
         }
         for c in rows
