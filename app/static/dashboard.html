@@ -312,24 +312,66 @@
 
     <!-- Campaigns -->
     <section id="sec-campaigns" style="display:none">
-      <div class="camp-top"><div class="camp-title"><div class="camp-icon">📣</div><div><h2>Create Campaign</h2><p>Send your WhatsApp message and image to selected customers</p></div></div><div class="camp-top-actions"><button class="btn ghost" onclick="scrollCampaignHistory()">🕘 Campaign history</button><button class="btn" onclick="resetCampaignForm()">＋ New campaign</button></div></div>
-      <div class="camp-tip">💡 <b>Keep it simple:</b> Paste your final WhatsApp message, upload your image if you have one, select the audience and click <b>Start Campaign</b>. Messages are sent automatically with a 15–20 second gap.</div>
-      <div class="camp-workspace"><div class="camp-main-card">
-        <div class="camp-step"><span>1</span><div><b>Campaign details</b><small>Give your campaign a name and paste the exact message you want customers to receive.</small></div></div>
-        <div class="camp-field"><label for="camp-name">Campaign name <em>*</em></label><input id="camp-name" placeholder="September Freshness Offer - Max 15%" maxlength="120"><small>This is only for your reference. Customers will not see it.</small></div>
-        <div class="camp-field"><label for="camp-msg">WhatsApp message <em>*</em></label><textarea id="camp-msg" rows="11" maxlength="4000" placeholder="Paste your complete WhatsApp message here…" oninput="updateCampaignMsgCount();updateCampaignPreview()"></textarea><div class="camp-count"><small>Use <b>{name}</b> if you want the customer name.</small><small id="camp-msg-count">0/4000</small></div></div>
-        <div class="camp-field"><label>Campaign image <span class="muted">(optional)</span></label><div class="camp-upload-row"><label class="camp-drop" for="camp-image"><span class="camp-upload-icon">☁️</span><b>Click to upload an image</b><small>PNG, JPG or WEBP · max 8MB</small><span class="btn ghost sm">Choose image</span><input id="camp-image" type="file" accept="image/jpeg,image/png,image/webp" onchange="uploadCampaignImage(this)"></label><div id="camp-image-preview" class="camp-image-preview"></div></div></div>
-        <div class="camp-note">🔒 Your message and image are used exactly as you provide them. AI does not rewrite the campaign.</div>
-      </div><div class="camp-side">
-        <div class="camp-card"><div class="camp-step"><span class="blue">2</span><div><b>Select audience</b><small>Choose who should receive this campaign.</small></div></div><div class="camp-audience-grid">
-          <button type="button" class="camp-audience active" data-segment="all_active" onclick="selectCampaignAudience('all_active')"><span>👥</span><b>All customers</b><small>All active customers</small></button>
-          <button type="button" class="camp-audience" data-segment="active_regular" onclick="selectCampaignAudience('active_regular')"><span>👑</span><b>Regular customers</b><small>Customers with 2+ orders</small></button>
-          <button type="button" class="camp-audience" data-segment="lapsed" onclick="selectCampaignAudience('lapsed')"><span>◷</span><b>Inactive customers</b><small>No order for 60–120 days</small></button>
-          <button type="button" class="camp-audience" data-segment="high_value" onclick="selectCampaignAudience('high_value')"><span>☷</span><b>High value</b><small>Your top-value customers</small></button>
-        </div><select id="camp-seg" style="display:none"></select><div class="camp-audience-meta"><span id="camp-audience-count">Loading audience…</span><span>Opt-outs are skipped automatically</span></div></div>
-        <div class="camp-card"><div class="camp-step"><span class="green">3</span><div><b>Start & sending</b><small>Start now and let the server handle the rest.</small></div></div><div class="camp-send-option active"><span>➤</span><div><b>Send now</b><small>Begin sending immediately</small></div></div><div class="camp-safe-note">ℹ️ Messages are sent one by one with a <b>15–20 second gap</b>. The campaign runs on the server, so closing this website does not stop it.</div><div class="camp-summary"><div><span>Name</span><b id="camp-summary-name">—</b></div><div><span>Audience</span><b id="camp-summary-audience">All customers</b></div><div><span>Image</span><b id="camp-summary-image">No image</b></div><div><span>Start</span><b>Send now</b></div><div><span>Recipients</span><b id="camp-summary-count">—</b></div></div></div>
-        <div class="camp-preview-card"><div class="camp-preview-head"><span>🟢</span><b>WhatsApp preview</b><small>This is how your message will look.</small></div><div class="camp-phone"><div class="camp-phone-head"><span>‹</span><b>🟠 Kwik Klin</b><span>⋮</span></div><div class="camp-phone-chat"><div id="camp-preview-image"></div><div class="camp-bubble"><div id="camp-preview-text">Your campaign message will appear here…</div><small>11:30 AM ✓✓</small></div></div><div class="camp-phone-input">☺ <span>Type a message…</span> 📎 🎙️</div></div><div class="camp-good">✓ <b>Looks good!</b><span>Your final message will be sent to the selected customers.</span></div></div>
-      </div></div>
+      <div class="camp-top">
+        <div class="camp-title"><div class="camp-icon">📣</div><div><h2>Create Campaign</h2><p>Write the message and see the exact WhatsApp preview live on the right.</p></div></div>
+        <div class="camp-top-actions"><button class="btn ghost" onclick="scrollCampaignHistory()">🕘 Campaign history</button><button class="btn" onclick="resetCampaignForm()">＋ New campaign</button></div>
+      </div>
+      <div class="camp-tip">💡 <b>Live preview:</b> Jo message aap likhenge aur jo image upload karenge, woh right side WhatsApp preview mein <b>turant</b> dikhega.</div>
+
+      <div class="camp-live-grid">
+        <div class="camp-main-card">
+          <div class="camp-step"><span>1</span><div><b>Campaign details</b><small>Message, image and campaign name. Preview updates while you type.</small></div></div>
+          <div class="camp-field"><label for="camp-name">Campaign name <em>*</em></label><input id="camp-name" placeholder="September Freshness Offer - Max 15%" maxlength="120" oninput="updateCampaignPreview()"><small>This is only for your reference. Customers will not see it.</small></div>
+          <div class="camp-field">
+            <label for="camp-msg">WhatsApp message <em>*</em></label>
+            <textarea id="camp-msg" rows="12" maxlength="4000" placeholder="Type your complete WhatsApp message here…" oninput="updateCampaignMsgCount();updateCampaignPreview()"></textarea>
+            <div class="camp-count"><small>Use <b>{name}</b> if you want the customer name.</small><small id="camp-msg-count">0/4000</small></div>
+          </div>
+          <div class="camp-field">
+            <label>Campaign image <span class="muted">(optional)</span></label>
+            <div class="camp-upload-row">
+              <label class="camp-drop" for="camp-image"><span class="camp-upload-icon">☁️</span><b>Click to upload an image</b><small>PNG, JPG or WEBP · max 8MB</small><span class="btn ghost sm">Choose image</span><input id="camp-image" type="file" accept="image/jpeg,image/png,image/webp" onchange="uploadCampaignImage(this)"></label>
+              <div id="camp-image-preview" class="camp-image-preview"></div>
+            </div>
+          </div>
+          <div class="camp-note">🔒 Your message and image are used exactly as you provide them. AI does not rewrite the campaign.</div>
+        </div>
+
+        <div class="camp-preview-card camp-live-preview">
+          <div class="camp-preview-head"><span>🟢</span><b>Live WhatsApp preview</b><small>Typing and image changes appear here instantly.</small></div>
+          <div class="camp-phone">
+            <div class="camp-phone-head"><span>‹</span><b>🟠 Kwik Klin</b><span>⋮</span></div>
+            <div class="camp-phone-chat">
+              <div id="camp-preview-image"></div>
+              <div class="camp-bubble"><div id="camp-preview-text">Your campaign message will appear here…</div><small>11:30 AM ✓✓</small></div>
+            </div>
+            <div class="camp-phone-input">☺ <span>Type a message…</span> 📎 🎙️</div>
+          </div>
+          <div class="camp-good">✓ <b>Live preview</b><span>Customer ko exactly yahi image + message milega.</span></div>
+        </div>
+      </div>
+
+      <div class="camp-bottom-grid">
+        <div class="camp-card">
+          <div class="camp-step"><span class="blue">2</span><div><b>Select audience</b><small>Choose who should receive this campaign.</small></div></div>
+          <div class="camp-audience-grid">
+            <button type="button" class="camp-audience active" data-segment="all_active" onclick="selectCampaignAudience('all_active')"><span>👥</span><b>All customers</b><small>All active customers</small></button>
+            <button type="button" class="camp-audience" data-segment="active_regular" onclick="selectCampaignAudience('active_regular')"><span>👑</span><b>Regular customers</b><small>Customers with 2+ orders</small></button>
+            <button type="button" class="camp-audience" data-segment="lapsed" onclick="selectCampaignAudience('lapsed')"><span>◷</span><b>Inactive customers</b><small>No order for 60–120 days</small></button>
+            <button type="button" class="camp-audience" data-segment="high_value" onclick="selectCampaignAudience('high_value')"><span>☷</span><b>High value</b><small>Your top-value customers</small></button>
+          </div>
+          <select id="camp-seg" style="display:none"></select>
+          <div class="camp-audience-meta"><span id="camp-audience-count">Loading audience…</span><span>Opt-outs are skipped automatically</span></div>
+        </div>
+
+        <div class="camp-card">
+          <div class="camp-step"><span class="green">3</span><div><b>Start & sending</b><small>Start now and let the server handle the rest.</small></div></div>
+          <div class="camp-send-option active"><span>➤</span><div><b>Send now</b><small>Begin sending immediately</small></div></div>
+          <div class="camp-safe-note">ℹ️ Messages are sent one by one with a <b>15–20 second gap</b>. The campaign runs on the server, so closing this website does not stop it.</div>
+          <div class="camp-summary"><div><span>Name</span><b id="camp-summary-name">—</b></div><div><span>Audience</span><b id="camp-summary-audience">All customers</b></div><div><span>Image</span><b id="camp-summary-image">No image</b></div><div><span>Start</span><b>Send now</b></div><div><span>Recipients</span><b id="camp-summary-count">—</b></div></div>
+        </div>
+      </div>
+
       <button class="camp-start" id="camp-start-btn" onclick="createCampaign(this)">➤ <span>Start Campaign</span><small>Automatic sending • 15–20 sec gap</small></button>
       <div id="camp-history" class="camp-history"><div class="camp-history-head"><div><h3>Campaign history</h3><p>Track sent, delivered, read and failed messages.</p></div></div><div id="camp-list"></div></div><div id="seg-cards" style="display:none"></div>
     </section>
