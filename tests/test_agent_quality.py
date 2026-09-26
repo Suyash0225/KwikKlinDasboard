@@ -106,6 +106,20 @@ async def test_relay_sends_rewritten_question(qa_staff, monkeypatch) -> None:
     assert reply
 
 
+async def test_staff_relay_cannot_create_task() -> None:
+    """A staff message must never create a new task through relay misclassification."""
+    reply = await bill_agent._apply_relay(
+        None,
+        "Ajit",
+        {
+            "relay_to": "Ravi",
+            "relay_message": "Ravi se pickup ke baare mein pucho",
+            "recipient_type": "STAFF",
+        },
+    )
+    assert reply is None
+
+
 async def test_customer_instruction_never_becomes_admin_task(monkeypatch) -> None:
     """'customer ko ...' must route to the customer, never to the sender/admin."""
     from app.models import Customer
