@@ -3136,6 +3136,7 @@ function resetCampaignForm() {
   if ($("camp-customer-search")) $("camp-customer-search").value = "";
   if ($("camp-customer-results")) $("camp-customer-results").innerHTML = '<div class="muted">Start typing to find customers.</div>';
   if ($("camp-selected-list")) $("camp-selected-list").innerHTML = "";
+  if ($("camp-selected-count")) $("camp-selected-count").textContent = "0 selected";
   ["camp-name","camp-msg"].forEach((id) => { if ($(id)) $(id).value = ""; }); window.CAMPAIGN_CUSTOM_IMAGE = null;
   if ($("camp-image")) $("camp-image").value = ""; if ($("camp-image-preview")) $("camp-image-preview").innerHTML = ""; if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
   updateCampaignMsgCount(); selectCampaignAudience("all_active", false); updateCampaignPreview(); $("camp-name")?.focus();
