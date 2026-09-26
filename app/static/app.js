@@ -3007,10 +3007,65 @@ function renderSegments(segs) {
   }
   window.CAMPAIGN_SEG_COUNTS = segs.counts || {}; updateCampaignAudienceCount();
 }
+let CAMPAIGN_SELECTED_CUSTOMERS = [];
+let CAMPAIGN_SEARCH_TIMER = null;
+
+function renderCampaignSelectedCustomers() {
+  const box = $("camp-selected-list"), count = $("camp-selected-count");
+  if (count) count.textContent = CAMPAIGN_SELECTED_CUSTOMERS.length + " selected";
+  if (box) box.innerHTML = CAMPAIGN_SELECTED_CUSTOMERS.length
+    ? CAMPAIGN_SELECTED_CUSTOMERS.map((x) =>
+        '<button type="button" class="camp-selected-chip" onclick="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
+        '<span>✓</span><b>' + esc(x.name || "Customer") + '</b><small>' + esc(x.phone_masked || "") + '</small><i>×</i></button>'
+      ).join("")
+    : '<span class="muted">No customers selected yet.</span>';
+  updateCampaignAudienceCount();
+}
+
+async function searchCampaignCustomers(value) {
+  clearTimeout(CAMPAIGN_SEARCH_TIMER);
+  const q = value.trim();
+  if (q.length < 2) {
+    if ($("camp-customer-results")) $("camp-customer-results").innerHTML = '<div class="muted">Start typing to find customers.</div>';
+    return;
+  }
+  CAMPAIGN_SEARCH_TIMER = setTimeout(async () => {
+    try {
+      const rows = await api("/admin/api/customers/search?q=" + encodeURIComponent(q));
+      const selected = new Set(CAMPAIGN_SELECTED_CUSTOMERS.map((x) => x.ref));
+      $("camp-customer-results").innerHTML = rows.length
+        ? rows.map((x) => '<button type="button" class="camp-customer-row ' + (selected.has(x.ref) ? "selected" : "") + '" onclick="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
+            '<span class="camp-customer-avatar">' + esc((x.name || "?").slice(0,1).toUpperCase()) + '</span><span><b>' + esc(x.name || "Customer") + '</b><small>' + esc(x.phone_masked || "") + '</small></span><strong>' + (selected.has(x.ref) ? "✓" : "+") + '</strong></button>'
+          ).join("")
+        : '<div class="muted">No matching active customer found.</div>';
+    } catch (e) { $("camp-customer-results").innerHTML = errBox(e.message, "searchCampaignCustomers"); }
+  }, 250);
+}
+
+async function toggleCampaignCustomer(ref) {
+  const i = CAMPAIGN_SELECTED_CUSTOMERS.findIndex((x) => x.ref === ref);
+  if (i >= 0) CAMPAIGN_SELECTED_CUSTOMERS.splice(i, 1);
+  else {
+    try {
+      const rows = await api("/admin/api/customers/search?q=" + encodeURIComponent(ref));
+      const found = rows.find((x) => x.ref === ref);
+      if (!found) throw new Error("Customer not found");
+      CAMPAIGN_SELECTED_CUSTOMERS.push(found);
+    } catch (e) { toast(e.message, true); return; }
+  }
+  renderCampaignSelectedCustomers();
+  const q = $("camp-customer-search")?.value || "";
+  if (q) searchCampaignCustomers(q);
+  updateCampaignPreview();
+}
+
 function selectCampaignAudience(segment, doPreview=true) {
   const sel = $("camp-seg"); if (sel) sel.value = segment;
   document.querySelectorAll(".camp-audience").forEach((b) => b.classList.toggle("active", b.dataset.segment === segment));
-  const label = SEGMENT_LABEL[segment] || segment, count = window.CAMPAIGN_SEG_COUNTS?.[segment];
+  const picker = $("camp-selected-picker");
+  if (picker) picker.hidden = segment !== "selected";
+  const label = segment === "selected" ? "Selected customers" : (SEGMENT_LABEL[segment] || segment);
+  const count = segment === "selected" ? CAMPAIGN_SELECTED_CUSTOMERS.length : window.CAMPAIGN_SEG_COUNTS?.[segment];
   if ($("camp-audience-count")) $("camp-audience-count").textContent = count == null ? "Audience unavailable" : count + " customer" + (count === 1 ? "" : "s") + " selected";
   if ($("camp-summary-audience")) $("camp-summary-audience").textContent = label;
   if (doPreview) updateCampaignPreview();
@@ -3044,6 +3099,10 @@ function updateCampaignPreview() {
   updateCampaignAudienceCount();
 }
 function resetCampaignForm() {
+  CAMPAIGN_SELECTED_CUSTOMERS = [];
+  if ($("camp-customer-search")) $("camp-customer-search").value = "";
+  if ($("camp-customer-results")) $("camp-customer-results").innerHTML = '<div class="muted">Start typing to find customers.</div>';
+  if ($("camp-selected-list")) $("camp-selected-list").innerHTML = "";
   ["camp-name","camp-msg"].forEach((id) => { if ($(id)) $(id).value = ""; }); window.CAMPAIGN_CUSTOM_IMAGE = null;
   if ($("camp-image")) $("camp-image").value = ""; if ($("camp-image-preview")) $("camp-image-preview").innerHTML = ""; if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
   updateCampaignMsgCount(); selectCampaignAudience("all_active", false); updateCampaignPreview(); $("camp-name")?.focus();
@@ -3091,9 +3150,14 @@ function removeCampaignImage() {
 async function createCampaign(btn) {
   const name = $("camp-name").value.trim(), message = $("camp-msg").value.trim(), segment = $("camp-seg").value;
   if (!name) { toast("Give the campaign a name", true); return; } if (!message) { toast("Paste your campaign message first", true); return; } if (!segment) { toast("Select an audience", true); return; }
-  const count = window.CAMPAIGN_SEG_COUNTS?.[segment] || 0; if (!count) { toast("No customers are available in this audience", true); return; }
+  const count = segment === "selected" ? CAMPAIGN_SELECTED_CUSTOMERS.length : (window.CAMPAIGN_SEG_COUNTS?.[segment] || 0);
+  if (!count) { toast(segment === "selected" ? "Select at least one customer" : "No customers are available in this audience", true); return; }
   await busy(btn, async () => {
-    const draft = await api("/admin/api/campaigns", { method: "POST", body: { name, segment, message_text: message, coupon_code: null, creative_file: window.CAMPAIGN_CUSTOM_IMAGE || null }});
+    const draft = await api("/admin/api/campaigns", { method: "POST", body: {
+      name, segment, message_text: message,
+      selected_customer_ids: segment === "selected" ? CAMPAIGN_SELECTED_CUSTOMERS.map((x) => x.ref) : [],
+      coupon_code: null, creative_file: window.CAMPAIGN_CUSTOM_IMAGE || null
+    }});
     try { const r = await api("/admin/api/campaigns/" + draft.id + "/approve", { method: "POST" }); toast("Campaign started — " + r.queued + " customers queued"); }
     catch (e) { toast("Draft saved, but sending could not be started: " + e.message, true); }
     resetCampaignForm(); loadCampaigns();
