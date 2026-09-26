@@ -1470,11 +1470,16 @@ async def toggle_agent(body: AgentToggleIn, db: AsyncSession = Depends(get_db)) 
     if cust is None:
         raise HTTPException(status_code=404, detail="customer not found")
     cust.agent_paused = body.paused
+    # Manual owner pause is PERMANENT until the owner presses Resume.
+    # Auto-pauses created by complaint/rating keep agent_paused_at set and
+    # may expire after agent_pause_hours. A manual pause uses NULL timestamp
+    # so the inbound webhook can never auto-resume it.
+    cust.agent_paused_at = None if body.paused else None
     await db.commit()
     await audit.record(
         actor_role="admin", actor="dashboard",
         action="agent_paused" if body.paused else "agent_resumed",
-        args={"phone": phone}, result="",
+        args={"phone": phone, "permanent": bool(body.paused)}, result="",
     )
     return {"phone": phone, "agent_paused": cust.agent_paused}
 
