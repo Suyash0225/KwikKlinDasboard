@@ -1918,3 +1918,66 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 #sec-campaigns .camp-start{width:100%;margin:16px 0 20px;border:0;border-radius:13px;background:linear-gradient(135deg,#ff671e,#ff7d1c);color:#fff;min-height:55px;font-size:18px;font-weight:800;cursor:pointer;box-shadow:0 8px 20px rgba(255,103,30,.22)}#sec-campaigns .camp-start small{float:right;margin:3px 18px 0 0;font-size:10px;font-weight:600;opacity:.9}
 #sec-campaigns .camp-history{scroll-margin-top:20px}.camp-history-head{margin-bottom:10px}.camp-history-head h3{margin:0;font-size:19px}.camp-history-head p{margin:3px 0;color:#7a879a;font-size:12px}.camp-history-item{background:#fff;border:1px solid #e5eaf1;border-radius:14px;padding:14px;margin-bottom:10px}.camp-history-item-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.camp-history-item-top .muted{font-size:11px;margin-top:3px}.camp-history-img{width:90px;height:90px;object-fit:cover;border-radius:9px;float:right;margin:8px 0 8px 10px}.camp-history-msg{background:#f7f9fc;border-radius:9px;padding:10px;margin-top:10px;white-space:pre-wrap;font-size:12px;clear:both}.camp-history-stats{color:#748198;font-size:11px;margin-top:9px}.camp-history-stats b{color:#34425c}
 @media(max-width:1050px){#sec-campaigns .camp-workspace{grid-template-columns:1fr}}@media(max-width:640px){#sec-campaigns .camp-top{align-items:flex-start;flex-direction:column}.camp-top-actions{width:100%}.camp-top-actions .btn{flex:1}.camp-title h2{font-size:25px}.camp-upload-row{grid-template-columns:1fr}.camp-audience-grid{grid-template-columns:1fr 1fr}.camp-start small{float:none;display:block;margin:2px 0 0}}
+
+/* Campaign live composer: editor + WhatsApp preview stay side-by-side */
+#sec-campaigns .camp-live-grid{
+  display:grid;
+  grid-template-columns:minmax(0,1.12fr) minmax(360px,.88fr);
+  gap:16px;
+  align-items:stretch;
+}
+#sec-campaigns .camp-live-preview{
+  padding:18px;
+  position:sticky;
+  top:16px;
+  background:linear-gradient(180deg,#f1fbf6 0%,#fff 100%);
+  border-color:#cfe9da;
+}
+#sec-campaigns .camp-live-preview .camp-phone{
+  max-width:380px;
+}
+#sec-campaigns .camp-bottom-grid{
+  display:grid;
+  grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);
+  gap:16px;
+  margin-top:16px;
+}
+#sec-campaigns .camp-main-card,
+#sec-campaigns .camp-live-preview,
+#sec-campaigns .camp-bottom-grid .camp-card{
+  min-width:0;
+}
+#sec-campaigns .camp-field textarea{
+  min-height:230px;
+  resize:vertical;
+}
+#sec-campaigns .camp-drop{
+  min-height:112px;
+}
+#sec-campaigns .camp-image-preview:empty{
+  display:none;
+}
+@media (max-width:900px){
+  #sec-campaigns .camp-live-grid,
+  #sec-campaigns .camp-bottom-grid{
+    grid-template-columns:1fr;
+  }
+  #sec-campaigns .camp-live-preview{
+    position:static;
+  }
+  #sec-campaigns .camp-live-preview .camp-phone{
+    max-width:440px;
+  }
+}
+@media (max-width:600px){
+  #sec-campaigns .camp-live-grid,
+  #sec-campaigns .camp-bottom-grid{
+    gap:12px;
+  }
+  #sec-campaigns .camp-live-preview{
+    padding:12px;
+  }
+  #sec-campaigns .camp-live-preview .camp-phone-chat{
+    min-height:260px;
+  }
+}
