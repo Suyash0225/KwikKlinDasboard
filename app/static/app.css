@@ -2271,3 +2271,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   #sec-campaigns .camp-picker-actions{justify-content:stretch}
   #sec-campaigns .camp-picker-actions .btn{flex:1}
 }
+
+#sec-campaigns .camp-customer-row{cursor:pointer}
+#sec-campaigns .camp-customer-row>span:nth-of-type(2){min-width:0;flex:1}
+#sec-campaigns .camp-customer-check{
+  width:17px;height:17px;margin:0 2px 0 0;accent-color:#128c7e;flex:none;
+}
