@@ -35,7 +35,7 @@ const STATUS_LABEL = {
 const statusName = (s) => STATUS_LABEL[s] || String(s || "").replace(/_/g, " ").toLowerCase();
 const STATUS_SEQ = ["RECEIVED", "IN_WASH", "IN_DRY", "IN_IRON", "READY", "OUT_FOR_DELIVERY", "DELIVERED"];
 const SEGMENT_LABEL = {
-  new: "New customers", active_regular: "Active regulars", at_risk: "At risk",
+  new: "New customers", active_regular: "Active regulars", at_risk: "At risk", selected: "Selected customers",
   lapsed: "Lapsed (60–120d)", lost: "Lost (120d+)", high_value: "High value",
   outstanding_dues: "Has dues", all_active: "All customers",
 };
