@@ -3008,6 +3008,7 @@ function renderSegments(segs) {
   window.CAMPAIGN_SEG_COUNTS = segs.counts || {}; updateCampaignAudienceCount();
 }
 let CAMPAIGN_SELECTED_CUSTOMERS = [];
+let CAMPAIGN_CUSTOMER_CACHE = {};
 let CAMPAIGN_SEARCH_TIMER = null;
 
 function renderCampaignSelectedCustomers() {
@@ -3032,6 +3033,7 @@ async function searchCampaignCustomers(value) {
   CAMPAIGN_SEARCH_TIMER = setTimeout(async () => {
     try {
       const rows = await api("/admin/api/customers/search?q=" + encodeURIComponent(q));
+      rows.forEach((x) => { CAMPAIGN_CUSTOMER_CACHE[x.ref] = x; });
       const selected = new Set(CAMPAIGN_SELECTED_CUSTOMERS.map((x) => x.ref));
       $("camp-customer-results").innerHTML = rows.length
         ? rows.map((x) => '<button type="button" class="camp-customer-row ' + (selected.has(x.ref) ? "selected" : "") + '" onclick="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
@@ -3047,9 +3049,8 @@ async function toggleCampaignCustomer(ref) {
   if (i >= 0) CAMPAIGN_SELECTED_CUSTOMERS.splice(i, 1);
   else {
     try {
-      const rows = await api("/admin/api/customers/search?q=" + encodeURIComponent(ref));
-      const found = rows.find((x) => x.ref === ref);
-      if (!found) throw new Error("Customer not found");
+      const found = CAMPAIGN_CUSTOMER_CACHE[ref];
+      if (!found) throw new Error("Search for the customer again");
       CAMPAIGN_SELECTED_CUSTOMERS.push(found);
     } catch (e) { toast(e.message, true); return; }
   }
@@ -3100,6 +3101,7 @@ function updateCampaignPreview() {
 }
 function resetCampaignForm() {
   CAMPAIGN_SELECTED_CUSTOMERS = [];
+  CAMPAIGN_CUSTOMER_CACHE = {};
   if ($("camp-customer-search")) $("camp-customer-search").value = "";
   if ($("camp-customer-results")) $("camp-customer-results").innerHTML = '<div class="muted">Start typing to find customers.</div>';
   if ($("camp-selected-list")) $("camp-selected-list").innerHTML = "";
