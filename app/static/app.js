@@ -3038,9 +3038,10 @@ async function searchCampaignCustomers(value) {
       CAMPAIGN_VISIBLE_CUSTOMERS = rows;
       const selected = new Set(CAMPAIGN_SELECTED_CUSTOMERS.map((x) => x.ref));
       $("camp-customer-results").innerHTML = rows.length
-        ? rows.map((x) => '<button type="button" class="camp-customer-row ' + (selected.has(x.ref) ? "selected" : "") + '" onclick="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
-            '<span class="camp-customer-avatar">' + esc((x.name || "?").slice(0,1).toUpperCase()) + '</span><span><b>' + esc(x.name || "Customer") + '</b><small>' + esc(x.phone_masked || "") + '</small></span><strong>' + (selected.has(x.ref) ? "✓" : "+") + '</strong></button>'
-          ).join("")
+        ? rows.map((x) => '<label class="camp-customer-row ' + (selected.has(x.ref) ? "selected" : "") + '">' +
+            '<input class="camp-customer-check" type="checkbox" ' + (selected.has(x.ref) ? "checked" : "") + ' onchange="toggleCampaignCustomer(\\'' + esc(x.ref) + '\\')">' +
+            '<span class="camp-customer-avatar">' + esc((x.name || "?").slice(0,1).toUpperCase()) + '</span><span><b>' + esc(x.name || "Customer") + '</b><small>' + esc(x.phone_masked || x.phone || "") + '</small></span>'
+          + '</label>').join("")
         : '<div class="muted">No matching active customer found.</div>';
     } catch (e) { $("camp-customer-results").innerHTML = errBox(e.message, "searchCampaignCustomers"); }
   }, 250);
