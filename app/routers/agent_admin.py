@@ -91,6 +91,7 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
                 "sent_at": c.sent_at.isoformat() if c.sent_at else None,
                 "stats": stats,
                 "creative_file": (c.stats or {}).get("creative_file"),
+                "selected_customer_count": len((c.stats or {}).get("selected_customer_ids") or []),
             }
         )
     return out
@@ -327,10 +328,25 @@ async def create_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) 
         if not body.selected_customer_ids:
             raise HTTPException(status_code=400, detail="select at least one customer")
         try:
-            selected_ids = [str(uuid_module.UUID(str(x))) for x in body.selected_customer_ids]
+            selected_ids = [uuid_module.UUID(str(x)) for x in body.selected_customer_ids]
         except (ValueError, AttributeError, TypeError):
             raise HTTPException(status_code=400, detail="invalid selected customer")
-        stats = {"selected_customer_ids": selected_ids}
+
+        # Resolve the selection against this tenant before persisting it. The
+        # campaign may only reference real, active customers visible to the
+        # authenticated tenant; never trust client-supplied IDs blindly.
+        selected_rows = (
+            await db.execute(
+                select(Customer.id).where(
+                    Customer.id.in_(selected_ids),
+                    Customer.is_active,
+                )
+            )
+        ).scalars().all()
+        if len(selected_rows) != len(set(selected_ids)):
+            raise HTTPException(status_code=400, detail="one or more selected customers are invalid or inactive")
+
+        stats = {"selected_customer_ids": [str(x) for x in selected_ids]}
         if creative:
             stats["creative_file"] = creative
     else:
@@ -353,6 +369,8 @@ async def approve_campaign(campaign_id: str, db: AsyncSession = Depends(get_db))
         raise HTTPException(status_code=404, detail="campaign not found")
     if c.status not in ("draft", "suggested"):
         raise HTTPException(status_code=409, detail=f"campaign is {c.status}")
+    if c.segment == "selected" and not (c.stats or {}).get("selected_customer_ids"):
+        raise HTTPException(status_code=400, detail="selected-customer campaign has no recipients")
     c.status = "approved"
     await db.commit()
     queued = await queue_campaign(db, c)
