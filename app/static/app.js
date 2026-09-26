@@ -3009,6 +3009,7 @@ function renderSegments(segs) {
 }
 let CAMPAIGN_SELECTED_CUSTOMERS = [];
 let CAMPAIGN_CUSTOMER_CACHE = {};
+let CAMPAIGN_VISIBLE_CUSTOMERS = [];
 let CAMPAIGN_SEARCH_TIMER = null;
 
 function renderCampaignSelectedCustomers() {
@@ -3034,6 +3035,7 @@ async function searchCampaignCustomers(value) {
     try {
       const rows = await api("/admin/api/customers/search?q=" + encodeURIComponent(q));
       rows.forEach((x) => { CAMPAIGN_CUSTOMER_CACHE[x.ref] = x; });
+      CAMPAIGN_VISIBLE_CUSTOMERS = rows;
       const selected = new Set(CAMPAIGN_SELECTED_CUSTOMERS.map((x) => x.ref));
       $("camp-customer-results").innerHTML = rows.length
         ? rows.map((x) => '<button type="button" class="camp-customer-row ' + (selected.has(x.ref) ? "selected" : "") + '" onclick="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
@@ -3042,6 +3044,25 @@ async function searchCampaignCustomers(value) {
         : '<div class="muted">No matching active customer found.</div>';
     } catch (e) { $("camp-customer-results").innerHTML = errBox(e.message, "searchCampaignCustomers"); }
   }, 250);
+}
+
+function selectAllVisibleCampaignCustomers() {
+  const selected = new Set(CAMPAIGN_SELECTED_CUSTOMERS.map((x) => x.ref));
+  CAMPAIGN_VISIBLE_CUSTOMERS.forEach((x) => {
+    if (!selected.has(x.ref)) CAMPAIGN_SELECTED_CUSTOMERS.push(x);
+  });
+  renderCampaignSelectedCustomers();
+  const q = $("camp-customer-search")?.value || "";
+  if (q) searchCampaignCustomers(q);
+  updateCampaignPreview();
+}
+
+function clearCampaignSelection() {
+  CAMPAIGN_SELECTED_CUSTOMERS = [];
+  renderCampaignSelectedCustomers();
+  const q = $("camp-customer-search")?.value || "";
+  if (q) searchCampaignCustomers(q);
+  updateCampaignPreview();
 }
 
 async function toggleCampaignCustomer(ref) {
@@ -3072,9 +3093,16 @@ function selectCampaignAudience(segment, doPreview=true) {
   if (doPreview) updateCampaignPreview();
 }
 function updateCampaignAudienceCount() {
-  const segment = $("camp-seg")?.value || "all_active"; selectCampaignAudience(segment, false);
-  const count = window.CAMPAIGN_SEG_COUNTS?.[segment];
-  if ($("camp-summary-count")) $("camp-summary-count").textContent = count == null ? "—" : "~ " + count + " customers";
+  const segment = $("camp-seg")?.value || "all_active";
+  selectCampaignAudience(segment, false);
+  const count = segment === "selected"
+    ? CAMPAIGN_SELECTED_CUSTOMERS.length
+    : window.CAMPAIGN_SEG_COUNTS?.[segment];
+  if ($("camp-summary-count")) {
+    $("camp-summary-count").textContent = count == null
+      ? "—"
+      : segment === "selected" ? count + " customers selected" : "~ " + count + " customers";
+  }
 }
 function prefillCampaign(seg) {
   selectCampaignAudience(seg, false); $("camp-name").value = (SEGMENT_LABEL[seg] || seg) + " - " + new Date().toISOString().slice(0, 10); updateCampaignPreview();
@@ -3085,7 +3113,7 @@ function renderCampaigns(camps) {
   $("camp-list").innerHTML = camps.map((c) => {
     const s = c.stats || {}, img = c.creative_file ? '<img class="camp-history-img" src="/admin/media/' + encodeURIComponent(c.creative_file) + '?key=' + encodeURIComponent(KEY) + '" alt="Campaign creative">' : "";
     return '<div class="camp-history-item"><div class="camp-history-item-top"><div><b>' + esc(c.name) + '</b><div class="muted">' + esc(SEGMENT_LABEL[c.segment] || c.segment) + ' · ' + new Date(c.created_at).toLocaleString() + '</div></div><span class="pill ' + (c.status === "sent" ? "PAID" : c.status === "cancelled" ? "CANCELLED" : "PARTIAL") + '">' + esc(c.status) + '</span></div>' + img +
-      '<div class="camp-history-msg">' + esc(c.message_text) + '</div><div class="camp-history-stats">Sent <b>' + (s.sent || 0) + '</b> · Delivered <b>' + (s.delivered || 0) + '</b> · Read <b>' + (s.read || 0) + '</b> · Replied <b>' + (s.replied || 0) + '</b> · Failed <b>' + (s.failed || 0) + '</b> · Skipped <b>' + (s.skipped || 0) + '</b></div>' +
+      '<div class="camp-history-msg">' + esc(c.message_text) + '</div>' + (c.segment === "selected" ? '<div class="camp-history-audience">Selected customers: <b>' + (c.selected_customer_count || 0) + '</b></div>' : '') + '<div class="camp-history-stats">Sent <b>' + (s.sent || 0) + '</b> · Delivered <b>' + (s.delivered || 0) + '</b> · Read <b>' + (s.read || 0) + '</b> · Replied <b>' + (s.replied || 0) + '</b> · Failed <b>' + (s.failed || 0) + '</b> · Skipped <b>' + (s.skipped || 0) + '</b></div>' +
       (["draft","suggested"].includes(c.status) ? '<div class="act"><button class="btn sm ok" onclick="approveCampaign(\'' + c.id + '\')">Start sending</button><button class="btn sm ghost" onclick="cancelCampaign(\'' + c.id + '\')">Cancel</button></div>' : '') + '</div>';
   }).join("");
 }
@@ -3097,11 +3125,14 @@ function updateCampaignPreview() {
   if ($("camp-preview-text")) $("camp-preview-text").textContent = msg || "Your campaign message will appear here…";
   if ($("camp-summary-name")) $("camp-summary-name").textContent = $("camp-name")?.value.trim() || "—";
   if ($("camp-summary-image")) $("camp-summary-image").textContent = window.CAMPAIGN_CUSTOM_IMAGE ? "1 image attached" : "No image";
+  const now = new Date();
+  if ($("camp-preview-time")) $("camp-preview-time").textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   updateCampaignAudienceCount();
 }
 function resetCampaignForm() {
   CAMPAIGN_SELECTED_CUSTOMERS = [];
   CAMPAIGN_CUSTOMER_CACHE = {};
+  CAMPAIGN_VISIBLE_CUSTOMERS = [];
   if ($("camp-customer-search")) $("camp-customer-search").value = "";
   if ($("camp-customer-results")) $("camp-customer-results").innerHTML = '<div class="muted">Start typing to find customers.</div>';
   if ($("camp-selected-list")) $("camp-selected-list").innerHTML = "";
