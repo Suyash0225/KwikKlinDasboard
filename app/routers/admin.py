@@ -691,7 +691,9 @@ async def customers_search(
         {
             "ref": str(c.id),
             "name": c.name or "Customer",
+            "phone": c.phone,  # existing customer autocomplete depends on this
             "phone_masked": _mask_phone(c.phone),
+            "address": c.address,
             "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
         }
         for c in rows
