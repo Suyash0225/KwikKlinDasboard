@@ -137,6 +137,7 @@ class CampaignIn(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     segment: str
     message_text: str = Field(min_length=5)
+    selected_customer_ids: list[str] = Field(default_factory=list, max_length=500)
     coupon_code: str | None = None
     creative_file: str | None = None
 
@@ -322,10 +323,23 @@ async def create_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) 
     creative = body.creative_file or ""
     if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\\.(?:png|jpg|jpeg)", creative):
         raise HTTPException(status_code=400, detail="invalid campaign creative")
+    if body.segment == "selected":
+        if not body.selected_customer_ids:
+            raise HTTPException(status_code=400, detail="select at least one customer")
+        try:
+            selected_ids = [str(uuid_module.UUID(str(x))) for x in body.selected_customer_ids]
+        except (ValueError, AttributeError, TypeError):
+            raise HTTPException(status_code=400, detail="invalid selected customer")
+        stats = {"selected_customer_ids": selected_ids}
+        if creative:
+            stats["creative_file"] = creative
+    else:
+        stats = {"creative_file": creative} if creative else None
+
     c = Campaign(
         name=body.name, segment=body.segment, message_text=body.message_text,
         coupon_code=body.coupon_code, status="draft", created_by="owner",
-        stats={"creative_file": creative} if creative else None,
+        stats=stats,
     )
     db.add(c)
     await db.commit()
