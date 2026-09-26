@@ -189,8 +189,30 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
     'holdout' (deliberately do NOT). Comparing the two afterwards is the
     only honest way to say a campaign earned anything — see campaign_stats.
     """
-    segs = await compute_segments(db)
-    targets = segs.get(campaign.segment, [])
+    if campaign.segment == "selected":
+        # For owner-picked recipients, resolve the IDs stored on the campaign
+        # and run the exact same marketing eligibility gate as normal segments.
+        selected_ids = []
+        raw_ids = (campaign.stats or {}).get("selected_customer_ids") or []
+        from uuid import UUID as _UUID
+        for raw_id in raw_ids:
+            try:
+                selected_ids.append(_UUID(str(raw_id)))
+            except (TypeError, ValueError):
+                continue
+        if not selected_ids:
+            return 0
+        from app.models import Customer as _Customer
+        rows = (await db.execute(
+            select(_Customer).where(
+                _Customer.id.in_(selected_ids),
+                _Customer.is_active,
+            )
+        )).scalars().all()
+        targets = [{"id": row.id} for row in rows]
+    else:
+        segs = await compute_segments(db)
+        targets = segs.get(campaign.segment, [])
     if not targets:
         return 0
     from app.services.leads import check_marketing_eligible_bulk
