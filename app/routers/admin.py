@@ -57,7 +57,7 @@ from app.models import (
     Staff,
     StaffRole,
 )
-from app.services import audit, tenant_context
+from app.services import audit, site_rates, tenant_context
 from app.utils.phone import normalize_phone as _norm_phone
 from app.routers.orders import require_admin_key, require_admin_owner, require_feature
 from app.services.order_service import ACTIVE_STATUSES, get_active_orders_for_phone
@@ -1124,6 +1124,7 @@ async def rate_create(body: RateIn, db: AsyncSession = Depends(get_db)) -> dict:
         )
     except DuplicateRate as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    site_rates.invalidate_cache()
     log.info("rate_created", service=rate.service, garment=rate.garment,
              rate=str(body.rate), revived=revived)
     return {"id": str(rate.id)}
@@ -1143,6 +1144,7 @@ async def rate_update(rate_id: str, body: RateUpdateIn, db: AsyncSession = Depen
     if body.is_active is not None:
         rate.is_active = body.is_active
     await db.commit()
+    site_rates.invalidate_cache()
     log.info("rate_updated", rate_id=rate_id, rate=str(rate.rate), active=rate.is_active)
     return {"ok": True}
 
@@ -1160,6 +1162,7 @@ async def rate_delete(rate_id: str, db: AsyncSession = Depends(get_db)) -> dict:
         raise HTTPException(status_code=404, detail="rate not found")
     await db.delete(rate)
     await db.commit()
+    site_rates.invalidate_cache()
     log.info("rate_deleted", rate_id=rate_id, service=rate.service, garment=rate.garment)
     return {"ok": True}
 
@@ -1177,6 +1180,7 @@ async def rates_delete_group(
     where = [Rate.unit == "pc", (Rate.service == service.strip()) if service else (Rate.garment == garment.strip())]
     res = await db.execute(delete(Rate).where(*where))
     await db.commit()
+    site_rates.invalidate_cache()
     log.info("rates_deleted", service=service, garment=garment, count=res.rowcount)
     return {"deleted": res.rowcount}
 
