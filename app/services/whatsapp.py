@@ -738,6 +738,8 @@ async def drain_outbound_queue() -> int:
             # never lazily loaded from this scheduler coroutine.
             row_id = row.id
             attempts_before = int(row.attempts or 0)
+            created_at = row.created_at
+            to_phone = row.to_phone
 
             # Do not send stale queued messages after a long outage. This is
             # especially important for reminders: delivering them days later
@@ -755,7 +757,7 @@ async def drain_outbound_queue() -> int:
                     )
                 )
                 await db.commit()
-                log.warning("outbound_stale_dead_lettered", to=row.to_phone, age_hours=round((now - row.created_at).total_seconds() / 3600, 1))
+                log.warning("outbound_stale_dead_lettered", to=to_phone, age_hours=round((now - created_at).total_seconds() / 3600, 1))
                 continue
 
             try:
