@@ -1,0 +1,27 @@
+# Isolated Postgres for the EC2 development server.
+# Production DB/container is untouched.
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.dev.yml down
+
+services:
+  db:
+    image: postgres:15
+    container_name: laundry-db-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: laundry_dev
+      POSTGRES_PASSWORD: laundry_dev
+      POSTGRES_DB: laundry_dev
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - laundry_pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U laundry_dev -d laundry_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  laundry_pgdata_dev:
