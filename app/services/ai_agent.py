@@ -447,10 +447,18 @@ async def build_ai_reply(
 
     # Global kill switch (Settings) — bot falls back to rule-based replies.
     from app.services import app_settings, audit
-
     if not sandbox and not await app_settings.get(db, "agent_enabled"):
         log.info("ai_agent_disabled_by_switch")
         return None
+
+    # Safety guard: unsolicited business promotions/vendors/spam must never
+    # reach the customer-facing AI or the lead-creation action.
+    if not sandbox:
+        from app.services.inbound_guard import should_suppress_inbound
+
+        if await should_suppress_inbound(text):
+            return None
+
 
     # Phase 3: let the model choose and chain scoped read/action tools.\n    # If the agentic loop fails, the older deterministic pipeline below remains the fallback.\n    try:\n        agentic_reply = await _run_agentic_customer_turn(db, customer, text, sandbox=sandbox)\n        if agentic_reply:\n            return agentic_reply\n    except Exception:\n        log.exception("agentic_customer_turn_wrapper_failed")\n\n    # Billing is a transactional action, not a language-generation task.
     # Handle it only after media normalization and the global AI switch.
