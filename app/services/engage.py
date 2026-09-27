@@ -130,6 +130,14 @@ async def run_conversation_followups() -> int:
 
     sent = 0
     async with async_session_factory() as db:
+        # Conversation follow-ups are proactive marketing. Require BOTH
+        # the feature switch and explicit autonomous marketing consent. This
+        # prevents a customer who merely sent an inbound message from being
+        # proactively contacted while Marketing autonomy is "suggest".
+        autonomy = str(await app_settings.get(db, "marketing_autonomy")).lower()
+        if autonomy != "auto":
+            log.info("engage_followups_skipped_not_auto", autonomy=autonomy)
+            return 0
         if not bool(await app_settings.get(db, "engage_followups_enabled")):
             return 0
         gap_h = float(await app_settings.get(db, "engage_gap_hours"))
