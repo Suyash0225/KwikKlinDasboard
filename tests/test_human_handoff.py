@@ -8,8 +8,8 @@ from app.models import Conversation, Customer, Direction
 
 
 @pytest.mark.asyncio
-async def test_human_handoff_waits_after_customer_inbound(monkeypatch):
-    """A human reply before the inbound puts that turn into a grace period."""
+async def test_human_handoff_waits_15_minutes_after_human_reply(monkeypatch):
+    """A human reply pauses AI for 15 minutes from the human reply time."""
     from app.routers import webhook
 
     now = datetime.now(timezone.utc)
@@ -84,5 +84,30 @@ async def test_human_handoff_expires_after_grace(monkeypatch):
     async def fake_get(_db, key):
         return 15
     monkeypatch.setattr(app_settings, "get", fake_get)
+
+    assert await webhook._human_handoff_waiting(FakeDB(), customer, inbound) is False
+
+
+@pytest.mark.asyncio
+async def test_human_handoff_without_human_reply_does_not_pause(monkeypatch):
+    from app.routers import webhook
+
+    now = datetime.now(timezone.utc)
+    customer = Customer(phone="+919999999997")
+    inbound = Conversation(
+        customer_id=customer.id,
+        direction=Direction.INBOUND,
+        message_text="hello",
+        wa_message_id="in-3",
+        created_at=now,
+    )
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class FakeDB:
+        async def execute(self, *_args, **_kwargs):
+            return FakeResult()
 
     assert await webhook._human_handoff_waiting(FakeDB(), customer, inbound) is False

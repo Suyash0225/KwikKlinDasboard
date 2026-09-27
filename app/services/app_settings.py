@@ -94,8 +94,8 @@ DEFAULTS: dict[str, Any] = {
     # customer ka agla normal sawal bhi hamesha ke liye anjaana reh jaata.
     # 0 = kabhi auto-resume mat karo (purana behaviour).
     "agent_pause_hours": 24,
-    # After a human replies from the WhatsApp phone, wait this many minutes
-    # after the customer's next inbound before the Service Agent takes over.
+    # After a human replies from the WhatsApp phone, keep the Service
+    # Agent paused for this many minutes, then resume automatically.
     "human_handoff_grace_minutes": 15,
     "customer_instructions": "",      # owner's extra instructions, hot-loaded
     "staff_instructions": "",
