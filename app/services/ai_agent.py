@@ -447,6 +447,7 @@ async def build_ai_reply(
 
     # Global kill switch (Settings) — bot falls back to rule-based replies.
     from app.services import app_settings, audit
+
     if not sandbox and not await app_settings.get(db, "agent_enabled"):
         log.info("ai_agent_disabled_by_switch")
         return None
@@ -505,7 +506,6 @@ async def build_ai_reply(
     except LLMError as exc:
         log.warning("ai_compose_failed", error=str(exc)[:150])
         return None
-
     lang = out.get("language") if out.get("language") in ("hi", "en") else "hi"
     intent = out.get("intent") if out.get("intent") in {
         "ORDER_STATUS", "NEW_ORDER", "PRICE_QUERY", "BILL_REQUEST", "COMPLAINT", "GREETING", "OTHER"
