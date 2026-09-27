@@ -378,13 +378,13 @@ async def _human_handoff_waiting(
     if latest_human is None:
         return False
 
-    # Human replied after this customer message: suppress AI immediately.
-    if latest_human.created_at >= inbound.created_at:
-        return True
-
+    # A human phone reply starts a takeover window. During the next 15
+    # minutes AI must stay silent, regardless of when the customer's latest
+    # inbound arrived. Once the window expires, AI can resume on the latest
+    # customer message.
     minutes = int(await app_settings.get(db, "human_handoff_grace_minutes") or 15)
     return minutes > 0 and (
-        datetime.now(timezone.utc) - inbound.created_at
+        datetime.now(timezone.utc) - latest_human.created_at
     ) < timedelta(minutes=minutes)
 
 
@@ -1148,18 +1148,8 @@ async def _send_customer_agent_reply(
             return False
 
         # Final human-takeover race guard: the owner may have replied from
-        # the phone while the LLM was thinking. Never send AI over that reply.
-        latest_inbound = (
-            await db.execute(
-                select(Conversation)
-                .where(
-                    Conversation.customer_id == customer.id,
-                    Conversation.direction == Direction.INBOUND,
-                )
-                .order_by(Conversation.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
+        # the phone while the LLM was thinking. Never send AI during the
+        # 15-minute human takeover window.
         latest_human = (
             await db.execute(
                 select(Conversation)
@@ -1172,12 +1162,15 @@ async def _send_customer_agent_reply(
                 .limit(1)
             )
         ).scalar_one_or_none()
+        human_grace = int(await _as.get(db, "human_handoff_grace_minutes") or 15)
         if (
-            latest_inbound is not None
-            and latest_human is not None
-            and latest_human.created_at >= latest_inbound.created_at
+            latest_human is not None
+            and human_grace > 0
+            and (
+                datetime.now(timezone.utc) - latest_human.created_at
+            ) < timedelta(minutes=human_grace)
         ):
-            log.info("human_replied_before_ai_send", phone=phone)
+            log.info("human_takeover_active_before_ai_send", phone=phone)
             return False
 
         try:
