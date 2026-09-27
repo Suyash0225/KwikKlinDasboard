@@ -497,8 +497,7 @@ async def receive_dotpe_webhook(
             )
         else:
             log.info("dotpe_webhook_unknown_event", keys=list(payload.keys()))
-    except Exception as exc:
-        log.exception("dotpe_webhook_processing_failed")
+    except Exception as exc:        log.exception("dotpe_webhook_processing_failed")
         if event_key is not None:
             await _mark_event(db, event_key, "failed", error=repr(exc))
     else:
@@ -997,8 +996,7 @@ async def _handle_inbound_message(
         except Exception:
             log.exception("campaign_reply_track_failed")
         rating = _match_rating(text or "")
-        if rating:
-            await _handle_rating(db, customer, phone, rating)
+        if rating:            await _handle_rating(db, customer, phone, rating)
             return
         if STOP_RE.search(text or ""):
             customer.opted_out = True
@@ -1065,6 +1063,13 @@ async def _handle_inbound_message(
         # (compliance kabhi band nahi hota).
         if not await _customer_agent_enabled(db, customer):
             log.info("agent_disabled_no_autoreply", phone=phone)
+            return
+
+        # High-confidence business ads/vendors/spam are stored for Inbox
+        # visibility but must not reach AI, fallback replies, or lead capture.
+        from app.services.inbound_guard import should_suppress_inbound
+
+        if await should_suppress_inbound(spoken):
             return
         # Ek baat, ek jawab. Jaldi-jaldi aaye messages ("11 iron" ... 7s
         # baad "3 dryclean") par pehle HAR message ka apna AI jawab jata
