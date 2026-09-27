@@ -1066,6 +1066,13 @@ async def _handle_inbound_message(
         if not await _customer_agent_enabled(db, customer):
             log.info("agent_disabled_no_autoreply", phone=phone)
             return
+
+        # High-confidence business ads/vendors/spam are stored for Inbox
+        # visibility but must not reach AI, fallback replies, or lead capture.
+        from app.services.inbound_guard import should_suppress_inbound
+
+        if await should_suppress_inbound(spoken):
+            return
         # Ek baat, ek jawab. Jaldi-jaldi aaye messages ("11 iron" ... 7s
         # baad "3 dryclean") par pehle HAR message ka apna AI jawab jata
         # tha — doosra jawab pehli poori baat dohrata tha aur customer
