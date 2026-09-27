@@ -506,6 +506,7 @@ async def build_ai_reply(
     except LLMError as exc:
         log.warning("ai_compose_failed", error=str(exc)[:150])
         return None
+
     lang = out.get("language") if out.get("language") in ("hi", "en") else "hi"
     intent = out.get("intent") if out.get("intent") in {
         "ORDER_STATUS", "NEW_ORDER", "PRICE_QUERY", "BILL_REQUEST", "COMPLAINT", "GREETING", "OTHER"
@@ -899,3 +900,4 @@ async def _build_facts(
             log.exception("shop_rate_card_tool_failed")
 
     return "\n".join(lines)
+
