@@ -723,8 +723,27 @@ async def drain_outbound_queue() -> int:
             .scalars()
             .all()
         )
-        for row in rows:
-            p = row.payload or {}
+        # Snapshot all ORM values before the loop can commit. SQLAlchemy
+        # expires ORM instances after commit, so later iterations must not
+        # access row.payload/row.to_phone/row.created_at lazily.
+        queued_rows = [
+            {
+                "id": row.id,
+                "attempts": int(row.attempts or 0),
+                "created_at": row.created_at,
+                "to_phone": row.to_phone,
+                "payload": row.payload or {},
+            }
+            for row in rows
+        ]
+
+        for queued in queued_rows:
+            row_id = queued["id"]
+            attempts_before = queued["attempts"]
+            created_at = queued["created_at"]
+            to_phone = queued["to_phone"]
+            p = queued["payload"]
+
             raw_buttons = p.get("buttons") or []
             buttons = [Button(b[0], b[1]) for b in raw_buttons] or None
             raw_list_rows = p.get("list_rows") or []
@@ -733,18 +752,10 @@ async def drain_outbound_queue() -> int:
                 for r in raw_list_rows
             ] or None
 
-            # send_message/_enqueue_outbound may commit before raising. Keep
-            # these values before that commit so expired ORM attributes are
-            # never lazily loaded from this scheduler coroutine.
-            row_id = row.id
-            attempts_before = int(row.attempts or 0)
-            created_at = row.created_at
-            to_phone = row.to_phone
-
             # Do not send stale queued messages after a long outage. This is
             # especially important for reminders: delivering them days later
             # is worse than dropping them into the dead-letter queue.
-            if row.created_at and now - row.created_at > MAX_OUTBOUND_AGE:
+            if created_at and now - created_at > MAX_OUTBOUND_AGE:
                 await db.rollback()
                 await db.execute(
                     update(OutboundMessage)
@@ -763,7 +774,7 @@ async def drain_outbound_queue() -> int:
             try:
                 await send_message(
                     db,
-                    to_phone=row.to_phone,
+                    to_phone=to_phone,
                     text=p.get("text"),
                     buttons=buttons,
                     list_rows=list_rows,
