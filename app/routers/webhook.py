@@ -497,7 +497,8 @@ async def receive_dotpe_webhook(
             )
         else:
             log.info("dotpe_webhook_unknown_event", keys=list(payload.keys()))
-    except Exception as exc:        log.exception("dotpe_webhook_processing_failed")
+    except Exception as exc:
+        log.exception("dotpe_webhook_processing_failed")
         if event_key is not None:
             await _mark_event(db, event_key, "failed", error=repr(exc))
     else:
@@ -996,7 +997,8 @@ async def _handle_inbound_message(
         except Exception:
             log.exception("campaign_reply_track_failed")
         rating = _match_rating(text or "")
-        if rating:            await _handle_rating(db, customer, phone, rating)
+        if rating:
+            await _handle_rating(db, customer, phone, rating)
             return
         if STOP_RE.search(text or ""):
             customer.opted_out = True
