@@ -3039,7 +3039,7 @@ async function searchCampaignCustomers(value) {
       const selected = new Set(CAMPAIGN_SELECTED_CUSTOMERS.map((x) => x.ref));
       $("camp-customer-results").innerHTML = rows.length
         ? rows.map((x) => '<label class="camp-customer-row ' + (selected.has(x.ref) ? "selected" : "") + '">' +
-            '<input class="camp-customer-check" type="checkbox" ' + (selected.has(x.ref) ? "checked" : "") + ' onchange="toggleCampaignCustomer(\\'' + esc(x.ref) + '\\')">' +
+            '<input class="camp-customer-check" type="checkbox" ' + (selected.has(x.ref) ? "checked" : "") + ' onchange="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
             '<span class="camp-customer-avatar">' + esc((x.name || "?").slice(0,1).toUpperCase()) + '</span><span><b>' + esc(x.name || "Customer") + '</b><small>' + esc(x.phone_masked || x.phone || "") + '</small></span>'
           + '</label>').join("")
         : '<div class="muted">No matching active customer found.</div>';
