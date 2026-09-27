@@ -115,7 +115,19 @@ async def mark_converted(db: AsyncSession, phone: str) -> None:
 
 
 async def run_lead_followups() -> int:
-    """Daily: send due ladder messages; after step 3 -> LOST."""
+    """Daily: send due ladder messages; only when marketing is explicitly auto."""
+    # Lead follow-ups are proactive marketing. Never send them merely because
+    # a lead exists: an unknown/new WhatsApp inquiry can become a Lead without
+    # the owner explicitly opting into autonomous marketing. The owner must
+    # select Marketing autonomy = auto before this scheduler may send.
+    from app.services import app_settings
+
+    async with async_session_factory() as settings_db:
+        autonomy = str(await app_settings.get(settings_db, "marketing_autonomy")).lower()
+    if autonomy != "auto":
+        log.info("lead_followups_skipped_not_auto", autonomy=autonomy)
+        return 0
+
     now = datetime.now(timezone.utc)
     sends = 0
     async with async_session_factory() as db:
