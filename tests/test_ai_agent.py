@@ -150,6 +150,45 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
     assert cust.address == "12 Lanka, Varanasi"
     assert reply
 
+async def test_ai_facts_always_include_saved_name_and_address(monkeypatch) -> None:
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        facts = await agent_module._build_facts(
+            db, cust, tool_names={}
+        )
+
+    assert "Customer name: AI Grahak" in facts
+    assert "Customer address: Test Address, Varanasi" in facts
+
+
+async def test_compose_prompt_tells_ai_not_to_repeat_saved_profile(monkeypatch) -> None:
+    async def fake_ask_json(**kw):
+        prompt = kw["system"]
+        assert "CUSTOMER PROFILE MEMORY IS AUTHORITATIVE" in prompt
+        assert "NEVER ask for that field again" in prompt
+        return {
+            "reply": "Ji, bataiye kaise help karun? — Kwik Klin AI",
+            "intent": "OTHER",
+            "language": "hi",
+            "action": "ANSWER",
+            "action_reason": "",
+            "escalate": False,
+            "escalation_reason": "",
+            "admin_note": "",
+            "intake": {
+                "name": "", "address": "", "items_text": "",
+                "pickup_date": "", "ready": False,
+            },
+        }
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        reply = await build_ai_reply(db, cust, "haan ji")
+
+    assert reply
+
+
 async def test_compose_happy_path_no_escalation(monkeypatch) -> None:
     async def fake_ask_json(**kw):
         # the FACTS block must carry customer identity, never notes

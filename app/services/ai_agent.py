@@ -352,7 +352,15 @@ _COMPOSE_SYSTEM = (
     "already asked something, do not ask the whole thing again — ask only "
     "for what is still missing, in one short line. If the customer's "
     "messages arrived in pieces (e.g. '11 iron' then '3 dryclean'), treat "
-    "them as ONE request and answer it once."
+    "them as ONE request and answer it once.\n"
+    "10. CUSTOMER PROFILE MEMORY IS AUTHORITATIVE. The FACTS block contains "
+    "the customer's saved name and address. If either field is present there, "
+    "treat it as already provided and NEVER ask for that field again. For a "
+    "new lead, ask only for a profile field that is genuinely missing. "
+    "Do not erase or replace an existing saved name/address with an empty "
+    "value from intake. When the conversation history contains a name or "
+    "address that is not yet saved, carry it forward in the intake and use "
+    "it for the current response."
 )
 
 
@@ -649,7 +657,9 @@ async def _gather_context(
         log.exception("knowledge_lookup_failed")
         kb = ""
     try:
-        history = await thread_history(db, customer_id=customer.id, limit=6)
+        # Keep enough recent conversation to preserve multi-step lead/order
+        # intake. Six messages can lose the customer's earlier name/address.
+        history = await thread_history(db, customer_id=customer.id, limit=20)
     except Exception:
         log.exception("thread_history_failed")
         history = ""
@@ -791,14 +801,20 @@ async def _build_facts(
         else {name: max(1, min(int(limit), 20)) for name, limit in tool_names.items() if name in CUSTOMER_READ_TOOLS}
     )
 
-    if "get_customer_profile" in selected:
-        try:
-            profile = await run_customer_tool(db, customer, "get_customer_profile")
-            lines.append(
-                f"Customer: {profile['name'] or '(name unknown)'} ({profile['phone']})"
-            )
-        except Exception:
-            log.exception("customer_profile_tool_failed")
+    # Always include the authenticated customer's profile. The tool router
+    # is optimized for the current question, but identity/address memory must
+    # never depend on whether the cheap router selected the profile tool.
+    try:
+        profile = await run_customer_tool(db, customer, "get_customer_profile")
+        lines.append(
+            f"Customer name: {profile['name'] or '(name unknown)'}"
+        )
+        lines.append(
+            f"Customer address: {profile['address'] or '(address unknown)'}"
+        )
+        lines.append(f"Customer phone: {profile['phone']}")
+    except Exception:
+        log.exception("customer_profile_tool_failed")
 
     from app.services import app_settings
     try:
