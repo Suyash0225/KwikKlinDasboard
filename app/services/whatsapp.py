@@ -287,14 +287,22 @@ async def send_message(
                     {"rowId": b.id, "title": b.title[:MAX_ROW_TITLE], "description": ""}
                     for b in buttons
                 ]
-                mid = await waha.send_list(to_phone, text, rows, button=list_button[:MAX_LIST_BUTTON])
+                mid = await waha.send_list(
+                    to_phone, text, rows,
+                    button=list_button[:MAX_LIST_BUTTON],
+                    title=list_title or "Kwik Klin",
+                )
                 logged = f"{text} [list: {', '.join(b.title for b in buttons)}]"
             elif list_rows:
                 rows = [
                     {"rowId": r.id, "title": r.title[:MAX_ROW_TITLE], "description": r.description[:MAX_ROW_DESC]}
                     for r in list_rows
                 ]
-                mid = await waha.send_list(to_phone, text, rows, button=list_button[:MAX_LIST_BUTTON])
+                mid = await waha.send_list(
+                    to_phone, text, rows,
+                    button=list_button[:MAX_LIST_BUTTON],
+                    title=list_title or "Kwik Klin",
+                )
                 logged = f"{text} [list: {', '.join(r.title for r in list_rows)}]"
             else:
                 mid = await waha.send_text(to_phone, text, reply_to=reply_to, link_preview=True)
@@ -664,6 +672,10 @@ def _now() -> datetime:
 
 MAX_OUTBOUND_ATTEMPTS = 8
 
+# A queued outbound message is a retry safety net, not a delayed campaign.
+# Never deliver stale messages after they have lost their business context.
+MAX_OUTBOUND_AGE = timedelta(hours=48)
+
 
 async def _enqueue_outbound(db: AsyncSession, to_phone: str, payload: dict) -> None:
     """Queue a failed send for retry. Never raises — the original SendError
@@ -727,6 +739,25 @@ async def drain_outbound_queue() -> int:
             row_id = row.id
             attempts_before = int(row.attempts or 0)
 
+            # Do not send stale queued messages after a long outage. This is
+            # especially important for reminders: delivering them days later
+            # is worse than dropping them into the dead-letter queue.
+            if row.created_at and now - row.created_at > MAX_OUTBOUND_AGE:
+                await db.rollback()
+                await db.execute(
+                    update(OutboundMessage)
+                    .where(OutboundMessage.id == row_id)
+                    .values(
+                        attempts=attempts_before,
+                        status="dead",
+                        last_error="stale queued message expired",
+                        next_attempt_at=now,
+                    )
+                )
+                await db.commit()
+                log.warning("outbound_stale_dead_lettered", to=row.to_phone, age_hours=round((now - row.created_at).total_seconds() / 3600, 1))
+                continue
+
             try:
                 await send_message(
                     db,
@@ -746,7 +777,7 @@ async def drain_outbound_queue() -> int:
                 await db.rollback()
                 status = "dead" if attempts >= MAX_OUTBOUND_ATTEMPTS else "queued"
                 next_attempt = (
-                    None
+                    now
                     if status == "dead"
                     else now + timedelta(seconds=min(900 * attempts, 21_600))
                 )
@@ -777,7 +808,7 @@ async def drain_outbound_queue() -> int:
                         last_error=str(exc)[:500],
                         status="dead" if dead else "queued",
                         next_attempt_at=(
-                            None
+                            now
                             if dead
                             else now + timedelta(seconds=min(300 * (2 ** attempts), 21_600))
                         ),
