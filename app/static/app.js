@@ -4956,7 +4956,12 @@ window.addEventListener("DOMContentLoaded", () => {
   // Live updates SIRF sign-in ke baad. Bina iske EventSource 401 par
   // baar-baar dobara judne ki koshish karta rehta — har teen second ek
   // request, login page par baithe rehne bhar ke liye.
-  ensureSignedIn().then((ok) => { if (ok) startLiveUpdates(); });
+  ensureSignedIn().then((ok) => {
+    if (ok) {
+      go("dashboard", false);
+      startLiveUpdates();
+    }
+  });
   const h = (location.hash || "#dashboard").slice(1);
   if (h.startsWith("inbox/")) {
     go("inbox", false);
