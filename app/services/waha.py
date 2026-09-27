@@ -131,13 +131,21 @@ async def send_text(
     return _message_id(data)
 
 
-async def send_list(phone: str, text: str, rows: list[dict], *, button: str = "Choose") -> str:
-    # WAHA expects list-message fields inside the "message" object.
-    # NOWEB otherwise sees message=undefined and crashes on description.
+async def send_list(
+    phone: str,
+    text: str,
+    rows: list[dict],
+    *,
+    button: str = "Choose",
+    title: str = "Kwik Klin",
+) -> str:
+    # WAHA requires a non-empty message.title for sendList, including NOWEB.
+    # Keep the customer-facing body in description and use a stable title.
     payload = {
         "session": settings.WAHA_SESSION,
         "chatId": chat_id(phone),
         "message": {
+            "title": str(title or "Kwik Klin")[:60],
             "description": text,
             "button": button,
             "sections": [{"title": "Options", "rows": rows}],
