@@ -38,6 +38,12 @@ _HOME_WORDS = re.compile(r"blanket|quilt|razai|rajai|curtain|bedsheet|bed sheet|
 _GARMENT_EN = {"pant": "Trouser", "razai/blanket": "Blanket / Quilt", "suit 2pc": "Suit (2-piece)", "suit 3pc": "Suit (3-piece)"}
 
 
+def invalidate_cache() -> None:
+    """Dashboard rate changes ko public website par turant visible karo."""
+    _cache["at"] = 0.0
+    _cache["rows"] = None
+
+
 def _category(service: str, garment: str, unit: str) -> str:
     s = service.lower()
     if unit == "kg":
