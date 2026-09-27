@@ -1,0 +1,144 @@
+"""Classify inbound WhatsApp messages before customer-facing AI runs.
+
+This guard is intentionally conservative: only high-confidence promotional,
+vendor, or spam messages are suppressed. Ambiguous messages continue through
+the normal customer flow so a genuine enquiry is not silently lost.
+"""
+
+from typing import Any
+
+import structlog
+
+from app.services import llm_client
+from app.services.llm_client import LLMError
+
+log = structlog.get_logger()
+
+_NON_LEAD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "classification": {
+            "type": "string",
+            "enum": [
+                "CUSTOMER_LEAD",
+                "BUSINESS_ADVERTISEMENT",
+                "SPAM",
+                "VENDOR_OR_PARTNER",
+            ],
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "reason": {"type": "string"},
+    },
+    "required": ["classification", "confidence", "reason"],
+    "additionalProperties": False,
+}
+
+_NON_LEAD_SYSTEM = """You are the inbound-message safety classifier for Kwik Klin laundry in Varanasi.
+
+Classify the customer's incoming WhatsApp message into exactly one category:
+
+CUSTOMER_LEAD:
+- A genuine customer/prospect asking about laundry, dry cleaning, pickup, delivery, pricing, orders, payment, or Kwik Klin services.
+- Existing-customer service questions also belong here.
+
+BUSINESS_ADVERTISEMENT:
+- Another business/person is promoting their own service or product to Kwik Klin.
+- Examples: digital marketing, SEO, website development, software, bulk SMS/WhatsApp marketing, advertising, recruitment, agency services, or other sales pitches.
+
+SPAM:
+- Clearly unsolicited/bulk/irrelevant promotional or suspicious content.
+
+VENDOR_OR_PARTNER:
+- A supplier, freelancer, agency, vendor, or potential business partner contacting Kwik Klin for their own business purpose rather than requesting Kwik Klin's service.
+
+Rules:
+- Judge the intent of the complete message, not individual keywords.
+- Do NOT classify a genuine Kwik Klin service enquiry as an advertisement just because it contains words such as service, business, offer, price, or company.
+- If the message is ambiguous, choose CUSTOMER_LEAD with lower confidence.
+- Do not invent context that is not present in the message.
+- Keep the reason short and factual.
+"""
+
+async def classify_inbound_message(text: str) -> dict[str, Any]:
+    """Return a conservative non-lead classification.
+
+    On classifier/LLM failure, allow the normal customer flow. A failed
+    classifier must never silently discard a possible customer.
+    """
+    message = (text or "").strip()
+    if not message:
+        return {
+            "classification": "CUSTOMER_LEAD",
+            "confidence": 0.0,
+            "reason": "empty message",
+        }
+
+    try:
+        with llm_client.track("inbound_non_lead_classifier"):
+            out = await llm_client.ask_json(
+                system=_NON_LEAD_SYSTEM,
+                user_text=f"INCOMING WHATSAPP MESSAGE:\n{message[:2000]}",
+                schema=_NON_LEAD_SCHEMA,
+                model=llm_client.MODEL_CHEAP,
+                max_tokens=180,
+            )
+
+        classification = out.get("classification")
+        if classification not in {
+            "CUSTOMER_LEAD",
+            "BUSINESS_ADVERTISEMENT",
+            "SPAM",
+            "VENDOR_OR_PARTNER",
+        }:
+            return {
+                "classification": "CUSTOMER_LEAD",
+                "confidence": 0.0,
+                "reason": "invalid classifier result",
+            }
+
+        try:
+            confidence = max(0.0, min(float(out.get("confidence", 0)), 1.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        return {
+            "classification": classification,
+            "confidence": confidence,
+            "reason": str(out.get("reason") or "").strip()[:240],
+        }
+    except LLMError as exc:
+        log.warning("inbound_non_lead_classifier_failed", error=str(exc)[:150])
+    except Exception:
+        log.exception("inbound_non_lead_classifier_unexpected")
+
+    return {
+        "classification": "CUSTOMER_LEAD",
+        "confidence": 0.0,
+        "reason": "classifier unavailable; normal customer flow allowed",
+    }
+
+
+async def should_suppress_inbound(text: str) -> bool:
+    """Suppress only high-confidence non-customer inbound messages."""
+    result = await classify_inbound_message(text)
+    classification = result["classification"]
+    confidence = result["confidence"]
+
+    suppress = (
+        classification in {
+            "BUSINESS_ADVERTISEMENT",
+            "SPAM",
+            "VENDOR_OR_PARTNER",
+        }
+        and confidence >= 0.85
+    )
+
+    if suppress:
+        log.info(
+            "ai_non_lead_suppressed",
+            classification=classification,
+            confidence=round(confidence, 3),
+            reason=result["reason"],
+        )
+
+    return suppress
