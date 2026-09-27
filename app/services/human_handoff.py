@@ -69,16 +69,20 @@ async def _reply_one(db: AsyncSession, customer: Customer, inbound: Conversation
     latest_human = await _latest_human(db, customer.id)
     latest_outbound = await _latest_outbound(db, customer.id)
 
-    # A human reply must exist before this customer turn.
-    if latest_human is None or latest_human.created_at >= inbound.created_at:
+    # A human phone reply starts the takeover window. AI can resume only
+    # after the configured grace period has elapsed.
+    if latest_human is None:
+        return False
+    if datetime.now(timezone.utc) - latest_human.created_at < timedelta(minutes=grace_minutes):
         return False
 
-    # If anything automated/human was sent after the inbound, this turn is
-    # already handled. This prevents duplicate AI replies.
-    if latest_outbound is not None and latest_outbound.created_at > inbound.created_at:
-        return False
-
-    if datetime.now(timezone.utc) - inbound.created_at < timedelta(minutes=grace_minutes):
+    # An automated reply after this inbound means this turn is already handled.
+    # A human outbound is intentionally allowed: it is the takeover signal.
+    if (
+        latest_outbound is not None
+        and latest_outbound.created_at > inbound.created_at
+        and latest_outbound.sent_by != "human"
+    ):
         return False
 
     # Import lazily to avoid webhook <-> service import cycles.
@@ -97,7 +101,11 @@ async def _reply_one(db: AsyncSession, customer: Customer, inbound: Conversation
         if current_inbound is None or current_inbound.id != inbound.id:
             await _unclaim(key)
             return False
-        if current_outbound is not None and current_outbound.created_at > inbound.created_at:
+        if (
+            current_outbound is not None
+            and current_outbound.created_at > inbound.created_at
+            and current_outbound.sent_by != "human"
+        ):
             await _unclaim(key)
             return False
         if customer.agent_paused or customer.opted_out:
@@ -121,7 +129,22 @@ async def _reply_one(db: AsyncSession, customer: Customer, inbound: Conversation
         if current_inbound is None or current_inbound.id != inbound.id:
             await _unclaim(key)
             return False
-        if current_outbound is not None and current_outbound.created_at > inbound.created_at:
+        if (
+            current_outbound is not None
+            and current_outbound.created_at > inbound.created_at
+            and current_outbound.sent_by != "human"
+        ):
+            await _unclaim(key)
+            return False
+
+        # The human may have replied while the LLM was generating. Re-check
+        # the takeover timer immediately before sending.
+        latest_human = await _latest_human(db, customer.id)
+        if (
+            latest_human is not None
+            and datetime.now(timezone.utc) - latest_human.created_at
+            < timedelta(minutes=grace_minutes)
+        ):
             await _unclaim(key)
             return False
 
