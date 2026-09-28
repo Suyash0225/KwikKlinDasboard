@@ -298,7 +298,7 @@ def _set_cookie(response: Response, token: str) -> None:
         max_age=auth.SESSION_DAYS * 86400,
         httponly=True,
         samesite="lax",
-        secure=settings.ENVIRONMENT == "production",
+        secure=True,
         path="/",
     )
 
@@ -690,7 +690,7 @@ async def google_start(db: AsyncSession = Depends(get_db)) -> Response:
     resp = RedirectResponse(url=google_auth.start_url(state, base), status_code=302)
     resp.set_cookie(
         google_auth.STATE_COOKIE, state, max_age=600, httponly=True,
-        samesite="lax", secure=settings.ENVIRONMENT == "production", path="/",
+        samesite="lax", secure=True, path="/",
     )
     return resp
 
@@ -775,7 +775,7 @@ async def _google_callback_inner(request, code, state, error, db) -> Response:
         google_auth.PENDING_COOKIE,
         json.dumps({"sub": ident["sub"], "email": ident["email"], "name": ident["name"]}),
         max_age=1800, httponly=True, samesite="lax",
-        secure=settings.ENVIRONMENT == "production", path="/",
+        secure=True, path="/",
     )
     resp.delete_cookie(google_auth.STATE_COOKIE, path="/")
     log.info("google_new_user_needs_shop", email=ident["email"])
