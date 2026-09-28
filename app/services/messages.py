@@ -253,8 +253,20 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "⚠️ {order_number} is in {old} — moving to {new} is not allowed.",
     },
     "ai_down_staff": {
-        "hi": "⚠️ AI agent abhi uplabdh nahi hai (API key ya network). Bill dashboard se bana lein; thodi der baad dobara try karein.",
-        "en": "⚠️ The AI agent is unavailable right now (API key or network). Use the dashboard for bills; try again shortly.",
+        "hi": "⚠️ AI agent abhi temporarily unavailable hai. Thodi der baad dobara try karein.",
+        "en": "⚠️ The AI agent is temporarily unavailable. Please try again shortly.",
+    },
+    "ai_down_staff_quota": {
+        "hi": "⚠️ AI quota abhi complete ho gayi hai. Thodi der baad dobara try karein.",
+        "en": "⚠️ The AI quota is currently exhausted. Please try again shortly.",
+    },
+    "ai_down_staff_rate_limit": {
+        "hi": "⚠️ AI service par abhi traffic zyada hai. Thodi der baad dobara try karein.",
+        "en": "⚠️ The AI service is rate-limited right now. Please try again shortly.",
+    },
+    "ai_down_staff_parse": {
+        "hi": "⚠️ AI response samajhne mein problem hui. Dobara try karein.",
+        "en": "⚠️ The AI response could not be parsed. Please try again.",
     },
     # --- scheduler: standup + reminders ---
     # {greet} waqt se banta hai (scheduler._greeting) — sham 6 baje
