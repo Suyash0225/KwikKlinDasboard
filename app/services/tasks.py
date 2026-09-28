@@ -718,12 +718,15 @@ async def complete_task(
         )
     ).scalar_one_or_none()
     if locked is None:
+        setattr(task, "_completion_won", False)
         return task
     if locked.status != TASK_OPEN:
         log.info("task_completion_duplicate", code=locked.code, status=locked.status, by=by)
+        setattr(locked, "_completion_won", False)
         await db.rollback()
         return locked
 
+    setattr(locked, "_completion_won", True)
     locked.status = TASK_DONE
     locked.completed_at = datetime.now(timezone.utc)
     if reply:
