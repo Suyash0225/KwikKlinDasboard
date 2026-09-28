@@ -211,10 +211,11 @@ async def tenant_scope(request: Request, call_next):
     if tid is None:
         tid = await tenant_context.get_home_tenant_id()
 
-    # Per-tenant rate limit: ek client ka runaway loop baaki sab tenants ko
-    # slow nahi kar sakta. Sirf API paths par; webhook (Meta ka traffic,
-    # burst aata hai) aur static exempt hain.
-    if tid is not None and _rate_limited(tid, request.url.path):
+    # Anonymous callers must not all share the home tenant bucket.
+    rate_key = f"tenant:{tid}" if token and tid is not None else (
+        f"ip:{request.client.host if request.client else 'unknown'}"
+    )
+    if _rate_limited(rate_key, request.url.path):
         return JSONResponse(
             status_code=429,
             content={"detail": "Bahut tezi se requests — thoda ruk kar try karein."},
@@ -240,7 +241,7 @@ import time as _time
 # Test suite ise nahi pakad payi kyunki wo limit 1/5 par set karke chalti hai.
 # Ab cap limit se hi nikalta hai.
 _RL_BUCKETS: dict = {}
-_RL_PREFIXES = ("/admin/api", "/admin/media", "/orders", "/api/", "/control", "/staff/api")
+_RL_PREFIXES = ("/admin/api", "/admin/media", "/admin/csp-report", "/orders", "/api/", "/control", "/staff/api")
 
 
 def _rate_limited(tid, path: str) -> bool:
