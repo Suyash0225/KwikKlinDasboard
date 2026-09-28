@@ -1098,27 +1098,34 @@ async def handle_staff_message(
                 _PENDING.pop(sender_phone, None)
                 return get_message("bill_cancelled")
         elif kind == "relay_confirm":
-            from app.services import tasks as task_service
-            code_m = re.search(r"T-\d+", action.upper())
-            choice = "yes" if action.endswith(":yes") else "no"
-            if code_m:
-                task = await task_service.get_by_code(db, code_m.group(0))
-                if task is not None:
-                    if choice == "yes":
-                        await task_service.note_reply(
-                            db, task.assigned_staff_id, "Yes — fixed-choice reply",
-                            by=sender_label,
-                        )
-                        await task_service.complete_task(
-                            db, task, reply="Yes — fixed-choice reply", by=sender_label,
-                            advance_order=False,
-                        )
-                        return f"✅ {task.code} ka response *Yes* record kar diya."
-                    await task_service.note_reply(
-                        db, task.assigned_staff_id, "No — fixed-choice reply",
-                        by=sender_label,
+            from app.services import tasks as task_service, team
+            parts = action.split(":")
+            code = parts[0].upper() if parts else ""
+            choice = parts[1].lower() if len(parts) > 1 else ""
+            task = await task_service.get_by_code(db, code) if re.fullmatch(r"T-\d+", code) else None
+            if task is not None:
+                staff = (
+                    await db.execute(select(Staff).where(Staff.phone == sender_phone))
+                ).scalar_one_or_none()
+                if staff is None or not await task_service.staff_can_access_task(db, task, staff):
+                    return "⚠️ Ye task aapki team ke access mein nahi hai."
+                answer = "Yes" if choice == "yes" else "No"
+                await task_service.note_reply(db, staff.id, f"{answer} — fixed-choice reply", by=staff.name)
+                if answer == "Yes":
+                    await task_service.complete_task(
+                        db, task, reply=f"{answer} — fixed-choice reply", by=staff.name,
+                        advance_order=False,
                     )
-                    return f"⏳ {task.code} ka response *No* record kar diya."
+                    await team.notify_admins(
+                        db, f"✅ {staff.name} ne [{task.code}] ka answer *Yes* diya.",
+                        skip_phone=staff.phone,
+                    )
+                    return f"✅ *{task.code}* ka response *Yes* record kar diya."
+                await team.notify_admins(
+                    db, f"⏳ {staff.name} ne [{task.code}] ka answer *No* diya: {task.title}",
+                    skip_phone=staff.phone,
+                )
+                return f"⏳ *{task.code}* ka response *No* record kar diya. Manager ko bata diya."
         return None
 
     # Task ke buttons + unka follow-up — dono deterministic, zero LLM.
@@ -2713,10 +2720,38 @@ async def _apply_relay(
 
         from app.services import tasks as task_service
 
+        # If the owner asked a bounded yes/no question, use a dedicated
+        # response menu instead of making the worker type "haan/nahi".
+        fixed_choice = bool(
+            re.search(
+                r"\?\s*$|\b(ho\s*gaya|ho\s*gayi|hua|hui|hai|hain|kar\s*diya|"
+                r"kar\s*di|mila|pahuncha|pahunchi|possible|ready)\b",
+                raw_message,
+                re.I,
+            )
+        )
         task = await task_service.create_task(
             db, title=message, staff=staff, order=order,
-            urgent=urgent, created_by=sender_label,
+            urgent=urgent, created_by=sender_label, notify=not fixed_choice,
         )
+        if fixed_choice:
+            try:
+                await send_message(
+                    db, to_phone=staff.phone,
+                    text=f"❓ *{message}*\nPlease select the answer below.",
+                    list_rows=[
+                        ListRow(f"relay_confirm:{task.code}:yes", "✅ Haan / Yes", "Yes"),
+                        ListRow(f"relay_confirm:{task.code}:no", "❌ Nahi / No", "No"),
+                    ],
+                    list_button="Answer",
+                    list_title="Kwik Klin",
+                    sent_by="bot",
+                )
+                task.last_ping_at = datetime.now(timezone.utc)
+                db.add(task)
+                await db.commit()
+            except (WindowClosedError, SendError):
+                log.info("relay_fixed_menu_not_sent", code=task.code)
         note = ""
         if order is not None and urgent and order.priority != "urgent":
             order.priority = "urgent"
