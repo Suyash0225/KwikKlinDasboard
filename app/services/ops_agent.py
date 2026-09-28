@@ -158,8 +158,12 @@ async def on_order_created(db: AsyncSession, order: Order) -> dict:
                 if (
                     order.status in (OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH)
                     and (
-                        order.expected_delivery is None
-                        or order.expected_delivery <= date.today() + timedelta(days=3)
+                        order.status is not OrderStatus.PICKED_UP
+                        and (
+                            order.expected_delivery is None
+                            or order.expected_delivery <= date.today() + timedelta(days=3)
+                        )
+                        or order.status is OrderStatus.PICKED_UP
                     )
                 ):
                     task = await task_service.create_task(
@@ -315,6 +319,35 @@ async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStat
                 db, t, reply=f"order {new_status.name.lower().replace('_', ' ')}", by=by or "ops-agent",
                 advance_order=False,
             )
+
+        # Pickup is the gate for washing work on home-pickup orders.
+        # The washer must never receive an order before the delivery boy has
+        # actually collected the clothes. Once PICKED_UP is committed, create
+        # the wash task immediately (without the 3-day planning delay).
+        if new_status is OrderStatus.PICKED_UP and await enabled(db):
+            if not await _open_tasks(db, order.id, ("wash",)):
+                from app.models import Customer
+                from app.services import tasks as task_service
+                from app.services.work_orders import items_summary
+
+                washer = await pick_staff(db, "WASHER", order)
+                if washer is not None:
+                    if order.assigned_washer_id is None:
+                        order.assigned_washer_id = washer.id
+                        db.add(order)
+                        await db.commit()
+                    customer = await db.get(Customer, order.customer_id)
+                    who = (customer.name or customer.phone) if customer else "Customer"
+                    await task_service.create_task(
+                        db,
+                        title=f"{who} — wash & iron: {items_summary(order)[:160]}",
+                        staff=washer,
+                        order=order,
+                        urgent=order.priority == "urgent",
+                        created_by="ops-agent",
+                        kind="wash",
+                        notify=True,
+                    )
 
         # Manual/status-driven moves must also create the next processing task.
         if new_status in _STAGE_TASKS:
