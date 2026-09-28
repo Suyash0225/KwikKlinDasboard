@@ -52,7 +52,8 @@ else:
 # A customer is staring at WhatsApp. The SDK's own default is ten MINUTES —
 # by then the person has phoned the shop, and our reply arrives as noise.
 # Better to give up fast and let the rule-based fallback answer.
-TIMEOUT_SECONDS = 25.0
+TIMEOUT_SECONDS = 45.0
+IMAGE_TIMEOUT_SECONDS = 90.0
 
 # Transient failures (429 / 5xx) get retried here with exponential backoff
 # and jitter. Jitter matters on the free tier: without it, every message
@@ -224,14 +225,15 @@ async def _generate_with_fallback(
         return lambda: _generate(system, user_text, m, max_tokens, schema, image)
 
     try:
-        return await _with_retry(_attempt(model), provider=PROVIDER, model=model)
+        async with asyncio.timeout(IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS):
+            return await _with_retry(_attempt(model), provider=PROVIDER, model=model)
     except LLMUnavailable:
         if model == MODEL_CHEAP:
             raise
-        log.warning("llm_smart_unavailable_trying_cheap", from_model=model)
-        return await _with_retry(
-            _attempt(MODEL_CHEAP), provider=PROVIDER, model=MODEL_CHEAP
-        )
+        alt = MODEL_SMART if model == MODEL_CHEAP else MODEL_CHEAP
+        log.warning("llm_model_unavailable_trying_alt", from_model=model, to_model=alt)
+        async with asyncio.timeout(IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS):
+            return await _with_retry(_attempt(alt), provider=PROVIDER, model=alt)
 
 
 def _parse_json(text: str, model: str) -> dict:
@@ -346,7 +348,7 @@ async def _gemini_post(model: str, payload: dict) -> httpx.Response:
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
         return await client.post(
             f"{_GEMINI_BASE}/{model}:generateContent",
-            params={"key": settings.GEMINI_API_KEY},
+            headers={"x-goog-api-key": settings.GEMINI_API_KEY},
             json=payload,
         )
 
@@ -402,6 +404,11 @@ async def _gemini_generate(
     if resp.status_code in (401, 403):
         log.error("llm_auth_failed", provider="gemini", model=model)
         raise LLMAuthError("invalid GEMINI_API_KEY")
+    if resp.status_code == 400 and "API_KEY_INVALID" in resp.text:
+        log.error("llm_auth_failed", provider="gemini", model=model, status=400)
+        raise LLMAuthError("invalid GEMINI_API_KEY")
+    if resp.status_code in (404, 408):
+        raise LLMUnavailable(f"gemini HTTP {resp.status_code}")
     if resp.status_code == 429:
         retry_after = resp.headers.get("retry-after")
         detail = resp.text[:300]
