@@ -35,11 +35,14 @@ class TemplateError(Exception):
 
 async def graph(method: str, path: str, token: str, **kw):
     """Ek Graph call — tests isi ko nakli banate hain."""
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.request(
-            method, f"{GRAPH}/{path}", headers={"Authorization": f"Bearer {token}"}, **kw
-        )
-    return r.status_code, r.json()
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.request(
+                method, f"{GRAPH}/{path}", headers={"Authorization": f"Bearer {token}"}, **kw
+            )
+        return r.status_code, r.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise TemplateError(f"meta_unreachable: {type(exc).__name__}", 503) from exc
 
 
 def creds_for(tenant) -> Creds | None:
