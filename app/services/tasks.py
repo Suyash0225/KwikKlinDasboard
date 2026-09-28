@@ -674,7 +674,9 @@ async def confirm_pickup(db: AsyncSession, task: Task, *, done: bool, by: str) -
         )
         return "Theek hai, ho jaye to batana. Main thodi der baad phir poochh lunga."
 
-    await complete_task(db, task, reply=f"{cfg['word']} ho gaya", by=by)
+    completed = await complete_task(db, task, reply=f"{cfg['word']} ho gaya", by=by)
+    if not getattr(completed, "_completion_won", False):
+        return f"ℹ️ *{task.code}* already complete ho chuka hai. Pehla valid update accept hua tha."
     if order is not None:
         try:
             from app.services import order_service
