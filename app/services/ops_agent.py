@@ -156,14 +156,13 @@ async def on_order_created(db: AsyncSession, order: Order) -> dict:
                 # preparation window. This keeps WhatsApp quiet and avoids
                 # unnecessary staff messages.
                 if (
-                    order.status in (OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH)
-                    and (
-                        order.status is not OrderStatus.PICKED_UP
+                    order.status is OrderStatus.PICKED_UP
+                    or (
+                        order.status in (OrderStatus.RECEIVED, OrderStatus.IN_WASH)
                         and (
                             order.expected_delivery is None
                             or order.expected_delivery <= date.today() + timedelta(days=3)
                         )
-                        or order.status is OrderStatus.PICKED_UP
                     )
                 ):
                     task = await task_service.create_task(
