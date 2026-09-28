@@ -819,14 +819,14 @@ async def run_task_followups() -> int:
                     db.add(task)
                     await db.commit()
 
-            if task.ping_count >= MAX_FOLLOWUPS_PER_DAY:
-                continue
-
             gap_hours = _task_ping_gap_hours(task, order, now_ist)
             since = task.last_ping_at or task.created_at
             if (now - since) < timedelta(hours=gap_hours):
                 continue
 
+            # After three staff reminders, tell the manager instead of sending
+            # a fourth staff message. This escalation is separate from the
+            # three-per-day staff limit.
             if task.ping_count >= ESCALATE_AFTER_PINGS and task.escalated_at is None:
                 waited = int((now - task.created_at).total_seconds() // 3600)
                 try:
@@ -847,6 +847,9 @@ async def run_task_followups() -> int:
                 task.escalated_at = now
                 db.add(task)
                 await db.commit()
+                continue
+
+            if task.ping_count >= MAX_FOLLOWUPS_PER_DAY:
                 continue
 
             if await _send_to_assignee(db, task, staff, first=False):
