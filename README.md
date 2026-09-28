@@ -176,8 +176,7 @@ Rules that matter:
 - **Dashboard** (127.0.0.1:8000/admin): full English, mobile-first, sign-in
   required; new pages: Campaigns, AI training, Activity (audit trail).
 
-**Env**: see `.env` — `LLM_PROVIDER=gemini` + `GEMINI_API_KEY` (Claude path
-kept: set `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`).
+**Env**: see `.env` — `LLM_PROVIDER=gemini` + `GEMINI_API_KEY`; keep `LLM_FALLBACK_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` configured so a Gemini outage can fail over to Claude automatically.
 `ESCALATION_CC_PHONE` is deprecated; AI/customer escalation alerts are sent to admin numbers only.
 
 **Migrations**: `alembic upgrade head` (latest: payments ledger, audit_log,
