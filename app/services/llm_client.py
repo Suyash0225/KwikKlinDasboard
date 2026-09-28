@@ -412,6 +412,11 @@ async def _gemini_generate(
     if resp.status_code == 429:
         retry_after = resp.headers.get("retry-after")
         detail = resp.text[:300]
+        latency_ms = int((time.monotonic() - started) * 1000)
+        try:
+            await _record_usage("gemini", model, 0, 0, latency_ms, False)
+        except Exception:
+            log.exception("llm_usage_record_crashed", model=model)
         log.warning(
             "llm_rate_limited",
             provider="gemini", model=model, status=429,
