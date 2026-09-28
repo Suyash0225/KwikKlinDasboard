@@ -3010,7 +3010,7 @@ function renderCampaignSelectedCustomers() {
   if (count) count.textContent = CAMPAIGN_SELECTED_CUSTOMERS.length + " selected";
   if (box) box.innerHTML = CAMPAIGN_SELECTED_CUSTOMERS.length
     ? CAMPAIGN_SELECTED_CUSTOMERS.map((x) =>
-        '<button type="button" class="camp-selected-chip" onclick="toggleCampaignCustomer(\\'' + esc(x.ref) + '\\')">' +
+        '<button type="button" class="camp-selected-chip" onclick="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
         '<span>✓</span><b>' + esc(x.name || "Customer") + '</b><small>' + esc(x.phone || x.phone_masked || "") + '</small><i>×</i></button>'
       ).join("")
     : '<span class="muted">No customers selected yet.</span>';
@@ -3021,7 +3021,7 @@ function campaignCustomerRowHtml(x) {
   const selected = CAMPAIGN_SELECTED_CUSTOMERS.some((c) => c.ref === x.ref);
   return '<label class="camp-customer-row ' + (selected ? "selected" : "") + '">' +
     '<input class="camp-customer-check" type="checkbox" ' + (selected ? "checked" : "") +
-      ' onchange="toggleCampaignCustomer(\\'' + esc(x.ref) + '\\')">' +
+      ' onchange="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
     '<span class="camp-customer-avatar">' + esc((x.name || "?").slice(0, 1).toUpperCase()) + '</span>' +
     '<span style="min-width:0;flex:1"><b>' + esc(x.name || "Customer") + '</b>' +
       '<small>' + esc(x.phone || x.phone_masked || "") + '</small></span>' +
