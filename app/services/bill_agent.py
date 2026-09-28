@@ -2504,6 +2504,9 @@ async def _close_task_by_code(
 
     await task_service.complete_task(db, task, by=sender_label)
 
+    if getattr(task, "_completion_won", True) is False:
+        return await task_service.completion_message(db, task, by=sender_label)
+
     # keep the owner in the loop without him having to ask
     try:
         staff = await db.get(Staff, assigned_staff_id) if assigned_staff_id else None
