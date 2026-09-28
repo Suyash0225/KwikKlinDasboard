@@ -660,6 +660,8 @@ async def confirm_pickup(db: AsyncSession, task: Task, *, done: bool, by: str) -
     from app.services import team
 
     cfg = _JOB.get(task.kind, _JOB["pickup"])
+    if task.status != TASK_OPEN:
+        return f"ℹ️ *{task.code}* already complete ho chuka hai. Pehla valid update accept hua tha."
     order = await db.get(Order, task.order_id) if task.order_id else None
     if not done:
         task.last_ping_at = datetime.now(timezone.utc)
