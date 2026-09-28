@@ -149,7 +149,7 @@ class Settings(BaseSettings):
     GA4_PROPERTY_ID: str = ""
     GA4_REFRESH_TOKEN: str = ""
 
-    ENVIRONMENT: Literal["development", "production"] = "development"
+    ENVIRONMENT: Literal["development", "production"] = "production"
 
     # Per-tenant API rate limit (requests/min). Ek runaway client (loop mein
     # fansa script, scraper) sabko slow na kare. DDoS-scale ke liye upar
