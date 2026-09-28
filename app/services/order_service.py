@@ -485,16 +485,26 @@ async def update_status(
         # thank-you + rating buttons (owner's policy 03 Aug)
         from app.services.whatsapp import Button
 
+        language = str(await app_settings.get(db, "communication_language") or "en").lower()
+        rating_buttons = (
+            [
+                Button("rate_good", "⭐ Excellent"),
+                Button("rate_mid", "🙂 It was okay"),
+                Button("rate_bad", "😞 Needs work"),
+            ]
+            if language != "hi"
+            else [
+                Button("rate_good", "⭐ Bahut achha"),
+                Button("rate_mid", "🙂 Theek tha"),
+                Button("rate_bad", "😞 Sudhar chahiye"),
+            ]
+        )
         await _notify_customer(
             db, order,
             message_key="thankyou_rating",
             template_name="kk_thankyou_rating",
             template_params=[order.order_number],
-            buttons=[
-                Button("rate_good", "⭐ Excellent"),
-                Button("rate_mid", "🙂 It was okay"),
-                Button("rate_bad", "😞 Needs work"),
-            ],
+            buttons=rating_buttons,
         )
         return order
     notification = _STATUS_NOTIFICATIONS.get(new_status)
