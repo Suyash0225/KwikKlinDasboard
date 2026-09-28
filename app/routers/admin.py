@@ -198,7 +198,7 @@ async def waha_configure_webhook(request: Request) -> dict:
     """
     if not _waha_is_home_tenant():
         raise HTTPException(status_code=403, detail="WhatsApp connection is managed for the home shop only")
-    if not settings.WAHA_WEBHOOK_HMAC_KEY:
+    if not settings.WAHA_WEBHOOK_SECRET:
         raise HTTPException(status_code=503, detail="WhatsApp webhook security is not configured")
 
     body = {
