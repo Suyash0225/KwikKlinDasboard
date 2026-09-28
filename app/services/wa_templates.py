@@ -46,9 +46,15 @@ def creds_for(tenant) -> Creds | None:
     """Dukaan ke apne creds; .env wale sirf home dukaan ko. Na hon to None."""
     from app.services import tenant_context
 
-    if tenant is not None and tenant.wa_token and tenant.wa_waba_id and tenant.wa_phone_number_id:
-        return Creds(tenant.wa_token, tenant.wa_waba_id, tenant.wa_phone_number_id)
-    if tenant is not None and tenant.id != tenant_context.cached_home_tenant_id():
+    # WAHA is the active WhatsApp transport for Kwik Klin. Do not silently
+    # pick up legacy Meta .env credentials when a tenant has not explicitly
+    # connected Meta from the Control panel.
+    if tenant is not None:
+        if tenant.wa_token and tenant.wa_waba_id and tenant.wa_phone_number_id:
+            return Creds(tenant.wa_token, tenant.wa_waba_id, tenant.wa_phone_number_id)
+        return None
+    # Keep the old .env fallback only for deployments that do not have WAHA.
+    if settings.WAHA_BASE_URL:
         return None
     if settings.WHATSAPP_TOKEN and settings.WHATSAPP_WABA_ID and settings.WHATSAPP_PHONE_NUMBER_ID:
         return Creds(settings.WHATSAPP_TOKEN, settings.WHATSAPP_WABA_ID, settings.WHATSAPP_PHONE_NUMBER_ID)
@@ -76,8 +82,24 @@ async def list_remote(creds: Creds | None) -> list[dict]:
         "GET", f"{creds.waba_id}/message_templates", creds.token,
         params={"fields": "name,status,category,language,components,rejected_reason", "limit": 100},
     )
+    if status in (401, 403):
+        log.error(
+            "meta_template_auth_failed",
+            waba_id=creds.waba_id,
+            status=status,
+            error_code=(data.get("error") or {}).get("code"),
+            error_subcode=(data.get("error") or {}).get("error_subcode"),
+            error_type=(data.get("error") or {}).get("type"),
+        )
+        raise TemplateError("meta_auth_failed", 503)
     if status != 200:
-        raise TemplateError(str(data)[:300], 502)
+        log.error(
+            "meta_template_graph_failed",
+            waba_id=creds.waba_id,
+            status=status,
+            error=str(data)[:300],
+        )
+        raise TemplateError("meta_template_api_error", 503)
     from app.services.templates import register_dynamic
 
     out = []
