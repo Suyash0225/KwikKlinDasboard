@@ -59,10 +59,10 @@ async def check_and_heal() -> str:
 
     async with async_session_factory() as db:
         await app_settings.set_value(db, "public_base_url", url)
-    meta_ok = await _update_meta_webhook(url)
+    meta_ok = False  # Meta disabled; WAHA owns WhatsApp webhooks.
     await audit.record(
         actor_role="system", actor="tunnel-guard", action="tunnel_heal",
-        args={"old": base or None}, result=f"{url} meta={'ok' if meta_ok else 'FAILED'}",
+        args={"old": base or None}, result=f"{url} meta=disabled",
         ok=meta_ok,
     )
     await _tell_owner(url, meta_ok)
@@ -102,40 +102,9 @@ def _respawn() -> str | None:
 
 
 async def _update_meta_webhook(url: str) -> bool:
-    """Point the Meta app's webhook at the new tunnel (needs app id+secret).
-
-    A freshly-minted tunnel takes a few seconds to become reachable from
-    Meta's side — wait for our own /health through it, then retry thrice.
-    """
-    if not settings.WHATSAPP_APP_ID:
-        return False
-    # don't ask Meta to verify until the tunnel actually routes
-    for _ in range(10):
-        if await _alive(url):
-            break
-        await asyncio.sleep(3)
-    app_token = f"{settings.WHATSAPP_APP_ID}|{settings.WHATSAPP_APP_SECRET}"
-    for attempt in range(3):
-        try:
-            async with httpx.AsyncClient(timeout=30) as c:
-                r = await c.post(
-                    f"https://graph.facebook.com/v21.0/{settings.WHATSAPP_APP_ID}/subscriptions",
-                    params={"access_token": app_token},
-                    data={
-                        "object": "whatsapp_business_account",
-                        "callback_url": f"{url}/webhook",
-                        "verify_token": settings.WHATSAPP_VERIFY_TOKEN,
-                        "fields": "messages,message_template_status_update",
-                    },
-                )
-            if r.status_code == 200 and r.json().get("success") is True:
-                return True
-            log.warning("meta_webhook_update_rejected", attempt=attempt, body=r.text[:150])
-        except httpx.HTTPError:
-            log.exception("meta_webhook_update_failed", )
-        await asyncio.sleep(8)
+    """Legacy Meta webhook hook intentionally disabled; WAHA owns webhooks."""
+    log.info("meta_webhook_disabled", url=url)
     return False
-
 
 async def _tell_owner_fixed_down(url: str) -> None:
     """Sthir URL neeche hai. Ghante mein ek baar batao — har 10 min nahi,

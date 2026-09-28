@@ -1448,75 +1448,31 @@ class WaSetIn(BaseModel):
     waba_id: str = ""
 
 
-@router.post("/api/tenants/{slug}/whatsapp")
-async def set_tenant_whatsapp(
-    slug: str, body: WaSetIn, request: Request, db: AsyncSession = Depends(get_db)
-) -> dict:
-    """Vendor client ke WhatsApp creds panel se jode — Graph par live
-    validate, duplicate number 409, token store hota hai par kabhi wapas
-    nahi jaata (masked)."""
-    from app.services import whatsapp
-
-    pnid = body.phone_number_id.strip()
-    if not await whatsapp.validate_credentials(pnid, body.token.strip()):
-        raise HTTPException(
-            status_code=400,
-            detail="Meta ne creds reject kiye — phone_number_id/token check karo",
-        )
-    t = await _tenant_or_404(db, slug)
-    dupe = (
-        await db.execute(
-            select(Tenant).where(
-                Tenant.wa_phone_number_id == pnid, Tenant.id != t.id
-            )
-        )
-    ).scalar_one_or_none()
-    if dupe is not None:
-        raise HTTPException(
-            status_code=409, detail=f"Ye number '{dupe.shop_name}' se juda hai"
-        )
-    t.wa_phone_number_id = pnid
-    t.wa_waba_id = body.waba_id.strip() or None
-    t.wa_token = body.token.strip()
-    await db.commit()
-    from app.services import audit
-
-    await audit.record(
-        actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
-        action="whatsapp_connect", tenant_id=t.id,
-        args={"tenant": slug, "phone_number_id": pnid, "via": "control-panel",
-              "ip": request.client.host if request.client else None},
-    )
-    return {"connected": True, "phone_number_id": pnid}
+@router.post("/api/tenants/{slug}/whatsapp", status_code=503)
+async def set_tenant_whatsapp(slug: str, body: WaSetIn, request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    """Meta WhatsApp connection is disabled; Kwik Klin uses WAHA/NOWEB."""
+    raise HTTPException(status_code=503, detail="Meta WhatsApp is disabled; Kwik Klin uses WAHA/NOWEB.")
 
 
 @router.get("/api/tenants/{slug}/whatsapp/templates")
 async def tenant_wa_templates(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
-    """Is client ke WABA par app ke auto-message templates ka haal."""
-    from app.services import wa_templates
+    """Return local templates; never contact Meta."""
+    await _tenant_or_404(db, slug)
+    from app.services.templates import STANDARD_SPECS
+    return {
+        "state": "local",
+        "templates": [
+            {"name": name, "purpose": spec["purpose"], "body": spec["body"],
+             "buttons": [b["text"] for b in spec.get("buttons", [])], "status": "LOCAL"}
+            for name, spec in STANDARD_SPECS.items()
+        ],
+    }
 
-    t = await _tenant_or_404(db, slug)
-    return await wa_templates.standard_status(wa_templates.creds_for(t))
 
-
-@router.post("/api/tenants/{slug}/whatsapp/templates")
-async def submit_tenant_wa_templates(
-    slug: str, request: Request, db: AsyncSession = Depends(get_db)
-) -> dict:
-    """Bache hue auto-message templates ISI client ke WABA par approval ko bhejo."""
-    from app.services import audit, wa_templates
-
-    t = await _tenant_or_404(db, slug)
-    try:
-        results = await wa_templates.submit_standard(wa_templates.creds_for(t))
-    except wa_templates.TemplateError as exc:
-        raise HTTPException(status_code=exc.status, detail=exc.detail)
-    await audit.record(
-        actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
-        action="wa_templates_submitted", tenant_id=t.id,
-        args={"tenant": slug, "results": {r["name"]: r["status"] for r in results}},
-    )
-    return {"results": results}
+@router.post("/api/tenants/{slug}/whatsapp/templates", status_code=503)
+async def submit_tenant_wa_templates(slug: str, request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    """Meta template submission is disabled for WAHA/NOWEB."""
+    raise HTTPException(status_code=503, detail="Meta templates are disabled; WAHA/NOWEB uses local templates.")
 
 
 # --- Instagram + Google Business: token ka har kaam sirf yahin ------------
@@ -2095,110 +2051,25 @@ async def decide_recharge_request(
 
 @router.get("/api/whatsapp/health")
 async def whatsapp_health(db: AsyncSession = Depends(get_db)) -> dict:
-    """Home dukaan ka WhatsApp sach mein juda hai ya nahi — chaaron taraf se.
-
-    Per-tenant creds /control se jodte waqt live validate hote hain. Home
-    dukaan ke creds .env se aate hain aur unka koi check tha hi nahi: app
-    boot ho jaati hai aur galti tab dikhti hai jab koi message na aaye.
-
-    Do cheezein khaas taur par chup rehti hain, aur dono "bot jawab nahi de
-    raha" jaisi dikhti hain jabki wajah alag hai:
-
-    - APP_SECRET galat -> bhejna theek chalta hai, par har incoming webhook
-      403 par girta hai. Message andar aata hi nahi.
-    - `messages` field subscribe nahi -> Meta verification pass ho jaati
-      hai aur phir bhi kuch nahi aata.
-
-    Isliye aakhri INBOUND message ka waqt sabse kaam ka signal hai: baaki
-    sab hara ho aur wo "kabhi nahi" ho, to gadbad aane wale raste mein hai.
-    """
-    import httpx as _httpx
+    """WAHA/NOWEB health only. No Meta/Graph checks are performed."""
     from sqlalchemy import func as _func
-
     from app.models.conversation import Conversation
     from app.models.enums import Direction
-    from app.services import tenant_context, whatsapp
+    from app.services import tenant_context, waha
 
-    checks: list[dict] = []
-
-    def add(key: str, label: str, ok: bool | None, detail: str) -> None:
-        checks.append({"key": key, "label": label, "ok": ok, "detail": detail})
-
-    tok = settings.WHATSAPP_TOKEN
-    pnid = settings.WHATSAPP_PHONE_NUMBER_ID
-
-    # 1. Token + phone number id — wahi live Graph call jo connect par hoti hai
-    if not tok or not pnid:
-        add("creds", "Token aur number", False, "WHATSAPP_TOKEN ya PHONE_NUMBER_ID .env mein nahi")
-    elif await whatsapp.validate_credentials(pnid, tok):
-        add("creds", "Token aur number", True, f"Graph ne maana — {pnid}")
-    else:
-        add("creds", "Token aur number", False, "Meta ne reject kiya — token expire to nahi?")
-
-    # 2. App secret — iske bina bhejna chalta hai, aana band
-    secret = settings.WHATSAPP_APP_SECRET
-    if not secret:
-        add("secret", "App secret", False, "Khali — har incoming message 403 par girega")
-    elif len(secret) < 16:
-        add("secret", "App secret", False, "Bahut chhota — asli secret nahi lagta")
-    else:
-        # Sach yahi hai: secret sirf ek asli signed webhook hi sabit karta hai.
-        add("secret", "App secret", None, "Bhara hua — sahi hai ya nahi, ye #4 batayega")
-
-    # 3. Webhook subscription — messages field ke bina kuch nahi aata
-    app_id = settings.WHATSAPP_APP_ID
-    if not app_id or not secret:
-        add("subscription", "Webhook subscription", None, "APP_ID ya APP_SECRET ke bina check nahi ho sakta")
-    else:
-        try:
-            async with _httpx.AsyncClient(timeout=15) as c:
-                r = await c.get(
-                    f"https://graph.facebook.com/v21.0/{app_id}/subscriptions",
-                    params={"access_token": f"{app_id}|{secret}"},
-                )
-            if r.status_code >= 300:
-                add("subscription", "Webhook subscription", False, f"Meta: {r.text[:90]}")
-            else:
-                fields, cb = set(), ""
-                for sub in r.json().get("data", []):
-                    if sub.get("object") != "whatsapp_business_account":
-                        continue
-                    for f in sub.get("fields", []):
-                        fields.add(f.get("name") if isinstance(f, dict) else f)
-                        if isinstance(f, dict) and f.get("callback_url"):
-                            cb = f["callback_url"]
-                    cb = cb or sub.get("callback_url", "")
-                if "messages" in fields:
-                    add("subscription", "Webhook subscription", True, cb or "messages subscribed")
-                else:
-                    add("subscription", "Webhook subscription", False,
-                        "`messages` field subscribe nahi — isi se kuch nahi aata")
-        except _httpx.HTTPError as e:
-            add("subscription", "Webhook subscription", None, f"Meta se baat nahi hui: {type(e).__name__}")
-
-    # 4. Aakhri aaya hua message — asli saboot ki poora raasta khula hai
+    checks = [
+        {"key": "provider", "label": "WhatsApp provider", "ok": settings.WHATSAPP_PROVIDER == "waha",
+         "detail": f"Configured provider: {settings.WHATSAPP_PROVIDER or 'unset'}"},
+        {"key": "waha", "label": "WAHA configured", "ok": waha.enabled(),
+         "detail": "WAHA_BASE_URL configured" if waha.enabled() else "WAHA_BASE_URL missing"},
+    ]
     tid = tenant_context.cached_home_tenant_id()
     last = None
     if tid is not None:
         async with tenant_context.as_tenant(tid):
-            last = (
-                await db.execute(
-                    select(_func.max(Conversation.created_at)).where(
-                        Conversation.direction == Direction.INBOUND
-                    )
-                )
-            ).scalar_one_or_none()
-    if last is None:
-        add("inbound", "Aakhri aaya message", False,
-            "Aaj tak ek bhi nahi — upar sab hara ho to gadbad yahi hai")
-    else:
-        hrs = (datetime.now(timezone.utc) - last).total_seconds() / 3600
-        add("inbound", "Aakhri aaya message", hrs < 72,
-            f"{last.strftime('%d %b, %I:%M %p')} ({int(hrs)}h pehle)")
-
-    return {
-        "checks": checks,
-        "ok": all(c["ok"] is not False for c in checks),
-        "phone_number_id": pnid or None,
-        "waba_id": settings.WHATSAPP_WABA_ID or None,
-    }
+            last = (await db.execute(select(_func.max(Conversation.created_at)).where(
+                Conversation.direction == Direction.INBOUND
+            ))).scalar_one_or_none()
+    checks.append({"key": "inbound", "label": "Last inbound message", "ok": bool(last),
+                   "detail": last.isoformat() if last else "No inbound message recorded"})
+    return {"provider": "waha", "checks": checks}
