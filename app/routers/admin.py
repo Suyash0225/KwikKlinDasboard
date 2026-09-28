@@ -2573,9 +2573,9 @@ async def dashboard_page(
             # rasta script hai, aur 242 style attributes hatana alag kaam
             # hai jo is header ko rok nahi sakta.
             "Content-Security-Policy-Report-Only": (
-                "default-src 'self'; script-src 'self'; "
+                "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; "
                 "style-src 'self' 'unsafe-inline'; "
-                "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
+                "img-src 'self' data:; connect-src 'self' https://cloudflareinsights.com; font-src 'self'; "
                 "base-uri 'none'; form-action 'none'; frame-ancestors 'none'; "
                 "report-uri /admin/csp-report"
             ),
