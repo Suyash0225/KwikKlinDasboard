@@ -202,11 +202,12 @@ async def receive_waha_webhook(
     """
     body = await request.body()
     secret = settings.WAHA_WEBHOOK_SECRET
-    if secret:
-        provided = request.headers.get("X-Webhook-Hmac", "")
-        expected = hmac.new(secret.encode(), body, hashlib.sha512).hexdigest()
-        if not provided or not hmac.compare_digest(expected, provided):
-            return JSONResponse({"error": "invalid signature"}, status_code=403)
+    if not secret:
+        return JSONResponse({"error": "webhook security is not configured"}, status_code=403)
+    provided = request.headers.get("X-Webhook-Hmac", "")
+    expected = hmac.new(secret.encode(), body, hashlib.sha512).hexdigest()
+    if not provided or not hmac.compare_digest(expected, provided):
+        return JSONResponse({"error": "invalid signature"}, status_code=403)
 
     try:
         event = json.loads(body)
