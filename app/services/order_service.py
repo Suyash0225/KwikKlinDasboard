@@ -485,16 +485,26 @@ async def update_status(
         # thank-you + rating buttons (owner's policy 03 Aug)
         from app.services.whatsapp import Button
 
+        language = str(await app_settings.get(db, "communication_language") or "en").lower()
+        rating_buttons = (
+            [
+                Button("rate_good", "⭐ Excellent"),
+                Button("rate_mid", "🙂 It was okay"),
+                Button("rate_bad", "😞 Needs work"),
+            ]
+            if language != "hi"
+            else [
+                Button("rate_good", "⭐ Bahut achha"),
+                Button("rate_mid", "🙂 Theek tha"),
+                Button("rate_bad", "😞 Sudhar chahiye"),
+            ]
+        )
         await _notify_customer(
             db, order,
             message_key="thankyou_rating",
             template_name="kk_thankyou_rating",
             template_params=[order.order_number],
-            buttons=[
-                Button("rate_good", "⭐ Excellent"),
-                Button("rate_mid", "🙂 It was okay"),
-                Button("rate_bad", "😞 Needs work"),
-            ],
+            buttons=rating_buttons,
         )
         return order
     notification = _STATUS_NOTIFICATIONS.get(new_status)
@@ -778,7 +788,7 @@ async def _notify_customer(
         url_param = None
         if TEMPLATES.get(template_name, {}).get("url_button") and order.tenant_id:
             url_param = bill_link.make(order.tenant_id, order.id)
-        text_body = get_message(message_key, order_number=order.order_number, **fmt)
+        language = str(await app_settings.get(db, "communication_language") or "en").lower()\n        if language not in ("en", "hi"):\n            language = "en"\n        text_body = get_message(message_key, lang=language, order_number=order.order_number, **fmt)
         try:
             await send_message(
                 db, to_phone=customer.phone, text=text_body, buttons=buttons

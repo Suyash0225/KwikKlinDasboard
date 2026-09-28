@@ -35,29 +35,46 @@ MAX_BUTTON_TITLE = 20   # WhatsApp ki hadd
 
 
 async def _labels(db: AsyncSession) -> dict[str, str]:
-    """Is shop ke apne button-shabd. Har shop alag rakh sakti hai."""
+    """Minimal action labels; language changes defaults, custom labels stay custom."""
+    try:
+        lang = str(await app_settings.get(db, "communication_language") or "en").lower()
+    except Exception:
+        lang = "en"
+    if lang not in ("en", "hi"):
+        lang = "en"
+    defaults = {
+        "done": "✅ Done",
+        "later": "⏳ Need more time",
+        "problem": "⚠️ Problem",
+        "list": "Select task",
+    }
+    hi = {
+        "done": "✅ Ho gaya",
+        "later": "⏳ Der lagegi",
+        "problem": "⚠️ Dikkat",
+        "list": "Kaam chuniye",
+    }
     out = {}
-    for slot, key in (
-        ("done", "agent_btn_done"),
-        ("later", "agent_btn_later"),
-        ("problem", "agent_btn_problem"),
-    ):
+    for slot, key in (("done", "agent_btn_done"), ("later", "agent_btn_later"), ("problem", "agent_btn_problem")):
         try:
-            label = (await app_settings.get(db, key) or "").strip()
+            configured = (await app_settings.get(db, key) or "").strip()
         except Exception:
-            label = ""
-        # Khali chhod diya ya bahut lamba likh diya to bhi message jana
-        # chahiye — Meta 20 se lamba title reject karta hai.
-        out[slot] = (label or app_settings.DEFAULTS[key])[:MAX_BUTTON_TITLE]
+            configured = ""
+        if configured and configured != app_settings.DEFAULTS.get(key):
+            out[slot] = configured[:MAX_BUTTON_TITLE]
+        else:
+            out[slot] = (hi if lang == "hi" else defaults)[slot]
+    try:
+        configured_list = (await app_settings.get(db, "agent_list_button") or "").strip()
+    except Exception:
+        configured_list = ""
+    out["list"] = (configured_list if configured_list and configured_list != app_settings.DEFAULTS.get("agent_list_button")
+                   else (hi if lang == "hi" else defaults)["list"])[:MAX_BUTTON_TITLE]
     return out
 
 
 async def list_button_label(db: AsyncSession) -> str:
-    try:
-        label = (await app_settings.get(db, "agent_list_button") or "").strip()
-    except Exception:
-        label = ""
-    return (label or app_settings.DEFAULTS["agent_list_button"])[:MAX_BUTTON_TITLE]
+    return (await _labels(db))["list"][:MAX_BUTTON_TITLE]
 
 
 async def order_buttons(db: AsyncSession, order_number: str) -> list[Button]:
@@ -70,10 +87,27 @@ async def order_buttons(db: AsyncSession, order_number: str) -> list[Button]:
 
 
 async def task_buttons(db: AsyncSession, code: str) -> list[Button]:
+    """Only show actions relevant to the current task stage."""
+    from app.services import tasks as task_service
+    task = await task_service.get_by_code(db, code)
     lb = await _labels(db)
+    kind = (task.kind if task else "general").lower()
+    if kind == "wash":
+        done = "🧼 Wash done" if lb["done"].startswith("✅") else "🧼 Wash ho gaya"
+    elif kind == "dry":
+        done = "💨 Dry done" if lb["done"].startswith("✅") else "💨 Dry ho gaya"
+    elif kind == "iron":
+        done = "👔 Iron done" if lb["done"].startswith("✅") else "👔 Iron ho gaya"
+    elif kind == "pickup":
+        done = "✅ Pickup done" if lb["done"].startswith("✅") else "✅ Pickup ho gaya"
+    elif kind == "delivery":
+        done = "✅ Delivered" if lb["done"].startswith("✅") else "✅ Delivery ho gayi"
+    else:
+        done = lb["done"]
+    later = "⏳ Delay" if lb["later"].startswith("⏳") else "⏳ Der lagegi"
     return [
-        Button(f"task:{code}:done", lb["done"]),
-        Button(f"task:{code}:later", lb["later"]),
+        Button(f"task:{code}:done", done[:MAX_BUTTON_TITLE]),
+        Button(f"task:{code}:later", later[:MAX_BUTTON_TITLE]),
         Button(f"task:{code}:problem", lb["problem"]),
     ]
 

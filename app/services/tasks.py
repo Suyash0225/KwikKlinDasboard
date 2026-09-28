@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import async_session_factory
 from app.models import TASK_CANCELLED, TASK_DONE, TASK_OPEN, Order, Staff, StaffRole, Task
-from app.services import audit
+from app.services import app_settings, audit
 from app.services.whatsapp import SendError, WindowClosedError, send_message
 from app.services.tenant_context import manager_phone
 
@@ -208,24 +208,34 @@ async def _send_to_assignee(
                 order_details = "\n" + "\n".join(lines) + "\n"
             except Exception:
                 log.exception("task_order_context_failed", code=task.code)
-    head = "🔴 URGENT" if task.urgent else "📋 KAAM ASSIGNMENT"
-    if task.kind == "wash":
-        head = "🧺 WASHING KAAM"
-    elif task.kind == "dry":
-        head = "💨 DRYING KAAM"
-    elif task.kind == "iron":
-        head = "👔 IRONING KAAM"
-    elif task.kind == "pickup":
-        head = "🛵 PICKUP KAAM"
-    elif task.kind == "delivery":
-        head = "🚚 DELIVERY KAAM"
+    language = str(await app_settings.get(db, "communication_language") or "en").lower()
+    if language not in ("en", "hi"):
+        language = "en"
+    if language == "hi":
+        head = "🔴 URGENT" if task.urgent else "📋 KAAM ASSIGNMENT"
+        if task.kind == "wash": head = "🧺 WASHING KAAM"
+        elif task.kind == "dry": head = "💨 DRYING KAAM"
+        elif task.kind == "iron": head = "👔 IRONING KAAM"
+        elif task.kind == "pickup": head = "🛵 PICKUP KAAM"
+        elif task.kind == "delivery": head = "🚚 DELIVERY KAAM"
+        complete_line = f"Kaam complete hone ke baad bas reply karein: done {task.code}"
+        update_line = f"Kaam ka update bhej dein, ya complete hone par reply karein: done {task.code}"
+    else:
+        head = "🔴 URGENT" if task.urgent else "📋 TASK ASSIGNMENT"
+        if task.kind == "wash": head = "🧼 WASHING TASK"
+        elif task.kind == "dry": head = "💨 DRYING TASK"
+        elif task.kind == "iron": head = "👔 IRONING TASK"
+        elif task.kind == "pickup": head = "🧺 PICKUP TASK"
+        elif task.kind == "delivery": head = "🚚 DELIVERY TASK"
+        complete_line = f"After completing the task, reply: done {task.code}"
+        update_line = f"Send an update, or reply when complete: done {task.code}"
     if first:
         body = (
             f"{head} [{task.code}]{order_bit}\n"
             f"━━━━━━━━━━━━━━━━\n"
             f"{task.title}\n"
             f"{order_details}\n"
-            f"Kaam complete hone ke baad bas reply karein: done {task.code}\n"
+            f"{complete_line}\n"
             f"— Kwik Klin"
         )
     else:
@@ -243,7 +253,7 @@ async def _send_to_assignee(
             f"━━━━━━━━━━━━━━━━\n"
             f"{task.title}\n"
             f"{order_details}\n"
-            f"Kaam ka update bhej dein, ya complete hone par reply karein: done {task.code}\n"
+            f"{update_line}\n"
             f"— Kwik Klin"
         )
     # Tap = zero typing. Button id mein task ka CODE hai, isliye 5-6 kaam
@@ -254,7 +264,9 @@ async def _send_to_assignee(
         # Assignment notification is a critical WhatsApp message. In WAHA
         # mode use plain text so delivery does not depend on interactive-list
         # support. The task code is still included for "done T-123" replies.
-        if settings.WHATSAPP_PROVIDER == "waha":
+        # First assignment is a clean task card. Add the action menu only
+        # on reminders/when the task is getting close to needing an update.
+        if first:
             await send_message(
                 db, to_phone=staff.phone, text=body, sent_by="bot"
             )
@@ -306,9 +318,9 @@ _JOB = {
         "head": "Naya pickup",
         "ask": "Kab tak pickup kar loge? (jaise: sham tak / kal 11 baje)",
         "done_q": "Pickup ho gaya?",
-        "yes_title": "✅ Haan, ho gaya",
+        "yes_title": "✅ Pickup done",
         "customer_line": "Your pickup is scheduled",
-        "done_reply": "👍 Shukriya! Kapde aa gaye — main aage ka dekh leta hoon.",
+        "done_reply": "👍 Thank you. Pickup marked as done.",
     },
     "delivery": {
         "emoji": "🚚",
@@ -317,9 +329,9 @@ _JOB = {
         "head": "Delivery ke liye taiyar",
         "ask": "Kab tak deliver kar doge? (jaise: sham tak / kal 11 baje)",
         "done_q": "Delivery ho gayi?",
-        "yes_title": "✅ Haan, ho gayi",
+        "yes_title": "✅ Delivered",
         "customer_line": "Your clothes are on the way",
-        "done_reply": "👍 Shukriya! Delivery mark kar di — customer ko bhi bata diya.",
+        "done_reply": "👍 Delivery marked as done. Customer updated.",
     },
 }
 
@@ -565,13 +577,22 @@ async def _ask_job_done(db: AsyncSession, task: Task, staff: Staff | None) -> No
     cfg = _JOB.get(task.kind, _JOB["pickup"])
     if staff is None:
         return
+    language = str(await app_settings.get(db, "communication_language") or "en").lower()
+    if language == "hi":
+        done_title = "✅ Haan, ho gaya" if task.kind == "pickup" else "✅ Haan, ho gayi"
+        pending_title = "⏳ Pending"
+        question = cfg["done_q"]
+    else:
+        done_title = cfg["yes_title"]
+        pending_title = "⏳ Pending"
+        question = cfg["done_q"]
     try:
         await send_message(
             db, to_phone=staff.phone,
-            text=f"[{task.code}] {cfg['done_q']}",
+            text=f"📋 {cfg['word'].upper()} TASK [{task.code}]\\n{question}",
             buttons=[
-                Button(f"job_yes:{task.code}", cfg["yes_title"]),
-                Button(f"job_no:{task.code}", "❌ Abhi nahi"),
+                Button(f"job_yes:{task.code}", done_title),
+                Button(f"job_no:{task.code}", pending_title),
             ],
             sent_by="bot",
         )

@@ -80,10 +80,11 @@ DEFAULTS: dict[str, Any] = {
     # ek client "✅ Ho gaya" rakhe, doosra "Done", teesra Bangla mein.
     # WhatsApp button ka title 20 akshar tak hi ja sakta hai — lamba
     # rakhne par apne aap chhota kar diya jata hai (message girta nahi).
-    "agent_btn_done": "✅ Ho gaya",
-    "agent_btn_later": "⏳ Time lagega",
-    "agent_btn_problem": "❓ Dikkat hai",
-    "agent_list_button": "Kaam chuniye",
+    "communication_language": "en",
+    "agent_btn_done": "✅ Done",
+    "agent_btn_later": "⏳ Need more time",
+    "agent_btn_problem": "⚠️ Problem",
+    "agent_list_button": "Select task",
     # Staff kin shabdon se dikkat batata hai — shop ki apni bol-chaal ke
     # shabd yahan jud sakte hain (code ke default ke UPAR, uski jagah nahi).
     "agent_trouble_words": [],

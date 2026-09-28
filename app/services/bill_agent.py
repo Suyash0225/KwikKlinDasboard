@@ -2184,6 +2184,18 @@ _ETA_HINT_RE = re.compile(
 )
 
 
+def _pickup_reference_date(text: str, today: date) -> date | None:
+    """Resolve explicit relative days in a staff pickup ETA."""
+    low = (text or "").casefold()
+    if re.search(r"\b(aaj|today)\b", low):
+        return today
+    if re.search(r"\b(kal|tomorrow)\b", low):
+        return today + timedelta(days=1)
+    if re.search(r"\b(parso|day after tomorrow)\b", low):
+        return today + timedelta(days=2)
+    return None
+
+
 async def _handle_pickup_exchange(
     db: AsyncSession, sender_phone: str, sender_label: str, text: str
 ) -> str | None:
@@ -2216,6 +2228,17 @@ async def _handle_pickup_exchange(
     if text and not text.startswith("["):
         pending = await task_service.open_pickup_awaiting_eta(db, staff.id)
         if pending is not None and _ETA_HINT_RE.search(text):
+            order = await db.get(Order, pending.order_id) if pending.order_id else None
+            if order is not None and order.pickup_date is not None:
+                today_ist = datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
+                mentioned = _pickup_reference_date(text, today_ist)
+                if mentioned is not None and mentioned != order.pickup_date:
+                    target = order.pickup_date.strftime("%d %b %Y")
+                    return (
+                        f"⚠️ Pickup date mismatch for {order.order_number}. "
+                        f"The customer requested pickup on {target}. "
+                        f"Please give a pickup time for {target} (for example: 12 PM / 1 PM / evening)."
+                    )
             return await task_service.record_pickup_eta(db, pending, text)
     return None
 
