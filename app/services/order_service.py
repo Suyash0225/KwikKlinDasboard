@@ -1,3 +1,4 @@
+from app.utils.dates import today_ist
 """Order business logic: creation, status lifecycle, payments, dates.
 
 This module is deterministic Python — in Phase 4 the AI agent will CALL these
@@ -429,7 +430,7 @@ async def update_status(
                 db, "sla_heavy_days" if heavy else "sla_normal_days"
             )
         )
-        order.expected_delivery = date.today() + timedelta(days=days)
+        order.expected_delivery = today_ist() + timedelta(days=days)
     db.add(
         OrderStatusHistory(
             order_id=order.id,
