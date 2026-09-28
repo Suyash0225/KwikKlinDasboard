@@ -20,6 +20,7 @@ import structlog
 from sqlalchemy import func, select
 
 from app.services import plans, tenant_context
+from app.utils.dates import IST
 
 log = structlog.get_logger()
 
