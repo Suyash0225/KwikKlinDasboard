@@ -1429,7 +1429,10 @@ async def agents_overview(db: AsyncSession = Depends(get_db)) -> dict:
 _SECRET_SETTINGS = {"ig_access_token", "gbp_connection"}
 # Sirf vendor Control panel likhta hai (routers/control.py) — dukaan ke
 # dashboard ke generic settings PUT se nahi, warna koi token/listing badal de.
-_READONLY_SETTINGS = {"gbp_connection", "gbp_reviews", "ig_user_id", "ig_access_token"}
+_READONLY_SETTINGS = {
+    "gbp_connection", "gbp_reviews", "ig_user_id", "ig_access_token",
+    "home_tenant_slug", "public_url_fixed",
+}
 _SECRET_MASK = "••••••••"
 
 
