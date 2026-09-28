@@ -250,8 +250,21 @@ async def test_task_status_menu_is_role_specific_and_updates_the_task(client, se
             "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
         )
 
+    phone = "+919999900088"
     async with async_session_factory() as db:
-        task = await _mk(db, worker, title="Sharma ji ka wash")
+        from app.services.order_service import create_order
+        order = await create_order(
+            db,
+            customer_phone=phone,
+            customer_name="Sharma ji",
+            created_by="test",
+            items=[{"type": "Shirt", "qty": 2}],
+        )
+        st = await db.get(Staff, worker)
+        task = await _mk(
+            db, worker, title="Sharma ji ka wash",
+            order=order, kind="wash",
+        )
         code = task.code
 
     menu_messages = [c for c in sent if c.get("list_rows")]
@@ -272,9 +285,13 @@ async def test_task_status_menu_is_role_specific_and_updates_the_task(client, se
     assert (await post(f"[button:task:{code}:ready] Ready")).status_code == 200
     async with async_session_factory() as db:
         updated = await task_service.get_by_code(db, code)
-        order = await db.get(Task, updated.id)
-    assert updated.status == TASK_DONE or updated.status == TASK_OPEN
+        order_after = await db.get(type(order), order.id)
+    assert order_after.status.name == "READY"
+    assert updated.status == TASK_DONE
     assert any(code in (c.get("text") or "") and "Ready" in (c.get("text") or "") for c in sent)
+
+    from tests.conftest import purge_phones
+    await purge_phones(phone)
 
 
 async def test_delivery_task_uses_done_pending_menu(sent) -> None:
