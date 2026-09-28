@@ -709,27 +709,42 @@ async def complete_task(
     db: AsyncSession, task: Task, *, reply: str | None = None, by: str = "staff",
     advance_order: bool = True,
 ) -> Task:
-    """Complete once. Concurrent/duplicate taps keep the first valid completion."""
-    if task.status != TASK_OPEN:
-        log.info("task_completion_duplicate", code=task.code, status=task.status, by=by)
+    """Complete once, with a row lock so simultaneous taps have one winner."""
+    locked = (
+        await db.execute(
+            select(Task).where(Task.id == task.id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if locked is None:
         return task
-    task.status = TASK_DONE
-    task.completed_at = datetime.now(timezone.utc)
+    if locked.status != TASK_OPEN:
+        log.info("task_completion_duplicate", code=locked.code, status=locked.status, by=by)
+        await db.rollback()
+        return locked
+
+    locked.status = TASK_DONE
+    locked.completed_at = datetime.now(timezone.utc)
     if reply:
-        task.reply = reply[:1000]
-    db.add(task)
+        locked.reply = reply[:1000]
+    db.add(locked)
     await db.commit()
     await audit.record(
         actor_role="staff" if by != "dashboard" else "admin", actor=by,
-        action="task_completed", args={"code": task.code}, result=(reply or "done")[:150],
+        action="task_completed", args={"code": locked.code}, result=(reply or "done")[:150],
     )
-    log.info("task_completed", code=task.code, by=by)
-    _announce(task, "done", by=by)
+    log.info("task_completed", code=locked.code, by=by)
+    _announce(locked, "done", by=by)
     if advance_order:
         from app.services import ops_agent
-        await ops_agent.on_task_done(db, task, by)
-    return task
+        await ops_agent.on_task_done(db, locked, by)
+    return locked
 
+
+async def completion_message(db: AsyncSession, task: Task, *, by: str) -> str:
+    """Return a safe response when a team member taps an already-finished task."""
+    if task.status == TASK_DONE:
+        return f"ℹ️ *{task.code}* already complete ho chuka hai. Pehla update accept hua tha; aapka duplicate update ignore kiya gaya."
+    return ""
 
 async def cancel_task(db: AsyncSession, task: Task, *, by: str = "dashboard") -> Task:
     task.status = TASK_CANCELLED
