@@ -96,7 +96,7 @@ def _orm_tenant_filter(execute_state) -> None:
     if tid is None:
         return  # system context — scheduler/webhook replay see everything
     if (
-        execute_state.is_select
+        (execute_state.is_select or execute_state.is_update or execute_state.is_delete)
         and not execute_state.is_column_load
         and not execute_state.is_relationship_load
     ):
