@@ -577,13 +577,22 @@ async def _ask_job_done(db: AsyncSession, task: Task, staff: Staff | None) -> No
     cfg = _JOB.get(task.kind, _JOB["pickup"])
     if staff is None:
         return
+    language = str(await app_settings.get(db, "communication_language") or "en").lower()
+    if language == "hi":
+        done_title = "✅ Haan, ho gaya" if task.kind == "pickup" else "✅ Haan, ho gayi"
+        pending_title = "⏳ Pending"
+        question = cfg["done_q"]
+    else:
+        done_title = cfg["yes_title"]
+        pending_title = "⏳ Pending"
+        question = cfg["done_q"]
     try:
         await send_message(
             db, to_phone=staff.phone,
-            text=f"📋 {cfg['word'].upper()} TASK [{task.code}]\n{cfg['done_q']}",
+            text=f"📋 {cfg['word'].upper()} TASK [{task.code}]\\n{question}",
             buttons=[
-                Button(f"job_yes:{task.code}", cfg["yes_title"]),
-                Button(f"job_no:{task.code}", "⏳ Pending"),
+                Button(f"job_yes:{task.code}", done_title),
+                Button(f"job_no:{task.code}", pending_title),
             ],
             sent_by="bot",
         )
