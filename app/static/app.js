@@ -458,17 +458,7 @@ function renderBillingBanner(sub) {
 }
 
 function showLogin() {
-  openModal(`<h3>Sign in</h3><p class="muted">Enter your admin key to continue.</p>
-    <div class="frm" style="margin-top:10px"><input id="login-key" type="password" placeholder="Admin key" autofocus></div>
-    <div class="btnrow"><button class="btn" id="login-go">Sign in</button></div>`);
-  $("login-go").onclick = async () => {
-    KEY = $("login-key").value.trim();
-    try {
-      await api("/admin/api/staff");
-      localStorage.setItem("kk_admin_key", KEY);
-      closeModal(); toast("Welcome back!"); go(CURRENT);
-    } catch (e) { toast("That key is not correct", true); }
-  };
+  location.href = "/join#login";
 }
 
 /* Debounce — search/filter typing must not re-render (or hit the API) per
