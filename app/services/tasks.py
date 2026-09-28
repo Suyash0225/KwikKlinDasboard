@@ -174,6 +174,7 @@ async def _send_to_assignee(
     """WhatsApp the assignee. False = could not deliver (logged, never raises)."""
     order_bit = ""
     order_details = ""
+    order = None
     if task.order_id:
         order = await db.get(Order, task.order_id)
         if order is not None:
