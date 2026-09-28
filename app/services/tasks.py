@@ -208,24 +208,34 @@ async def _send_to_assignee(
                 order_details = "\n" + "\n".join(lines) + "\n"
             except Exception:
                 log.exception("task_order_context_failed", code=task.code)
-    head = "🔴 URGENT" if task.urgent else "📋 KAAM ASSIGNMENT"
-    if task.kind == "wash":
-        head = "🧺 WASHING KAAM"
-    elif task.kind == "dry":
-        head = "💨 DRYING KAAM"
-    elif task.kind == "iron":
-        head = "👔 IRONING KAAM"
-    elif task.kind == "pickup":
-        head = "🛵 PICKUP KAAM"
-    elif task.kind == "delivery":
-        head = "🚚 DELIVERY KAAM"
+    language = str(await app_settings.get(db, "communication_language") or "en").lower()
+    if language not in ("en", "hi"):
+        language = "en"
+    if language == "hi":
+        head = "🔴 URGENT" if task.urgent else "📋 KAAM ASSIGNMENT"
+        if task.kind == "wash": head = "🧺 WASHING KAAM"
+        elif task.kind == "dry": head = "💨 DRYING KAAM"
+        elif task.kind == "iron": head = "👔 IRONING KAAM"
+        elif task.kind == "pickup": head = "🛵 PICKUP KAAM"
+        elif task.kind == "delivery": head = "🚚 DELIVERY KAAM"
+        complete_line = f"Kaam complete hone ke baad bas reply karein: done {task.code}"
+        update_line = f"Kaam ka update bhej dein, ya complete hone par reply karein: done {task.code}"
+    else:
+        head = "🔴 URGENT" if task.urgent else "📋 TASK ASSIGNMENT"
+        if task.kind == "wash": head = "🧼 WASHING TASK"
+        elif task.kind == "dry": head = "💨 DRYING TASK"
+        elif task.kind == "iron": head = "👔 IRONING TASK"
+        elif task.kind == "pickup": head = "🧺 PICKUP TASK"
+        elif task.kind == "delivery": head = "🚚 DELIVERY TASK"
+        complete_line = f"After completing the task, reply: done {task.code}"
+        update_line = f"Send an update, or reply when complete: done {task.code}"
     if first:
         body = (
             f"{head} [{task.code}]{order_bit}\n"
             f"━━━━━━━━━━━━━━━━\n"
             f"{task.title}\n"
             f"{order_details}\n"
-            f"Kaam complete hone ke baad bas reply karein: done {task.code}\n"
+            f"{complete_line}\n"
             f"— Kwik Klin"
         )
     else:
@@ -243,7 +253,7 @@ async def _send_to_assignee(
             f"━━━━━━━━━━━━━━━━\n"
             f"{task.title}\n"
             f"{order_details}\n"
-            f"Kaam ka update bhej dein, ya complete hone par reply karein: done {task.code}\n"
+            f"{update_line}\n"
             f"— Kwik Klin"
         )
     # Tap = zero typing. Button id mein task ka CODE hai, isliye 5-6 kaam
