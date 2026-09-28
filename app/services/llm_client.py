@@ -266,9 +266,18 @@ async def _generate_with_fallback(
                     )
                 _provider_succeeded(provider)
                 return result
-            except LLMUnavailable as exc:
+            except LLMAuthError as exc:
+                # A bad key/quota is not worth retrying on the same provider;
+                # move directly to the next configured provider.
                 last_exc = exc
-                log.warning("llm_model_unavailable", provider=provider, model=candidate, error=str(exc)[:200])
+                log.warning("llm_provider_auth_failed", provider=provider, model=candidate, error=str(exc)[:200])
+                break
+            except LLMError as exc:
+                # Provider returned an unusable response (for example an
+                # unsupported structured-output request). Try the provider's
+                # cheaper model, then let the outer loop fail over.
+                last_exc = exc
+                log.warning("llm_model_error", provider=provider, model=candidate, error=str(exc)[:200])
         _provider_failed(provider)
         raise last_exc or LLMUnavailable(f"{provider} unavailable")
 
