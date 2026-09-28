@@ -12,6 +12,7 @@ from sqlalchemy import delete, select
 
 import app.services.bill_agent as bill_agent
 import app.services.tasks as task_service
+from app.services import team
 from app.config import settings
 from app.database import async_session_factory
 from app.models import TASK_DONE, TASK_OPEN, Conversation, Staff, StaffRole, Task
@@ -114,8 +115,10 @@ async def test_staff_closes_task_with_done_code(worker, sent) -> None:
         task = await task_service.get_by_code(db, code)
         assert task.status == TASK_DONE
         assert task.completed_at is not None
-    # the owner hears about it without asking
-    assert any(c["to"] == settings.MANAGER_PHONE for c in sent)
+    # the configured primary admin hears about it without asking
+    async with async_session_factory() as db:
+        owner_phone = await team.primary_admin_phone(db)
+    assert any(c["to"] == owner_phone for c in sent)
 
 
 async def test_unknown_code_is_not_a_crash(worker, sent) -> None:
@@ -191,7 +194,9 @@ async def test_silence_escalates_to_the_manager(worker, sent, awake, monkeypatch
     sent.clear()
 
     await task_service.run_task_followups()
-    to_manager = [c for c in sent if c["to"] == settings.MANAGER_PHONE]
+    async with async_session_factory() as db:
+        owner_phone = await team.primary_admin_phone(db)
+    to_manager = [c for c in sent if c["to"] == owner_phone]
     assert to_manager, "the owner must be told when staff go quiet"
     assert code in to_manager[0]["text"]
 
@@ -201,7 +206,7 @@ async def test_silence_escalates_to_the_manager(worker, sent, awake, monkeypatch
 
     sent.clear()
     await task_service.run_task_followups()
-    assert not [c for c in sent if c["to"] == settings.MANAGER_PHONE], "escalate once, not every tick"
+    assert not [c for c in sent if c["to"] == owner_phone], "escalate once, not every tick"
 
 
 async def test_task_followups_max_three_per_day(worker, sent, awake, monkeypatch) -> None:
