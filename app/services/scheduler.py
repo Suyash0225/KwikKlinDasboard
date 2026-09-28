@@ -1082,7 +1082,13 @@ async def run_payment_reminders() -> int:
                 reminder_text = get_message(
                     kind, lang="en", order_number=o.order_number, amount=f"{due}",
                 ) + bill_link.message_line(await bill_link.url_for(db, o))
-                await send_message(db, to_phone=cust.phone, text=reminder_text)
+                from app.services.customer_messages import payment_buttons
+                await send_message(
+                    db, to_phone=cust.phone, text=reminder_text,
+                    buttons=await payment_buttons(db, o),
+                    list_button="Payment",
+                    list_title="Kwik Klin",
+                )
                 sends += 1
             except WindowClosedError:
                 try:
