@@ -129,7 +129,7 @@ async def test_a_too_long_label_never_breaks_the_send() -> None:
             assert len(await list_button_label(db)) == 20
             # khali chhodne par default wapas
             await app_settings.set_value(db, "agent_btn_later", "")
-            assert (await order_buttons(db, "KK-20260101-01"))[1].title == "⏳ Time lagega"
+            assert (await order_buttons(db, "KK-20260101-01"))[1].title == "⏳ Need more time"
         finally:
             async with async_session_factory() as d2:
                 await app_settings.set_value(d2, "agent_btn_later", prior_btn)
