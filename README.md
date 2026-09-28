@@ -151,7 +151,7 @@ Rules that matter:
 
 - All outbound WhatsApp messages go through `app/services/whatsapp.py`. Never
   call the Graph API anywhere else.
-- Only `app/services/llm_client.py` talks to an LLM (Anthropic or Gemini).
+- Only `app/services/llm_client.py` talks to an LLM (Anthropic, Gemini, or OpenRouter).
 - All human-facing strings live in `app/services/messages.py`.
 - `orders.notes` is internal-only — never sent to a customer.
 - Payment status is derived in exactly one place: `app/models/order.py`.
@@ -176,8 +176,7 @@ Rules that matter:
 - **Dashboard** (127.0.0.1:8000/admin): full English, mobile-first, sign-in
   required; new pages: Campaigns, AI training, Activity (audit trail).
 
-**Env**: see `.env` — `LLM_PROVIDER=gemini` + `GEMINI_API_KEY` (Claude path
-kept: set `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`).
+**Env**: see `.env` — `LLM_PROVIDER=gemini` + `GEMINI_API_KEY`; keep `LLM_FALLBACK_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` configured, and `LLM_SECONDARY_FALLBACK_PROVIDER=openrouter` + `OPENROUTER_API_KEY` as the final provider-level fallback.
 `ESCALATION_CC_PHONE` is deprecated; AI/customer escalation alerts are sent to admin numbers only.
 
 **Migrations**: `alembic upgrade head` (latest: payments ledger, audit_log,

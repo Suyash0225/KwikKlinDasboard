@@ -6,9 +6,7 @@ import anthropic
 import httpx
 import pytest
 
-import app.services.intent as intent_module
 import app.services.llm_client as llm
-from app.services.intent import classify_intent
 from app.services.llm_client import LLMError, LLMUnavailable, ask, ask_json
 
 
@@ -213,7 +211,6 @@ def test_no_empty_enum_values_in_any_schema() -> None:
     """Gemini's responseSchema 400s on '' inside an enum — guard every schema."""
     from app.services.ai_agent import _REPLY_SCHEMA
     from app.services.bill_agent import _EXTRACT_SCHEMA
-    from app.services.intent import _SCHEMA as intent_schema
 
     def walk(node):
         if isinstance(node, dict):
@@ -225,25 +222,8 @@ def test_no_empty_enum_values_in_any_schema() -> None:
             for v in node:
                 walk(v)
 
-    for schema in (_EXTRACT_SCHEMA, intent_schema, _REPLY_SCHEMA):
+    for schema in (_EXTRACT_SCHEMA, _REPLY_SCHEMA):
         walk(schema)
-
-
-async def test_classify_intent_happy(monkeypatch) -> None:
-    async def fake_ask_json(**kw):
-        return {"intent": "ORDER_STATUS", "language": "hi"}
-
-    monkeypatch.setattr(intent_module.llm_client, "ask_json", fake_ask_json)
-    out = await classify_intent("bhaiya kapde kab milenge")
-    assert out == {"intent": "ORDER_STATUS", "language": "hi"}
-
-
-async def test_classify_intent_none_when_llm_down(monkeypatch) -> None:
-    async def fake_ask_json(**kw):
-        raise LLMUnavailable("down")
-
-    monkeypatch.setattr(intent_module.llm_client, "ask_json", fake_ask_json)
-    assert await classify_intent("hi") is None
 
 
 # --- naye pehre: refusal, truncation, caching, thinking -------------------
