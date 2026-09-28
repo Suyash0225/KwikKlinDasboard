@@ -1850,7 +1850,13 @@ async def send_payment_reminder(
 
     sent = False
     try:
-        await send_message(db, to_phone=cust.phone, text=text)
+        from app.services.customer_messages import payment_buttons
+        await send_message(
+            db, to_phone=cust.phone, text=text,
+            buttons=await payment_buttons(db, order),
+            list_button="Payment",
+            list_title="Kwik Klin",
+        )
         sent = True
     except SendError as exc:
         log.info("panel_reminder_api_failed", order=order.order_number, error=str(exc))
