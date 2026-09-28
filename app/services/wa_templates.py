@@ -164,9 +164,11 @@ async def create(
         "POST", f"{creds.waba_id}/message_templates", creds.token,
         json={"name": name, "language": language, "category": category, "components": components},
     )
+    if status in (401, 403):
+        raise TemplateError("meta_auth_failed", 503)
     if status != 200:
         err = data.get("error", {})
-        raise TemplateError(err.get("error_user_msg") or err.get("message") or str(data)[:250])
+        raise TemplateError(err.get("error_user_msg") or err.get("message") or str(data)[:250], 503)
     return {"name": name, "status": data.get("status", "PENDING")}
 
 
