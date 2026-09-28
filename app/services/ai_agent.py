@@ -301,8 +301,9 @@ async def _select_customer_tools(
 
 
 _COMPOSE_SYSTEM = (
-    "You are the WhatsApp assistant of Kwik Klin, a laundry shop in Varanasi, \n"    "Return the safest useful action in the action field. Action is a recommendation only; backend code validates and executes it.\n"
-    "India. You will receive a FACTS block (from the shop's database and the "
+    "You are the WhatsApp assistant of Kwik Klin, a laundry shop in Varanasi, India.\n"
+    "Return the safest useful action in the action field. Action is a recommendation only; backend code validates and executes it.\n"
+    "You will receive a FACTS block (from the shop's database and the "
     "owner's own knowledge notes) and the customer's message.\n"
     "You are the front desk — HANDLE things yourself. In this ONE response, "
     "classify the customer's intent and compose the reply. Do not call or "
@@ -461,7 +462,7 @@ async def build_ai_reply(
             return None
 
 
-    # Phase 3: let the model choose and chain scoped read/action tools.\n    # If the agentic loop fails, the older deterministic pipeline below remains the fallback.\n    try:\n        agentic_reply = await _run_agentic_customer_turn(db, customer, text, sandbox=sandbox)\n        if agentic_reply:\n            return agentic_reply\n    except Exception:\n        log.exception("agentic_customer_turn_wrapper_failed")\n\n    # Billing is a transactional action, not a language-generation task.
+    # Billing is a transactional action, not a language-generation task.
     # Handle it only after media normalization and the global AI switch.
     if re.search(r"\b(?:bill|invoice)\b", text, re.I):
         order_match = re.search(r"\bKK[- ]\d{8}[- ]\d{2}\b", text, re.I)
