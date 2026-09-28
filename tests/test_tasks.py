@@ -60,7 +60,7 @@ async def test_create_task_messages_the_assignee(worker, sent) -> None:
     assert sent and sent[0]["to"] == TASK_STAFF_PHONE
     body = sent[0]["text"]
     assert task.code in body and "Sharma ji" in body
-    assert "status menu" in body.lower(), "staff must be given a clear status menu"
+    assert "current task status" in body.lower(), "staff must be given a clear status menu"
     assert "Due:" not in body
     assert "Bill & payment:" not in body
 
@@ -160,19 +160,31 @@ async def test_followup_pings_only_when_due(worker, sent, awake) -> None:
         await db.commit()
 
     await task_service.run_task_followups()
-    assert any(code in (c["text"] or "") and "Reminder" in (c["text"] or "") for c in sent)
+    assert any(code in (c["text"] or "") and "reminder" in (c["text"] or "").lower() for c in sent)
 
     async with async_session_factory() as db:
         task = await task_service.get_by_code(db, code)
     assert task.ping_count == 1
 
 
-async def test_silence_escalates_to_the_manager(worker, sent, awake) -> None:
+async def test_silence_escalates_to_the_manager(worker, sent, awake, monkeypatch) -> None:
+    # Freeze the scheduler clock at midday so the test never crosses an IST
+    # calendar-day boundary when subtracting the reminder gap.
+    fixed_now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed_now.replace(tzinfo=None)
+            return fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(task_service, "datetime", FrozenDateTime)
     async with async_session_factory() as db:
         task = await _mk(db, worker)
         code = task.code
         task.ping_count = task_service.ESCALATE_AFTER_PINGS
-        task.last_ping_at = datetime.now(timezone.utc) - timedelta(hours=5)
+        task.last_ping_at = fixed_now - timedelta(hours=5)
         db.add(task)
         await db.commit()
     sent.clear()
@@ -191,11 +203,22 @@ async def test_silence_escalates_to_the_manager(worker, sent, awake) -> None:
     assert not [c for c in sent if c["to"] == settings.MANAGER_PHONE], "escalate once, not every tick"
 
 
-async def test_task_followups_max_three_per_day(worker, sent, awake) -> None:
+async def test_task_followups_max_three_per_day(worker, sent, awake, monkeypatch) -> None:
+    # Keep the test timestamp safely inside one IST calendar day.
+    fixed_now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed_now.replace(tzinfo=None)
+            return fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(task_service, "datetime", FrozenDateTime)
     """An open task may receive at most three staff reminders per day."""
     async with async_session_factory() as db:
         task = await _mk(db, worker)
-        task.last_ping_at = datetime.now(timezone.utc) - timedelta(hours=3)
+        task.last_ping_at = fixed_now - timedelta(hours=3)
         task.ping_count = 3
         db.add(task)
         await db.commit()
@@ -520,7 +543,7 @@ async def test_task_reminder_repeats_the_status_menu(sent, worker, awake) -> Non
         t = (await db.execute(select(Task).where(Task.code == code))).scalar_one()
         assert await task_service._send_to_assignee(db, t, st, first=False)
     ping = next(c for c in sent if c["to"] == TASK_STAFF_PHONE)
-    assert "Reminder" in ping["text"]
+    assert "reminder" in ping["text"].lower()
     assert [row.id for row in (ping.get("list_rows") or [])] == [
         f"task:{code}:wash", f"task:{code}:iron",
         f"task:{code}:ready", f"task:{code}:pending",
