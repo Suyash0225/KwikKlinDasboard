@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import Conversation, Customer, Direction, Staff, WebhookEvent
+from app.models import Conversation, Customer, Direction, Staff, WebhookEvent, Order, PaymentStatus
 from app.services.ai_agent import build_ai_reply
 from app.services.bill_agent import handle_staff_message
 from app.services.messages import CUSTOMER_LANG, get_message, status_label
@@ -84,6 +84,58 @@ def _match_rating(text: str) -> str | None:
     if not m:
         return None
     return _RATING_MAP.get(m.group(1).strip().lower())
+
+
+def _match_payment_action(text: str) -> tuple[str, str] | None:
+    m = re.match(r"^\[button:payment:([^:]+):(pay|paid)\]", text or "")
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
+async def _handle_payment_action(
+    db: AsyncSession, customer: Customer, phone: str, order_number: str, action: str
+) -> None:
+    """Simple customer payment buttons; never mark a payment paid on a tap."""
+    order = (
+        await db.execute(
+            select(Order).where(
+                Order.order_number == order_number,
+                Order.customer_id == customer.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if order is None:
+        await send_message(db, to_phone=phone, text="⚠️ Ye bill ab available nahi hai. Kripya message karke batayein.")
+        return
+
+    if action == "pay":
+        from app.services import bill_link
+        link = await bill_link.url_for(db, order)
+        await send_message(
+            db,
+            to_phone=phone,
+            text=f"💰 Payment ke liye yahan tap karein:\n{link}",
+        )
+        return
+
+    if order.payment_status is PaymentStatus.PAID:
+        await send_message(db, to_phone=phone, text="✅ Haan, payment already receive ho chuka hai. Dhanyawad! 🙏")
+        return
+
+    await send_message(
+        db,
+        to_phone=phone,
+        text="👍 Theek hai, aapne payment kar diya hai. Hum payment verify karke update kar denge. Dhanyawad! 🙏",
+    )
+    try:
+        await send_message(
+            db,
+            to_phone=manager_phone(),
+            text=f"💰 Customer {customer.name or phone} ne {order.order_number} par 'Already Paid' dabaya hai. Payment verify karein.",
+        )
+    except SendError:
+        log.exception("customer_payment_paid_alert_failed", phone=phone, order=order.order_number)
 
 
 async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind: str) -> None:
@@ -997,6 +1049,11 @@ async def _handle_inbound_message(
             await track_reply(db, customer.id)
         except Exception:
             log.exception("campaign_reply_track_failed")
+        payment_action = _match_payment_action(text or "")
+        if payment_action:
+            order_number, action = payment_action
+            await _handle_payment_action(db, customer, phone, order_number, action)
+            return
         rating = _match_rating(text or "")
         if rating:
             await _handle_rating(db, customer, phone, rating)
