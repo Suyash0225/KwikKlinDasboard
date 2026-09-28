@@ -858,33 +858,12 @@ async def put_message_format(body: MsgFormatIn, db: AsyncSession = Depends(get_d
 
 
 # ---------------------------------------------------------------------------
-# WhatsApp template studio (create -> submit to Meta -> track approval)
+# ---------------------------------------------------------------------------
+# WhatsApp (WAHA/NOWEB only)
 # ---------------------------------------------------------------------------
 
-from app.services import wa_templates
-
-
-# Template counts and quality rating move on Meta's timescale (hours), not
-# ours. Without this every dashboard load — every manager, every refresh —
-# was two more Graph calls.
-_WA_STATS_TTL = 60.0
-_wa_stats_cache: dict[str, tuple[float, dict]] = {}
-# Last successful Meta template list per WABA. This is intentionally process-local:
-# it prevents a temporary Meta auth/network failure from blanking the dashboard.
-_template_cache: dict[str, list[dict]] = {}
-
-
-def _wa_stats_cached(key: str) -> dict | None:
-    hit = _wa_stats_cache.get(key)
-    if hit is None:
-        return None
-    at, payload = hit
-    if _time.monotonic() - at > _WA_STATS_TTL:
-        _wa_stats_cache.pop(key, None)
-        return None
-    return payload
-
-
+# WAHA is the only active WhatsApp transport for Kwik Klin. Meta/Graph is not
+# queried by the admin dashboard or message flow.
 @router.get("/usage", dependencies=[Depends(require_feature("reports"))])
 async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(default=30, ge=1, le=180)) -> dict:
     """AI usage and cost: today, this month, per model, and where it's going.
@@ -1568,103 +1547,29 @@ async def growth_analytics(db: AsyncSession = Depends(get_db)) -> dict:
 
 @router.get("/whatsapp/stats", dependencies=[Depends(require_feature("reports"))])
 async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
-    """Today's WhatsApp traffic (our DB) + live Meta template/quality data."""
+    """Today's WhatsApp traffic from our DB. Transport is WAHA/NOWEB only."""
     from zoneinfo import ZoneInfo
-
     from app.models import Conversation, Direction
 
     ist = ZoneInfo("Asia/Kolkata")
-    today_start = (
-        datetime.now(ist).replace(hour=0, minute=0, second=0, microsecond=0)
-    ).astimezone(timezone.utc)
-    sent_n = (
-        await db.execute(
-            select(func.count()).select_from(Conversation).where(
-                Conversation.direction == Direction.OUTBOUND,
-                Conversation.created_at >= today_start,
-            )
-        )
-    ).scalar_one()
-    recv_n = (
-        await db.execute(
-            select(func.count()).select_from(Conversation).where(
-                Conversation.direction == Direction.INBOUND,
-                Conversation.created_at >= today_start,
-            )
-        )
-    ).scalar_one()
-    talked = (
-        await db.execute(
-            select(func.count(func.distinct(Conversation.customer_id))).where(
-                Conversation.created_at >= today_start,
-                Conversation.customer_id.isnot(None),
-            )
-        )
-    ).scalar_one()
-
-    tpl = {"approved": 0, "pending": 0, "rejected": 0}
-    quality, meta_ok, meta_state, meta_error = None, False, "not_connected", None
-
-    creds = await wa_templates.creds_for_current(db)
-    if creds is not None:
-        cached = _wa_stats_cached(creds.waba_id)
-        if cached is not None:
-            tpl, quality = dict(cached["templates"]), cached["quality"]
-            meta_ok, meta_state = cached["meta_ok"], cached["meta_state"]
-        else:
-            try:
-                status, data = await wa_templates.graph(
-                    "GET", f"{creds.waba_id}/message_templates",
-                    token=creds.token,
-                    params={"fields": "name,status", "limit": 100},
-                )
-                if status == 200:
-                    meta_ok, meta_state = True, "ok"
-                    for t in data.get("data", []):
-                        k = (t.get("status") or "").lower()
-                        if k in tpl:
-                            tpl[k] += 1
-                    # Only worth asking for quality once the token has proven
-                    # itself. Firing it after a 401 was the second wasted call.
-                    s2, d2 = await wa_templates.graph(
-                        "GET", creds.phone_number_id,
-                        token=creds.token,
-                        params={"fields": "quality_rating"},
-                    )
-                    if s2 == 200:
-                        quality = d2.get("quality_rating")
-                elif status in (401, 403):
-                    meta_state = "auth_failed"
-                    meta_error = {
-                        "status": status,
-                        "code": (data.get("error") or {}).get("code"),
-                        "subcode": (data.get("error") or {}).get("error_subcode"),
-                        "message": (data.get("error") or {}).get("message"),
-                    }
-                    log.error("wa_stats_meta_auth_failed", waba_id=creds.waba_id, **meta_error)
-                else:
-                    meta_state = "error"
-                    meta_error = {"status": status, "message": str(data)[:300]}
-                    log.error("wa_stats_meta_error", waba_id=creds.waba_id, **meta_error)
-            except Exception as exc:
-                meta_state = "unreachable"
-                meta_error = {"message": str(exc)[:200]}
-                log.exception("wa_stats_meta_failed", waba_id=creds.waba_id)
-            _wa_stats_cache[creds.waba_id] = (
-                _time.monotonic(),
-                {"templates": dict(tpl), "quality": quality,
-                 "meta_ok": meta_ok, "meta_state": meta_state,
-                 "meta_error": meta_error},
-            )
+    today_start = datetime.now(ist).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    sent_n = (await db.execute(select(func.count()).select_from(Conversation).where(
+        Conversation.direction == Direction.OUTBOUND, Conversation.created_at >= today_start
+    ))).scalar_one()
+    recv_n = (await db.execute(select(func.count()).select_from(Conversation).where(
+        Conversation.direction == Direction.INBOUND, Conversation.created_at >= today_start
+    ))).scalar_one()
+    talked = (await db.execute(select(func.count(func.distinct(Conversation.customer_id))).where(
+        Conversation.created_at >= today_start, Conversation.customer_id.isnot(None)
+    ))).scalar_one()
 
     return {
         "today": {"sent": sent_n, "received": recv_n, "customers_talked": talked},
-        "templates": tpl,
-        "quality": quality,
-        "meta_ok": meta_ok,
-        # Why Meta data is missing, so the UI can stop calling a shop that
-        # never connected WhatsApp "unreachable".
-        "meta_state": meta_state,
+        "templates": {"approved": 0, "pending": 0, "rejected": 0},
+        "quality": None,
+        "meta_ok": None,
+        "meta_state": "disabled",
+        "provider": "waha",
     }
 
 
