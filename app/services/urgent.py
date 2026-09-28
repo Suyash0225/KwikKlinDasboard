@@ -1,3 +1,4 @@
+from app.utils.dates import today_ist
 """⚡ Urgent kapde — extra charge aur jaldi delivery, ek hi jagah ka hisaab.
 
 Charge bill ki ek alag line banta hai (kind="urgent_charge"), taaki:
@@ -56,4 +57,4 @@ def line(amount: Decimal) -> dict:
 
 
 def delivery_date(cfg: dict) -> date:
-    return date.today() + timedelta(days=int(cfg.get("days", 1)))
+    return today_ist() + timedelta(days=int(cfg.get("days", 1)))
