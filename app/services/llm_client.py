@@ -78,24 +78,37 @@ def _anthropic() -> AsyncAnthropic:
 async def _with_retry(call, *, provider: str, model: str):
     """Run one provider call, retrying only what is worth retrying.
 
-    Retry: network blips and 5xx — a second attempt genuinely often works.
-    Don't: bad key, spent quota, 429. Those fail identically the second
-    time; the caller's cheaper-model fallback is the real escape hatch.
+    Retry: network blips, 408/5xx, and 429 rate limits — a bounded retry
+    with jitter can recover transient capacity. Do not retry bad keys or
+    application quota exhaustion; the caller's cheaper-model fallback is
+    the real escape hatch.
     LLMError (garbage JSON) isn't caught here at all — retrying a confused
     model burns quota to get confused again.
     """
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             return await call()
-        except (LLMAuthError, LLMRateLimited):
+        except LLMAuthError:
+            # Invalid key / exhausted app quota is not transient.
             raise
-        except LLMUnavailable:
+        except LLMRateLimited as exc:
             if attempt == _MAX_ATTEMPTS:
                 raise
             delay = _BACKOFF_BASE * (2 ** (attempt - 1)) * (0.5 + random.random())
-            log.info(
+            log.warning(
+                "llm_rate_limited_retry",
+                provider=provider, model=model, attempt=attempt,
+                error=str(exc)[:200], sleep_ms=int(delay * 1000),
+            )
+            await asyncio.sleep(delay)
+        except LLMUnavailable as exc:
+            if attempt == _MAX_ATTEMPTS:
+                raise
+            delay = _BACKOFF_BASE * (2 ** (attempt - 1)) * (0.5 + random.random())
+            log.warning(
                 "llm_retry", provider=provider, model=model,
-                attempt=attempt, sleep_ms=int(delay * 1000),
+                attempt=attempt, error=str(exc)[:200],
+                sleep_ms=int(delay * 1000),
             )
             await asyncio.sleep(delay)
 
@@ -390,8 +403,14 @@ async def _gemini_generate(
         log.error("llm_auth_failed", provider="gemini", model=model)
         raise LLMAuthError("invalid GEMINI_API_KEY")
     if resp.status_code == 429:
-        log.warning("llm_unavailable", provider="gemini", model=model, status=429)
-        raise LLMRateLimited("gemini HTTP 429")
+        retry_after = resp.headers.get("retry-after")
+        detail = resp.text[:300]
+        log.warning(
+            "llm_rate_limited",
+            provider="gemini", model=model, status=429,
+            retry_after=retry_after, error=detail,
+        )
+        raise LLMRateLimited(f"gemini HTTP 429: {detail}")
     if resp.status_code >= 500:
         log.warning("llm_unavailable", provider="gemini", model=model, status=resp.status_code)
         raise LLMUnavailable(f"gemini HTTP {resp.status_code}")

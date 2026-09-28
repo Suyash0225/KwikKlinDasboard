@@ -869,6 +869,9 @@ from app.services import wa_templates
 # was two more Graph calls.
 _WA_STATS_TTL = 60.0
 _wa_stats_cache: dict[str, tuple[float, dict]] = {}
+# Last successful Meta template list per WABA. This is intentionally process-local:
+# it prevents a temporary Meta auth/network failure from blanking the dashboard.
+_template_cache: dict[str, list[dict]] = {}
 
 
 def _wa_stats_cached(key: str) -> dict | None:
@@ -1286,10 +1289,29 @@ async def templates_registry() -> list[dict]:
 
 @router.get("/templates")
 async def list_templates(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    creds = await wa_templates.creds_for_current(db)
+
+    # WAHA-only tenants have no Meta credentials. Serve the local registry
+    # instead of accidentally calling Meta with a legacy/global token.
+    if creds is None:
+        return await templates_registry()
+
     try:
-        return await wa_templates.list_remote(await wa_templates.creds_for_current(db))
+        rows = await wa_templates.list_remote(creds)
+        _template_cache[creds.waba_id] = rows
+        return rows
     except wa_templates.TemplateError as exc:
-        raise HTTPException(status_code=exc.status, detail=exc.detail)
+        cached = _template_cache.get(creds.waba_id)
+        if cached is not None:
+            log.warning(
+                "meta_templates_using_cache",
+                waba_id=creds.waba_id,
+                error=exc.detail,
+            )
+            return cached
+        # No cache yet: expose a useful service-unavailable response instead
+        # of pretending Cloudflare/origin is broken.
+        raise HTTPException(status_code=503, detail=exc.detail)
 
 
 class TplButtonIn(BaseModel):
@@ -1581,7 +1603,7 @@ async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
     ).scalar_one()
 
     tpl = {"approved": 0, "pending": 0, "rejected": 0}
-    quality, meta_ok, meta_state = None, False, "not_connected"
+    quality, meta_ok, meta_state, meta_error = None, False, "not_connected", None
 
     creds = await wa_templates.creds_for_current(db)
     if creds is not None:
@@ -1613,15 +1635,26 @@ async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
                         quality = d2.get("quality_rating")
                 elif status in (401, 403):
                     meta_state = "auth_failed"
+                    meta_error = {
+                        "status": status,
+                        "code": (data.get("error") or {}).get("code"),
+                        "subcode": (data.get("error") or {}).get("error_subcode"),
+                        "message": (data.get("error") or {}).get("message"),
+                    }
+                    log.error("wa_stats_meta_auth_failed", waba_id=creds.waba_id, **meta_error)
                 else:
                     meta_state = "error"
-            except Exception:
+                    meta_error = {"status": status, "message": str(data)[:300]}
+                    log.error("wa_stats_meta_error", waba_id=creds.waba_id, **meta_error)
+            except Exception as exc:
                 meta_state = "unreachable"
-                log.exception("wa_stats_meta_failed")
+                meta_error = {"message": str(exc)[:200]}
+                log.exception("wa_stats_meta_failed", waba_id=creds.waba_id)
             _wa_stats_cache[creds.waba_id] = (
                 _time.monotonic(),
                 {"templates": dict(tpl), "quality": quality,
-                 "meta_ok": meta_ok, "meta_state": meta_state},
+                 "meta_ok": meta_ok, "meta_state": meta_state,
+                 "meta_error": meta_error},
             )
 
     return {
