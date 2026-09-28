@@ -1340,8 +1340,9 @@ async def control_page():
             "Cache-Control": "no-store",
             "X-Robots-Tag": "noindex",
             "Content-Security-Policy": (
-                "default-src 'self'; script-src 'self'; style-src 'self'; "
-                "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
+                "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; "
+                "style-src 'self'; img-src 'self' data:; "
+                "connect-src 'self' https://cloudflareinsights.com; font-src 'self'; "
                 "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
             ),
         },
@@ -1391,8 +1392,9 @@ async def staff_page():
         headers={
             "Cache-Control": "no-store",
             "Content-Security-Policy": (
-                "default-src 'self'; script-src 'self'; style-src 'self'; "
-                "img-src 'self' data:; connect-src 'self'; form-action 'none'; "
+                "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; "
+                "style-src 'self'; img-src 'self' data:; "
+                "connect-src 'self' https://cloudflareinsights.com; form-action 'none'; "
                 "frame-ancestors 'none'; base-uri 'none'"
             ),
         },
