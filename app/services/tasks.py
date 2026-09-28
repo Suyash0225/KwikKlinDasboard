@@ -28,6 +28,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 PING_AFTER_HOURS = 2
 URGENT_PING_AFTER_HOURS = 1
 ESCALATE_AFTER_PINGS = 3
+MAX_FOLLOWUPS_PER_DAY = 3
 QUIET_START, QUIET_END = settings.QUIET_HOURS_START, settings.QUIET_HOURS_END
 
 
@@ -219,8 +220,8 @@ async def _send_to_assignee(
         elif task.kind == "iron": head = "👔 IRONING KAAM"
         elif task.kind == "pickup": head = "🛵 PICKUP KAAM"
         elif task.kind == "delivery": head = "🚚 DELIVERY KAAM"
-        complete_line = f"Kaam complete hone ke baad bas reply karein: done {task.code}"
-        update_line = f"Kaam ka update bhej dein, ya complete hone par reply karein: done {task.code}"
+        complete_line = "Neeche diye gaye status menu se current status select karein."
+        update_line = "Please status menu se current task status update karein."
     else:
         head = "🔴 URGENT" if task.urgent else "📋 TASK ASSIGNMENT"
         if task.kind == "wash": head = "🧼 WASHING TASK"
@@ -228,8 +229,8 @@ async def _send_to_assignee(
         elif task.kind == "iron": head = "👔 IRONING TASK"
         elif task.kind == "pickup": head = "🧺 PICKUP TASK"
         elif task.kind == "delivery": head = "🚚 DELIVERY TASK"
-        complete_line = f"After completing the task, reply: done {task.code}"
-        update_line = f"Send an update, or reply when complete: done {task.code}"
+        complete_line = "Select the current task status from the menu below."
+        update_line = "Please use the status menu to keep the task updated."
     if first:
         body = (
             f"{head} [{task.code}]{order_bit}\n"
@@ -257,26 +258,27 @@ async def _send_to_assignee(
             f"{update_line}\n"
             f"— Kwik Klin"
         )
-    # Tap = zero typing. Button id mein task ka CODE hai, isliye 5-6 kaam
-    # ek saath pending hon tab bhi galat task kabhi band nahi hota. Likh kar
-    # jawab dena ("done T-11", ya poori baat) waise hi chalta rahega —
-    # button sirf sabse aam jawab ka shortcut hai.
+    # Fixed choices should be a WhatsApp list, not free-text instructions.
+    # The menu is role-aware: washer/supervisor gets Wash/Iron/Ready/Pending;
+    # delivery gets Done/Pending for both pickup and delivery. The task code
+    # stays in every row id, so a tap can never update the wrong task.
     try:
-        # Assignment notification is a critical WhatsApp message. In WAHA
-        # mode use plain text so delivery does not depend on interactive-list
-        # support. The task code is still included for "done T-123" replies.
-        # First assignment is a clean task card. Add the action menu only
-        # on reminders/when the task is getting close to needing an update.
-        if first:
+        from app.services.work_orders import task_status_menu
+
+        rows = await task_status_menu(db, task.code)
+        if rows:
+            menu_body = body + "\n\nPlease select the current task status from the menu below."
             await send_message(
-                db, to_phone=staff.phone, text=body, sent_by="bot"
+                db,
+                to_phone=staff.phone,
+                text=menu_body,
+                list_rows=rows,
+                list_button="Update status",
+                list_title="Task status",
+                sent_by="bot",
             )
         else:
-            from app.services.work_orders import task_buttons
-            buttons = await task_buttons(db, task.code)
-            await send_message(
-                db, to_phone=staff.phone, text=body, buttons=buttons, sent_by="bot"
-            )
+            await send_message(db, to_phone=staff.phone, text=body, sent_by="bot")
         log.info("task_whatsapp_assignment_sent", code=task.code, staff=staff.name)
         return True
     except WindowClosedError:
@@ -408,12 +410,22 @@ async def _create_job_task(db: AsyncSession, order, kind: str) -> Task | None:
         ask = (
             f"{cfg['emoji']} {cfg['head']} [{task.code}] — {order.order_number}\n"
             f"{who} · {customer.phone if customer else ''}\n"
-            + (f"Pata: {addr}\n" if addr else "")
-            + f"\n{cfg['ask']}"
+            + (f"📍 Address: {addr}\n" if addr else "")
+            + "\nPlease select the current task status from the menu below."
         )
         delivered = "no"
         try:
-            await send_message(db, to_phone=staff.phone, text=ask, sent_by="bot")
+            from app.services.work_orders import task_status_menu
+            rows = await task_status_menu(db, task.code)
+            await send_message(
+                db,
+                to_phone=staff.phone,
+                text=ask,
+                list_rows=rows,
+                list_button="Update status",
+                list_title=cfg["word"].title(),
+                sent_by="bot",
+            )
             delivered = "yes"
         except WindowClosedError:
             # Unki 24h chat band hai — free-form Meta allow nahi karta. Ye
@@ -441,7 +453,7 @@ async def _create_job_task(db: AsyncSession, order, kind: str) -> Task | None:
         from app.services import team
 
         tail = {
-            "yes": "Unse samay pooch liya hai, pata chalte hi bata dunga.",
+            "yes": "Task assign kar diya hai aur status menu bhej diya hai.",
             "template": (
                 f"Unki chat band thi, isliye template se bheja hai — "
                 f"jawab aate hi bata dunga."
@@ -460,7 +472,7 @@ async def _create_job_task(db: AsyncSession, order, kind: str) -> Task | None:
         await audit.record(
             actor_role="system", actor="agent", action=f"{kind}_task_created",
             args={"code": task.code, "order": order.order_number, "staff": staff.name},
-            result="asked for ETA",
+            result="asked for task status",
         )
         log.info("job_task_created", kind=kind, code=task.code, order=order.order_number)
         return task
@@ -588,13 +600,17 @@ async def _ask_job_done(db: AsyncSession, task: Task, staff: Staff | None) -> No
         pending_title = "⏳ Pending"
         question = cfg["done_q"]
     try:
+        from app.services.whatsapp import ListRow
+
         await send_message(
             db, to_phone=staff.phone,
             text=f"📋 {cfg['word'].upper()} TASK [{task.code}]\\n{question}",
-            buttons=[
-                Button(f"job_yes:{task.code}", done_title),
-                Button(f"job_no:{task.code}", pending_title),
+            list_rows=[
+                ListRow(f"job_yes:{task.code}", done_title, "Mark the task completed"),
+                ListRow(f"job_no:{task.code}", pending_title, "Task is still pending"),
             ],
+            list_button="Update status",
+            list_title=cfg["word"].title(),
             sent_by="bot",
         )
     except (SendError, WindowClosedError):
@@ -791,11 +807,26 @@ async def run_task_followups() -> int:
             if staff is None or not staff.is_active:
                 continue
             order = await db.get(Order, task.order_id) if task.order_id else None
+            # ping_count is intentionally a DAILY follow-up count.
+            # We never send more than three reminders to one staff member for
+            # one open task in a calendar day. At the first follow-up of a new
+            # day the counter starts again; escalated_at stays permanent so
+            # the manager is not spammed every morning.
+            if task.last_ping_at is not None:
+                last_ping_ist = task.last_ping_at.astimezone(IST)
+                if last_ping_ist.date() != now_ist.date():
+                    task.ping_count = 0
+                    db.add(task)
+                    await db.commit()
+
             gap_hours = _task_ping_gap_hours(task, order, now_ist)
             since = task.last_ping_at or task.created_at
             if (now - since) < timedelta(hours=gap_hours):
                 continue
 
+            # After three staff reminders, tell the manager instead of sending
+            # a fourth staff message. This escalation is separate from the
+            # three-per-day staff limit.
             if task.ping_count >= ESCALATE_AFTER_PINGS and task.escalated_at is None:
                 waited = int((now - task.created_at).total_seconds() // 3600)
                 try:
@@ -816,6 +847,9 @@ async def run_task_followups() -> int:
                 task.escalated_at = now
                 db.add(task)
                 await db.commit()
+                continue
+
+            if task.ping_count >= MAX_FOLLOWUPS_PER_DAY:
                 continue
 
             if await _send_to_assignee(db, task, staff, first=False):

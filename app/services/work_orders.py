@@ -112,6 +112,40 @@ async def task_buttons(db: AsyncSession, code: str) -> list[Button]:
     ]
 
 
+async def task_status_menu(db: AsyncSession, code: str) -> list[ListRow]:
+    """Role-specific status menu for staff task updates.
+
+    Washer/supervisor: Wash, Iron, Ready, Pending.
+    Delivery: Done, Pending — the same menu works for pickup and delivery.
+    Other operational roles get the safe Done/Pending/Problem menu.
+    """
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        return []
+
+    staff = await db.get(Staff, task.assigned_staff_id) if task.assigned_staff_id else None
+    role = staff.role.name if staff is not None else ""
+    if role in {"WASHER", "SUPERVISOR"}:
+        return [
+            ListRow(f"task:{code}:wash", "🧼 Wash", "Washing is in progress"),
+            ListRow(f"task:{code}:iron", "👔 Iron", "Move to ironing"),
+            ListRow(f"task:{code}:ready", "✅ Ready", "Order is ready"),
+            ListRow(f"task:{code}:pending", "⏳ Pending", "Still in progress"),
+        ]
+    if role == "DELIVERY":
+        return [
+            ListRow(f"task:{code}:done", "✅ Done", "Pickup or delivery completed"),
+            ListRow(f"task:{code}:pending", "⏳ Pending", "Still pending"),
+        ]
+    return [
+        ListRow(f"task:{code}:done", "✅ Done", "Task completed"),
+        ListRow(f"task:{code}:pending", "⏳ Pending", "Still pending"),
+        ListRow(f"task:{code}:problem", "⚠️ Problem", "Report an issue"),
+    ]
+
+
 async def work_rows(db: AsyncSession, orders, tasks=()) -> list[ListRow]:
     """Kaam ki tappable list — buttons sirf 3 ho sakte hain, list 10.
 

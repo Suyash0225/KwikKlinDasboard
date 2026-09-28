@@ -12,6 +12,7 @@ from sqlalchemy import delete, select
 
 import app.services.bill_agent as bill_agent
 import app.services.tasks as task_service
+from app.services import team
 from app.config import settings
 from app.database import async_session_factory
 from app.models import TASK_DONE, TASK_OPEN, Conversation, Staff, StaffRole, Task
@@ -60,7 +61,7 @@ async def test_create_task_messages_the_assignee(worker, sent) -> None:
     assert sent and sent[0]["to"] == TASK_STAFF_PHONE
     body = sent[0]["text"]
     assert task.code in body and "Sharma ji" in body
-    assert f"done {task.code}" in body, "they must be told how to close it"
+    assert "current task status" in body.lower(), "staff must be given a clear status menu"
     assert "Due:" not in body
     assert "Bill & payment:" not in body
 
@@ -114,8 +115,10 @@ async def test_staff_closes_task_with_done_code(worker, sent) -> None:
         task = await task_service.get_by_code(db, code)
         assert task.status == TASK_DONE
         assert task.completed_at is not None
-    # the owner hears about it without asking
-    assert any(c["to"] == settings.MANAGER_PHONE for c in sent)
+    # the configured primary admin hears about it without asking
+    async with async_session_factory() as db:
+        owner_phone = await team.primary_admin_phone(db)
+    assert any(c["to"] == owner_phone for c in sent)
 
 
 async def test_unknown_code_is_not_a_crash(worker, sent) -> None:
@@ -160,25 +163,40 @@ async def test_followup_pings_only_when_due(worker, sent, awake) -> None:
         await db.commit()
 
     await task_service.run_task_followups()
-    assert any(code in (c["text"] or "") and "Reminder" in (c["text"] or "") for c in sent)
+    assert any(code in (c["text"] or "") and "reminder" in (c["text"] or "").lower() for c in sent)
 
     async with async_session_factory() as db:
         task = await task_service.get_by_code(db, code)
     assert task.ping_count == 1
 
 
-async def test_silence_escalates_to_the_manager(worker, sent, awake) -> None:
+async def test_silence_escalates_to_the_manager(worker, sent, awake, monkeypatch) -> None:
+    # Freeze the scheduler clock at midday so the test never crosses an IST
+    # calendar-day boundary when subtracting the reminder gap.
+    fixed_now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed_now.replace(tzinfo=None)
+            return fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(task_service, "datetime", FrozenDateTime)
     async with async_session_factory() as db:
         task = await _mk(db, worker)
         code = task.code
+        task.created_at = fixed_now - timedelta(hours=10)
         task.ping_count = task_service.ESCALATE_AFTER_PINGS
-        task.last_ping_at = datetime.now(timezone.utc) - timedelta(hours=5)
+        task.last_ping_at = fixed_now - timedelta(hours=5)
         db.add(task)
         await db.commit()
     sent.clear()
 
     await task_service.run_task_followups()
-    to_manager = [c for c in sent if c["to"] == settings.MANAGER_PHONE]
+    async with async_session_factory() as db:
+        owner_phone = await team.primary_admin_phone(db)
+    to_manager = [c for c in sent if c["to"] == owner_phone]
     assert to_manager, "the owner must be told when staff go quiet"
     assert code in to_manager[0]["text"]
 
@@ -188,7 +206,36 @@ async def test_silence_escalates_to_the_manager(worker, sent, awake) -> None:
 
     sent.clear()
     await task_service.run_task_followups()
-    assert not [c for c in sent if c["to"] == settings.MANAGER_PHONE], "escalate once, not every tick"
+    assert not [c for c in sent if c["to"] == owner_phone], "escalate once, not every tick"
+
+
+async def test_task_followups_max_three_per_day(worker, sent, awake, monkeypatch) -> None:
+    """An open task may receive at most three staff reminders per day."""
+    # Keep the test timestamp safely inside one IST calendar day.
+    fixed_now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed_now.replace(tzinfo=None)
+            return fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(task_service, "datetime", FrozenDateTime)
+    async with async_session_factory() as db:
+        task = await _mk(db, worker)
+        task.created_at = fixed_now - timedelta(hours=10)
+        task.last_ping_at = fixed_now - timedelta(hours=3)
+        task.ping_count = 3
+        db.add(task)
+        await db.commit()
+
+    sent.clear()
+    await task_service.run_task_followups()
+
+    assert not [c for c in sent if c["to"] == TASK_STAFF_PHONE], (
+        "fourth reminder must not be sent on the same day"
+    )
 
 
 async def test_done_tasks_are_left_alone(worker, sent, awake) -> None:
@@ -231,63 +278,94 @@ async def test_api_rejects_unknown_staff(client) -> None:
 
 # ---------------------------------------------------- task buttons -------
 
-async def test_task_buttons_close_ask_eta_and_report_problem(client, sent, worker) -> None:
-    """Ravi/Ajit ko sirf tap karna ho — likhna majboori na ho.
+async def test_task_status_menu_is_role_specific_and_updates_the_task(client, sent, worker) -> None:
+    """Staff gets a list menu instead of typing status commands.
 
-    Teen button: ✅ Ho gaya (task band), ⏳ Time lagega (ETA poochho aur
-    owner ko batao), ❓ Dikkat hai (owner ko turant khabar). Button id mein
-    task ka CODE hota hai, isliye 5-6 kaam ek saath hone par bhi kabhi
-    galat task band nahi hota.
+    Washer/supervisor: Wash, Iron, Ready, Pending.
+    Delivery: Done, Pending for both pickup and delivery.
     """
     import uuid as _uuid
-
     from tests.conftest import meta_payload, sign_body
 
     async def post(text):
         tag = _uuid.uuid4().hex[:8]
         body = meta_payload(messages=[{
-            "from": TASK_STAFF_PHONE.lstrip("+"), "id": f"wamid.TB-{tag}",
+            "from": TASK_STAFF_PHONE.lstrip("+"), "id": f"wamid.TM-{tag}",
             "type": "text", "text": {"body": text},
         }])
         return await client.post(
             "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
         )
 
+    phone = "+919999900088"
     async with async_session_factory() as db:
-        t1 = await _mk(db, worker, title="Anmol ka press")
-        t2 = await _mk(db, worker, title="Sharma ji ka wash")
+        from app.services.order_service import create_order
+        order = await create_order(
+            db,
+            customer_phone=phone,
+            customer_name="Sharma ji",
+            created_by="test",
+            items=[{"type": "Shirt", "qty": 2}],
+        )
+        st = await db.get(Staff, worker)
+        task = await _mk(
+            db, worker, title="Sharma ji ka wash",
+            order=order, kind="wash",
+        )
+        code = task.code
 
-    # message ke saath buttons gaye — typing majboori nahi
-    with_btns = [c for c in sent if c.get("buttons")]
-    assert with_btns, "task message par buttons jane chahiye"
-    ids = [b.id for b in with_btns[-1]["buttons"]]
-    assert f"task:{t2.code}:done" in ids and f"task:{t2.code}:later" in ids
+    menu_messages = [c for c in sent if c.get("list_rows")]
+    assert menu_messages, "task assignment must contain a list menu"
+    rows = menu_messages[-1]["list_rows"]
+    ids = [row.id for row in rows]
+    assert ids == [
+        f"task:{code}:wash",
+        f"task:{code}:iron",
+        f"task:{code}:ready",
+        f"task:{code}:pending",
+    ]
+    assert [row.title for row in rows] == [
+        "🧼 Wash", "👔 Iron", "✅ Ready", "⏳ Pending"
+    ]
 
-    # t2 par "Ho gaya" -> sirf t2 band, t1 chhua na jaye
     sent.clear()
-    assert (await post(f"[button:task:{t2.code}:done] Ho gaya")).status_code == 200
+    assert (await post(f"[button:task:{code}:ready] Ready")).status_code == 200
     async with async_session_factory() as db:
-        a = (await db.execute(select(Task).where(Task.code == t2.code))).scalar_one()
-        b = (await db.execute(select(Task).where(Task.code == t1.code))).scalar_one()
-    assert a.status == TASK_DONE, "jo button dabaya wahi band hona chahiye"
-    assert b.status == TASK_OPEN, "doosra task galti se band nahi hona chahiye"
+        updated = await task_service.get_by_code(db, code)
+        order_after = await db.get(type(order), order.id)
+    assert order_after.status.name == "READY"
+    assert updated.status == TASK_DONE
+    assert any(code in (c.get("text") or "") and "Ready" in (c.get("text") or "") for c in sent)
 
-    # t1 par "Time lagega" -> ETA poochha jaye, agla free-text ETA ban jaye
-    sent.clear()
-    assert (await post(f"[button:task:{t1.code}:later] Time lagega")).status_code == 200
-    assert any("kab tak" in (c.get("text") or "").lower() for c in sent)
+    from tests.conftest import purge_phones
+    await purge_phones(phone)
 
-    sent.clear()
-    assert (await post("sham tak ho jayega")).status_code == 200
+
+async def test_delivery_task_uses_done_pending_menu(sent) -> None:
+    """Pickup and delivery work use the same simple Done/Pending menu."""
     async with async_session_factory() as db:
-        b = (await db.execute(select(Task).where(Task.code == t1.code))).scalar_one()
-    assert b.eta_text == "sham tak ho jayega", "ETA task par save hona chahiye"
-    assert any("sham tak" in (c.get("text") or "") for c in sent), "owner ko ETA jaana chahiye"
-
-    # "Dikkat hai" -> owner ko khabar + staff se wajah
-    sent.clear()
-    assert (await post(f"[button:task:{t1.code}:problem] Dikkat hai")).status_code == 200
-    assert any("dikkat" in (c.get("text") or "").lower() for c in sent)
+        worker = Staff(
+            phone="+919999900087", name="Delivery Test", role=StaffRole.DELIVERY,
+            is_active=True, last_message_at=datetime.now(timezone.utc),
+        )
+        db.add(worker)
+        await db.commit()
+        sid = worker.id
+        task = await _mk(
+            db, sid, title="Rahul ji ka pickup complete karna hai", kind="pickup"
+        )
+    try:
+        menu_messages = [c for c in sent if c.get("list_rows") and c.get("to") == "+919999900087"]
+        assert menu_messages
+        rows = menu_messages[-1]["list_rows"]
+        assert [row.id for row in rows] == [
+            f"task:{task.code}:done", f"task:{task.code}:pending"
+        ]
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.assigned_staff_id == sid))
+            await db.execute(delete(Staff).where(Staff.id == sid))
+            await db.commit()
 
 
 # --- number/naam badalna turant asar kare ---------------------------------
@@ -460,8 +538,8 @@ async def test_work_order_to_staff_carries_the_same_buttons(sent, worker) -> Non
         await purge_phones(cust)
 
 
-async def test_task_reminder_repeats_the_buttons(sent, worker, awake, monkeypatch) -> None:
-    """Yaad-dahani par bhi button — pehle message par hi nahi."""
+async def test_task_reminder_repeats_the_status_menu(sent, worker, awake) -> None:
+    """Reminder mein bhi wahi clear status menu repeat hota hai."""
     async with async_session_factory() as db:
         task = await _mk(db, worker)
         code = task.code
@@ -472,7 +550,8 @@ async def test_task_reminder_repeats_the_buttons(sent, worker, awake, monkeypatc
         t = (await db.execute(select(Task).where(Task.code == code))).scalar_one()
         assert await task_service._send_to_assignee(db, t, st, first=False)
     ping = next(c for c in sent if c["to"] == TASK_STAFF_PHONE)
-    assert "Reminder" in ping["text"]
-    assert [b.id for b in (ping.get("buttons") or [])] == [
-        f"task:{code}:done", f"task:{code}:later", f"task:{code}:problem",
+    assert "reminder" in ping["text"].lower()
+    assert [row.id for row in (ping.get("list_rows") or [])] == [
+        f"task:{code}:wash", f"task:{code}:iron",
+        f"task:{code}:ready", f"task:{code}:pending",
     ]

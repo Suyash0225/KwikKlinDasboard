@@ -291,7 +291,10 @@ _EXTRACT_SYSTEM = (
 # Button id mein code hota hai — "task:T-11:done" — isliye 5-6 kaam ek saath
 # hone par bhi kaunsa kaam hai ye kabhi galat nahi hota. Jise likhna hai wo
 # likh sakta hai; ye sirf sabse aam jawab ka shortcut hai.
-_TASK_BTN_RE = re.compile(r"^\s*\[button:task:(T-?\d+):(done|later|problem)\]", re.I)
+_TASK_BTN_RE = re.compile(
+    r"^\s*\[button:task:(T-?\d+):(done|later|problem|wash|iron|ready|pending)\]",
+    re.I,
+)
 # List se chuna gaya kaam ("pick:o:KK-...", "pick:t:T-11") aur order card ke
 # apne teen button. Order ke button ko pehle parkha jata hai — warna
 # "ord:KK-..:done" ko pick samajh liya jata.
@@ -302,10 +305,11 @@ _ORDER_BTN_RE = re.compile(r"^\s*\[button:ord:(KK-\S+?):(done|later|problem)\]",
 async def _handle_task_button(
     db: AsyncSession, sender_phone: str, sender_label: str, text: str
 ) -> str | None:
-    """Task ke button ka jawab. None = ye button nahi hai."""
+    """Handle deterministic task-menu replies. None means this is not a task menu."""
     m = _TASK_BTN_RE.match(text or "")
     if not m:
         return None
+
     code, action = m.group(1).upper(), m.group(2).lower()
     from app.services import tasks as task_service, team
 
@@ -313,27 +317,111 @@ async def _handle_task_button(
     if task is None:
         return get_message("task_unknown_code", code=code)
 
+    # A task menu belongs only to its assignee (manager/admin can operate it).
+    staff = (
+        await db.execute(select(Staff).where(Staff.phone == sender_phone))
+    ).scalar_one_or_none()
+    if (
+        staff is not None
+        and task.assigned_staff_id is not None
+        and staff.role.name not in {"ADMIN", "MANAGER"}
+        and task.assigned_staff_id != staff.id
+    ):
+        return "Ye task aapke naam par assigned nahi hai. Kripya apne assigned task ka menu use karein."
+
+    role = staff.role.name if staff is not None else "manager"
+
+    # Delivery staff: the same Done/Pending menu is used for both pickup and delivery.
     if action == "done":
-        # Wahi rasta jo "done T-11" likhne par chalta hai — ek hi jagah
-        # sach rahe: task band, owner ko khabar, aur job task ho to order
-        # ka status bhi aage badhe.
+        if role not in {"DELIVERY", "ADMIN", "MANAGER"}:
+            return "This task is assigned to a different role."
+        if task.kind in {"pickup", "delivery"}:
+            return await task_service.confirm_pickup(
+                db, task, done=True, by=staff.name if staff else sender_label
+            )
         return await _close_task_by_code(db, sender_phone, sender_label, code)
+
+    if action == "pending":
+        staff_id = staff.id if staff is not None else task.assigned_staff_id
+        await task_service.note_reply(db, staff_id, "Pending")
+        if task.kind in {"pickup", "delivery"}:
+            _PENDING[sender_phone] = PendingTaskEta(code=code)
+            await team.notify_admins(
+                db,
+                f"⏳ *Task pending — {task.code}*\n"
+                f"Staff: {staff.name if staff else sender_label}\n"
+                f"Task: {task.title}\n"
+                "Current status: Pending. ETA will be requested from the staff member.",
+            )
+            return (
+                f"⏳ *{task.code}* — Pending status recorded.\n"
+                "Please tell me the expected completion time, for example: "
+                "2 baje / sham tak / kal subah."
+            )
+        return f"⏳ *{task.code}* — Pending status recorded. Please update again when the task is completed."
+
+    # Washer/supervisor menu: update the order stage deterministically.
+    if action in {"wash", "iron", "ready"}:
+        if role not in {"WASHER", "SUPERVISOR", "ADMIN", "MANAGER"}:
+            return "Ye status option sirf washing staff ke liye hai."
+        if task.order_id is None:
+            return f"*{task.code}* order se linked nahi hai, isliye order status update nahi kiya ja sakta."
+
+        order = await db.get(Order, task.order_id)
+        if order is None:
+            return get_message("order_not_found_staff", order_number="linked order")
+
+        target = {
+            "wash": OrderStatus.IN_WASH,
+            "iron": OrderStatus.IN_IRON,
+            "ready": OrderStatus.READY,
+        }[action]
+        try:
+            old = order.status
+            await update_status(db, order, target, changed_by=sender_label)
+        except InvalidTransitionError:
+            return get_message(
+                "status_invalid",
+                order_number=order.order_number,
+                old=old.name,
+                new=target.name,
+            )
+
+        label = {
+            "wash": "In Wash",
+            "iron": "In Iron",
+            "ready": "Ready",
+        }[action]
+        await audit.record(
+            actor_role="staff",
+            actor=sender_label,
+            action="task_menu_status_update",
+            args={"task": code, "order": order.order_number, "status": target.name},
+            result=target.name,
+        )
+        return (
+            f"✅ *{order.order_number}* status updated to *{label}*.\n"
+            f"Task: {code}\n"
+            "The dashboard and next workflow step have been updated."
+        )
 
     if action == "later":
         _PENDING[sender_phone] = PendingTaskEta(code=code)
         return (
-            f"Theek hai 👍 [{code}] kab tak ho jayega?\n"
-            "Bas likh dijiye — jaise: 2 baje / sham tak / kal subah."
+            f"⏳ *{code}* — please tell me the expected completion time.\n"
+            "Example: 2 baje / sham tak / kal subah."
         )
 
     # problem: owner ko turant khabar, aur staff se wajah poochho
     _PENDING[sender_phone] = PendingTaskIssue(code=code)
-    from app.services import team
-
     await team.notify_admins(
-        db, f"❓ {sender_label} ne [{code}] par dikkat batayi: {task.title}"
+        db,
+        f"⚠️ *Task issue — {code}*\n"
+        f"Staff: {staff.name if staff else sender_label}\n"
+        f"Task: {task.title}\n"
+        "Please review the issue and advise.",
     )
-    return f"Kya dikkat aa rahi hai [{code}] mein? Likh dijiye, main {settings.SHOP_NAME} ko bata deta hoon."
+    return f"⚠️ *{code}* — please describe the issue briefly. I will notify the manager."
 
 
 async def _send_with_buttons(
@@ -2252,7 +2340,7 @@ async def _handle_pickup_exchange(
 async def _close_task_by_code(
     db: AsyncSession, sender_phone: str, sender_label: str, code: str
 ) -> str:
-    from app.services import tasks as task_service
+    from app.services import tasks as task_service, team
 
     task = await task_service.get_by_code(db, code)
     if task is None:

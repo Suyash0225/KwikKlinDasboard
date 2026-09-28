@@ -3003,6 +3003,7 @@ let CAMPAIGN_SELECTED_CUSTOMERS = [];
 let CAMPAIGN_CUSTOMER_CACHE = {};
 let CAMPAIGN_VISIBLE_CUSTOMERS = [];
 let CAMPAIGN_SEARCH_TIMER = null;
+let CAMPAIGN_PICKER_ROWS = [];
 
 function renderCampaignSelectedCustomers() {
   const box = $("camp-selected-list"), count = $("camp-selected-count");
@@ -3010,67 +3011,110 @@ function renderCampaignSelectedCustomers() {
   if (box) box.innerHTML = CAMPAIGN_SELECTED_CUSTOMERS.length
     ? CAMPAIGN_SELECTED_CUSTOMERS.map((x) =>
         '<button type="button" class="camp-selected-chip" onclick="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
-        '<span>✓</span><b>' + esc(x.name || "Customer") + '</b><small>' + esc(x.phone_masked || "") + '</small><i>×</i></button>'
+        '<span>✓</span><b>' + esc(x.name || "Customer") + '</b><small>' + esc(x.phone || x.phone_masked || "") + '</small><i>×</i></button>'
       ).join("")
     : '<span class="muted">No customers selected yet.</span>';
   updateCampaignAudienceCount();
 }
 
-async function searchCampaignCustomers(value) {
+function campaignCustomerRowHtml(x) {
+  const selected = CAMPAIGN_SELECTED_CUSTOMERS.some((c) => c.ref === x.ref);
+  return '<label class="camp-customer-row ' + (selected ? "selected" : "") + '">' +
+    '<input class="camp-customer-check" type="checkbox" ' + (selected ? "checked" : "") +
+      ' onchange="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
+    '<span class="camp-customer-avatar">' + esc((x.name || "?").slice(0, 1).toUpperCase()) + '</span>' +
+    '<span style="min-width:0;flex:1"><b>' + esc(x.name || "Customer") + '</b>' +
+      '<small>' + esc(x.phone || x.phone_masked || "") + '</small></span>' +
+  '</label>';
+}
+
+function renderCampaignCustomerPickerRows(rows) {
+  CAMPAIGN_PICKER_ROWS = rows || [];
+  CAMPAIGN_PICKER_ROWS.forEach((x) => { CAMPAIGN_CUSTOMER_CACHE[x.ref] = x; });
+  const box = $("camp-customer-results");
+  if (!box) return;
+  box.innerHTML = CAMPAIGN_PICKER_ROWS.length
+    ? CAMPAIGN_PICKER_ROWS.map(campaignCustomerRowHtml).join("")
+    : '<div class="muted" style="padding:16px;text-align:center">No matching active customer found.</div>';
+}
+
+async function loadCampaignCustomerPicker(value = "") {
+  const q = String(value || "").trim();
   clearTimeout(CAMPAIGN_SEARCH_TIMER);
-  const q = value.trim();
-  if (q.length < 2) {
-    if ($("camp-customer-results")) $("camp-customer-results").innerHTML = '<div class="muted">Start typing to find customers.</div>';
-    return;
-  }
   CAMPAIGN_SEARCH_TIMER = setTimeout(async () => {
     try {
-      const rows = await api("/admin/api/customers/search?q=" + encodeURIComponent(q));
-      rows.forEach((x) => { CAMPAIGN_CUSTOMER_CACHE[x.ref] = x; });
-      CAMPAIGN_VISIBLE_CUSTOMERS = rows;
-      const selected = new Set(CAMPAIGN_SELECTED_CUSTOMERS.map((x) => x.ref));
-      $("camp-customer-results").innerHTML = rows.length
-        ? rows.map((x) => '<label class="camp-customer-row ' + (selected.has(x.ref) ? "selected" : "") + '">' +
-            '<input class="camp-customer-check" type="checkbox" ' + (selected.has(x.ref) ? "checked" : "") + ' onchange="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
-            '<span class="camp-customer-avatar">' + esc((x.name || "?").slice(0,1).toUpperCase()) + '</span><span><b>' + esc(x.name || "Customer") + '</b><small>' + esc(x.phone_masked || x.phone || "") + '</small></span>'
-          + '</label>').join("")
-        : '<div class="muted">No matching active customer found.</div>';
-    } catch (e) { $("camp-customer-results").innerHTML = errBox(e.message, "searchCampaignCustomers"); }
-  }, 250);
+      const url = "/admin/api/customers/search?limit=50" + (q ? "&q=" + encodeURIComponent(q) : "");
+      const rows = await api(url);
+      renderCampaignCustomerPickerRows(rows);
+      const meta = $("camp-picker-result-count");
+      if (meta) meta.textContent = rows.length + (rows.length === 50 ? "+" : "") + " customers shown";
+    } catch (e) {
+      const box = $("camp-customer-results");
+      if (box) box.innerHTML = errBox(e.message, "openCampaignCustomerPicker");
+    }
+  }, q ? 180 : 0);
+}
+
+async function openCampaignCustomerPicker() {
+  openModal(`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+    <div><h3 style="margin:0">👥 Select customers</h3>
+      <p class="muted" style="margin:4px 0 0">Tick the customers who should receive this campaign.</p></div>
+    <b id="camp-picker-result-count" class="pill">Loading…</b>
+  </div>
+  <div style="margin-top:14px">
+    <input id="camp-customer-search" type="search" placeholder="Search by customer name or mobile number…"
+      style="width:100%;box-sizing:border-box" oninput="loadCampaignCustomerPicker(this.value)">
+  </div>
+  <div class="camp-picker-actions" style="margin-top:10px">
+    <button type="button" class="btn ghost sm" onclick="selectAllVisibleCampaignCustomers()">Select all visible</button>
+    <button type="button" class="btn ghost sm" onclick="clearCampaignSelection()">Clear selection</button>
+  </div>
+  <div id="camp-customer-results" class="camp-customer-results" style="max-height:52vh;overflow:auto;margin-top:10px">
+    <div class="muted" style="padding:16px;text-align:center">Loading customers…</div>
+  </div>
+  <div class="btnrow" style="margin-top:14px">
+    <button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn" onclick="closeModal();renderCampaignSelectedCustomers()">Done — <span id="camp-picker-selected-count">${CAMPAIGN_SELECTED_CUSTOMERS.length}</span> selected</button>
+  </div>`);
+  await loadCampaignCustomerPicker("");
+  const input = $("camp-customer-search");
+  if (input) input.focus();
 }
 
 function selectAllVisibleCampaignCustomers() {
   const selected = new Set(CAMPAIGN_SELECTED_CUSTOMERS.map((x) => x.ref));
-  CAMPAIGN_VISIBLE_CUSTOMERS.forEach((x) => {
+  CAMPAIGN_PICKER_ROWS.forEach((x) => {
     if (!selected.has(x.ref)) CAMPAIGN_SELECTED_CUSTOMERS.push(x);
   });
   renderCampaignSelectedCustomers();
-  const q = $("camp-customer-search")?.value || "";
-  if (q) searchCampaignCustomers(q);
+  renderCampaignCustomerPickerRows(CAMPAIGN_PICKER_ROWS);
+  const count = $("camp-picker-selected-count");
+  if (count) count.textContent = CAMPAIGN_SELECTED_CUSTOMERS.length;
   updateCampaignPreview();
 }
 
 function clearCampaignSelection() {
   CAMPAIGN_SELECTED_CUSTOMERS = [];
   renderCampaignSelectedCustomers();
-  const q = $("camp-customer-search")?.value || "";
-  if (q) searchCampaignCustomers(q);
+  renderCampaignCustomerPickerRows(CAMPAIGN_PICKER_ROWS);
+  const count = $("camp-picker-selected-count");
+  if (count) count.textContent = "0";
   updateCampaignPreview();
 }
 
 async function toggleCampaignCustomer(ref) {
   const i = CAMPAIGN_SELECTED_CUSTOMERS.findIndex((x) => x.ref === ref);
-  if (i >= 0) CAMPAIGN_SELECTED_CUSTOMERS.splice(i, 1);
-  else {
-    try {
-      const found = CAMPAIGN_CUSTOMER_CACHE[ref];
-      if (!found) throw new Error("Search for the customer again");
-      CAMPAIGN_SELECTED_CUSTOMERS.push(found);
-    } catch (e) { toast(e.message, true); return; }
+  if (i >= 0) {
+    CAMPAIGN_SELECTED_CUSTOMERS.splice(i, 1);
+  } else {
+    const found = CAMPAIGN_CUSTOMER_CACHE[ref];
+    if (!found) { toast("Customer not loaded. Search again.", true); return; }
+    CAMPAIGN_SELECTED_CUSTOMERS.push(found);
   }
   renderCampaignSelectedCustomers();
-  const q = $("camp-customer-search")?.value || "";
-  if (q) searchCampaignCustomers(q);
+  renderCampaignCustomerPickerRows(CAMPAIGN_PICKER_ROWS);
+  const count = $("camp-picker-selected-count");
+  if (count) count.textContent = CAMPAIGN_SELECTED_CUSTOMERS.length;
   updateCampaignPreview();
 }
 
