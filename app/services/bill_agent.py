@@ -334,18 +334,29 @@ async def _handle_task_button(
     # Delivery staff: the same Done/Pending menu is used for both pickup and delivery.
     if action == "done":
         if role not in {"DELIVERY", "ADMIN", "MANAGER"}:
-            return "Is task ke liye Done option available nahi hai."
+            return "This task is assigned to a different role."
+        if task.kind in {"pickup", "delivery"}:
+            return await task_service.confirm_pickup(
+                db, task, done=True, by=staff.name if staff else sender_label
+            )
         return await _close_task_by_code(db, sender_phone, sender_label, code)
 
     if action == "pending":
-        await task_service.note_reply(db, staff.id if staff is not None else task.assigned_staff_id, "Pending")
+        staff_id = staff.id if staff is not None else task.assigned_staff_id
+        await task_service.note_reply(db, staff_id, "Pending")
         if task.kind in {"pickup", "delivery"}:
+            _PENDING[sender_phone] = PendingTaskEta(code=code)
             await team.notify_admins(
                 db,
                 f"⏳ *Task pending — {task.code}*\n"
                 f"Staff: {staff.name if staff else sender_label}\n"
                 f"Task: {task.title}\n"
-                "Current status: Pending.",
+                "Current status: Pending. ETA will be requested from the staff member.",
+            )
+            return (
+                f"⏳ *{task.code}* — Pending status recorded.\n"
+                "Please tell me the expected completion time, for example: "
+                "2 baje / sham tak / kal subah."
             )
         return f"⏳ *{task.code}* — Pending status recorded. Please update again when the task is completed."
 
