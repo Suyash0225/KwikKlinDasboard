@@ -183,6 +183,7 @@ async def test_silence_escalates_to_the_manager(worker, sent, awake, monkeypatch
     async with async_session_factory() as db:
         task = await _mk(db, worker)
         code = task.code
+        task.created_at = fixed_now - timedelta(hours=10)
         task.ping_count = task_service.ESCALATE_AFTER_PINGS
         task.last_ping_at = fixed_now - timedelta(hours=5)
         db.add(task)
@@ -204,6 +205,7 @@ async def test_silence_escalates_to_the_manager(worker, sent, awake, monkeypatch
 
 
 async def test_task_followups_max_three_per_day(worker, sent, awake, monkeypatch) -> None:
+    """An open task may receive at most three staff reminders per day."""
     # Keep the test timestamp safely inside one IST calendar day.
     fixed_now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
 
@@ -215,9 +217,9 @@ async def test_task_followups_max_three_per_day(worker, sent, awake, monkeypatch
             return fixed_now.astimezone(tz)
 
     monkeypatch.setattr(task_service, "datetime", FrozenDateTime)
-    """An open task may receive at most three staff reminders per day."""
     async with async_session_factory() as db:
         task = await _mk(db, worker)
+        task.created_at = fixed_now - timedelta(hours=10)
         task.last_ping_at = fixed_now - timedelta(hours=3)
         task.ping_count = 3
         db.add(task)
