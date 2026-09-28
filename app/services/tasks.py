@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import async_session_factory
 from app.models import TASK_CANCELLED, TASK_DONE, TASK_OPEN, Order, Staff, StaffRole, Task
-from app.services import audit
+from app.services import app_settings, audit
 from app.services.whatsapp import SendError, WindowClosedError, send_message
 from app.services.tenant_context import manager_phone
 
