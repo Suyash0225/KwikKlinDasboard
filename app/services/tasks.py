@@ -28,6 +28,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 PING_AFTER_HOURS = 2
 URGENT_PING_AFTER_HOURS = 1
 ESCALATE_AFTER_PINGS = 3
+MAX_FOLLOWUPS_PER_DAY = 3
 QUIET_START, QUIET_END = settings.QUIET_HOURS_START, settings.QUIET_HOURS_END
 
 
@@ -806,6 +807,21 @@ async def run_task_followups() -> int:
             if staff is None or not staff.is_active:
                 continue
             order = await db.get(Order, task.order_id) if task.order_id else None
+            # ping_count is intentionally a DAILY follow-up count.
+            # We never send more than three reminders to one staff member for
+            # one open task in a calendar day. At the first follow-up of a new
+            # day the counter starts again; escalated_at stays permanent so
+            # the manager is not spammed every morning.
+            if task.last_ping_at is not None:
+                last_ping_ist = task.last_ping_at.astimezone(IST)
+                if last_ping_ist.date() != now_ist.date():
+                    task.ping_count = 0
+                    db.add(task)
+                    await db.commit()
+
+            if task.ping_count >= MAX_FOLLOWUPS_PER_DAY:
+                continue
+
             gap_hours = _task_ping_gap_hours(task, order, now_ist)
             since = task.last_ping_at or task.created_at
             if (now - since) < timedelta(hours=gap_hours):
