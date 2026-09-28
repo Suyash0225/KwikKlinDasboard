@@ -239,6 +239,9 @@ async def send_message(
     Interactive buttons are represented as a WAHA list so task actions remain
     deterministic without relying on WAHA's deprecated button endpoint.
     """
+    if settings.WHATSAPP_PROVIDER != "waha":
+        raise SendError("WAHA/NOWEB is the only enabled WhatsApp provider", transient=False)
+
     if template_name and (text or buttons or list_rows):
         raise ValueError("template cannot be combined with text/buttons/list")
     if buttons and list_rows:
@@ -452,6 +455,9 @@ async def send_image(
     sent_by: str = "manager",
 ) -> str:
     """Send media through WAHA when configured; keep Meta/DotPe legacy path."""
+    if settings.WHATSAPP_PROVIDER != "waha":
+        raise SendError("WAHA/NOWEB is the only enabled WhatsApp provider", transient=False)
+
     customer, staff = await _find_recipient(db, to_phone)
 
     if settings.WHATSAPP_PROVIDER == "waha":
