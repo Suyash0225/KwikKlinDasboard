@@ -78,9 +78,10 @@ def _anthropic() -> AsyncAnthropic:
 async def _with_retry(call, *, provider: str, model: str):
     """Run one provider call, retrying only what is worth retrying.
 
-    Retry: network blips and 5xx — a second attempt genuinely often works.
-    Don't: bad key, spent quota, 429. Those fail identically the second
-    time; the caller's cheaper-model fallback is the real escape hatch.
+    Retry: network blips, 408/5xx, and 429 rate limits — a bounded retry
+    with jitter can recover transient capacity. Do not retry bad keys or
+    application quota exhaustion; the caller's cheaper-model fallback is
+    the real escape hatch.
     LLMError (garbage JSON) isn't caught here at all — retrying a confused
     model burns quota to get confused again.
     """
