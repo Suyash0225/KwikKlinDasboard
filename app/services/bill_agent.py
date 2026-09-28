@@ -427,6 +427,11 @@ async def _handle_task_button(
             args={"task": code, "order": order.order_number, "status": target.name},
             result=target.name,
         )
+        await team.notify_admins(
+            db,
+            f"🔄 {sender_label} updated [{code}] / {order.order_number} → {label}",
+            skip_phone=staff.phone if staff else None,
+        )
         return (
             f"✅ *{order.order_number}* status updated to *{label}*.\n"
             f"Task: {code}\n"
@@ -1099,7 +1104,6 @@ async def handle_staff_message(
                 return get_message("bill_cancelled")
         elif kind == "relay_confirm":
             from app.services import tasks as task_service, team
-            from app.models.task import TASK_OPEN
             parts = action.split(":")
             code = parts[0].upper() if parts else ""
             choice = parts[1].lower() if len(parts) > 1 else ""
