@@ -255,8 +255,10 @@ async def _send_to_assignee(
         # mode use plain text so delivery does not depend on interactive-list
         # support. The task code is still included for "done T-123" replies.
         if settings.WHATSAPP_PROVIDER == "waha":
+            from app.services.work_orders import task_buttons
             await send_message(
-                db, to_phone=staff.phone, text=body, sent_by="bot"
+                db, to_phone=staff.phone, text=body,
+                buttons=await task_buttons(db, task.code), sent_by="bot"
             )
         else:
             from app.services.work_orders import task_buttons
@@ -306,9 +308,9 @@ _JOB = {
         "head": "Naya pickup",
         "ask": "Kab tak pickup kar loge? (jaise: sham tak / kal 11 baje)",
         "done_q": "Pickup ho gaya?",
-        "yes_title": "✅ Haan, ho gaya",
+        "yes_title": "✅ Pickup done",
         "customer_line": "Your pickup is scheduled",
-        "done_reply": "👍 Shukriya! Kapde aa gaye — main aage ka dekh leta hoon.",
+        "done_reply": "👍 Thank you. Pickup marked as done.",
     },
     "delivery": {
         "emoji": "🚚",
@@ -317,9 +319,9 @@ _JOB = {
         "head": "Delivery ke liye taiyar",
         "ask": "Kab tak deliver kar doge? (jaise: sham tak / kal 11 baje)",
         "done_q": "Delivery ho gayi?",
-        "yes_title": "✅ Haan, ho gayi",
+        "yes_title": "✅ Delivered",
         "customer_line": "Your clothes are on the way",
-        "done_reply": "👍 Shukriya! Delivery mark kar di — customer ko bhi bata diya.",
+        "done_reply": "👍 Delivery marked as done. Customer updated.",
     },
 }
 
@@ -568,10 +570,10 @@ async def _ask_job_done(db: AsyncSession, task: Task, staff: Staff | None) -> No
     try:
         await send_message(
             db, to_phone=staff.phone,
-            text=f"[{task.code}] {cfg['done_q']}",
+            text=f"📋 {cfg['word'].upper()} TASK [{task.code}]\n{cfg['done_q']}",
             buttons=[
                 Button(f"job_yes:{task.code}", cfg["yes_title"]),
-                Button(f"job_no:{task.code}", "❌ Abhi nahi"),
+                Button(f"job_no:{task.code}", "⏳ Pending"),
             ],
             sent_by="bot",
         )
