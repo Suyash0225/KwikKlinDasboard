@@ -33,9 +33,10 @@ class QuotaExceeded(Exception):
 
 
 def _month_start() -> datetime:
-    return datetime.now(timezone.utc).replace(
+    now_ist = datetime.now(IST)
+    return now_ist.replace(
         day=1, hour=0, minute=0, second=0, microsecond=0
-    )
+    ).astimezone(timezone.utc)
 
 
 async def _tenant_and_limits(db):
