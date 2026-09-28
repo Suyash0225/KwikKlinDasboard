@@ -177,8 +177,10 @@ async def delete(creds: Creds | None, name: str) -> None:
     status, data = await graph(
         "DELETE", f"{creds.waba_id}/message_templates", creds.token, params={"name": name}
     )
+    if status in (401, 403):
+        raise TemplateError("meta_auth_failed", 503)
     if status != 200:
-        raise TemplateError(str(data)[:250])
+        raise TemplateError(str(data)[:250], 503)
 
 
 def _status_vs_spec(remote_t: dict | None, spec: dict, state: str) -> str:
