@@ -788,7 +788,10 @@ async def _notify_customer(
         url_param = None
         if TEMPLATES.get(template_name, {}).get("url_button") and order.tenant_id:
             url_param = bill_link.make(order.tenant_id, order.id)
-        language = str(await app_settings.get(db, "communication_language") or "en").lower()\n        if language not in ("en", "hi"):\n            language = "en"\n        text_body = get_message(message_key, lang=language, order_number=order.order_number, **fmt)
+        language = str(await app_settings.get(db, "communication_language") or "en").lower()
+        if language not in ("en", "hi"):
+            language = "en"
+        text_body = get_message(message_key, lang=language, order_number=order.order_number, **fmt)
         try:
             await send_message(
                 db, to_phone=customer.phone, text=text_body, buttons=buttons
