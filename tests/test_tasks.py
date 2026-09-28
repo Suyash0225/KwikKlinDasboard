@@ -191,6 +191,23 @@ async def test_silence_escalates_to_the_manager(worker, sent, awake) -> None:
     assert not [c for c in sent if c["to"] == settings.MANAGER_PHONE], "escalate once, not every tick"
 
 
+async def test_task_followups_max_three_per_day(worker, sent, awake) -> None:
+    """An open task may receive at most three staff reminders per day."""
+    async with async_session_factory() as db:
+        task = await _mk(db, worker)
+        task.last_ping_at = datetime.now(timezone.utc) - timedelta(hours=3)
+        task.ping_count = 3
+        db.add(task)
+        await db.commit()
+
+    sent.clear()
+    await task_service.run_task_followups()
+
+    assert not [c for c in sent if c["to"] == TASK_STAFF_PHONE], (
+        "fourth reminder must not be sent on the same day"
+    )
+
+
 async def test_done_tasks_are_left_alone(worker, sent, awake) -> None:
     async with async_session_factory() as db:
         task = await _mk(db, worker)
