@@ -257,26 +257,27 @@ async def _send_to_assignee(
             f"{update_line}\n"
             f"— Kwik Klin"
         )
-    # Tap = zero typing. Button id mein task ka CODE hai, isliye 5-6 kaam
-    # ek saath pending hon tab bhi galat task kabhi band nahi hota. Likh kar
-    # jawab dena ("done T-11", ya poori baat) waise hi chalta rahega —
-    # button sirf sabse aam jawab ka shortcut hai.
+    # Fixed choices should be a WhatsApp list, not free-text instructions.
+    # The menu is role-aware: washer/supervisor gets Wash/Iron/Ready/Pending;
+    # delivery gets Done/Pending for both pickup and delivery. The task code
+    # stays in every row id, so a tap can never update the wrong task.
     try:
-        # Assignment notification is a critical WhatsApp message. In WAHA
-        # mode use plain text so delivery does not depend on interactive-list
-        # support. The task code is still included for "done T-123" replies.
-        # First assignment is a clean task card. Add the action menu only
-        # on reminders/when the task is getting close to needing an update.
-        if first:
+        from app.services.work_orders import task_status_menu
+
+        rows = await task_status_menu(db, task.code)
+        if rows:
+            menu_body = body + "\n\nPlease select the current task status from the menu below."
             await send_message(
-                db, to_phone=staff.phone, text=body, sent_by="bot"
+                db,
+                to_phone=staff.phone,
+                text=menu_body,
+                list_rows=rows,
+                list_button="Update status",
+                list_title="Task status",
+                sent_by="bot",
             )
         else:
-            from app.services.work_orders import task_buttons
-            buttons = await task_buttons(db, task.code)
-            await send_message(
-                db, to_phone=staff.phone, text=body, buttons=buttons, sent_by="bot"
-            )
+            await send_message(db, to_phone=staff.phone, text=body, sent_by="bot")
         log.info("task_whatsapp_assignment_sent", code=task.code, staff=staff.name)
         return True
     except WindowClosedError:
