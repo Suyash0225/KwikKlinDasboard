@@ -1603,7 +1603,7 @@ async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
     ).scalar_one()
 
     tpl = {"approved": 0, "pending": 0, "rejected": 0}
-    quality, meta_ok, meta_state = None, False, "not_connected"
+    quality, meta_ok, meta_state, meta_error = None, False, "not_connected", None
 
     creds = await wa_templates.creds_for_current(db)
     if creds is not None:
@@ -1635,15 +1635,26 @@ async def whatsapp_stats(db: AsyncSession = Depends(get_db)) -> dict:
                         quality = d2.get("quality_rating")
                 elif status in (401, 403):
                     meta_state = "auth_failed"
+                    meta_error = {
+                        "status": status,
+                        "code": (data.get("error") or {}).get("code"),
+                        "subcode": (data.get("error") or {}).get("error_subcode"),
+                        "message": (data.get("error") or {}).get("message"),
+                    }
+                    log.error("wa_stats_meta_auth_failed", waba_id=creds.waba_id, **meta_error)
                 else:
                     meta_state = "error"
-            except Exception:
+                    meta_error = {"status": status, "message": str(data)[:300]}
+                    log.error("wa_stats_meta_error", waba_id=creds.waba_id, **meta_error)
+            except Exception as exc:
                 meta_state = "unreachable"
-                log.exception("wa_stats_meta_failed")
+                meta_error = {"message": str(exc)[:200]}
+                log.exception("wa_stats_meta_failed", waba_id=creds.waba_id)
             _wa_stats_cache[creds.waba_id] = (
                 _time.monotonic(),
                 {"templates": dict(tpl), "quality": quality,
-                 "meta_ok": meta_ok, "meta_state": meta_state},
+                 "meta_ok": meta_ok, "meta_state": meta_state,
+                 "meta_error": meta_error},
             )
 
     return {
