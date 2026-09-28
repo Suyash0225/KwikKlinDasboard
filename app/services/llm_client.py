@@ -213,7 +213,7 @@ async def _generate(
     provider: str = PROVIDER,
 ) -> str:
     """Provider dispatch — one place, so fallback logic stays tiny."""
-    if PROVIDER == "gemini":
+    if provider == "gemini":
         return await _gemini_generate(system, user_text, model, max_tokens, schema, image)
     output_config = (
         {"format": {"type": "json_schema", "schema": schema}} if schema is not None else None
