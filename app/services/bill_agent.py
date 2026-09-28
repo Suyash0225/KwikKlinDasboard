@@ -60,7 +60,7 @@ from app.services.order_service import (
     set_expected_delivery,
     update_status,
 )
-from app.services.whatsapp import SendError, WindowClosedError, send_message
+from app.services.whatsapp import ListRow, SendError, WindowClosedError, send_message
 from app.utils.phone import normalize_phone
 from app.services.tenant_context import manager_phone
 
@@ -72,6 +72,34 @@ _IMAGE_MARKER_RE = re.compile(r"^\[image:/admin/media/([A-Za-z0-9._\-]+)\]\s*(.*
 _MEDIA_DIR = Path(__file__).resolve().parent.parent / "media"
 _CONFIRM_RE = re.compile(r"^\s*(haan?|ha(n|nji)?|yes|y|ok(ay)?|theek( hai)?|confirm|✅|done)\s*$", re.I)
 _CANCEL_RE = re.compile(r"^\s*(nahi+|no|na|cancel|rehne do|❌|mat( banao)?)\s*$", re.I)
+
+# Fixed-choice prompts use WhatsApp list menus. Free-form answers (ETA, issue
+# description, bill edits) remain normal text because those need real input.
+_FIXED_BTN_RE = re.compile(
+    r"^\s*\[button:(bill_confirm|payment_confirm|relay_confirm):([^\]]+)\]",
+    re.I,
+)
+
+async def _send_fixed_choice_menu(
+    db: AsyncSession,
+    to_phone: str,
+    text: str,
+    rows: list[ListRow],
+    *,
+    button: str = "Select",
+    title: str = "Kwik Klin",
+) -> bool:
+    """Send a bounded-choice prompt as a WhatsApp list; False means fallback."""
+    try:
+        await send_message(
+            db, to_phone=to_phone, text=text, list_rows=rows,
+            list_button=button, list_title=title, sent_by="bot",
+        )
+        return True
+    except (WindowClosedError, SendError):
+        log.info("fixed_choice_menu_not_sent", to=to_phone)
+        return False
+
 
 
 @dataclass
@@ -1042,6 +1070,57 @@ async def handle_staff_message(
         _PENDING.pop(sender_phone, None)
         pending = None
 
+    # Fixed-choice confirmations are deterministic and handled before the LLM.
+    fixed = _FIXED_BTN_RE.match(text or "")
+    if fixed:
+        kind, action = fixed.group(1).lower(), fixed.group(2).lower()
+        if kind == "bill_confirm":
+            pending_bill = _PENDING.get(sender_phone)
+            if not isinstance(pending_bill, PendingBill):
+                return "⚠️ Ye bill draft ab active nahi hai."
+            if action == "yes":
+                return await _finalize_bill(db, sender_phone, sender_label, pending_bill)
+            if action == "cancel":
+                _PENDING.pop(sender_phone, None)
+                return get_message("bill_cancelled")
+            if action == "edit":
+                return (
+                    "✏️ Theek hai — bill mein kya badalna hai likh dijiye. "
+                    "Draft save hai; main update karke phir confirmation menu dikhaunga."
+                )
+        elif kind == "payment_confirm":
+            pending_payment = _PENDING.get(sender_phone)
+            if not isinstance(pending_payment, PendingPayment):
+                return "⚠️ Ye payment confirmation ab active nahi hai."
+            if action == "yes":
+                return await _finalize_payment(db, sender_phone, sender_label, pending_payment)
+            if action == "cancel":
+                _PENDING.pop(sender_phone, None)
+                return get_message("bill_cancelled")
+        elif kind == "relay_confirm":
+            from app.services import tasks as task_service
+            code_m = re.search(r"T-\d+", action.upper())
+            choice = "yes" if action.endswith(":yes") else "no"
+            if code_m:
+                task = await task_service.get_by_code(db, code_m.group(0))
+                if task is not None:
+                    if choice == "yes":
+                        await task_service.note_reply(
+                            db, task.assigned_staff_id, "Yes — fixed-choice reply",
+                            by=sender_label,
+                        )
+                        await task_service.complete_task(
+                            db, task, reply="Yes — fixed-choice reply", by=sender_label,
+                            advance_order=False,
+                        )
+                        return f"✅ {task.code} ka response *Yes* record kar diya."
+                    await task_service.note_reply(
+                        db, task.assigned_staff_id, "No — fixed-choice reply",
+                        by=sender_label,
+                    )
+                    return f"⏳ {task.code} ka response *No* record kar diya."
+        return None
+
     # Task ke buttons + unka follow-up — dono deterministic, zero LLM.
     btn_reply = await _handle_task_button(db, sender_phone, sender_label, text or "")
     if btn_reply is not None:
@@ -1121,6 +1200,7 @@ async def handle_staff_message(
         if not text or text.startswith("["):
             return None
         if pending and _CONFIRM_RE.match(text):
+            # Backward compatible with an older client or typed "haan".
             if isinstance(pending, PendingPayment):
                 return await _finalize_payment(db, sender_phone, sender_label, pending)
             return await _finalize_bill(db, sender_phone, sender_label, pending)
@@ -1162,8 +1242,21 @@ async def handle_staff_message(
     reply: str | None = None
     if action == "new_bill" and extracted["items"]:
         draft = await _price_draft(db, extracted)
-        _PENDING[sender_phone] = PendingBill(draft=draft)
+        pending_bill = PendingBill(draft=draft)
+        _PENDING[sender_phone] = pending_bill
         reply = _draft_summary(draft)
+        sent = await _send_fixed_choice_menu(
+            db, sender_phone, reply,
+            [
+                ListRow("bill_confirm:yes", "✅ Haan, Bill Banao", "Create this bill"),
+                ListRow("bill_confirm:edit", "✏️ Bill Badalna Hai", "Edit the draft"),
+                ListRow("bill_confirm:cancel", "❌ Cancel", "Cancel this draft"),
+            ],
+            button="Bill action",
+            title="Bill confirmation",
+        )
+        if sent:
+            reply = None
     elif action == "delay_update":
         reply = await _apply_delay(db, sender_label, extracted)
     elif action == "status_update":
@@ -1871,13 +1964,23 @@ async def _stage_payment(
         order_number=order.order_number, amount=amount, method=method
     )
     due = (order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0"))
-    return get_message(
+    prompt = get_message(
         "payment_confirm_prompt",
         order_number=order.order_number,
         amount=f"{amount:g}",
         method=method.upper(),
         due=f"{max(due, 0)}",
     )
+    sent = await _send_fixed_choice_menu(
+        db, sender_phone, prompt,
+        [
+            ListRow("payment_confirm:yes", "✅ Haan, Payment Record Karo", "Record this payment"),
+            ListRow("payment_confirm:cancel", "❌ Cancel", "Do not record payment"),
+        ],
+        button="Payment action",
+        title="Payment confirmation",
+    )
+    return None if sent else prompt
 
 
 async def _finalize_payment(
