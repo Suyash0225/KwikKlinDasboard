@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     WAHA_API_KEY: str = ""
     WAHA_SESSION: str = "default"
     WAHA_WEBHOOK_SECRET: str = ""
+    # Backward-compatible name used by the existing EC2 WAHA container.
+    # New deployments should prefer WAHA_WEBHOOK_SECRET.
+    WAHA_WEBHOOK_HMAC_KEY: str = ""
 
     # --- Backups ---
     # Where pg_dump lives on this machine; nightly backups need it.

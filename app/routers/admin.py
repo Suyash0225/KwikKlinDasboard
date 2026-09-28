@@ -198,7 +198,8 @@ async def waha_configure_webhook(request: Request) -> dict:
     """
     if not _waha_is_home_tenant():
         raise HTTPException(status_code=403, detail="WhatsApp connection is managed for the home shop only")
-    if not settings.WAHA_WEBHOOK_SECRET:
+    webhook_secret = settings.WAHA_WEBHOOK_SECRET or settings.WAHA_WEBHOOK_HMAC_KEY
+    if not webhook_secret:
         raise HTTPException(status_code=503, detail="WhatsApp webhook security is not configured")
 
     body = {
@@ -213,7 +214,7 @@ async def waha_configure_webhook(request: Request) -> dict:
             "webhooks": [{
                 "url": f"{settings.SITE_URL.rstrip('/') if settings.SITE_URL else 'https://kwikklin.online'}/webhook/waha",
                 "events": ["message", "message.ack", "session.status"],
-                "hmac": {"key": settings.WAHA_WEBHOOK_HMAC_KEY},
+                "hmac": {"key": webhook_secret},
                 "retries": {"policy": "exponential", "delaySeconds": 2, "attempts": 5},
             }]
         },
