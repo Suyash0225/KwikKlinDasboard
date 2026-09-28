@@ -665,23 +665,30 @@ async def customers_search(
     (ix_customers_tenant_phone_prefix / ix_customers_name_trgm).
     """
     term = q.strip()
-    if len(term) < 2:
-        return []       # ek akshar par poori dukaan lautana bekaar hai
-    digits = re.sub(r"\D", "", term)
-    if digits and len(digits) >= 3:
-        # Number ka tukda: aage se bhi mile aur beech se bhi (log 98765...
-        # bhi likhte hain aur +91 98765... bhi)
-        where = Customer.phone.ilike(f"%{digits}%")
-    else:
-        where = Customer.name.ilike(f"%{term}%")
-    rows = (
-        await db.execute(
+    if term:
+        if len(term) < 2:
+            return []       # ek akshar par search karna useful nahi
+        digits = re.sub(r"\D", "", term)
+        if digits and len(digits) >= 3:
+            # Number ka tukda: aage se bhi mile aur beech se bhi
+            where = Customer.phone.ilike(f"%{digits}%")
+        else:
+            where = Customer.name.ilike(f"%{term}%")
+        query = (
             select(Customer)
             .where(where, Customer.is_active)
             .order_by(Customer.last_message_at.desc().nulls_last())
             .limit(limit)
         )
-    ).scalars().all()
+    else:
+        # Campaign picker popup ko khulte hi recent active customers dikhane hain.
+        query = (
+            select(Customer)
+            .where(Customer.is_active)
+            .order_by(Customer.last_message_at.desc().nulls_last())
+            .limit(limit)
+        )
+    rows = (await db.execute(query)).scalars().all()
     def _mask_phone(phone: str) -> str:
         digits = re.sub(r"\D", "", phone or "")
         if len(digits) >= 10:
