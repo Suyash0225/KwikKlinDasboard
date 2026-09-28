@@ -71,22 +71,14 @@ function isoDateLocal(d) {
   const day = String(d.getDate()).padStart(2, "0");
   return y + "-" + m + "-" + day;
 }
-let KEY = localStorage.getItem("kk_admin_key") || "";
-const qs = new URLSearchParams(location.search);
-if (qs.get("key")) {
-  KEY = qs.get("key");
-  localStorage.setItem("kk_admin_key", KEY);
-  history.replaceState({ kk: "root" }, "", location.pathname + location.hash);
-}
-
 async function api(path, opts = {}) {
-  const headers = Object.assign({ "X-API-Key": KEY }, opts.headers || {});
+  const headers = Object.assign({}, opts.headers || {});
   if (opts.body && !(opts.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
     opts.body = typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body);
   }
   const r = await fetch(path, Object.assign({}, opts, { headers }));
-  if (r.status === 401) { showLogin(); throw new Error("Please sign in"); }
+  if (r.status === 401) { location.href = "/join#login"; throw new Error("Please sign in"); }
   if (!r.ok) {
     let d = T.errGeneric;
     try { d = (await r.json()).detail || d; } catch (e) {}
@@ -290,8 +282,7 @@ function startLiveUpdates() {
 
 async function kkLogout() {
   // dono cheezein hatao: purani admin key AUR asli session
-  localStorage.removeItem("kk_admin_key");
-  KEY = "";
+
   try {
     await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
   } catch (e) { /* offline — cookie waise bhi expire ho jayegi */ }
@@ -329,7 +320,6 @@ async function ensureSignedIn() {
     applyFeatureLocks(me.features || []);
     return true;                       // session kaafi hai, key ki zaroorat nahi
   }
-  if (KEY) return true;                  // purani admin key se chal jayega
   if (!serverAnswered) {
     // Signal gaya hai, session nahi. Login par bhejna yahan galat jawab hai.
     toast("No signal — trying again…", true, 4000);
