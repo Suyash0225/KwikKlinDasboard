@@ -339,6 +339,49 @@ def knowledge_block(
     return "\n".join(lines)
 
 
+_INTERACTIVE_ID_RE = re.compile(r"^\[button:([^\]]+)\]\s*(.*)$", re.I)
+
+
+def _conversation_for_ai(message_text: str) -> str:
+    """Turn stored interactive IDs into explicit semantic context for the AI."""
+    text = (message_text or "").strip()
+    m = _INTERACTIVE_ID_RE.match(text)
+    if not m:
+        return text[:200]
+
+    action_id, title = m.group(1).strip(), m.group(2).strip()
+    known = {
+        "bill_confirm:yes": "MENU_RESPONSE: Bill draft -> YES, create the bill.",
+        "bill_confirm:edit": "MENU_RESPONSE: Bill draft -> EDIT; user wants to change the draft before creating it.",
+        "bill_confirm:cancel": "MENU_RESPONSE: Bill draft -> CANCEL; discard the draft.",
+        "payment_confirm:yes": "MENU_RESPONSE: Payment -> YES, record the payment.",
+        "payment_confirm:cancel": "MENU_RESPONSE: Payment -> CANCEL; do not record the payment.",
+    }
+    if action_id in known:
+        return known[action_id]
+    if action_id.startswith("job_yes:"):
+        return f"MENU_RESPONSE: Task {action_id.split(':', 1)[1]} -> YES / completed."
+    if action_id.startswith("job_no:"):
+        return f"MENU_RESPONSE: Task {action_id.split(':', 1)[1]} -> NO / still pending."
+    if action_id.startswith("relay_confirm:"):
+        parts = action_id.split(":")
+        if len(parts) >= 3:
+            return f"MENU_RESPONSE: Task {parts[1]} -> {('YES' if parts[2].lower() == 'yes' else 'NO')}."
+    if action_id.startswith("task:"):
+        parts = action_id.split(":")
+        if len(parts) >= 3:
+            return f"MENU_RESPONSE: Task {parts[1]} -> selected status/action '{parts[2]}'."
+    if action_id.startswith("ord:"):
+        parts = action_id.split(":")
+        if len(parts) >= 3:
+            return f"MENU_RESPONSE: Order {parts[1]} -> action '{parts[2]}'."
+    if action_id.startswith("payment:"):
+        parts = action_id.split(":")
+        if len(parts) >= 3:
+            return f"MENU_RESPONSE: Customer payment for {parts[1]} -> '{parts[2]}'."
+    return f"MENU_RESPONSE: selected '{title or action_id}' (id={action_id})."
+
+
 async def thread_history(
     db: AsyncSession,
     *,
@@ -369,5 +412,5 @@ async def thread_history(
     lines = []
     for m in reversed(rows):
         who = "THEM" if m.direction.name == "INBOUND" else "US"
-        lines.append(f"{who}: {(m.message_text or '')[:200]}")
+        lines.append(f"{who}: {_conversation_for_ai(m.message_text)}")
     return "Recent conversation (oldest first):\n" + "\n".join(lines)
