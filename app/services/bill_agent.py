@@ -345,17 +345,17 @@ async def _handle_task_button(
     if task is None:
         return get_message("task_unknown_code", code=code)
 
-    # A task menu belongs only to its assignee (manager/admin can operate it).
+    # Team-shared task access: the primary assignee is still retained for
+    # ownership/audit, but any active member of the matching operational team
+    # may act on the shared queue.
     staff = (
         await db.execute(select(Staff).where(Staff.phone == sender_phone))
     ).scalar_one_or_none()
-    if (
-        staff is not None
-        and task.assigned_staff_id is not None
-        and staff.role.name not in {"ADMIN", "MANAGER"}
-        and task.assigned_staff_id != staff.id
-    ):
-        return "Ye task aapke naam par assigned nahi hai. Kripya apne assigned task ka menu use karein."
+    if staff is not None:
+        if not await task_service.staff_can_access_task(db, task, staff):
+            return "Ye task aapki team ke shared queue mein nahi hai."
+    if task.status != task_service.TASK_OPEN:
+        return await task_service.completion_message(db, task, by=staff.name if staff else sender_label)
 
     role = staff.role.name if staff is not None else "manager"
 
@@ -371,7 +371,7 @@ async def _handle_task_button(
 
     if action == "pending":
         staff_id = staff.id if staff is not None else task.assigned_staff_id
-        await task_service.note_reply(db, staff_id, "Pending")
+        await task_service.note_reply(db, staff_id, "Pending", by=staff.name if staff else sender_label)
         if task.kind in {"pickup", "delivery"}:
             _PENDING[sender_phone] = PendingTaskEta(code=code)
             await team.notify_admins(
@@ -958,8 +958,8 @@ async def _staff_reference_lookup(
         task = await task_service.get_by_code(db, ref_value)
         if task is None:
             return f"❌ {ref_value} ka koi task nahi mila. Task No. check karke bhej dijiye."
-        if task.assigned_staff_id != staff.id:
-            return f"ℹ️ {ref_value} aapke naam par assigned nahi hai, isliye main uski details nahi dikha sakta."
+        if not await task_service.staff_can_access_task(db, task, staff):
+            return f"ℹ️ {ref_value} aapki team ke shared queue mein nahi hai, isliye main uski details nahi dikha sakta."
 
         _STAFF_REF_CONTEXT[sender_phone] = ("task", task.code, datetime.now(timezone.utc))
         order = await db.get(Order, task.order_id) if task.order_id else None
@@ -1099,6 +1099,7 @@ async def handle_staff_message(
                 return get_message("bill_cancelled")
         elif kind == "relay_confirm":
             from app.services import tasks as task_service, team
+            from app.models.task import TASK_OPEN
             parts = action.split(":")
             code = parts[0].upper() if parts else ""
             choice = parts[1].lower() if len(parts) > 1 else ""
@@ -2399,6 +2400,9 @@ def _pickup_reference_date(text: str, today: date) -> date | None:
         return today + timedelta(days=2)
     return None
 
+
+# Duplicate pickup/delivery taps are safe: confirm_pickup checks the task state
+# before advancing the order or notifying the manager again.
 
 async def _handle_pickup_exchange(
     db: AsyncSession, sender_phone: str, sender_label: str, text: str
