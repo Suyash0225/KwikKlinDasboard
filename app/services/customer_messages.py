@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Order, Payment
 from app.services import app_settings
 from app.services.messages import get_message
+from app.services.whatsapp import Button
 
 KINDS = ("payment_thanks", "service_thanks", "review_request", "delivery_update")
 
@@ -65,6 +66,20 @@ async def short_review_link(db: AsyncSession, tenant) -> str:
     if base and tenant is not None and getattr(tenant, "slug", None):
         return f"{base}/r/{tenant.slug}"
     return links[0]
+
+
+async def payment_buttons(db: AsyncSession, order: Order) -> list[Button]:
+    """Customer payment actions — deliberately simple two-button UX."""
+    from app.services import bill_link
+
+    url = await bill_link.url_for(db, order)
+    # The actual payment link stays in the message body. WAHA renders these
+    # reply buttons as an interactive list; tapping Pay Now can resend/open
+    # the same signed bill link through the inbound handler.
+    return [
+        Button(f"payment:{order.order_number}:pay", "💰 Pay Now"),
+        Button(f"payment:{order.order_number}:paid", "✅ Already Paid"),
+    ]
 
 
 async def compose(db: AsyncSession, *, kind: str, order: Order, customer, tenant) -> str:
