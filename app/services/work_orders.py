@@ -35,14 +35,42 @@ MAX_BUTTON_TITLE = 20   # WhatsApp ki hadd
 
 
 async def _labels(db: AsyncSession) -> dict[str, str]:
-    """Minimal action labels following the tenant communication language."""
+    """Minimal action labels; language changes defaults, custom labels stay custom."""
     try:
         lang = str(await app_settings.get(db, "communication_language") or "en").lower()
     except Exception:
         lang = "en"
-    if lang == "hi":
-        return {"done": "✅ Ho gaya", "later": "⏳ Der lagegi", "problem": "⚠️ Dikkat", "list": "Kaam chuniye"}
-    return {"done": "✅ Done", "later": "⏳ Need more time", "problem": "⚠️ Problem", "list": "Select task"}
+    if lang not in ("en", "hi"):
+        lang = "en"
+    defaults = {
+        "done": "✅ Done",
+        "later": "⏳ Need more time",
+        "problem": "⚠️ Problem",
+        "list": "Select task",
+    }
+    hi = {
+        "done": "✅ Ho gaya",
+        "later": "⏳ Der lagegi",
+        "problem": "⚠️ Dikkat",
+        "list": "Kaam chuniye",
+    }
+    out = {}
+    for slot, key in (("done", "agent_btn_done"), ("later", "agent_btn_later"), ("problem", "agent_btn_problem")):
+        try:
+            configured = (await app_settings.get(db, key) or "").strip()
+        except Exception:
+            configured = ""
+        if configured and configured != app_settings.DEFAULTS.get(key):
+            out[slot] = configured[:MAX_BUTTON_TITLE]
+        else:
+            out[slot] = (hi if lang == "hi" else defaults)[slot]
+    try:
+        configured_list = (await app_settings.get(db, "agent_list_button") or "").strip()
+    except Exception:
+        configured_list = ""
+    out["list"] = (configured_list if configured_list and configured_list != app_settings.DEFAULTS.get("agent_list_button")
+                   else (hi if lang == "hi" else defaults)["list"])[:MAX_BUTTON_TITLE]
+    return out
 
 
 async def list_button_label(db: AsyncSession) -> str:
