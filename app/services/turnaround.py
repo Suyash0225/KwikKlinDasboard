@@ -1,3 +1,4 @@
+from app.utils.dates import today_ist
 """Turnaround — har order kitni der se kis stage par hai, aur kab "delayed" (IMP_006).
 
 Do alag signals:
@@ -93,8 +94,8 @@ def track(order: Order, history: list, stage_limits: dict, now: datetime | None 
     limit = stage_limits.get(status)
     active = order.status not in TERMINAL
     stage_late = bool(active and limit and stage_hours > limit)
-    promise_late = bool(active and order.expected_delivery and order.expected_delivery < date.today())
-    due_today = bool(active and order.expected_delivery == date.today()
+    promise_late = bool(active and order.expected_delivery and order.expected_delivery < today_ist())
+    due_today = bool(active and order.expected_delivery == today_ist()
                      and order.status not in (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY))
     total_hours = _hours(order.created_at, order.actual_delivery or now)
     return {
