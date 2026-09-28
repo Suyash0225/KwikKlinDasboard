@@ -201,7 +201,7 @@ async def receive_waha_webhook(
     Meta's 24h window and template rules are deliberately not involved.
     """
     body = await request.body()
-    secret = settings.WAHA_WEBHOOK_SECRET
+    secret = settings.WAHA_WEBHOOK_SECRET or settings.WAHA_WEBHOOK_HMAC_KEY
     if not secret:
         return JSONResponse({"error": "webhook security is not configured"}, status_code=403)
     provided = request.headers.get("X-Webhook-Hmac", "")
