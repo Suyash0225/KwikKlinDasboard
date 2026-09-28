@@ -409,12 +409,22 @@ async def _create_job_task(db: AsyncSession, order, kind: str) -> Task | None:
         ask = (
             f"{cfg['emoji']} {cfg['head']} [{task.code}] — {order.order_number}\n"
             f"{who} · {customer.phone if customer else ''}\n"
-            + (f"Pata: {addr}\n" if addr else "")
-            + f"\n{cfg['ask']}"
+            + (f"📍 Address: {addr}\n" if addr else "")
+            + "\nPlease select the current task status from the menu below."
         )
         delivered = "no"
         try:
-            await send_message(db, to_phone=staff.phone, text=ask, sent_by="bot")
+            from app.services.work_orders import task_status_menu
+            rows = await task_status_menu(db, task.code)
+            await send_message(
+                db,
+                to_phone=staff.phone,
+                text=ask,
+                list_rows=rows,
+                list_button="Update status",
+                list_title=cfg["word"].title(),
+                sent_by="bot",
+            )
             delivered = "yes"
         except WindowClosedError:
             # Unki 24h chat band hai — free-form Meta allow nahi karta. Ye
@@ -442,7 +452,7 @@ async def _create_job_task(db: AsyncSession, order, kind: str) -> Task | None:
         from app.services import team
 
         tail = {
-            "yes": "Unse samay pooch liya hai, pata chalte hi bata dunga.",
+            "yes": "Task assign kar diya hai aur status menu bhej diya hai.",
             "template": (
                 f"Unki chat band thi, isliye template se bheja hai — "
                 f"jawab aate hi bata dunga."
@@ -461,7 +471,7 @@ async def _create_job_task(db: AsyncSession, order, kind: str) -> Task | None:
         await audit.record(
             actor_role="system", actor="agent", action=f"{kind}_task_created",
             args={"code": task.code, "order": order.order_number, "staff": staff.name},
-            result="asked for ETA",
+            result="asked for task status",
         )
         log.info("job_task_created", kind=kind, code=task.code, order=order.order_number)
         return task
@@ -589,13 +599,17 @@ async def _ask_job_done(db: AsyncSession, task: Task, staff: Staff | None) -> No
         pending_title = "⏳ Pending"
         question = cfg["done_q"]
     try:
+        from app.services.whatsapp import ListRow
+
         await send_message(
             db, to_phone=staff.phone,
             text=f"📋 {cfg['word'].upper()} TASK [{task.code}]\\n{question}",
-            buttons=[
-                Button(f"job_yes:{task.code}", done_title),
-                Button(f"job_no:{task.code}", pending_title),
+            list_rows=[
+                ListRow(f"job_yes:{task.code}", done_title, "Mark the task completed"),
+                ListRow(f"job_no:{task.code}", pending_title, "Task is still pending"),
             ],
+            list_button="Update status",
+            list_title=cfg["word"].title(),
             sent_by="bot",
         )
     except (SendError, WindowClosedError):
