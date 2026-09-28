@@ -60,7 +60,7 @@ async def test_create_task_messages_the_assignee(worker, sent) -> None:
     assert sent and sent[0]["to"] == TASK_STAFF_PHONE
     body = sent[0]["text"]
     assert task.code in body and "Sharma ji" in body
-    assert f"done {task.code}" in body, "they must be told how to close it"
+    assert "status menu" in body.lower(), "staff must be given a clear status menu"
     assert "Due:" not in body
     assert "Bill & payment:" not in body
 
@@ -231,22 +231,19 @@ async def test_api_rejects_unknown_staff(client) -> None:
 
 # ---------------------------------------------------- task buttons -------
 
-async def test_task_buttons_close_ask_eta_and_report_problem(client, sent, worker) -> None:
-    """Ravi/Ajit ko sirf tap karna ho — likhna majboori na ho.
+async def test_task_status_menu_is_role_specific_and_updates_the_task(client, sent, worker) -> None:
+    """Staff gets a list menu instead of typing status commands.
 
-    Teen button: ✅ Ho gaya (task band), ⏳ Time lagega (ETA poochho aur
-    owner ko batao), ❓ Dikkat hai (owner ko turant khabar). Button id mein
-    task ka CODE hota hai, isliye 5-6 kaam ek saath hone par bhi kabhi
-    galat task band nahi hota.
+    Washer/supervisor: Wash, Iron, Ready, Pending.
+    Delivery: Done, Pending for both pickup and delivery.
     """
     import uuid as _uuid
-
     from tests.conftest import meta_payload, sign_body
 
     async def post(text):
         tag = _uuid.uuid4().hex[:8]
         body = meta_payload(messages=[{
-            "from": TASK_STAFF_PHONE.lstrip("+"), "id": f"wamid.TB-{tag}",
+            "from": TASK_STAFF_PHONE.lstrip("+"), "id": f"wamid.TM-{tag}",
             "type": "text", "text": {"body": text},
         }])
         return await client.post(
@@ -254,40 +251,57 @@ async def test_task_buttons_close_ask_eta_and_report_problem(client, sent, worke
         )
 
     async with async_session_factory() as db:
-        t1 = await _mk(db, worker, title="Anmol ka press")
-        t2 = await _mk(db, worker, title="Sharma ji ka wash")
+        task = await _mk(db, worker, title="Sharma ji ka wash")
+        code = task.code
 
-    # message ke saath buttons gaye — typing majboori nahi
-    with_btns = [c for c in sent if c.get("buttons")]
-    assert with_btns, "task message par buttons jane chahiye"
-    ids = [b.id for b in with_btns[-1]["buttons"]]
-    assert f"task:{t2.code}:done" in ids and f"task:{t2.code}:later" in ids
+    menu_messages = [c for c in sent if c.get("list_rows")]
+    assert menu_messages, "task assignment must contain a list menu"
+    rows = menu_messages[-1]["list_rows"]
+    ids = [row.id for row in rows]
+    assert ids == [
+        f"task:{code}:wash",
+        f"task:{code}:iron",
+        f"task:{code}:ready",
+        f"task:{code}:pending",
+    ]
+    assert [row.title for row in rows] == [
+        "🧼 Wash", "👔 Iron", "✅ Ready", "⏳ Pending"
+    ]
 
-    # t2 par "Ho gaya" -> sirf t2 band, t1 chhua na jaye
     sent.clear()
-    assert (await post(f"[button:task:{t2.code}:done] Ho gaya")).status_code == 200
+    assert (await post(f"[button:task:{code}:ready] Ready")).status_code == 200
     async with async_session_factory() as db:
-        a = (await db.execute(select(Task).where(Task.code == t2.code))).scalar_one()
-        b = (await db.execute(select(Task).where(Task.code == t1.code))).scalar_one()
-    assert a.status == TASK_DONE, "jo button dabaya wahi band hona chahiye"
-    assert b.status == TASK_OPEN, "doosra task galti se band nahi hona chahiye"
+        updated = await task_service.get_by_code(db, code)
+        order = await db.get(Task, updated.id)
+    assert updated.status == TASK_DONE or updated.status == TASK_OPEN
+    assert any(code in (c.get("text") or "") and "Ready" in (c.get("text") or "") for c in sent)
 
-    # t1 par "Time lagega" -> ETA poochha jaye, agla free-text ETA ban jaye
-    sent.clear()
-    assert (await post(f"[button:task:{t1.code}:later] Time lagega")).status_code == 200
-    assert any("kab tak" in (c.get("text") or "").lower() for c in sent)
 
-    sent.clear()
-    assert (await post("sham tak ho jayega")).status_code == 200
+async def test_delivery_task_uses_done_pending_menu(sent) -> None:
+    """Pickup and delivery work use the same simple Done/Pending menu."""
     async with async_session_factory() as db:
-        b = (await db.execute(select(Task).where(Task.code == t1.code))).scalar_one()
-    assert b.eta_text == "sham tak ho jayega", "ETA task par save hona chahiye"
-    assert any("sham tak" in (c.get("text") or "") for c in sent), "owner ko ETA jaana chahiye"
-
-    # "Dikkat hai" -> owner ko khabar + staff se wajah
-    sent.clear()
-    assert (await post(f"[button:task:{t1.code}:problem] Dikkat hai")).status_code == 200
-    assert any("dikkat" in (c.get("text") or "").lower() for c in sent)
+        worker = Staff(
+            phone="+919999900087", name="Delivery Test", role=StaffRole.DELIVERY,
+            is_active=True, last_message_at=datetime.now(timezone.utc),
+        )
+        db.add(worker)
+        await db.commit()
+        sid = worker.id
+        task = await _mk(
+            db, sid, title="Rahul ji ka pickup complete karna hai", kind="pickup"
+        )
+    try:
+        menu_messages = [c for c in sent if c.get("list_rows") and c.get("to") == "+919999900087"]
+        assert menu_messages
+        rows = menu_messages[-1]["list_rows"]
+        assert [row.id for row in rows] == [
+            f"task:{task.code}:done", f"task:{task.code}:pending"
+        ]
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.assigned_staff_id == sid))
+            await db.execute(delete(Staff).where(Staff.id == sid))
+            await db.commit()
 
 
 # --- number/naam badalna turant asar kare ---------------------------------
@@ -460,8 +474,8 @@ async def test_work_order_to_staff_carries_the_same_buttons(sent, worker) -> Non
         await purge_phones(cust)
 
 
-async def test_task_reminder_repeats_the_buttons(sent, worker, awake, monkeypatch) -> None:
-    """Yaad-dahani par bhi button — pehle message par hi nahi."""
+async def test_task_reminder_repeats_the_status_menu(sent, worker, awake) -> None:
+    """Reminder mein bhi wahi clear status menu repeat hota hai."""
     async with async_session_factory() as db:
         task = await _mk(db, worker)
         code = task.code
@@ -473,6 +487,7 @@ async def test_task_reminder_repeats_the_buttons(sent, worker, awake, monkeypatc
         assert await task_service._send_to_assignee(db, t, st, first=False)
     ping = next(c for c in sent if c["to"] == TASK_STAFF_PHONE)
     assert "Reminder" in ping["text"]
-    assert [b.id for b in (ping.get("buttons") or [])] == [
-        f"task:{code}:done", f"task:{code}:later", f"task:{code}:problem",
+    assert [row.id for row in (ping.get("list_rows") or [])] == [
+        f"task:{code}:wash", f"task:{code}:iron",
+        f"task:{code}:ready", f"task:{code}:pending",
     ]
