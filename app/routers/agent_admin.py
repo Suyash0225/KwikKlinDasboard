@@ -1267,30 +1267,9 @@ async def templates_registry() -> list[dict]:
 
 
 @router.get("/templates")
-async def list_templates(db: AsyncSession = Depends(get_db)) -> list[dict]:
-    creds = await wa_templates.creds_for_current(db)
-
-    # WAHA-only tenants have no Meta credentials. Serve the local registry
-    # instead of accidentally calling Meta with a legacy/global token.
-    if creds is None:
-        return await templates_registry()
-
-    try:
-        rows = await wa_templates.list_remote(creds)
-        _template_cache[creds.waba_id] = rows
-        return rows
-    except wa_templates.TemplateError as exc:
-        cached = _template_cache.get(creds.waba_id)
-        if cached is not None:
-            log.warning(
-                "meta_templates_using_cache",
-                waba_id=creds.waba_id,
-                error=exc.detail,
-            )
-            return cached
-        # No cache yet: expose a useful service-unavailable response instead
-        # of pretending Cloudflare/origin is broken.
-        raise HTTPException(status_code=503, detail=exc.detail)
+async def list_templates() -> list[dict]:
+    """Return the local template registry for the WAHA-only WhatsApp setup."""
+    return await templates_registry()
 
 
 class TplButtonIn(BaseModel):
