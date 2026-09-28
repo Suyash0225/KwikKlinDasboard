@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # anthropic = Claude (sk-ant-... key) | gemini = Google (AIza... key).
     # Only app/services/llm_client.py reads these.
     LLM_PROVIDER: Literal["anthropic", "gemini"] = "anthropic"
+    # Provider used automatically when the primary provider is unavailable.
+    # "none" disables cross-provider failover.
+    LLM_FALLBACK_PROVIDER: Literal["none", "anthropic", "gemini"] = "anthropic"
     ANTHROPIC_API_KEY: str
     GEMINI_API_KEY: str = ""
 
