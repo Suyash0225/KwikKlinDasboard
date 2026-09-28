@@ -1,3 +1,4 @@
+from app.utils.dates import today_ist
 """Staff/manager WhatsApp commands (Phase 4, group c).
 
 Three things a staff/manager message can do, all extracted by the cheap
@@ -708,7 +709,7 @@ async def _staff_worklist(
         flags = []
         if o.priority == "urgent":
             flags.append("🔴 URGENT")
-        if o.expected_delivery and o.expected_delivery <= date.today():
+        if o.expected_delivery and o.expected_delivery <= today_ist():
             flags.append("aaj delivery")
         return (
             f"{i}. {o.order_number} — {cust.name or cust.phone if cust else '?'} — "
@@ -1450,7 +1451,7 @@ async def _finalize_bill(
             db, "delivery_normal_days", "delivery_heavy_days", "delivery_holidays"
         )
         exp = calculate_delivery_date(
-            date.today(),
+            today_ist(),
             d["items"],
             normal_days=int(cfg.get("delivery_normal_days") or 4),
             heavy_days=int(cfg.get("delivery_heavy_days") or 5),
