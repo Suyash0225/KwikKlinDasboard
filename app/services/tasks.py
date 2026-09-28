@@ -724,10 +724,12 @@ async def complete_task(
         return task
     if locked.status != TASK_OPEN:
         log.info("task_completion_duplicate", code=locked.code, status=locked.status, by=by)
+        setattr(task, "_completion_won", False)
         setattr(locked, "_completion_won", False)
         await db.rollback()
         return locked
 
+    setattr(task, "_completion_won", True)
     setattr(locked, "_completion_won", True)
     locked.status = TASK_DONE
     locked.completed_at = datetime.now(timezone.utc)
