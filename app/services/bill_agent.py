@@ -2493,17 +2493,27 @@ async def _close_task_by_code(
     task = await task_service.get_by_code(db, code)
     if task is None:
         return get_message("task_unknown_code", code=code.upper())
+
+    # complete_task() may roll back on a duplicate completion. SQLAlchemy then
+    # expires the Task instance, so reading its fields afterwards can trigger
+    # an implicit async refresh and MissingGreenlet. Capture notification data
+    # before completion so the duplicate path stays side-effect safe.
+    task_code = task.code
+    task_title = task.title
+    assigned_staff_id = task.assigned_staff_id
+
     await task_service.complete_task(db, task, by=sender_label)
+
     # keep the owner in the loop without him having to ask
     try:
-        staff = await db.get(Staff, task.assigned_staff_id) if task.assigned_staff_id else None
+        staff = await db.get(Staff, assigned_staff_id) if assigned_staff_id else None
         await send_message(
             db, to_phone=await team.primary_admin_phone(db),
-            text=f"✅ {staff.name if staff else sender_label} ne {task.code} kar diya: {task.title}",
+            text=f"✅ {staff.name if staff else sender_label} ne {task_code} kar diya: {task_title}",
         )
     except SendError:
-        log.info("task_done_owner_notify_failed", code=task.code)
-    return get_message("task_done_ack", code=task.code)
+        log.info("task_done_owner_notify_failed", code=task_code)
+    return get_message("task_done_ack", code=task_code)
 
 
 _TASK_REPLY_SCHEMA = {
