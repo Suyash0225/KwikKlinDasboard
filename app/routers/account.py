@@ -14,6 +14,9 @@ Owner (Suyash) ke apne endpoints `/api/admin/tenants*` par hain — usse wo
 50-60 clients ek jagah se dekh aur sambhal sakta hai.
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import re
 from pathlib import Path
@@ -303,6 +306,31 @@ def _set_cookie(response: Response, token: str) -> None:
     )
 
 
+
+
+def _sign_google_pending(payload: str) -> str:
+    secret = settings.GOOGLE_CLIENT_SECRET.encode()
+    sig = hmac.new(secret, payload.encode(), hashlib.sha256).digest()
+    return f"{payload}.{base64.urlsafe_b64encode(sig).decode().rstrip('=')}"
+
+
+def _read_google_pending(raw: str) -> dict | None:
+    if not raw or "." not in raw or not settings.GOOGLE_CLIENT_SECRET:
+        return None
+    payload, encoded = raw.rsplit(".", 1)
+    try:
+        sig = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    except Exception:
+        return None
+    expected = hmac.new(
+        settings.GOOGLE_CLIENT_SECRET.encode(), payload.encode(), hashlib.sha256
+    ).digest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    try:
+        return json.loads(payload)
+    except Exception:
+        return None
 
 
 def _dashboard_url(tenant: Tenant | None, is_home: bool) -> str:
@@ -749,11 +777,15 @@ async def _google_callback_inner(request, code, state, error, db) -> Response:
         user = (
             await db.execute(select(User).where(User.email == ident["email"]))
         ).scalars().first()
-        if user is not None and not user.google_sub:
-            # wahi insaan, doosra rasta — account jod do
-            user.google_sub = ident["sub"]
-            await db.commit()
-            log.info("google_linked_to_existing", email=user.email)
+        if user is not None:
+            if user.google_sub and user.google_sub != ident["sub"]:
+                log.warning("google_sub_mismatch", email=user.email)
+                return _fail("Google account does not match this user")
+            if not user.google_sub:
+                # wahi insaan, doosra rasta — account jod do
+                user.google_sub = ident["sub"]
+                await db.commit()
+                log.info("google_linked_to_existing", email=user.email)
 
     if user is not None:
         if not user.is_active:
@@ -773,7 +805,7 @@ async def _google_callback_inner(request, code, state, error, db) -> Response:
     resp = RedirectResponse(url="/join?google=1#signup", status_code=303)
     resp.set_cookie(
         google_auth.PENDING_COOKIE,
-        json.dumps({"sub": ident["sub"], "email": ident["email"], "name": ident["name"]}),
+        _sign_google_pending(json.dumps({"sub": ident["sub"], "email": ident["email"], "name": ident["name"]}, separators=(",", ":"))),
         max_age=1800, httponly=True, samesite="lax",
         secure=True, path="/",
     )
@@ -788,9 +820,8 @@ async def google_pending(request: Request) -> dict:
     raw = request.cookies.get(google_auth.PENDING_COOKIE, "")
     if not raw:
         return {"pending": False}
-    try:
-        d = json.loads(raw)
-    except Exception:
+    d = _read_google_pending(raw)
+    if d is None:
         return {"pending": False}
     return {"pending": True, "email": d.get("email"), "name": d.get("name")}
 
@@ -828,8 +859,10 @@ async def _signup_google_inner(body, request, response, db) -> dict:
         raise HTTPException(
             status_code=400, detail="Google login expired — please try again"
         )
+    pend = _read_google_pending(raw)
+    if pend is None:
+        raise HTTPException(status_code=400, detail="Could not read the Google login")
     try:
-        pend = json.loads(raw)
         email = (pend["email"] or "").strip().lower()
         sub = str(pend.get("sub") or "")
     except Exception:
