@@ -72,7 +72,6 @@ async def payment_buttons(db: AsyncSession, order: Order) -> list[Button]:
     """Customer payment actions — deliberately simple two-button UX."""
     from app.services import bill_link
 
-    url = await bill_link.url_for(db, order)
     # The actual payment link stays in the message body. WAHA renders these
     # reply buttons as an interactive list; tapping Pay Now can resend/open
     # the same signed bill link through the inbound handler.
