@@ -163,8 +163,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Delivery: {date}",
     },
     "bill_draft_confirm": {
-        "hi": "Sab theek? 'haan' → bill ban jaega | badalna ho to likh dein | 'nahi' → cancel",
-        "en": "All good? 'haan' → creates the bill | describe any change | 'nahi' → cancel",
+        "hi": "Sab theek? Upar menu se choice select karein: Haan = bill banega | Bill Badalna Hai = edit | Cancel = draft hatao.",
+        "en": "Please choose from the menu above: Yes = create bill | Edit = change draft | Cancel = discard draft.",
     },
     "bill_need_phone": {
         "hi": "⚠️ Customer ka number nahi mila — number bhej dein, draft saved hai.",
@@ -386,8 +386,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "✅ Note saved on {order_number}; {notified}.",
     },
     "payment_confirm_prompt": {
-        "hi": "💰 {order_number} par ₹{amount} ({method}) record karun? Abhi baaki: ₹{due}\n'haan' → record | 'nahi' → cancel",
-        "en": "💰 Record ₹{amount} ({method}) on {order_number}? Currently due: ₹{due}\n'haan' → record | 'nahi' → cancel",
+        "hi": "💰 {order_number} par ₹{amount} ({method}) record karun? Abhi baaki: ₹{due}\nUpar menu se: Payment Record Karo ya Cancel.",
+        "en": "💰 Record ₹{amount} ({method}) on {order_number}? Currently due: ₹{due}\nUse the menu above: Record Payment or Cancel.",
     },
     "payment_done": {
         "hi": "✅ ₹{amount} record ho gaya ({order_number}). Ab baaki: ₹{due} [{status}]",

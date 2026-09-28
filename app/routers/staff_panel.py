@@ -320,16 +320,26 @@ async def change_own_password(
 # --------------------------------------------------------------- tasks ----
 
 
+def _shared_task_clause(p: StaffPrincipal):
+    if p.is_manager:
+        return None
+    if p.staff.role is StaffRole.DELIVERY:
+        return Task.kind.in_(("pickup", "delivery"))
+    if p.staff.role in (StaffRole.WASHER, StaffRole.SUPERVISOR):
+        return Task.kind.notin_(("pickup", "delivery"))
+    return Task.assigned_staff_id == p.staff.id
+
+
 def _tasks_query(p: StaffPrincipal, tab: str):
-    """Tab ke hisaab se query — count aur page dono isi se bante hain,
-    taaki 'Page 3 of 9' aur list kabhi alag baat na kahein."""
+    """Shared operational queue: each team member sees the same work."""
     q = select(Task)
-    if not p.is_manager:
-        q = q.where(Task.assigned_staff_id == p.staff.id)
+    clause = _shared_task_clause(p)
+    if clause is not None:
+        q = q.where(clause)
     if tab == "pending":
         q = q.where(Task.status == TASK_OPEN)
     elif tab == "mine":
-        q = q.where(Task.assigned_staff_id == p.staff.id, Task.status == TASK_OPEN)
+        q = q.where(Task.status == TASK_OPEN)
     elif tab == "done":
         q = q.where(Task.status == TASK_DONE)
     elif tab == "cancelled":
@@ -435,9 +445,7 @@ async def my_tasks(
     counts = {
         "mine": (
             await db.execute(
-                select(func.count()).select_from(Task).where(
-                    Task.assigned_staff_id == p.staff.id, Task.status == TASK_OPEN
-                )
+                select(func.count()).select_from(_tasks_query(p, "mine").subquery())
             )
         ).scalar_one(),
     }
@@ -460,10 +468,11 @@ async def _my_task(db: AsyncSession, p: StaffPrincipal, code: str) -> Task:
     ).scalar_one_or_none()
     if t is None:
         raise HTTPException(status_code=404, detail=f"{code} not found")
-    if not p.is_manager and t.assigned_staff_id != p.staff.id:
-        # 403, 404 nahi: manager ke logs mein ye dikhna chahiye
-        log.info("staff_task_forbidden", staff=p.staff.name, code=code)
-        raise HTTPException(status_code=403, detail="This job is not assigned to you")
+    if not p.is_manager:
+        from app.services import tasks as task_service
+        if not await task_service.staff_can_access_task(db, t, p.staff):
+            log.info("staff_task_forbidden", staff=p.staff.name, code=code)
+            raise HTTPException(status_code=403, detail="This job is not in your shared team queue")
     return t
 
 
@@ -1967,10 +1976,11 @@ async def today_summary(
 
     out = {
         "pending": await _count(
-            Task.assigned_staff_id == p.staff.id, Task.status == TASK_OPEN
+            _shared_task_clause(p) if _shared_task_clause(p) is not None else True,
+            Task.status == TASK_OPEN
         ),
         "done_today": await _count(
-            Task.assigned_staff_id == p.staff.id,
+            _shared_task_clause(p) if _shared_task_clause(p) is not None else True,
             Task.status == TASK_DONE,
             Task.completed_at >= start,
         ),
@@ -2048,21 +2058,13 @@ async def _route_query(db: AsyncSession, p: StaffPrincipal, tab: str = "todo"):
     else:
         q = select(Order).where(Order.status.in_(stages))
     if not p.is_manager:
-        # "Mera kaam" ka matlab sirf explicitly assigned nahi hai.
-        #
-        # Zyadatar bill kisi ko assign kiye bina bante hain (counter par
-        # manager banata hai, ya delivery boy khud). Aise order par
-        # assigned_delivery_id NULL rehta hai — par work order phir bhi
-        # dukaan ke delivery wale ko hi jaata hai (work_orders.resolve_worker
-        # ka fallback). Panel purane filter se un orders ko chhupa deta tha:
-        # WhatsApp par "pickup karo" aata tha aur app mein kuch nahi dikhta
-        # tha. Ab: mere naam wale + jo kisi ke naam nahi hain, jab ye aadmi
-        # hi dukaan ka delivery/washer wala hai.
-        default_staff = await _shop_default_for(db, "DELIVERY" if is_delivery else "WASHER")
-        if default_staff is not None and default_staff.id == p.staff.id:
-            q = q.where(or_(col == p.staff.id, col.is_(None)))
+        # Operational staff share the queue by role. The assigned_* column
+        # remains the primary owner for routing/audit, but it no longer hides
+        # the order from another washer/delivery teammate.
+        if is_delivery:
+            q = q.where(Order.status.in_(road_stages))
         else:
-            q = q.where(col == p.staff.id)
+            q = q.where(Order.status.in_(wash_stages))
     return q, is_delivery
 
 

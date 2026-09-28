@@ -555,3 +555,47 @@ async def test_task_reminder_repeats_the_status_menu(sent, worker, awake) -> Non
         f"task:{code}:wash", f"task:{code}:iron",
         f"task:{code}:ready", f"task:{code}:pending",
     ]
+
+
+async def test_operational_team_shares_queue_and_first_completion_wins(worker, sent) -> None:
+    """Any active washer can update the shared queue; duplicate completion is harmless."""
+    second_phone = "+919999900089"
+    async with async_session_factory() as db:
+        second = Staff(
+            phone=second_phone, name="Taskram Two", role=StaffRole.WASHER,
+            is_active=True, last_message_at=datetime.now(timezone.utc),
+        )
+        db.add(second)
+        await db.commit()
+        second_id = second.id
+        task = await _mk(db, worker, title="Shared washing queue task", notify=False)
+        code = task.code
+
+    try:
+        async with async_session_factory() as db:
+            visible = await task_service.open_tasks_for_staff(db, second_id)
+            assert any(t.code == code for t in visible)
+
+        async with async_session_factory() as db:
+            reply = await bill_agent.handle_staff_message(
+                db, sender_phone=second_phone, sender_label="Taskram Two",
+                text=f"done {code}",
+            )
+            assert "closed" in (reply or "").lower() or code in (reply or "")
+
+        async with async_session_factory() as db:
+            done = await task_service.get_by_code(db, code)
+            assert done.status == TASK_DONE
+            assert done.reply is None or done.reply == "done"
+
+        async with async_session_factory() as db:
+            duplicate = await bill_agent.handle_staff_message(
+                db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
+                text=f"done {code}",
+            )
+            assert "already complete" in (duplicate or "").lower()
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.code == code))
+            await db.execute(delete(Staff).where(Staff.id == second_id))
+            await db.commit()

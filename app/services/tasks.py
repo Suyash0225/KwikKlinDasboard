@@ -31,6 +31,32 @@ ESCALATE_AFTER_PINGS = 3
 MAX_FOLLOWUPS_PER_DAY = 3
 QUIET_START, QUIET_END = settings.QUIET_HOURS_START, settings.QUIET_HOURS_END
 
+# Operational teams share the same queue. assigned_staff_id remains the
+# primary/notification owner, but every active member of the relevant team
+# can see and update the open task. This keeps the DB source of truth while
+# making the WhatsApp/dashboard workflow collaborative.
+SHARED_TEAM_ROLES = {"WASHER", "SUPERVISOR", "DELIVERY"}
+SHARED_JOB_KINDS = {"pickup", "delivery"}
+
+def _task_team_matches_staff(task: Task, staff: Staff) -> bool:
+    role = staff.role.name
+    if role in {"ADMIN", "MANAGER"}:
+        return True
+    if role == "DELIVERY":
+        return task.kind in SHARED_JOB_KINDS
+    if role in {"WASHER", "SUPERVISOR"}:
+        return task.kind not in SHARED_JOB_KINDS
+    return False
+
+async def staff_can_access_task(db: AsyncSession, task: Task, staff: Staff) -> bool:
+    """Shared-team authorization; manager/admin always have full access."""
+    if not staff.is_active:
+        return False
+    if _task_team_matches_staff(task, staff):
+        return True
+    return task.assigned_staff_id == staff.id
+
+
 
 def _announce(task: Task, action: str, *, by: str = "") -> None:
     """Khuli hui screens ko bata do ki is task ka kya hua.
@@ -491,17 +517,25 @@ async def create_delivery_task(db: AsyncSession, order) -> Task | None:
     return await _create_job_task(db, order, "delivery")
 
 
+async def _staff_open_task_filter(db: AsyncSession, staff_id):
+    staff = await db.get(Staff, staff_id)
+    if staff is None:
+        return None
+    if staff.role.name == "DELIVERY":
+        return (Task.kind.in_(JOB_KINDS))
+    if staff.role.name in {"WASHER", "SUPERVISOR"}:
+        return (Task.kind.notin_(JOB_KINDS))
+    return (Task.assigned_staff_id == staff_id)
+
 async def open_pickup_awaiting_eta(db: AsyncSession, staff_id) -> Task | None:
-    """A pickup/delivery this person was asked about but has not answered."""
+    """Newest shared delivery-team pickup/delivery awaiting an ETA."""
+    cond = await _staff_open_task_filter(db, staff_id)
+    if cond is None:
+        return None
     return (
         await db.execute(
             select(Task)
-            .where(
-                Task.assigned_staff_id == staff_id,
-                Task.status == TASK_OPEN,
-                Task.kind.in_(JOB_KINDS),
-                Task.eta_text.is_(None),
-            )
+            .where(cond, Task.status == TASK_OPEN, Task.kind.in_(JOB_KINDS), Task.eta_text.is_(None))
             .order_by(Task.created_at.desc())
             .limit(1)
         )
@@ -509,15 +543,14 @@ async def open_pickup_awaiting_eta(db: AsyncSession, staff_id) -> Task | None:
 
 
 async def open_pickup_awaiting_confirm(db: AsyncSession, staff_id) -> Task | None:
-    """Their newest pickup/delivery that is still open."""
+    """Newest shared delivery-team pickup/delivery still open."""
+    cond = await _staff_open_task_filter(db, staff_id)
+    if cond is None:
+        return None
     return (
         await db.execute(
             select(Task)
-            .where(
-                Task.assigned_staff_id == staff_id,
-                Task.status == TASK_OPEN,
-                Task.kind.in_(JOB_KINDS),
-            )
+            .where(cond, Task.status == TASK_OPEN, Task.kind.in_(JOB_KINDS))
             .order_by(Task.created_at.desc())
             .limit(1)
         )
@@ -627,6 +660,8 @@ async def confirm_pickup(db: AsyncSession, task: Task, *, done: bool, by: str) -
     from app.services import team
 
     cfg = _JOB.get(task.kind, _JOB["pickup"])
+    if task.status != TASK_OPEN:
+        return f"ℹ️ *{task.code}* already complete ho chuka hai. Pehla valid update accept hua tha."
     order = await db.get(Order, task.order_id) if task.order_id else None
     if not done:
         task.last_ping_at = datetime.now(timezone.utc)
@@ -639,7 +674,9 @@ async def confirm_pickup(db: AsyncSession, task: Task, *, done: bool, by: str) -
         )
         return "Theek hai, ho jaye to batana. Main thodi der baad phir poochh lunga."
 
-    await complete_task(db, task, reply=f"{cfg['word']} ho gaya", by=by)
+    completed = await complete_task(db, task, reply=f"{cfg['word']} ho gaya", by=by)
+    if not getattr(completed, "_completion_won", False):
+        return f"ℹ️ *{task.code}* already complete ho chuka hai. Pehla valid update accept hua tha."
     if order is not None:
         try:
             from app.services import order_service
@@ -676,26 +713,45 @@ async def complete_task(
     db: AsyncSession, task: Task, *, reply: str | None = None, by: str = "staff",
     advance_order: bool = True,
 ) -> Task:
-    """advance_order: wash task done = order READY (ops agent). False jab
-    order khud aage badh chuka ho aur ye band karna sirf safai hai."""
-    task.status = TASK_DONE
-    task.completed_at = datetime.now(timezone.utc)
+    """Complete once, with a row lock so simultaneous taps have one winner."""
+    locked = (
+        await db.execute(
+            select(Task).where(Task.id == task.id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if locked is None:
+        setattr(task, "_completion_won", False)
+        return task
+    if locked.status != TASK_OPEN:
+        log.info("task_completion_duplicate", code=locked.code, status=locked.status, by=by)
+        setattr(locked, "_completion_won", False)
+        await db.rollback()
+        return locked
+
+    setattr(locked, "_completion_won", True)
+    locked.status = TASK_DONE
+    locked.completed_at = datetime.now(timezone.utc)
     if reply:
-        task.reply = reply[:1000]
-    db.add(task)
+        locked.reply = reply[:1000]
+    db.add(locked)
     await db.commit()
     await audit.record(
         actor_role="staff" if by != "dashboard" else "admin", actor=by,
-        action="task_completed", args={"code": task.code}, result=(reply or "done")[:150],
+        action="task_completed", args={"code": locked.code}, result=(reply or "done")[:150],
     )
-    log.info("task_completed", code=task.code, by=by)
-    _announce(task, "done", by=by)
+    log.info("task_completed", code=locked.code, by=by)
+    _announce(locked, "done", by=by)
     if advance_order:
         from app.services import ops_agent
+        await ops_agent.on_task_done(db, locked, by)
+    return locked
 
-        await ops_agent.on_task_done(db, task, by)
-    return task
 
+async def completion_message(db: AsyncSession, task: Task, *, by: str) -> str:
+    """Return a safe response when a team member taps an already-finished task."""
+    if task.status == TASK_DONE:
+        return f"ℹ️ *{task.code}* already complete ho chuka hai. Pehla update accept hua tha; aapka duplicate update ignore kiya gaya."
+    return ""
 
 async def cancel_task(db: AsyncSession, task: Task, *, by: str = "dashboard") -> Task:
     task.status = TASK_CANCELLED
@@ -736,11 +792,15 @@ async def get_by_code(db: AsyncSession, code: str) -> Task | None:
 
 
 async def open_tasks_for_staff(db: AsyncSession, staff_id) -> list[Task]:
+    """Open queue visible to the staff member's shared operational team."""
+    cond = await _staff_open_task_filter(db, staff_id)
+    if cond is None:
+        return []
     return list(
         (
             await db.execute(
                 select(Task)
-                .where(Task.assigned_staff_id == staff_id, Task.status == TASK_OPEN)
+                .where(cond, Task.status == TASK_OPEN)
                 .order_by(Task.last_ping_at.desc().nullslast(), Task.created_at)
             )
         )
@@ -749,19 +809,21 @@ async def open_tasks_for_staff(db: AsyncSession, staff_id) -> list[Task]:
     )
 
 
-async def note_reply(db: AsyncSession, staff_id, text: str) -> Task | None:
-    """A staff member said something — attach it to the task they were last
-    pinged about, so the dashboard shows their actual words."""
+async def note_reply(db: AsyncSession, staff_id, text: str, *, by: str | None = None) -> Task | None:
+    """Store the latest shared-team reply and record who made it."""
     tasks = await open_tasks_for_staff(db, staff_id)
     if not tasks:
         return None
     task = tasks[0]
+    author = by or "staff"
     task.reply = text[:1000]
     db.add(task)
     await db.commit()
-    # Staff ne kuch kaha — "nahi ho paega", "ho gaya", "time lagega". Ye
-    # wahi baat hai jiske liye owner baar-baar refresh karta tha.
-    _announce(task, "reply", by="staff")
+    await audit.record(
+        actor_role="staff", actor=author,
+        action="task_reply", args={"code": task.code}, result=text[:150],
+    )
+    _announce(task, "reply", by=author)
     return task
 
 
