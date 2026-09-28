@@ -264,11 +264,11 @@ async def _send_to_assignee(
         # Assignment notification is a critical WhatsApp message. In WAHA
         # mode use plain text so delivery does not depend on interactive-list
         # support. The task code is still included for "done T-123" replies.
-        if settings.WHATSAPP_PROVIDER == "waha":
-            from app.services.work_orders import task_buttons
+        # First assignment is a clean task card. Add the action menu only
+        # on reminders/when the task is getting close to needing an update.
+        if first:
             await send_message(
-                db, to_phone=staff.phone, text=body,
-                buttons=await task_buttons(db, task.code), sent_by="bot"
+                db, to_phone=staff.phone, text=body, sent_by="bot"
             )
         else:
             from app.services.work_orders import task_buttons
