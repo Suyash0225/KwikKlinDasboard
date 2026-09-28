@@ -2452,7 +2452,10 @@ async def serve_media(
         allowed = user is not None
     if not allowed:
         raise HTTPException(status_code=401, detail="key ya login chahiye")
-    # basename() guard: no traversal
+    # Only generated customer media is public to a logged-in tenant user.
+    # Never expose diagnostics or arbitrary files from the media directory.
+    if not re.fullmatch(r"(?:in|out|job|campaign)-[0-9a-f]{32}\.(?:jpg|jpeg|png|webp|ogg|pdf)", name, re.I):
+        raise HTTPException(status_code=404, detail="media nahi mila")
     safe = Path(name).name
     path = _MEDIA_DIR / safe
     if not path.is_file():
