@@ -1084,11 +1084,29 @@ async def handle_staff_message(
             if not isinstance(pending_bill, PendingBill):
                 return "⚠️ Ye bill draft ab active nahi hai."
             if action == "yes":
+                await audit.record(
+                    actor_role="admin" if sender_label == "manager" else "staff",
+                    actor=sender_label, action="menu_response",
+                    args={"menu": "bill_confirm", "choice": "yes"},
+                    result="create_bill",
+                )
                 return await _finalize_bill(db, sender_phone, sender_label, pending_bill)
             if action == "cancel":
                 _PENDING.pop(sender_phone, None)
+                await audit.record(
+                    actor_role="admin" if sender_label == "manager" else "staff",
+                    actor=sender_label, action="menu_response",
+                    args={"menu": "bill_confirm", "choice": "cancel"},
+                    result="discard_bill_draft",
+                )
                 return get_message("bill_cancelled")
             if action == "edit":
+                await audit.record(
+                    actor_role="admin" if sender_label == "manager" else "staff",
+                    actor=sender_label, action="menu_response",
+                    args={"menu": "bill_confirm", "choice": "edit"},
+                    result="edit_bill_draft",
+                )
                 return (
                     "✏️ Theek hai — bill mein kya badalna hai likh dijiye. "
                     "Draft save hai; main update karke phir confirmation menu dikhaunga."
@@ -1098,9 +1116,21 @@ async def handle_staff_message(
             if not isinstance(pending_payment, PendingPayment):
                 return "⚠️ Ye payment confirmation ab active nahi hai."
             if action == "yes":
+                await audit.record(
+                    actor_role="admin" if sender_label == "manager" else "staff",
+                    actor=sender_label, action="menu_response",
+                    args={"menu": "payment_confirm", "choice": "yes", "order": pending_payment.order_number},
+                    result="record_payment",
+                )
                 return await _finalize_payment(db, sender_phone, sender_label, pending_payment)
             if action == "cancel":
                 _PENDING.pop(sender_phone, None)
+                await audit.record(
+                    actor_role="admin" if sender_label == "manager" else "staff",
+                    actor=sender_label, action="menu_response",
+                    args={"menu": "payment_confirm", "choice": "cancel", "order": pending_payment.order_number},
+                    result="cancel_payment",
+                )
                 return get_message("bill_cancelled")
         elif kind == "relay_confirm":
             from app.services import tasks as task_service, team
