@@ -599,3 +599,17 @@ async def test_operational_team_shares_queue_and_first_completion_wins(worker, s
             await db.execute(delete(Task).where(Task.code == code))
             await db.execute(delete(Staff).where(Staff.id == second_id))
             await db.commit()
+
+
+async def test_menu_response_is_saved_as_ai_readable_context() -> None:
+    from app.services.knowledge import _conversation_for_ai
+
+    assert _conversation_for_ai("[button:bill_confirm:yes] ✅ Haan, Bill Banao").startswith(
+        "MENU_RESPONSE: Bill draft -> YES"
+    )
+    assert "Task T-123 -> YES" in _conversation_for_ai(
+        "[button:job_yes:T-123] ✅ Haan, ho gaya"
+    )
+    assert "Order KK-20260928-01 -> action 'done'" in _conversation_for_ai(
+        "[button:ord:KK-20260928-01:done] ✅ Ho gaya"
+    )
