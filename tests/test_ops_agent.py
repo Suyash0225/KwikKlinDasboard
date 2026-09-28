@@ -94,13 +94,44 @@ async def test_wash_task_waits_until_three_days_before_delivery(shop, sent) -> N
     assert any(x["to"] in (W1, W2) for x in sent)
 
 
-async def test_pickup_bill_gives_pickup_task_to_delivery_boy_without_double_message(shop, sent) -> None:
+async def test_pickup_bill_waits_for_pickup_before_washer_task(shop, sent) -> None:
     o = await _order(needs_pickup=True, pickup_date=date.today())
     kinds = {t.kind: t for t in await _tasks(o.id)}
-    assert set(kinds) == {"wash", "pickup"}
+
+    # Clothes are still with the customer, so only the delivery boy gets work.
+    assert set(kinds) == {"pickup"}
     assert kinds["pickup"].assigned_staff_id == shop["d1"]
+    assert not [c for c in sent if c["to"] == W1 or c["to"] == W2]
+
     to_boy = [c for c in sent if c["to"] == D1]
     assert len(to_boy) == 1 and "Kab tak" in (to_boy[0]["text"] or ""), to_boy
+
+    # The washer gets the order only after the pickup is actually completed.
+    async with async_session_factory() as db:
+        order = await db.get(Order, o.id)
+        await order_service.update_status(db, order, OrderStatus.PICKED_UP, changed_by="staff:Opsboy")
+
+    kinds = {t.kind: t for t in await _tasks(o.id)}
+    assert kinds["pickup"].status == "DONE"
+    assert kinds["wash"].status == "OPEN"
+    assert kinds["wash"].assigned_staff_id in (shop["w1"], shop["w2"])
+    assert [c for c in sent if c["to"] in (W1, W2)]
+
+
+async def test_cancelled_pickup_never_creates_washer_task(shop) -> None:
+    o = await _order(needs_pickup=True, pickup_date=date.today())
+    assert {t.kind for t in await _tasks(o.id)} == {"pickup"}
+
+    async with async_session_factory() as db:
+        await order_service.update_status(
+            db, await db.get(Order, o.id), OrderStatus.CANCELLED, changed_by="customer"
+        )
+
+    ts = await _tasks(o.id)
+    assert len(ts) == 1
+    assert ts[0].kind == "pickup"
+    assert ts[0].status == "CANCELLED"
+    assert not [t for t in ts if t.kind == "wash"]
 
 
 async def test_wash_dry_iron_pipeline_hands_delivery_to_boy(shop) -> None:
