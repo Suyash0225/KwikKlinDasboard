@@ -3611,6 +3611,72 @@ function stTab(t) {
   document.querySelectorAll("[data-st]").forEach((el) => el.classList.toggle("on", el.dataset.st === t));
 }
 
+async function loadWahaConnection() {
+  const box = $("waha-connection-body");
+  if (!box) return;
+  try {
+    const s = await api("/admin/api/whatsapp/waha/status");
+    const state = String(s.state || s.status || "").toUpperCase();
+    if (state === "WORKING" || state === "CONNECTED") {
+      box.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="chip on">🟢 Connected</span>
+          <b>${esc(s.push_name || s.number_masked || "WhatsApp")}</b>
+        </div>
+        <small class="muted" style="display:block;margin-top:6px">Session: ${esc(s.session || "default")} · WAHA/NOWEB</small>`;
+      return;
+    }
+    const started = state === "SCAN_QR_CODE" || state === "STARTING" || state === "INITIALIZING" || state === "AUTHENTICATING";
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="chip">${started ? "🟡 Waiting for scan" : "⚪ Not connected"}</span>
+        <span class="muted">Status: ${esc(state || "NOT_CREATED")}</span>
+      </div>
+      <div class="filters" style="margin-top:10px">
+        <button class="btn" onclick="startWahaConnection()">📲 ${started ? "Refresh QR" : "Connect WhatsApp"}</button>
+      </div>
+      <div id="waha-qr-wrap" style="margin-top:12px"></div>`;
+    if (started) await showWahaQr();
+  } catch (e) {
+    box.innerHTML = `<div class="errbox">⚠️ ${esc(e.message)}<br><br><button class="btn ghost" onclick="loadWahaConnection()">Try again</button></div>`;
+  }
+}
+
+async function startWahaConnection() {
+  const box = $("waha-connection-body");
+  if (box) box.innerHTML = '<span class="muted">Starting WhatsApp connection…</span>';
+  try {
+    await api("/admin/api/whatsapp/waha/start", { method: "POST" });
+    toast("WhatsApp connection started");
+    await new Promise(r => setTimeout(r, 1200));
+    await loadWahaConnection();
+  } catch (e) {
+    if (box) box.innerHTML = `<div class="errbox">⚠️ ${esc(e.message)}<br><br><button class="btn ghost" onclick="loadWahaConnection()">Try again</button></div>`;
+  }
+}
+
+async function showWahaQr() {
+  const wrap = $("waha-qr-wrap");
+  if (!wrap) return;
+  try {
+    const r = await fetch("/admin/api/whatsapp/waha/qr?ts=" + Date.now(), {
+      headers: { "X-API-Key": KEY, "Cache-Control": "no-cache" }
+    });
+    if (!r.ok) throw new Error("QR code is not available yet");
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    wrap.innerHTML = `
+      <div style="display:inline-flex;flex-direction:column;align-items:center;gap:8px;padding:12px;border:1px solid var(--line,#e5e7eb);border-radius:14px;background:#fff">
+        <img src="${url}" alt="WhatsApp QR code" style="width:280px;height:280px;image-rendering:auto;border-radius:8px">
+        <b>WhatsApp → Linked Devices → Link a device</b>
+        <small class="muted">QR expires periodically. Refresh if it stops scanning.</small>
+        <button class="btn ghost sm" onclick="showWahaQr()">↻ Refresh QR</button>
+      </div>`;
+  } catch (e) {
+    wrap.innerHTML = `<div class="muted">${esc(e.message)} · <button class="btn ghost sm" onclick="showWahaQr()">Refresh QR</button></div>`;
+  }
+}
+
 async function loadSettings() {
   mfLoad();
   try {
@@ -3664,6 +3730,7 @@ async function loadSettings() {
     $("bp-gstpct").value = s.gst_percent;
     $("bp-gstdef").checked = !!s.gst_default_on;
     gbpLoad();
+    loadWahaConnection();
   } catch (e) { toast(e.message, true); }
 }
 

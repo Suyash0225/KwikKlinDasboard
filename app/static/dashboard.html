@@ -20,7 +20,7 @@
 <link rel="stylesheet" href="/admin/static/tokens.css?v=rs1">
 <link rel="stylesheet" href="/admin/static/app.css?v=rs7">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
-<script src="/admin/static/app.js?v=rs7" defer></script>
+<script src="/admin/static/app.js?v=rs8" defer></script>
 </head>
 <body>
 <div class="shell">
@@ -555,6 +555,17 @@
               <input type="checkbox" id="bp-gstdef"> Enable GST by default on new bills</label>
           </div>
           <button class="btn" style="margin-top:12px" onclick="saveProfile(this)">Save profile configurations</button>
+        </div>
+
+        <div class="card" style="margin-bottom:14px" id="waha-connection-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+            <div>
+              <b>📱 WhatsApp Connection</b>
+              <p class="muted" style="margin:5px 0 0">Connect the Kwik Klin WhatsApp number using WAHA / NOWEB.</p>
+            </div>
+            <button class="btn ghost sm" onclick="loadWahaConnection()">↻ Refresh</button>
+          </div>
+          <div id="waha-connection-body" style="margin-top:12px"><span class="muted">Checking WhatsApp connection…</span></div>
         </div>
 
         <div class="card" style="margin-bottom:14px">
