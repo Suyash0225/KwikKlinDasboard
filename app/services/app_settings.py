@@ -228,7 +228,9 @@ async def get(db: AsyncSession, key: str) -> Any:
     ).scalar_one_or_none()
     if row is None:
         return default
-    return row.value.get("v", default)
+    value = row.value.get("v", default)
+    if key == "llm_rates":
+        return {**DEFAULTS["llm_rates"], **(value or {})}
     return value
 
 
