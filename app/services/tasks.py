@@ -219,8 +219,8 @@ async def _send_to_assignee(
         elif task.kind == "iron": head = "👔 IRONING KAAM"
         elif task.kind == "pickup": head = "🛵 PICKUP KAAM"
         elif task.kind == "delivery": head = "🚚 DELIVERY KAAM"
-        complete_line = f"Kaam complete hone ke baad bas reply karein: done {task.code}"
-        update_line = f"Kaam ka update bhej dein, ya complete hone par reply karein: done {task.code}"
+        complete_line = "Neeche diye gaye status menu se current status select karein."
+        update_line = "Please status menu se current task status update karein."
     else:
         head = "🔴 URGENT" if task.urgent else "📋 TASK ASSIGNMENT"
         if task.kind == "wash": head = "🧼 WASHING TASK"
@@ -228,8 +228,8 @@ async def _send_to_assignee(
         elif task.kind == "iron": head = "👔 IRONING TASK"
         elif task.kind == "pickup": head = "🧺 PICKUP TASK"
         elif task.kind == "delivery": head = "🚚 DELIVERY TASK"
-        complete_line = f"After completing the task, reply: done {task.code}"
-        update_line = f"Send an update, or reply when complete: done {task.code}"
+        complete_line = "Select the current task status from the menu below."
+        update_line = "Please use the status menu to keep the task updated."
     if first:
         body = (
             f"{head} [{task.code}]{order_bit}\n"
