@@ -322,7 +322,7 @@ async def ai_campaign_draft(
 @router.post("/campaigns", dependencies=[Depends(require_feature("campaigns"))], status_code=201)
 async def create_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) -> dict:
     creative = body.creative_file or ""
-    if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\\.(?:png|jpg|jpeg)", creative):
+    if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\.(?:png|jpg|jpeg)", creative):
         raise HTTPException(status_code=400, detail="invalid campaign creative")
     if body.segment == "selected":
         if not body.selected_customer_ids:
@@ -1429,7 +1429,10 @@ async def agents_overview(db: AsyncSession = Depends(get_db)) -> dict:
 _SECRET_SETTINGS = {"ig_access_token", "gbp_connection"}
 # Sirf vendor Control panel likhta hai (routers/control.py) — dukaan ke
 # dashboard ke generic settings PUT se nahi, warna koi token/listing badal de.
-_READONLY_SETTINGS = {"gbp_connection", "gbp_reviews", "ig_user_id", "ig_access_token"}
+_READONLY_SETTINGS = {
+    "gbp_connection", "gbp_reviews", "ig_user_id", "ig_access_token",
+    "home_tenant_slug", "public_url_fixed",
+}
 _SECRET_MASK = "••••••••"
 
 

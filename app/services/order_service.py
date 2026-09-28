@@ -1,3 +1,4 @@
+from app.utils.dates import today_ist
 """Order business logic: creation, status lifecycle, payments, dates.
 
 This module is deterministic Python — in Phase 4 the AI agent will CALL these
@@ -36,6 +37,7 @@ from app.models import (
     PaymentMethod,
     PaymentStatus,
 )
+from app.services import app_settings
 from app.services.messages import get_message
 from app.services.whatsapp import SendError, WindowClosedError, send_message
 from app.utils.phone import normalize_phone
@@ -412,7 +414,6 @@ async def update_status(
         # normal, 7 din heavy items. Computed BEFORE the commit below so
         # status + promise land atomically — a crash can't leave a picked-up
         # order without its delivery date.
-        from app.services import app_settings
 
         heavy_words = [
             w.strip().lower()
@@ -429,7 +430,7 @@ async def update_status(
                 db, "sla_heavy_days" if heavy else "sla_normal_days"
             )
         )
-        order.expected_delivery = date.today() + timedelta(days=days)
+        order.expected_delivery = today_ist() + timedelta(days=days)
     db.add(
         OrderStatusHistory(
             order_id=order.id,
@@ -851,11 +852,11 @@ async def _next_order_number(db: AsyncSession) -> str:
     prefix = f"{ORDER_NUMBER_PREFIX}-{today}-"
     last = (
         await db.execute(
-            select(Order.order_number)
-            .where(Order.order_number.like(f"{prefix}%"))
-            .order_by(Order.order_number.desc())
-            .limit(1)
+            select(Order.order_number).where(Order.order_number.like(f"{prefix}%"))
         )
-    ).scalar_one_or_none()
-    seq = int(last.rsplit("-", 1)[1]) + 1 if last else 1
+    ).scalars().all()
+    seq = max(
+        (int(n.rsplit("-", 1)[1]) for n in last if n.rsplit("-", 1)[1].isdigit()),
+        default=0,
+    ) + 1
     return f"{prefix}{seq:02d}"

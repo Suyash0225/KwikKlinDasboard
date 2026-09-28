@@ -1,3 +1,4 @@
+from app.utils.dates import today_ist
 """Staff/manager WhatsApp commands (Phase 4, group c).
 
 Three things a staff/manager message can do, all extracted by the cheap
@@ -47,7 +48,7 @@ from app.models import (
     Staff,
 )
 from app.services import app_settings, audit, llm_client
-from app.services.llm_client import LLMError
+from app.services.llm_client import LLMAuthError, LLMError, LLMRateLimited
 from app.services.messages import get_message, status_label
 from app.services.order_service import (
     ACTIVE_STATUSES,
@@ -708,7 +709,7 @@ async def _staff_worklist(
         flags = []
         if o.priority == "urgent":
             flags.append("🔴 URGENT")
-        if o.expected_delivery and o.expected_delivery <= date.today():
+        if o.expected_delivery and o.expected_delivery <= today_ist():
             flags.append("aaj delivery")
         return (
             f"{i}. {o.order_number} — {cust.name or cust.phone if cust else '?'} — "
@@ -1059,10 +1060,15 @@ async def handle_staff_message(
                 return reply
         else:
             extracted = await _extract(db, text, _as_bill(pending), history)
+    except LLMRateLimited as exc:
+        log.warning("staff_extract_rate_limited", error=str(exc)[:150])
+        return get_message("ai_down_staff_rate_limit") if sender_label == "manager" else None
+    except LLMAuthError as exc:
+        log.warning("staff_extract_quota_or_auth_failed", error=str(exc)[:150])
+        return get_message("ai_down_staff_quota") if sender_label == "manager" else None
     except LLMError as exc:
-        log.warning("staff_extract_failed", error=str(exc)[:150])
-        # Never leave the MANAGER wondering — staff chatter can stay silent.
-        return get_message("ai_down_staff") if sender_label == "manager" else None
+        log.warning("staff_extract_parse_failed", error=str(exc)[:150])
+        return get_message("ai_down_staff_parse") if sender_label == "manager" else None
 
     action = extracted["action"]
     reply: str | None = None
@@ -1445,7 +1451,7 @@ async def _finalize_bill(
             db, "delivery_normal_days", "delivery_heavy_days", "delivery_holidays"
         )
         exp = calculate_delivery_date(
-            date.today(),
+            today_ist(),
             d["items"],
             normal_days=int(cfg.get("delivery_normal_days") or 4),
             heavy_days=int(cfg.get("delivery_heavy_days") or 5),

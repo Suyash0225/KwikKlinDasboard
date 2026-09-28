@@ -35,11 +35,14 @@ class TemplateError(Exception):
 
 async def graph(method: str, path: str, token: str, **kw):
     """Ek Graph call — tests isi ko nakli banate hain."""
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.request(
-            method, f"{GRAPH}/{path}", headers={"Authorization": f"Bearer {token}"}, **kw
-        )
-    return r.status_code, r.json()
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.request(
+                method, f"{GRAPH}/{path}", headers={"Authorization": f"Bearer {token}"}, **kw
+            )
+        return r.status_code, r.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise TemplateError(f"meta_unreachable: {type(exc).__name__}", 503) from exc
 
 
 def creds_for(tenant) -> Creds | None:
@@ -164,9 +167,11 @@ async def create(
         "POST", f"{creds.waba_id}/message_templates", creds.token,
         json={"name": name, "language": language, "category": category, "components": components},
     )
+    if status in (401, 403):
+        raise TemplateError("meta_auth_failed", 503)
     if status != 200:
         err = data.get("error", {})
-        raise TemplateError(err.get("error_user_msg") or err.get("message") or str(data)[:250])
+        raise TemplateError(err.get("error_user_msg") or err.get("message") or str(data)[:250], 503)
     return {"name": name, "status": data.get("status", "PENDING")}
 
 
@@ -175,8 +180,10 @@ async def delete(creds: Creds | None, name: str) -> None:
     status, data = await graph(
         "DELETE", f"{creds.waba_id}/message_templates", creds.token, params={"name": name}
     )
+    if status in (401, 403):
+        raise TemplateError("meta_auth_failed", 503)
     if status != 200:
-        raise TemplateError(str(data)[:250])
+        raise TemplateError(str(data)[:250], 503)
 
 
 def _status_vs_spec(remote_t: dict | None, spec: dict, state: str) -> str:
