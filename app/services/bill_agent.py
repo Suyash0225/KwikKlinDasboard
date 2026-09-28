@@ -47,7 +47,7 @@ from app.models import (
     Staff,
 )
 from app.services import app_settings, audit, llm_client
-from app.services.llm_client import LLMError
+from app.services.llm_client import LLMAuthError, LLMError, LLMRateLimited
 from app.services.messages import get_message, status_label
 from app.services.order_service import (
     ACTIVE_STATUSES,
@@ -1059,10 +1059,15 @@ async def handle_staff_message(
                 return reply
         else:
             extracted = await _extract(db, text, _as_bill(pending), history)
+    except LLMRateLimited as exc:
+        log.warning("staff_extract_rate_limited", error=str(exc)[:150])
+        return get_message("ai_down_staff_rate_limit") if sender_label == "manager" else None
+    except LLMAuthError as exc:
+        log.warning("staff_extract_quota_or_auth_failed", error=str(exc)[:150])
+        return get_message("ai_down_staff_quota") if sender_label == "manager" else None
     except LLMError as exc:
-        log.warning("staff_extract_failed", error=str(exc)[:150])
-        # Never leave the MANAGER wondering — staff chatter can stay silent.
-        return get_message("ai_down_staff") if sender_label == "manager" else None
+        log.warning("staff_extract_parse_failed", error=str(exc)[:150])
+        return get_message("ai_down_staff_parse") if sender_label == "manager" else None
 
     action = extracted["action"]
     reply: str | None = None
