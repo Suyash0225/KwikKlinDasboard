@@ -41,13 +41,36 @@ from app.config import settings
 log = structlog.get_logger()
 
 PROVIDER = settings.LLM_PROVIDER
+FALLBACK_PROVIDER = getattr(settings, "LLM_FALLBACK_PROVIDER", "anthropic")
+_PROVIDER_MODELS = {"gemini": ("gemini-3.5-flash-lite", "gemini-3.5-flash"), "anthropic": ("claude-haiku-4-5", "claude-sonnet-5")}
+MODEL_CHEAP, MODEL_SMART = _PROVIDER_MODELS[PROVIDER]
+_CIRCUIT_FAILURE_THRESHOLD = 3
+_CIRCUIT_OPEN_SECONDS = 60.0
+_circuit_failures: dict[str, int] = {}
+_circuit_open_until: dict[str, float] = {}
 
-if PROVIDER == "gemini":
-    MODEL_CHEAP = "gemini-3.5-flash-lite"
-    MODEL_SMART = "gemini-3.5-flash"
-else:
-    MODEL_CHEAP = "claude-haiku-4-5"
-    MODEL_SMART = "claude-sonnet-5"
+def _provider_is_open(provider: str) -> bool:
+    until = _circuit_open_until.get(provider, 0.0)
+    if until <= time.monotonic():
+        if until:
+            _circuit_open_until.pop(provider, None)
+            _circuit_failures.pop(provider, None)
+        return False
+    return True
+
+def _provider_failed(provider: str) -> None:
+    failures = _circuit_failures.get(provider, 0) + 1
+    _circuit_failures[provider] = failures
+    if failures >= _CIRCUIT_FAILURE_THRESHOLD:
+        _circuit_open_until[provider] = time.monotonic() + _CIRCUIT_OPEN_SECONDS
+        log.warning("llm_circuit_open", provider=provider, cooldown_seconds=int(_CIRCUIT_OPEN_SECONDS), failures=failures)
+
+def _provider_succeeded(provider: str) -> None:
+    _circuit_failures.pop(provider, None)
+    _circuit_open_until.pop(provider, None)
+
+def _provider_models(provider: str) -> tuple[str, str]:
+    return _PROVIDER_MODELS[provider]
 
 # A customer is staring at WhatsApp. The SDK's own default is ten MINUTES —
 # by then the person has phoned the shop, and our reply arrives as noise.
@@ -187,6 +210,7 @@ async def _generate(
     max_tokens: int,
     schema: dict | None = None,
     image: tuple[str, bytes] | None = None,
+    provider: str = PROVIDER,
 ) -> str:
     """Provider dispatch — one place, so fallback logic stays tiny."""
     if PROVIDER == "gemini":
@@ -212,28 +236,48 @@ async def _generate_with_fallback(
     Free tiers throttle the bigger model first; a slightly dumber answer
     beats no answer (ground rule #5).
     """
-    # Plan ki AI quota — network call se PEHLE. Exceeded -> LLMUnavailable,
-    # jiska degrade path (escalate/owner ko batao) pehle se tested hai.
     from app.services.quota import QuotaExceeded, check_ai_quota
-
     try:
         await check_ai_quota()
     except QuotaExceeded as exc:
         raise LLMAuthError(str(exc)) from exc
 
-    def _attempt(m: str):
-        return lambda: _generate(system, user_text, m, max_tokens, schema, image)
+    async def _provider_attempt(provider: str, requested_model: str) -> str:
+        if _provider_is_open(provider):
+            raise LLMUnavailable(f"{provider} circuit open")
+        cheap, smart = _provider_models(provider)
+        candidates = [requested_model] if requested_model in (cheap, smart) else [smart]
+        if candidates[0] != cheap:
+            candidates.append(cheap)
+        last_exc: LLMUnavailable | None = None
+        for candidate in candidates:
+            try:
+                async with asyncio.timeout(IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS):
+                    result = await _with_retry(
+                        lambda: _generate(system, user_text, candidate, max_tokens, schema, image, provider),
+                        provider=provider, model=candidate,
+                    )
+                _provider_succeeded(provider)
+                return result
+            except LLMUnavailable as exc:
+                last_exc = exc
+                log.warning("llm_model_unavailable", provider=provider, model=candidate, error=str(exc)[:200])
+        _provider_failed(provider)
+        raise last_exc or LLMUnavailable(f"{provider} unavailable")
 
-    try:
-        async with asyncio.timeout(IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS):
-            return await _with_retry(_attempt(model), provider=PROVIDER, model=model)
-    except LLMUnavailable:
-        if model == MODEL_CHEAP:
-            raise
-        alt = MODEL_SMART if model == MODEL_CHEAP else MODEL_CHEAP
-        log.warning("llm_model_unavailable_trying_alt", from_model=model, to_model=alt)
-        async with asyncio.timeout(IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS):
-            return await _with_retry(_attempt(alt), provider=PROVIDER, model=alt)
+    providers = [PROVIDER]
+    if FALLBACK_PROVIDER in _PROVIDER_MODELS and FALLBACK_PROVIDER != PROVIDER:
+        providers.append(FALLBACK_PROVIDER)
+    last_exc: LLMUnavailable | None = None
+    for index, provider in enumerate(providers):
+        requested_model = model if index == 0 else _provider_models(provider)[0]
+        try:
+            return await _provider_attempt(provider, requested_model)
+        except LLMUnavailable as exc:
+            last_exc = exc
+            if index + 1 < len(providers):
+                log.warning("llm_provider_failover", from_provider=provider, to_provider=providers[index + 1], error=str(exc)[:200])
+    raise last_exc or LLMUnavailable("all configured LLM providers unavailable")
 
 
 def _parse_json(text: str, model: str) -> dict:
