@@ -322,7 +322,7 @@ async def ai_campaign_draft(
 @router.post("/campaigns", dependencies=[Depends(require_feature("campaigns"))], status_code=201)
 async def create_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) -> dict:
     creative = body.creative_file or ""
-    if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\\.(?:png|jpg|jpeg)", creative):
+    if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\.(?:png|jpg|jpeg)", creative):
         raise HTTPException(status_code=400, detail="invalid campaign creative")
     if body.segment == "selected":
         if not body.selected_customer_ids:
