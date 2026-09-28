@@ -2426,7 +2426,6 @@ async def inbox_send_media(
 @router.get("/media/{name}")
 async def serve_media(
     name: str,
-    key: str = Query(default=""),
     kk_session: str = Cookie(default=""),
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
@@ -2440,10 +2439,8 @@ async def serve_media(
     ke paas admin key hoti hi nahi — har photo 401 deti thi aur Inbox mein
     toota hua dabba dikhta tha.
     """
-    import hmac as _hmac
-
-    allowed = bool(key) and _hmac.compare_digest(key, settings.ADMIN_API_KEY)
-    if not allowed and kk_session:
+    allowed = False
+    if kk_session:
         from app.services import auth as auth_service
 
         # Self-serve gate: koi bhi valid session. Filenames random-UUID hain
@@ -2451,7 +2448,7 @@ async def serve_media(
         user = await auth_service.user_for_token(db, kk_session)
         allowed = user is not None
     if not allowed:
-        raise HTTPException(status_code=401, detail="key ya login chahiye")
+        raise HTTPException(status_code=401, detail="login chahiye")
     # Only generated customer media is public to a logged-in tenant user.
     # Never expose diagnostics or arbitrary files from the media directory.
     if not re.fullmatch(r"(?:in|out|job|campaign)-[0-9a-f]{32}\.(?:jpg|jpeg|png|webp|ogg|pdf)", name, re.I):
