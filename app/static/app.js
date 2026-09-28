@@ -821,7 +821,7 @@ async function messageMenu(num) {
   openModal(`<h3>💬 Message — ${esc(num)}</h3>
     <p class="muted">${due > 0 ? "You see the message before it goes." : "Bill is paid in full — thank them, or ask for a review."}</p>
     <div class="frm">${kinds.map(([k, ico, label]) =>
-      `<button class="btn ghost" onclick="composeMessage('${esc(num)}','${k}')">${ico} ${label}</button>`).join("")}
+      `<button class="btn ghost" data-action="composeMessage" data-num="${esc(num)}" data-kind="${esc(k)}">${ico} ${label}</button>`).join("")}
     </div>
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
 }
@@ -1580,7 +1580,7 @@ function custAc(fieldId) {
     AC_HITS = hits;
     box.innerHTML = hits.length
       ? hits.map((c, i) =>
-          `<div onclick="pickCust(${i})">${esc(displayName(c.name, c.phone))} · ${esc(c.phone)}</div>`).join("")
+          `<div data-action="pickCust" data-index="${i}">${esc(displayName(c.name, c.phone))} · ${esc(c.phone)}</div>`).join("")
       : `<div class="muted" style="cursor:default">No match — this will be a new customer</div>`;
   }, 200);
 }
@@ -1613,12 +1613,24 @@ function nbRewardPaint() {
   if (!NB_REWARDS.length) { box.hidden = true; box.innerHTML = ""; return; }
   box.hidden = false;
   box.innerHTML = NB_REWARDS.map((r) => r.code === cur
-    ? `<div class="rwchip on">🎁 <b>${esc(r.reward)}</b> applied · ${esc(r.code)} <button type="button" class="btn sm ghost" onclick="nbRewardClear()">✕ Remove</button></div>`
-    : `<div class="rwchip">🎁 Customer has <b>${esc(r.reward)}</b> earned${r.expires_at ? ` · valid till ${esc(r.expires_at.slice(0, 10))}` : ""} <button type="button" class="btn sm" onclick="nbRewardApply('${esc(r.code)}')">Apply</button></div>`).join("");
+    ? `<div class="rwchip on">🎁 <b>${esc(r.reward)}</b> applied · ${esc(r.code)} <button type="button" class="btn sm ghost" data-action="nbRewardClear">✕ Remove</button></div>`
+    : `<div class="rwchip">🎁 Customer has <b>${esc(r.reward)}</b> earned${r.expires_at ? ` · valid till ${esc(r.expires_at.slice(0, 10))}` : ""} <button type="button" class="btn sm" data-action="nbRewardApply" data-code="${esc(r.code)}">Apply</button></div>`).join("");
 }
 function nbRewardApply(code) { $("nb-coupon").value = code; nbRewardPaint(); toast("Reward applied — discount shows on save"); }
 function nbRewardClear() { $("nb-coupon").value = ""; nbRewardPaint(); }
 document.addEventListener("change", (e) => { if (e.target && e.target.id === "nb-phone") nbRewards(e.target.value); });
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-action]");
+  if (!el) return;
+  const action = el.dataset.action;
+  if (action === "pickCust") return pickCust(Number(el.dataset.index));
+  if (action === "composeMessage") return composeMessage(el.dataset.num, el.dataset.kind);
+  if (action === "nbRewardApply") return nbRewardApply(el.dataset.code);
+  if (action === "nbRewardClear") return nbRewardClear();
+  if (action === "rwToggle") return rwToggle(el.dataset.id);
+  if (action === "rwDelete") return rwDelete(el.dataset.id);
+  if (action === "tplDelete") return tplDelete(el.dataset.name);
+});
 
 /* ---- Settings → Rewards ---- */
 let RW_RULES = [];
@@ -1634,8 +1646,8 @@ async function loadRewards() {
           ${r.min_order ? `<span class="badge">min bill ${money(r.min_order)}</span>` : ""}<span class="badge">coupon valid ${r.valid_days} days</span>
           <span class="statuspill ${r.active ? "on" : "off"}">${r.active ? "Active" : "Paused"}</span></div></div>
       <div class="acts">
-        <button class="btn sm ghost" onclick="rwToggle('${r.id}')">${r.active ? "Pause" : "Resume"}</button>
-        <button class="btn sm danger" onclick="rwDelete('${r.id}')">Delete</button>
+        <button class="btn sm ghost" data-action="rwToggle" data-id="${esc(r.id)}">${r.active ? "Pause" : "Resume"}</button>
+        <button class="btn sm danger" data-action="rwDelete" data-id="${esc(r.id)}">Delete</button>
       </div></div>`).join("")}</div>`
     : `<div class="emptystate">No reward rules yet. Start with the suggested ones below.</div>`;
   const have = new Set(RW_RULES.map((r) => r.name));
@@ -3246,7 +3258,7 @@ async function tplLoad() {
           <span class="pill ${t.status === "APPROVED" ? "PAID" : t.status === "REJECTED" ? "UNPAID" : "PARTIAL"}">${t.status}</span>
           ${t.rejected_reason ? `<div class="muted" style="color:var(--danger)">Reason: ${esc(t.rejected_reason)}</div>` : ""}
           <div class="muted" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px">${esc(t.body)}</div></span>
-        <button class="btn sm danger" onclick="tplDelete('${esc(t.name)}')">✕</button>
+        <button class="btn sm danger" data-action="tplDelete" data-name="${esc(t.name)}">✕</button>
       </div>`).join("") : `<p class="muted">No templates yet.</p>`;
   } catch (e) { $("tpl-list").innerHTML = errBox(e.message, "tplLoad"); }
 }
