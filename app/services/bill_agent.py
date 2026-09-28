@@ -2340,7 +2340,7 @@ async def _handle_pickup_exchange(
 async def _close_task_by_code(
     db: AsyncSession, sender_phone: str, sender_label: str, code: str
 ) -> str:
-    from app.services import tasks as task_service
+    from app.services import tasks as task_service, team
 
     task = await task_service.get_by_code(db, code)
     if task is None:
