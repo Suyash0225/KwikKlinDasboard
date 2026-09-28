@@ -1,3 +1,4 @@
+from app.utils.dates import today_ist
 """Scheduled jobs (APScheduler, Asia/Kolkata) — the proactive half of the agent.
 
 Jobs:
@@ -545,7 +546,7 @@ async def run_daily_summary() -> None:
             (
                 await db.execute(
                     select(Order).where(
-                        Order.expected_delivery < date.today(),
+                        Order.expected_delivery < today_ist(),
                         Order.status.notin_(
                             (OrderStatus.DELIVERED, OrderStatus.CANCELLED)
                         ),
@@ -747,7 +748,7 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
                     flags = []
                     if o.priority == "urgent":
                         flags.append("🔴 URGENT")
-                    if o.expected_delivery and o.expected_delivery <= date.today():
+                    if o.expected_delivery and o.expected_delivery <= today_ist():
                         flags.append("aaj delivery")
                     lines.append(
                         f"{i}. {o.order_number} — "
@@ -797,7 +798,7 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
                 select(Order, Customer)
                 .join(Customer, Customer.id == Order.customer_id)
                 .where(
-                    Order.expected_delivery <= date.today(),
+                    Order.expected_delivery <= today_ist(),
                     Order.status.in_(
                         (
                             OrderStatus.RECEIVED,
@@ -1006,7 +1007,7 @@ async def run_delivery_nudges() -> int:
             (
                 await db.execute(
                     select(Order).where(
-                        Order.expected_delivery <= date.today(),
+                        Order.expected_delivery <= today_ist(),
                         Order.status.in_(
                             (
                                 OrderStatus.RECEIVED, OrderStatus.IN_WASH,
