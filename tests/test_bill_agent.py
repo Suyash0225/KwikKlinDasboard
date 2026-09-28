@@ -100,9 +100,12 @@ async def test_bill_draft_then_confirm_creates_order(monkeypatch, sent) -> None:
         draft_reply = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="manager", text="Sharma ji 2 kurta"
         )
-    assert draft_reply is not None
-    assert "₹80" in draft_reply and "Advance: ₹20" in draft_reply
-    assert "Sharma ji" in draft_reply and SENDER in _PENDING
+    assert draft_reply is None, "menu is sent directly so the webhook does not duplicate it"
+    menu = next(m for m in sent if m.get("list_rows") and m["to"] == SENDER)
+    assert [row.id for row in menu["list_rows"]] == [
+        "bill_confirm:yes", "bill_confirm:edit", "bill_confirm:cancel",
+    ]
+    assert SENDER in _PENDING
     assert await _order_for_customer() is None  # nothing written yet!
 
     async with async_session_factory() as db:
@@ -153,7 +156,7 @@ async def test_confirm_without_phone_keeps_draft(monkeypatch) -> None:
         draft_reply = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="manager", text="Verma 1 kurta"
         )
-        assert "number nahi mila" in draft_reply
+        assert draft_reply is None
         blocked = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="manager", text="haan"
         )
