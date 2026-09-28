@@ -87,15 +87,27 @@ async def _with_retry(call, *, provider: str, model: str):
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             return await call()
-        except (LLMAuthError, LLMRateLimited):
+        except LLMAuthError:
+            # Invalid key / exhausted app quota is not transient.
             raise
-        except LLMUnavailable:
+        except LLMRateLimited as exc:
             if attempt == _MAX_ATTEMPTS:
                 raise
             delay = _BACKOFF_BASE * (2 ** (attempt - 1)) * (0.5 + random.random())
-            log.info(
+            log.warning(
+                "llm_rate_limited_retry",
+                provider=provider, model=model, attempt=attempt,
+                error=str(exc)[:200], sleep_ms=int(delay * 1000),
+            )
+            await asyncio.sleep(delay)
+        except LLMUnavailable as exc:
+            if attempt == _MAX_ATTEMPTS:
+                raise
+            delay = _BACKOFF_BASE * (2 ** (attempt - 1)) * (0.5 + random.random())
+            log.warning(
                 "llm_retry", provider=provider, model=model,
-                attempt=attempt, sleep_ms=int(delay * 1000),
+                attempt=attempt, error=str(exc)[:200],
+                sleep_ms=int(delay * 1000),
             )
             await asyncio.sleep(delay)
 
@@ -390,8 +402,14 @@ async def _gemini_generate(
         log.error("llm_auth_failed", provider="gemini", model=model)
         raise LLMAuthError("invalid GEMINI_API_KEY")
     if resp.status_code == 429:
-        log.warning("llm_unavailable", provider="gemini", model=model, status=429)
-        raise LLMRateLimited("gemini HTTP 429")
+        retry_after = resp.headers.get("retry-after")
+        detail = resp.text[:300]
+        log.warning(
+            "llm_rate_limited",
+            provider="gemini", model=model, status=429,
+            retry_after=retry_after, error=detail,
+        )
+        raise LLMRateLimited(f"gemini HTTP 429: {detail}")
     if resp.status_code >= 500:
         log.warning("llm_unavailable", provider="gemini", model=model, status=resp.status_code)
         raise LLMUnavailable(f"gemini HTTP {resp.status_code}")
