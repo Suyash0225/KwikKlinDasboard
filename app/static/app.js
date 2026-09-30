@@ -3043,11 +3043,11 @@ async function loadCampaignCustomerPicker(value = "") {
   clearTimeout(CAMPAIGN_SEARCH_TIMER);
   CAMPAIGN_SEARCH_TIMER = setTimeout(async () => {
     try {
-      const url = "/admin/api/customers/search?limit=50" + (q ? "&q=" + encodeURIComponent(q) : "");
+      const url = "/admin/api/customers/search?limit=25" + (q ? "&q=" + encodeURIComponent(q) : "");
       const rows = await api(url);
       renderCampaignCustomerPickerRows(rows);
       const meta = $("camp-picker-result-count");
-      if (meta) meta.textContent = rows.length + (rows.length === 50 ? "+" : "") + " customers shown";
+      if (meta) meta.textContent = rows.length + (rows.length === 25 ? "+" : "") + " customers shown";
     } catch (e) {
       const box = $("camp-customer-results");
       if (box) box.innerHTML = errBox(e.message, "openCampaignCustomerPicker");
