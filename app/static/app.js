@@ -3158,8 +3158,8 @@ function renderCampaigns(camps) {
   $("camp-list").innerHTML = camps.map((c) => {
     const s = c.stats || {};
     const img = c.creative_file ? '<img class="camp-history-img" src="' + mediaUrl("/admin/media/" + encodeURIComponent(c.creative_file)) + '" alt="Campaign creative">' : "";
-    const total = ["sent","delivered","read","replied","failed","skipped","holdout"].reduce((n,k) => n + Number(s[k] || 0), 0);
-    const done = ["sent","delivered","read","replied","failed","skipped"].reduce((n,k) => n + Number(s[k] || 0), 0);
+    const total = ["queued","sent","delivered","read","replied","failed","skipped","holdout"].reduce((n,k) => n + Number(s[k] || 0), 0);
+    const done = ["sent","delivered","read","replied","failed","skipped","holdout"].reduce((n,k) => n + Number(s[k] || 0), 0);
     const pct = total ? Math.min(100, Math.round(done * 100 / total)) : 0;
     const action = ["sending","approved"].includes(c.status)
       ? '<button class="btn sm" onclick="openCampaignLive(\'' + c.id + '\')">🟢 Live monitor</button>'
