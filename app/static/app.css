@@ -2046,6 +2046,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 #sec-campaigns .camp-live-preview .camp-phone-input span{
   background:#fff;border:1px solid #e1e7e4;padding:8px 11px;
 }
+#sec-campaigns .camp-selected-picker[hidden]{display:none!important}
 #sec-campaigns .camp-selected-picker{
   margin-top:14px;
   padding:14px;
