@@ -3149,14 +3149,111 @@ function prefillCampaign(seg) {
   $("camp-name").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 function renderCampaigns(camps) {
-  if (!camps.length) { $("camp-list").innerHTML = emptyBox("No campaigns yet. Create your first campaign above.", "📣"); return; }
+  if (!camps.length) {
+    $("camp-list").innerHTML = emptyBox("No campaigns yet. Create your first WhatsApp campaign above.", "📣");
+    updateCampaignKpis([]);
+    return;
+  }
+  updateCampaignKpis(camps);
   $("camp-list").innerHTML = camps.map((c) => {
-    const s = c.stats || {}, img = c.creative_file ? '<img class="camp-history-img" src="' + mediaUrl("/admin/media/" + encodeURIComponent(c.creative_file)) + '" alt="Campaign creative">' : "";
-    return '<div class="camp-history-item"><div class="camp-history-item-top"><div><b>' + esc(c.name) + '</b><div class="muted">' + esc(SEGMENT_LABEL[c.segment] || c.segment) + ' · ' + new Date(c.created_at).toLocaleString() + '</div></div><span class="pill ' + (c.status === "sent" ? "PAID" : c.status === "cancelled" ? "CANCELLED" : "PARTIAL") + '">' + esc(c.status) + '</span></div>' + img +
-      '<div class="camp-history-msg">' + esc(c.message_text) + '</div>' + (c.segment === "selected" ? '<div class="camp-history-audience">Selected customers: <b>' + (c.selected_customer_count || 0) + '</b></div>' : '') + '<div class="camp-history-stats">Sent <b>' + (s.sent || 0) + '</b> · Delivered <b>' + (s.delivered || 0) + '</b> · Read <b>' + (s.read || 0) + '</b> · Replied <b>' + (s.replied || 0) + '</b> · Failed <b>' + (s.failed || 0) + '</b> · Skipped <b>' + (s.skipped || 0) + '</b></div>' +
-      (["draft","suggested"].includes(c.status) ? '<div class="act"><button class="btn sm ok" onclick="approveCampaign(\'' + c.id + '\')">Start sending</button><button class="btn sm ghost" onclick="cancelCampaign(\'' + c.id + '\')">Cancel</button></div>' : '') + '</div>';
+    const s = c.stats || {};
+    const img = c.creative_file ? '<img class="camp-history-img" src="' + mediaUrl("/admin/media/" + encodeURIComponent(c.creative_file)) + '" alt="Campaign creative">' : "";
+    const total = ["sent","delivered","read","replied","failed","skipped","holdout"].reduce((n,k) => n + Number(s[k] || 0), 0);
+    const done = ["sent","delivered","read","replied","failed","skipped"].reduce((n,k) => n + Number(s[k] || 0), 0);
+    const pct = total ? Math.min(100, Math.round(done * 100 / total)) : 0;
+    const action = ["sending","approved"].includes(c.status)
+      ? '<button class="btn sm" onclick="openCampaignLive(\'' + c.id + '\')">🟢 Live monitor</button>'
+      : '<button class="btn sm ghost" onclick="openCampaignLive(\'' + c.id + '\')">View report</button>';
+    return '<div class="camp-history-item">' +
+      '<div class="camp-history-item-top"><div><b>' + esc(c.name) + '</b><div class="muted">' + esc(SEGMENT_LABEL[c.segment] || c.segment) + ' · ' + new Date(c.created_at).toLocaleString() + '</div></div>' +
+      '<span class="pill ' + (c.status === "sent" ? "PAID" : c.status === "cancelled" ? "CANCELLED" : c.status === "sending" ? "PARTIAL" : "PARTIAL") + '">' + esc(c.status) + '</span></div>' +
+      img +
+      '<div class="camp-history-msg">' + esc(c.message_text) + '</div>' +
+      '<div class="camp-history-progress"><div style="width:' + pct + '%"></div></div>' +
+      '<div class="camp-history-stats"><span>Sent <b>' + (s.sent || 0) + '</b></span><span>Delivered <b>' + (s.delivered || 0) + '</b></span><span>Read <b>' + (s.read || 0) + '</b></span><span>Replies <b>' + (s.replied || 0) + '</b></span><span>Failed <b>' + (s.failed || 0) + '</b></span><span>Skipped <b>' + (s.skipped || 0) + '</b></span></div>' +
+      (s.orders_attributed != null ? '<div class="camp-history-revenue">Orders <b>' + (s.orders_attributed || 0) + '</b> · Revenue <b>₹' + Number(s.revenue_attributed || 0).toLocaleString("en-IN") + '</b> · Lift <b>' + ((Number(s.lift || 0) * 100).toFixed(1)) + '%</b></div>' : '') +
+      '<div class="act">' + action +
+      (["draft","suggested"].includes(c.status) ? '<button class="btn sm ok" onclick="approveCampaign(\'' + c.id + '\')">Start sending</button><button class="btn sm ghost" onclick="cancelCampaign(\'' + c.id + '\')">Cancel</button>' : '') +
+      '</div></div>';
   }).join("");
 }
+
+function updateCampaignKpis(camps) {
+  const total = camps.length;
+  const live = camps.filter(c => ["sending","approved"].includes(c.status)).length;
+  const sent = camps.reduce((n,c) => n + Number((c.stats||{}).sent || 0), 0);
+  const replies = camps.reduce((n,c) => n + Number((c.stats||{}).replied || 0), 0);
+  const revenue = camps.reduce((n,c) => n + Number((c.stats||{}).revenue_attributed || 0), 0);
+  if ($("camp-kpi-total")) $("camp-kpi-total").textContent = total;
+  if ($("camp-kpi-live")) $("camp-kpi-live").textContent = live;
+  if ($("camp-kpi-sent")) $("camp-kpi-sent").textContent = sent;
+  if ($("camp-kpi-replies")) $("camp-kpi-replies").textContent = replies;
+  if ($("camp-kpi-revenue")) $("camp-kpi-revenue").textContent = "₹" + revenue.toLocaleString("en-IN");
+}
+
+let CAMPAIGN_LIVE_ID = null;
+let CAMPAIGN_LIVE_TIMER = null;
+
+async function openCampaignLive(id) {
+  CAMPAIGN_LIVE_ID = id;
+  const board = $("camp-live-board");
+  if (board) board.hidden = false;
+  await refreshCampaignLive();
+  board?.scrollIntoView({ behavior: "smooth", block: "start" });
+  clearInterval(CAMPAIGN_LIVE_TIMER);
+  CAMPAIGN_LIVE_TIMER = setInterval(() => refreshCampaignLive(true), 5000);
+}
+
+async function refreshCampaignLive(silent=false) {
+  if (!CAMPAIGN_LIVE_ID) return;
+  try {
+    const d = await api("/admin/api/campaigns/" + encodeURIComponent(CAMPAIGN_LIVE_ID) + "/live");
+    renderCampaignLive(d);
+    if (["sent","cancelled"].includes(d.status)) clearInterval(CAMPAIGN_LIVE_TIMER);
+  } catch (e) {
+    if (!silent) toast(e.message, true);
+  }
+}
+
+function renderCampaignLive(d) {
+  const s = d.stats || {};
+  const sent = Number(s.sent || 0), delivered = Number(s.delivered || 0), read = Number(s.read || 0);
+  const replied = Number(s.replied || 0), failed = Number(s.failed || 0), skipped = Number(s.skipped || 0);
+  const holdout = Number(s.holdout || 0);
+  const total = sent + failed + skipped + holdout;
+  const completed = sent + failed + skipped;
+  const pct = total ? Math.min(100, Math.round(completed * 100 / total)) : 0;
+
+  if ($("camp-live-title")) $("camp-live-title").textContent = d.name;
+  if ($("camp-live-subtitle")) $("camp-live-subtitle").textContent = d.status === "sending" ? "Sending messages live" : "Campaign " + d.status;
+  if ($("camp-live-progress-bar")) $("camp-live-progress-bar").style.width = pct + "%";
+  if ($("camp-live-progress-text")) $("camp-live-progress-text").textContent = completed + " / " + total + " processed";
+  if ($("camp-live-progress-percent")) $("camp-live-progress-percent").textContent = pct + "%";
+  if ($("camp-live-cancel")) $("camp-live-cancel").style.display = ["sending","approved"].includes(d.status) ? "" : "none";
+
+  const metrics = [
+    ["📤","Sent",sent],["✓✓","Delivered",delivered],["👁","Read",read],
+    ["💬","Replies",replied],["❌","Failed",failed],["⏭","Skipped",skipped]
+  ];
+  if ($("camp-live-metrics")) $("camp-live-metrics").innerHTML = metrics.map(x =>
+    '<div class="camp-live-metric"><span>' + x[0] + '</span><small>' + x[1] + '</small><b>' + x[2] + '</b></div>'
+  ).join("");
+
+  if ($("camp-live-stream-list")) {
+    $("camp-live-stream-list").innerHTML = (d.recipients || []).map(r => {
+      const icon = r.status === "failed" ? "❌" : r.status === "replied" ? "💬" : ["sent","delivered","read"].includes(r.status) ? "✓" : "⏭";
+      const when = r.updated_at ? new Date(r.updated_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : "";
+      return '<div class="camp-stream-row"><span class="camp-stream-icon">' + icon + '</span><div><b>' + esc(r.name) + '</b><small>' + esc(r.phone || "") + '</small></div><span class="camp-stream-status">' + esc(r.status) + (r.detail ? " · " + esc(r.detail) : "") + '</span><time>' + when + '</time></div>';
+    }).join("") || '<div class="muted" style="padding:18px">Waiting for campaign activity…</div>';
+  }
+}
+
+async function cancelLiveCampaign() {
+  if (!CAMPAIGN_LIVE_ID) return;
+  await cancelCampaign(CAMPAIGN_LIVE_ID);
+  await refreshCampaignLive();
+}
+
 function updateCampaignMsgCount() {
   const el = $("camp-msg"), count = $("camp-msg-count"); if (el && count) count.textContent = el.value.length + "/4000";
 }
