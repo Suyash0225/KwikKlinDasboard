@@ -1,0 +1,28 @@
+name: Campaigns UI check
+
+on:
+  pull_request:
+    paths:
+      - "app/static/app.js"
+      - "app/static/dashboard.html"
+      - "app/static/app.css"
+      - "app/routers/agent_admin.py"
+      - ".github/workflows/campaigns-ui-check.yml"
+  push:
+    branches:
+      - "feature/campaigns-control-room"
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Python syntax
+        run: python -m compileall -q app
+      - name: Check Campaigns JavaScript syntax
+        run: node --check app/static/app.js
+      - name: Check Campaigns markup references
+        run: |
+          grep -q 'id="camp-live-board"' app/static/dashboard.html
+          grep -q 'function renderCampaignLive' app/static/app.js
+          grep -q '/campaigns/" + encodeURIComponent(CAMPAIGN_LIVE_ID) + "/live' app/static/app.js
