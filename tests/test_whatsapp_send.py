@@ -14,7 +14,7 @@ import app.services.whatsapp as whatsapp_module
 from app.services import waha
 from app.database import async_session_factory
 from app.models import Customer
-from app.services.whatsapp import Button, ListRow, send_message
+from app.services.whatsapp import Button, ListRow, SendError, send_message
 from tests.conftest import TEST_CUSTOMER_PHONE
 
 ROWS = [
@@ -34,6 +34,25 @@ async def open_window():
         )
         await s.commit()
     yield
+
+
+
+async def test_unknown_recipient_is_rejected(open_window, monkeypatch) -> None:
+    async def _must_not_send(*args, **kwargs):
+        raise AssertionError("WAHA must not be called for an unauthorized recipient")
+
+    monkeypatch.setattr(waha, "send_text", _must_not_send)
+    with pytest.raises(SendError, match="not authorized"):
+        await send_message(
+            await _db_for_test(),
+            to_phone="+919876543210",
+            text="This must never be sent",
+            sent_by="bot",
+        )
+
+
+async def _db_for_test():
+    return async_session_factory().__aenter__()
 
 
 async def _capture(monkeypatch) -> list[dict]:
