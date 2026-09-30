@@ -2342,7 +2342,7 @@ async function sendReminder(phone) {
 /* Media ka URL. Login session ho to cookie hi kaafi hai; sirf purane
    admin-key wale rasta ke liye ?key= lagta hai. Khali key jodne se server
    401 deta tha aur Inbox mein toota hua dabba dikhta tha. */
-const mediaUrl = (path) => KEY ? `${path}?key=${encodeURIComponent(KEY)}` : path;
+const mediaUrl = (path) => path;
 
 /* ---- chat text + ticks, WhatsApp style ---- */
 /* Trailing newlines in a stored/approved body rendered as a big empty hole
@@ -2978,7 +2978,7 @@ async function loadReports() {
     </div>`;
 }
 async function dlServer(path, name) {
-  const r = await fetch(path, { headers: { "X-API-Key": KEY } });
+  const r = await fetch(path);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(await r.blob()); a.download = name; a.click();
 }
@@ -3151,7 +3151,7 @@ function prefillCampaign(seg) {
 function renderCampaigns(camps) {
   if (!camps.length) { $("camp-list").innerHTML = emptyBox("No campaigns yet. Create your first campaign above.", "📣"); return; }
   $("camp-list").innerHTML = camps.map((c) => {
-    const s = c.stats || {}, img = c.creative_file ? '<img class="camp-history-img" src="/admin/media/' + encodeURIComponent(c.creative_file) + '?key=' + encodeURIComponent(KEY) + '" alt="Campaign creative">' : "";
+    const s = c.stats || {}, img = c.creative_file ? '<img class="camp-history-img" src="/admin/media/' + encodeURIComponent(c.creative_file) + '" alt="Campaign creative">' : "";
     return '<div class="camp-history-item"><div class="camp-history-item-top"><div><b>' + esc(c.name) + '</b><div class="muted">' + esc(SEGMENT_LABEL[c.segment] || c.segment) + ' · ' + new Date(c.created_at).toLocaleString() + '</div></div><span class="pill ' + (c.status === "sent" ? "PAID" : c.status === "cancelled" ? "CANCELLED" : "PARTIAL") + '">' + esc(c.status) + '</span></div>' + img +
       '<div class="camp-history-msg">' + esc(c.message_text) + '</div>' + (c.segment === "selected" ? '<div class="camp-history-audience">Selected customers: <b>' + (c.selected_customer_count || 0) + '</b></div>' : '') + '<div class="camp-history-stats">Sent <b>' + (s.sent || 0) + '</b> · Delivered <b>' + (s.delivered || 0) + '</b> · Read <b>' + (s.read || 0) + '</b> · Replied <b>' + (s.replied || 0) + '</b> · Failed <b>' + (s.failed || 0) + '</b> · Skipped <b>' + (s.skipped || 0) + '</b></div>' +
       (["draft","suggested"].includes(c.status) ? '<div class="act"><button class="btn sm ok" onclick="approveCampaign(\'' + c.id + '\')">Start sending</button><button class="btn sm ghost" onclick="cancelCampaign(\'' + c.id + '\')">Cancel</button></div>' : '') + '</div>';
@@ -3198,7 +3198,7 @@ async function uploadCampaignImage(input) {
     const fd = new FormData(); fd.append("file", file);
     const d = await api("/admin/api/campaigns/upload-image", { method: "POST", body: fd });
     window.CAMPAIGN_CUSTOM_IMAGE = d.creative_file;
-    const url = "/admin/media/" + encodeURIComponent(d.creative_file) + "?key=" + encodeURIComponent(KEY);
+    const url = "/admin/media/" + encodeURIComponent(d.creative_file);
     // Keep the already-visible preview in place, then switch it to the saved creative URL.
     $("camp-image-preview").innerHTML = '<div class="camp-image-card"><img src="' + url + '" alt="Campaign image preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';
     $("camp-preview-image").innerHTML = '<img src="' + url + '" alt="Campaign image">';
@@ -3696,7 +3696,7 @@ async function showWahaQr() {
   if (!wrap) return;
   try {
     const r = await fetch("/admin/api/whatsapp/waha/qr?ts=" + Date.now(), {
-      headers: { "X-API-Key": KEY, "Cache-Control": "no-cache" }
+      headers: { "Cache-Control": "no-cache" }
     });
     if (!r.ok) throw new Error("QR code is not available yet");
     const blob = await r.blob();
