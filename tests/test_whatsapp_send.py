@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import pytest
 
 import app.services.whatsapp as whatsapp_module
+from app.services import waha
 from app.database import async_session_factory
 from app.models import Customer
 from app.services.whatsapp import Button, ListRow, send_message
@@ -48,7 +49,7 @@ async def _capture(monkeypatch) -> list[dict]:
         })
         return "wamid.TESTLIST"
 
-    monkeypatch.setattr(whatsapp_module.waha, "send_list", _list_ok)
+    monkeypatch.setattr(waha, "send_list", _list_ok)
     return seen
 
 
