@@ -296,7 +296,10 @@ async def active_tenants() -> list[tuple[uuid.UUID, str, str]]:
         rows = (
             await db.execute(
                 select(Tenant.id, Tenant.slug, Tenant.owner_phone)
-                .where(Tenant.status.in_(WRITABLE_STATUSES))
+                .where(
+                    Tenant.status.in_(WRITABLE_STATUSES),
+                    Tenant.onboarding_done.is_(True),
+                )
                 .order_by(Tenant.created_at)
             )
         ).all()
