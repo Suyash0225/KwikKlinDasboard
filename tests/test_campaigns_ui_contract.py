@@ -18,7 +18,7 @@ def test_campaign_customer_picker_backend_route_is_referenced():
     js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
     admin = (ROOT / "app/routers/admin.py").read_text(encoding="utf-8")
 
-    assert "/admin/api/customers/search?limit=50" in js
+    assert "/admin/api/customers/search?limit=25" in js
     assert '@router.get("/api/customers/search"' in admin
 
 
