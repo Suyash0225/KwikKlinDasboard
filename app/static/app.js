@@ -3062,7 +3062,7 @@ async function openCampaignCustomerSelection() {
   updateCampaignAudienceCount();
   openCampaignCustomerPicker();
 }
-function openCampaignCustomerPicker() {
+async function openCampaignCustomerPicker() {
   openModal(`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
     <div><h3 style="margin:0">👥 Select customers</h3>
       <p class="muted" style="margin:4px 0 0">Tick the customers who should receive this campaign.</p></div>
