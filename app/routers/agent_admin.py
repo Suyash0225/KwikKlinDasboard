@@ -132,7 +132,7 @@ async def campaign_live(campaign_id: str, db: AsyncSession = Depends(get_db)) ->
             "wa_message_id": rec.wa_message_id,
         })
 
-    total = sum(int(v or 0) for v in stats.values() if isinstance(v, int))
+    total = sum(int(stats.get(k, 0) or 0) for k in ("queued", "sent", "delivered", "read", "replied", "failed", "skipped", "holdout"))
     completed = sum(int(stats.get(k, 0) or 0) for k in ("sent", "delivered", "read", "replied", "failed", "skipped", "holdout"))
     return {
         "id": str(campaign.id),
