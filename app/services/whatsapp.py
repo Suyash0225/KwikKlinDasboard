@@ -564,7 +564,12 @@ async def _find_recipient(
     """Look up the phone in customers and staff. Staff wins if both match."""
     try:
         staff = (
-            await db.execute(select(Staff).where(Staff.phone == phone))
+            await db.execute(
+                select(Staff).where(
+                    Staff.phone == phone,
+                    Staff.is_active.is_(True),
+                )
+            )
         ).scalar_one_or_none()
         if staff:
             return None, staff
@@ -689,8 +694,17 @@ async def _enqueue_outbound(db: AsyncSession, to_phone: str, payload: dict) -> N
     from app.models import OutboundMessage
 
     try:
+        from app.services.tenant_context import current_tenant_id
+
+        tenant_id = current_tenant_id.get()
+        if tenant_id is None:
+            log.error("outbound_enqueue_without_tenant", to=to_phone)
+            return
+        queued_payload = dict(payload)
+        queued_payload["_tenant_id"] = str(tenant_id)
+
         await db.rollback()  # the failed send may have left the session dirty
-        db.add(OutboundMessage(to_phone=to_phone, payload=payload))
+        db.add(OutboundMessage(to_phone=to_phone, payload=queued_payload))
         await db.commit()
         log.info("outbound_queued_for_retry", to=to_phone)
     except Exception:
@@ -750,6 +764,29 @@ async def drain_outbound_queue() -> int:
             to_phone = queued["to_phone"]
             p = queued["payload"]
 
+            tenant_raw = p.get("_tenant_id")
+            try:
+                import uuid
+                tenant_id = uuid.UUID(str(tenant_raw)) if tenant_raw else None
+            except (ValueError, AttributeError, TypeError):
+                tenant_id = None
+
+            if tenant_id is None:
+                await db.rollback()
+                await db.execute(
+                    update(OutboundMessage)
+                    .where(OutboundMessage.id == row_id)
+                    .values(
+                        attempts=attempts_before + 1,
+                        status="dead",
+                        last_error="legacy outbound row has no tenant identity",
+                        next_attempt_at=now,
+                    )
+                )
+                await db.commit()
+                log.error("outbound_legacy_row_dead_lettered", to=to_phone)
+                continue
+
             raw_buttons = p.get("buttons") or []
             buttons = [Button(b[0], b[1]) for b in raw_buttons] or None
             raw_list_rows = p.get("list_rows") or []
@@ -778,19 +815,23 @@ async def drain_outbound_queue() -> int:
                 continue
 
             try:
-                await send_message(
-                    db,
-                    to_phone=to_phone,
-                    text=p.get("text"),
-                    buttons=buttons,
-                    list_rows=list_rows,
-                    list_button=p.get("list_button") or "Chuniye",
-                    template_name=p.get("template_name"),
-                    template_params=p.get("template_params"),
-                    template_url_param=p.get("template_url_param"),
-                    sent_by=p.get("sent_by") or "bot",
-                    enqueue_on_fail=False,
-                )
+                from app.services.tenant_context import as_tenant
+
+                async with as_tenant(tenant_id):
+                    async with async_session_factory() as tenant_db:
+                        await send_message(
+                            tenant_db,
+                            to_phone=to_phone,
+                            text=p.get("text"),
+                            buttons=buttons,
+                            list_rows=list_rows,
+                            list_button=p.get("list_button") or "Chuniye",
+                            template_name=p.get("template_name"),
+                            template_params=p.get("template_params"),
+                            template_url_param=p.get("template_url_param"),
+                            sent_by=p.get("sent_by") or "bot",
+                            enqueue_on_fail=False,
+                        )
             except WindowClosedError as exc:
                 attempts = attempts_before + 1
                 await db.rollback()
