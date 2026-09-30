@@ -1258,7 +1258,7 @@ const startBillTimer = (e) => {
 document.addEventListener("input", startBillTimer, true);
 document.addEventListener("click", startBillTimer, true);
 
-async async function showNewBill() {
+async function showNewBill() {
   $("chips").innerHTML = "";
   if (!ME.features.includes("billing")) {
     $("list").innerHTML = `<div class="empty"><b>Billing is not in this plan</b>Ask the owner to upgrade.</div>`;
