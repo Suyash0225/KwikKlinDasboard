@@ -231,6 +231,16 @@ function renderNav() {
   $("nav").querySelectorAll("[data-nav]").forEach((b) => { b.onclick = () => go(b.dataset.nav); });
 }
 
+async function openPickupBill(code) {
+  try {
+    const ctx = await api(`/tasks/${encodeURIComponent(code)}/bill-context`);
+    PICKUP_BILL_CONTEXT = ctx;
+    go("new");
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
 function go(nav, push = true) {
   if (push && NAV !== nav) history.pushState({ kk: "nav", nav }, "");
   NAV = nav;
@@ -541,7 +551,8 @@ function primaryAction(w) {
     return { act: "deliver", label: pend ? `Deliver rest (${pend})` : "Deliver" };
   }
   if (s && ["PICKUP_ASSIGNED"].includes(s) && DELIVERY_ROLES.includes(ME.role)) {
-    return { act: "pickup", label: "Picked up" };
+    const t = w.tasks && w.tasks.find((x) => x.kind === "pickup" && x.status === "OPEN");
+    return t ? { act: "pickup_bill", label: "Create bill & pick up", code: t.code } : { act: "pickup", label: "Picked up" };
   }
   if (s && ["RECEIVED", "PICKED_UP"].includes(s) && WASH_ROLES.includes(ME.role)) {
     return { act: "washing", label: "Start wash" };
@@ -598,6 +609,7 @@ function runAction(act, num, d = {}) {
   if (act === "pay") return askCollect(num, parseFloat(d.due));
   if (act === "more") return moreMenu(num);
   if (act === "deliver") return deliverModal(num);
+  if (act === "pickup_bill") return openPickupBill(d.code);
   if (act === "pickup") return confirmStep(num, "picked-up", "Picked up the clothes?", "Yes, picked up");
   if (act === "washing") return confirmStep(num, "washing", "Started washing these clothes?", "Yes, washing");
   if (act === "ready") return confirmStep(num, "ready", "Clothes washed and ready?", "Yes, ready");
@@ -1029,6 +1041,7 @@ async function callCustomer(number) {
    tha. Ab alag tab: search + due/paid chips. */
 
 let BILLS = [], BILLS_TOTAL = 0, BILL_SEQ = 0, Q_TIMER = null;
+let PICKUP_BILL_CONTEXT = null;
 // Ek page mein kitne. Chhota isliye ki 3G par pehli screen jaldi aaye;
 // baaki "Show more" par. 800 order wali dukaan par poori list bhejna
 // 79 KB ka payload tha jo har 30 second par dobara utarta tha.
@@ -1245,7 +1258,7 @@ const startBillTimer = (e) => {
 document.addEventListener("input", startBillTimer, true);
 document.addEventListener("click", startBillTimer, true);
 
-async function showNewBill() {
+async async function showNewBill() {
   $("chips").innerHTML = "";
   if (!ME.features.includes("billing")) {
     $("list").innerHTML = `<div class="empty"><b>Billing is not in this plan</b>Ask the owner to upgrade.</div>`;
@@ -1401,6 +1414,25 @@ async function showNewBill() {
   });
   $("b-save").onclick = (e) => saveBill(e.currentTarget);
   wireCustomerSearch();
+
+  if (PICKUP_BILL_CONTEXT) {
+    const ctx = PICKUP_BILL_CONTEXT;
+    PICKED = ctx.customer_ref || "";
+    PREV_DUE = 0;
+    PREV_BILLS = 0;
+    $("b-name").value = ctx.customer_name || "";
+    $("b-phone").value = ctx.customer_phone || "";
+    $("b-phone").disabled = true;
+    $("b-picked").hidden = false;
+    $("b-picked").className = "picked";
+    $("b-picked").textContent = `🛵 Pickup ${ctx.order_number} · ${ctx.customer_name || "Customer"}`;
+    NEEDS_PICKUP = false;
+    $("b-pickhint").textContent = "Pickup task linked — this bill completes the collection. No second pickup will be created.";
+    $("list").querySelectorAll("[data-pickup]").forEach((b) => {
+      b.disabled = b.dataset.pickup === "1";
+      if (b.dataset.pickup === "0") b.classList.add("on");
+    });
+  }
   renderCart();
 }
 
@@ -2036,6 +2068,7 @@ async function saveBill(btn) {
         discount_percent: DISC.mode === "pct" ? DISC.value : 0,
         coupon_code: REWARD_CODE || "",
         needs_pickup: NEEDS_PICKUP,
+        pickup_task_code: PICKUP_BILL_CONTEXT ? PICKUP_BILL_CONTEXT.task_code : "",
         // ⚡ jo rakam screen par dikh rahi thi wahi jaati hai (0 = maaf)
         urgent: URG.on,
         urgent_charge: URG.on ? m.urg : null,
@@ -2049,17 +2082,22 @@ async function saveBill(btn) {
         })),
       },
     });
+    const pickupCompleted = !!r.pickup_completed;
     CART = []; PICKED = ""; PREV_DUE = 0; PREV_BILLS = 0; BILL_STARTED = 0; REWARDS = []; REWARD_CODE = "";
+    PICKUP_BILL_CONTEXT = null;
     DISC = { mode: "amt", value: 0 };
     URG = { on: false, manual: false, amt: 0 };
     toast(
-      r.previous_due > 0
+      pickupCompleted
+        ? `${r.order_number} — bill created and pickup completed ✅`
+        : r.previous_due > 0
         ? `${r.order_number} — ${money(r.grand_total)} lena hai (${money(r.previous_due)} purana)`
         : `${r.order_number} created — ${money(r.total)}`,
       false, 5000,
     );
     showNewBill();
     loadToday();
+    if (pickupCompleted) loadWork({ quiet: true });
     // Grahak saamne khada hai — bill turant bhej dein
     shareBill(r.order_number);
   });
