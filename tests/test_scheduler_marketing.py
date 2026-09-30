@@ -105,6 +105,10 @@ async def test_payment_reminders_polite_then_firm(sched_sent, sent) -> None:
     await run_payment_reminders()
     mine = [c for c in sched_sent if c["to"] == PHONE]
     assert mine and "500" in mine[0]["text"]
+    assert "View bill & pay online:" in mine[0]["text"]
+    assert "https://kwikklin.online/b/" in mine[0]["text"]
+    assert not mine[0].get("buttons")
+    assert not mine[0].get("list_rows")
 
     # age it to firm territory -> firmer message + admin flag
     async with async_session_factory() as s:
