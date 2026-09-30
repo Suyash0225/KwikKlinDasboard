@@ -1859,12 +1859,10 @@ async def send_payment_reminder(
 
     sent = False
     try:
-        from app.services.customer_messages import payment_buttons
+        # Payment reminder must stay a plain text message so the
+        # signed bill URL is directly tappable in WhatsApp/WAHA.
         await send_message(
             db, to_phone=cust.phone, text=text,
-            buttons=await payment_buttons(db, order),
-            list_button="Payment",
-            list_title="Kwik Klin",
         )
         sent = True
     except SendError as exc:
