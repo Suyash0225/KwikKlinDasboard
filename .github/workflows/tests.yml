@@ -61,6 +61,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
+      - name: Check staff JavaScript syntax
+        run: node --check app/static/staff.js
+
       - name: Run database migrations
         run: python -m alembic upgrade head
 
@@ -73,3 +76,4 @@ jobs:
           tests/test_agent_tools.py
           tests/test_scheduler_marketing.py -k "campaign"
           tests/test_campaigns_ui_contract.py
+          tests/test_pickup_billing_flow.py
