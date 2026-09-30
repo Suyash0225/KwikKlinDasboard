@@ -78,9 +78,12 @@ async def _purge_staff(*phones: str) -> None:
                     ),
                     {"p": phone},
                 )
+            # Conversation rows must keep exactly one participant, so they
+            # cannot be detached with staff_id = NULL. Test-only staff threads
+            # can be removed safely before deleting the staff rows.
             await db.execute(
                 sqltext(
-                    "UPDATE conversations SET staff_id = NULL WHERE staff_id IN"
+                    "DELETE FROM conversations WHERE staff_id IN"
                     " (SELECT id FROM staff WHERE phone = :p)"
                 ),
                 {"p": phone},
