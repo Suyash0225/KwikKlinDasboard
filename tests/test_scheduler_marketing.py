@@ -150,6 +150,14 @@ async def test_eligibility_blocks_opted_out(sent) -> None:
 
 
 async def test_campaign_queue_send_and_track(sched_sent, sent, monkeypatch) -> None:
+    # This service-level test exercises sending, so give the test tenant a
+    # campaign-capable plan. Production plan enforcement remains unchanged.
+    from app.services import plans as plans_module
+    monkeypatch.setattr(
+        plans_module,
+        "effective_limits",
+        lambda tenant: {"max_campaign_msgs_month": 99999},
+    )
     # make the pacer instant
     import asyncio as aio
 
