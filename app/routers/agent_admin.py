@@ -97,6 +97,58 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
     return out
 
 
+@router.get("/campaigns/{campaign_id}/live", dependencies=[Depends(require_feature("campaigns"))])
+async def campaign_live(campaign_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Compact live control-room view: progress plus the latest recipient events."""
+    try:
+        cid = uuid_module.UUID(campaign_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=400, detail="invalid campaign id")
+    campaign = await db.get(Campaign, cid)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="campaign not found")
+
+    stats = campaign_stats(db, cid)
+    if hasattr(stats, "__await__"):
+        stats = await stats
+
+    rows = (
+        await db.execute(
+            select(CampaignRecipient, Customer)
+            .join(Customer, Customer.id == CampaignRecipient.customer_id)
+            .where(CampaignRecipient.campaign_id == cid)
+            .order_by(CampaignRecipient.updated_at.desc())
+            .limit(80)
+        )
+    ).all()
+
+    recipients = []
+    for rec, customer in rows:
+        recipients.append({
+            "id": str(rec.id),
+            "name": customer.name or "Customer",
+            "phone": customer.phone,
+            "status": rec.status,
+            "detail": rec.detail,
+            "updated_at": rec.updated_at.isoformat() if rec.updated_at else None,
+            "wa_message_id": rec.wa_message_id,
+        })
+
+    total = sum(int(v or 0) for v in stats.values() if isinstance(v, int))
+    completed = sum(int(stats.get(k, 0) or 0) for k in ("sent", "delivered", "read", "replied", "failed", "skipped", "holdout"))
+    return {
+        "id": str(campaign.id),
+        "name": campaign.name,
+        "status": campaign.status,
+        "message_text": campaign.message_text,
+        "created_at": campaign.created_at.isoformat(),
+        "sent_at": campaign.sent_at.isoformat() if campaign.sent_at else None,
+        "stats": stats,
+        "progress": {"completed": completed, "total": total},
+        "recipients": recipients,
+    }
+
+
 @router.post("/campaigns/upload-image", dependencies=[Depends(require_feature("campaigns"))])
 async def upload_campaign_image(
     file: UploadFile = File(...),
