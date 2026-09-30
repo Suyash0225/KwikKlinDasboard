@@ -108,9 +108,7 @@ async def campaign_live(campaign_id: str, db: AsyncSession = Depends(get_db)) ->
     if campaign is None:
         raise HTTPException(status_code=404, detail="campaign not found")
 
-    stats = campaign_stats(db, cid)
-    if hasattr(stats, "__await__"):
-        stats = await stats
+    stats = await campaign_stats(db, cid)
 
     rows = (
         await db.execute(
