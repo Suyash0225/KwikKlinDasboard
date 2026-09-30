@@ -462,7 +462,16 @@ async def _ping_staff(db: AsyncSession, args: str) -> str:
         return "Format: ping_staff('Naam | message')"
 
     staff = (
-        (await db.execute(select(Staff).where(Staff.name.ilike(f"%{name}%")).limit(3)))
+        (
+            await db.execute(
+                select(Staff)
+                .where(
+                    Staff.name.ilike(f"%{name}%"),
+                    Staff.is_active.is_(True),
+                )
+                .limit(3)
+            )
+        )
         .scalars()
         .all()
     )

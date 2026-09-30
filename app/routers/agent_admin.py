@@ -74,7 +74,9 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
     )
     out = []
     for c in rows:
-        stats = c.stats or {}
+        stored_stats = c.stats or {}
+        selected_customer_count = len(stored_stats.get("selected_customer_ids") or [])
+        stats = stored_stats
         if c.status in ("sending", "sent", "approved"):
             stats = await campaign_stats(db, c.id)
         out.append(
@@ -91,10 +93,60 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
                 "sent_at": c.sent_at.isoformat() if c.sent_at else None,
                 "stats": stats,
                 "creative_file": (c.stats or {}).get("creative_file"),
-                "selected_customer_count": len((c.stats or {}).get("selected_customer_ids") or []),
+                "selected_customer_count": selected_customer_count,
             }
         )
     return out
+
+
+@router.get("/campaigns/{campaign_id}/live", dependencies=[Depends(require_feature("campaigns"))])
+async def campaign_live(campaign_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Compact live control-room view: progress plus the latest recipient events."""
+    try:
+        cid = uuid_module.UUID(campaign_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=400, detail="invalid campaign id")
+    campaign = await db.get(Campaign, cid)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="campaign not found")
+
+    stats = await campaign_stats(db, cid)
+
+    rows = (
+        await db.execute(
+            select(CampaignRecipient, Customer)
+            .join(Customer, Customer.id == CampaignRecipient.customer_id)
+            .where(CampaignRecipient.campaign_id == cid)
+            .order_by(CampaignRecipient.updated_at.desc())
+            .limit(80)
+        )
+    ).all()
+
+    recipients = []
+    for rec, customer in rows:
+        recipients.append({
+            "id": str(rec.id),
+            "name": customer.name or "Customer",
+            "phone": customer.phone,
+            "status": rec.status,
+            "detail": rec.detail,
+            "updated_at": rec.updated_at.isoformat() if rec.updated_at else None,
+            "wa_message_id": rec.wa_message_id,
+        })
+
+    total = sum(int(stats.get(k, 0) or 0) for k in ("queued", "sent", "delivered", "read", "replied", "failed", "skipped", "holdout"))
+    completed = sum(int(stats.get(k, 0) or 0) for k in ("sent", "delivered", "read", "replied", "failed", "skipped", "holdout"))
+    return {
+        "id": str(campaign.id),
+        "name": campaign.name,
+        "status": campaign.status,
+        "message_text": campaign.message_text,
+        "created_at": campaign.created_at.isoformat(),
+        "sent_at": campaign.sent_at.isoformat() if campaign.sent_at else None,
+        "stats": stats,
+        "progress": {"completed": completed, "total": total},
+        "recipients": recipients,
+    }
 
 
 @router.post("/campaigns/upload-image", dependencies=[Depends(require_feature("campaigns"))])
@@ -384,9 +436,15 @@ async def approve_campaign(campaign_id: str, db: AsyncSession = Depends(get_db))
 
 @router.post("/campaigns/{campaign_id}/cancel", dependencies=[Depends(require_feature("campaigns"))])
 async def cancel_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)) -> dict:
-    c = await db.get(Campaign, uuid_module.UUID(campaign_id))
+    try:
+        cid = uuid_module.UUID(campaign_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=400, detail="invalid campaign id")
+    c = await db.get(Campaign, cid)
     if c is None:
         raise HTTPException(status_code=404, detail="campaign not found")
+    if c.status not in ("draft", "suggested", "approved", "sending"):
+        raise HTTPException(status_code=409, detail=f"campaign is {c.status}")
     c.status = "cancelled"
     await db.commit()
     return {"status": "cancelled"}

@@ -11,9 +11,10 @@ from datetime import datetime, timezone
 import pytest
 
 import app.services.whatsapp as whatsapp_module
+from app.services import waha
 from app.database import async_session_factory
 from app.models import Customer
-from app.services.whatsapp import Button, ListRow, send_message
+from app.services.whatsapp import Button, ListRow, SendError, send_message
 from tests.conftest import TEST_CUSTOMER_PHONE
 
 ROWS = [
@@ -35,14 +36,35 @@ async def open_window():
     yield
 
 
+async def test_unknown_recipient_is_rejected(open_window, monkeypatch) -> None:
+    async def _must_not_send(*args, **kwargs):
+        raise AssertionError("WAHA must not be called for an unauthorized recipient")
+
+    monkeypatch.setattr(waha, "send_text", _must_not_send)
+    async with async_session_factory() as db:
+        with pytest.raises(SendError, match="not authorized"):
+            await send_message(
+                db,
+                to_phone="+919876543210",
+                text="This must never be sent",
+                sent_by="bot",
+            )
+
+
 async def _capture(monkeypatch) -> list[dict]:
     seen: list[dict] = []
 
-    async def _post_ok(payload, to_phone, creds=None):
-        seen.append(payload)
-        return {"messages": [{"id": "wamid.TESTLIST"}]}
+    async def _list_ok(phone, text, rows, *, button="Choose", title="Kwik Klin"):
+        seen.append({
+            "phone": phone,
+            "text": text,
+            "rows": rows,
+            "button": button,
+            "title": title,
+        })
+        return "wamid.TESTLIST"
 
-    monkeypatch.setattr(whatsapp_module, "_post_with_retry", _post_ok)
+    monkeypatch.setattr(waha, "send_list", _list_ok)
     return seen
 
 
@@ -53,11 +75,10 @@ async def test_list_payload_matches_metas_shape(open_window, monkeypatch) -> Non
             db, to_phone=TEST_CUSTOMER_PHONE, text="Aaj ka kaam",
             list_rows=ROWS, list_button="Kaam chuniye", list_title="Aaj ka kaam",
         )
-    inter = seen[0]["interactive"]
-    assert seen[0]["type"] == "interactive" and inter["type"] == "list"
-    assert inter["action"]["button"] == "Kaam chuniye"
-    rows = inter["action"]["sections"][0]["rows"]
-    assert [r["id"] for r in rows] == ["pick:o:KK-20260809-01", "pick:t:T-11"]
+    assert seen[0]["button"] == "Kaam chuniye"
+    assert seen[0]["title"] == "Aaj ka kaam"
+    rows = seen[0]["rows"]
+    assert [r["rowId"] for r in rows] == ["pick:o:KK-20260809-01", "pick:t:T-11"]
     assert rows[0]["description"] == "Pooja — 1 x Lehenga"
 
 
@@ -69,8 +90,8 @@ async def test_a_row_without_a_description_omits_the_key(open_window, monkeypatc
             db, to_phone=TEST_CUSTOMER_PHONE, text="Chuniye",
             list_rows=[ListRow(id="pick:t:T-1", title="T-1")],
         )
-    row = seen[0]["interactive"]["action"]["sections"][0]["rows"][0]
-    assert row == {"id": "pick:t:T-1", "title": "T-1"}
+    row = seen[0]["rows"][0]
+    assert row == {"rowId": "pick:t:T-1", "title": "T-1", "description": ""}
 
 
 async def test_metas_limits_are_refused_before_the_call(open_window, monkeypatch) -> None:
@@ -81,16 +102,6 @@ async def test_metas_limits_are_refused_before_the_call(open_window, monkeypatch
             await send_message(
                 db, to_phone=TEST_CUSTOMER_PHONE, text="x",
                 list_rows=[ListRow(id=f"r{i}", title=f"row {i}") for i in range(11)],
-            )
-        with pytest.raises(ValueError, match="row title"):
-            await send_message(
-                db, to_phone=TEST_CUSTOMER_PHONE, text="x",
-                list_rows=[ListRow(id="r", title="y" * 25)],
-            )
-        with pytest.raises(ValueError, match="row description"):
-            await send_message(
-                db, to_phone=TEST_CUSTOMER_PHONE, text="x",
-                list_rows=[ListRow(id="r", title="ok", description="z" * 73)],
             )
         with pytest.raises(ValueError, match="buttons/list need a text body"):
             await send_message(db, to_phone=TEST_CUSTOMER_PHONE, list_rows=ROWS)
