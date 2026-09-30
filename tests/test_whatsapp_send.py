@@ -61,7 +61,7 @@ async def test_list_payload_matches_metas_shape(open_window, monkeypatch) -> Non
             list_rows=ROWS, list_button="Kaam chuniye", list_title="Aaj ka kaam",
         )
     assert seen[0]["button"] == "Kaam chuniye"
-    assert seen[0]["title"] == "Kwik Klin"
+    assert seen[0]["title"] == "Aaj ka kaam"
     rows = seen[0]["rows"]
     assert [r["rowId"] for r in rows] == ["pick:o:KK-20260809-01", "pick:t:T-11"]
     assert rows[0]["description"] == "Pooja — 1 x Lehenga"
