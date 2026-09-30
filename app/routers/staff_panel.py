@@ -1277,6 +1277,7 @@ class BillIn(BaseModel):
     urgent_charge: float | None = Field(default=None, ge=0, le=100000)
     # Reward/coupon code — server validate karta hai (grahak-locked bhi)
     coupon_code: str = Field(default="", max_length=30)
+    pickup_task_code: str = Field(default="", max_length=20)
 
 
 @router.get("/customers/{ref}/rewards", dependencies=[Depends(require_biller())])
@@ -1292,6 +1293,42 @@ async def customer_rewards(ref: str, db: AsyncSession = Depends(get_db)) -> dict
     if cust is None:
         raise HTTPException(status_code=404, detail="Customer not found")
     return {"available": await rewards.available(db, cid)}
+
+
+@router.get("/tasks/{code}/bill-context", dependencies=[Depends(require_biller())])
+async def pickup_bill_context(
+    code: str,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Context for opening the existing New Bill UI from a pickup task."""
+    from app.services import tasks as task_service
+    from app.utils.phone import normalize_phone
+
+    task = await task_service.get_by_code(db, code)
+    if task is None or task.kind != "pickup":
+        raise HTTPException(status_code=404, detail="Pickup task not found")
+    if task.status != TASK_OPEN:
+        raise HTTPException(status_code=409, detail="This pickup task is already closed")
+    if task.assigned_staff_id != p.staff.id and not p.is_manager:
+        raise HTTPException(status_code=403, detail="This pickup is assigned to another delivery person")
+    if task.order_id is None:
+        raise HTTPException(status_code=409, detail="Pickup task has no order")
+    order = await db.get(Order, task.order_id)
+    if order is None or order.status is not OrderStatus.PICKUP_ASSIGNED:
+        raise HTTPException(status_code=409, detail="This pickup is no longer awaiting collection")
+    customer = await db.get(Customer, order.customer_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    if order.total_amount is not None:
+        raise HTTPException(status_code=409, detail="This pickup already has a bill")
+    return {
+        "task_code": task.code,
+        "order_number": order.order_number,
+        "customer_ref": str(customer.id),
+        "customer_name": customer.name or "",
+        "customer_phone": normalize_phone(customer.phone),
+    }
 
 
 @router.post("/bills", dependencies=[Depends(require_biller())], status_code=201)
@@ -1418,10 +1455,57 @@ async def create_bill(
             heavy_days=int(cfg.get("delivery_heavy_days") or 5),
             holidays=cfg.get("delivery_holidays") or [],
         )
-    order = await create_order(
+    pickup_task = None
+    if body.pickup_task_code.strip():
+        from app.services import tasks as task_service
+        pickup_task = await task_service.get_by_code(db, body.pickup_task_code)
+        if pickup_task is None or pickup_task.kind != "pickup":
+            raise HTTPException(status_code=404, detail="Pickup task not found")
+        if pickup_task.status != TASK_OPEN:
+            raise HTTPException(status_code=409, detail="Pickup task is already complete")
+        if pickup_task.assigned_staff_id != p.staff.id and not p.is_manager:
+            raise HTTPException(status_code=403, detail="This pickup is assigned to another delivery person")
+        if pickup_task.order_id is None:
+            raise HTTPException(status_code=409, detail="Pickup task has no order")
+        existing = await db.get(Order, pickup_task.order_id)
+        if existing is None or existing.status is not OrderStatus.PICKUP_ASSIGNED:
+            raise HTTPException(status_code=409, detail="Pickup is no longer awaiting collection")
+        if existing.total_amount is not None:
+            raise HTTPException(status_code=409, detail="This pickup already has a bill")
+        existing_customer = await db.get(Customer, existing.customer_id)
+        if existing_customer is None or normalize_phone(phone) != normalize_phone(existing_customer.phone):
+            raise HTTPException(status_code=409, detail="Customer does not match this pickup")
+        order = existing
+        order.items = items
+        order.total_amount = total
+        order.discount_amount = discount or None
+        order.expected_delivery = delivery
+        order.priority = "urgent" if body.urgent else "normal"
+        order.bill_seconds = body.bill_seconds
+        if name and not existing_customer.name:
+            existing_customer.name = name
+        db.add(order)
+        await db.commit()
+        await db.refresh(order)
+    else:
+        order = await create_order(
         db,
         customer_phone=normalize_phone(phone),
         customer_name=name or None,
+        items=items,
+        # total_amount hamesha CHHOOT KE BAAD ka hai — wahi convention jo
+        # dashboard ke coupon raste par hai. Do jagah do matlab rakhne par
+        # har report do jawab dene lagta hai.
+        total_amount=total,
+        discount_amount=discount or None,
+        expected_delivery=delivery,
+        advance_hint=Decimal(str(body.advance)) if body.advance else None,
+        created_by=p.staff.name,
+        needs_pickup=body.needs_pickup,
+        priority="urgent" if body.urgent else "normal",
+        bill_seconds=body.bill_seconds,
+        coupon_code=body.coupon_code.strip() or None,
+        )
         items=items,
         # total_amount hamesha CHHOOT KE BAAD ka hai — wahi convention jo
         # dashboard ke coupon raste par hai. Do jagah do matlab rakhne par
@@ -1447,16 +1531,27 @@ async def create_bill(
             method=PaymentMethod.CASH, recorded_by=p.staff.name,
             notify_customer=False,   # "order received" message mein advance pehle se hai
         )
+    if pickup_task is not None:
+        from app.services import tasks as task_service
+        completed = await task_service.complete_task(
+            db, pickup_task, reply=f"Bill {order.order_number} created at pickup",
+            by=p.staff.name, advance_order=False,
+        )
+        if not getattr(completed, "_completion_won", False):
+            raise HTTPException(status_code=409, detail="Pickup was completed by another update")
+        from app.services.order_service import update_status
+        await update_status(db, order, OrderStatus.PICKED_UP, changed_by=f"staff:{p.staff.name}")
     # Washerman ko WhatsApp par work order — wahi jo dashboard ka New Bill
     # bhejta hai. Best-effort: khabar na ja paye to bhi bill ban chuka hai.
-    try:
-        from app.services.work_orders import send_work_order
+    if pickup_task is None:
+        try:
+            from app.services.work_orders import send_work_order
 
-        sent_status = await send_work_order(db, order, headline="Naya order aaya")
-        if sent_status == "no_staff":
-            log.info("panel_bill_no_washer", order=order.order_number)
-    except Exception:
-        log.exception("panel_bill_work_order_failed", order=order.order_number)
+            sent_status = await send_work_order(db, order, headline="Naya order aaya")
+            if sent_status == "no_staff":
+                log.info("panel_bill_no_washer", order=order.order_number)
+        except Exception:
+            log.exception("panel_bill_work_order_failed", order=order.order_number)
 
     await audit.record(
         actor_role="staff", actor=p.staff.name, action="bill_created_from_panel",
@@ -1493,6 +1588,7 @@ async def create_bill(
         "previous_due": prev_due,
         "previous_bills": prev_bills,
         "grand_total": round(this_due + prev_due, 2),
+        "pickup_completed": pickup_task is not None,
     }
 
 
@@ -1523,8 +1619,11 @@ async def my_bills(
     # to dekh-rekh karta hai — aur mine=1 se wo bhi apne tak simat sakta hai.
     if not p.is_manager or mine:
         made_by_me = select(OrderStatusHistory.order_id).where(
-            OrderStatusHistory.old_status.is_(None),
             OrderStatusHistory.changed_by == p.staff.name,
+            (
+                OrderStatusHistory.old_status.is_(None)
+                | (OrderStatusHistory.new_status == OrderStatus.PICKED_UP)
+            ),
         )
         sel = sel.where(Order.id.in_(made_by_me))
     if pay == "due":
