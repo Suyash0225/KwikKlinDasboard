@@ -3220,8 +3220,8 @@ function renderCampaignLive(d) {
   const sent = Number(s.sent || 0), delivered = Number(s.delivered || 0), read = Number(s.read || 0);
   const replied = Number(s.replied || 0), failed = Number(s.failed || 0), skipped = Number(s.skipped || 0);
   const holdout = Number(s.holdout || 0);
-  const total = sent + failed + skipped + holdout;
-  const completed = sent + failed + skipped;
+  const total = Number(d.progress?.total || 0);
+  const completed = Number(d.progress?.completed || 0);
   const pct = total ? Math.min(100, Math.round(completed * 100 / total)) : 0;
 
   if ($("camp-live-title")) $("camp-live-title").textContent = d.name;
