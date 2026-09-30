@@ -74,7 +74,9 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
     )
     out = []
     for c in rows:
-        stats = c.stats or {}
+        stored_stats = c.stats or {}
+        selected_customer_count = len(stored_stats.get("selected_customer_ids") or [])
+        stats = stored_stats
         if c.status in ("sending", "sent", "approved"):
             stats = await campaign_stats(db, c.id)
         out.append(
@@ -91,7 +93,7 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
                 "sent_at": c.sent_at.isoformat() if c.sent_at else None,
                 "stats": stats,
                 "creative_file": (c.stats or {}).get("creative_file"),
-                "selected_customer_count": len((c.stats or {}).get("selected_customer_ids") or []),
+                "selected_customer_count": selected_customer_count,
             }
         )
     return out
@@ -434,9 +436,15 @@ async def approve_campaign(campaign_id: str, db: AsyncSession = Depends(get_db))
 
 @router.post("/campaigns/{campaign_id}/cancel", dependencies=[Depends(require_feature("campaigns"))])
 async def cancel_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)) -> dict:
-    c = await db.get(Campaign, uuid_module.UUID(campaign_id))
+    try:
+        cid = uuid_module.UUID(campaign_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=400, detail="invalid campaign id")
+    c = await db.get(Campaign, cid)
     if c is None:
         raise HTTPException(status_code=404, detail="campaign not found")
+    if c.status not in ("draft", "suggested", "approved", "sending"):
+        raise HTTPException(status_code=409, detail=f"campaign is {c.status}")
     c.status = "cancelled"
     await db.commit()
     return {"status": "cancelled"}
