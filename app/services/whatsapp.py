@@ -36,7 +36,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Conversation, Customer, Direction, Staff
+from app.models import Conversation, Customer, Direction, Staff, Tenant
 from app.services import dotpe
 from app.services.templates import TEMPLATES, build_template
 
@@ -260,6 +260,23 @@ async def send_message(
         raise SendError(str(exc), transient=False) from exc
 
     customer, staff = await _find_recipient(db, to_phone)
+
+    # Outbound WhatsApp must never accept an arbitrary phone number. A send
+    # is allowed only to a customer/staff row belonging to the current tenant,
+    # or to that tenant's owner phone. This is the final guard against AI or
+    # scheduler bugs turning a plain phone string into an external recipient.
+    if customer is None and staff is None:
+        from app.services.tenant_context import current_tenant_id
+
+        tenant_id = current_tenant_id.get()
+        tenant = await db.get(Tenant, tenant_id) if tenant_id is not None else None
+        if tenant is None or tenant.owner_phone != to_phone:
+            log.error(
+                "whatsapp_recipient_not_authorized",
+                to=to_phone,
+                tenant_id=str(tenant_id) if tenant_id else None,
+            )
+            raise SendError("recipient is not authorized for the current tenant", transient=False)
 
     if text:
         text = _wa_format(text)
