@@ -397,6 +397,11 @@
             <button type="button" class="camp-audience camp-audience-custom" data-segment="selected" onclick="selectCampaignAudience('selected')"><span>☑</span><b>Selected</b><small>Pick exactly who receives it</small></button>
           </div>
           <select id="camp-seg" style="display:none"></select>
+          <button type="button" id="camp-custom-audience-launch" class="camp-custom-audience-launch" onclick="openCampaignCustomerSelection()">
+            <span class="camp-custom-audience-icon">👤</span>
+            <span><b>Choose specific customers</b><small>Search by name or WhatsApp number and select exactly who should receive this campaign.</small></span>
+            <strong>›</strong>
+          </button>
           <div id="camp-selected-picker" class="camp-selected-picker" hidden>
             <div class="camp-picker-head"><div><b>Selected customers</b><small>Name + mobile are shown before launch.</small></div><span id="camp-selected-count">0 selected</span></div>
             <button type="button" class="btn" style="width:100%;margin-top:10px" onclick="openCampaignCustomerPicker()">👥 Choose customers</button>
