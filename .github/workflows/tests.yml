@@ -71,3 +71,5 @@ jobs:
           tests/test_whatsapp_send.py
           tests/test_whatsapp_multitenant.py
           tests/test_agent_tools.py
+          tests/test_scheduler_marketing.py
+          tests/test_campaigns_ui_contract.py
