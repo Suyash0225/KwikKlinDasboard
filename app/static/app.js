@@ -2402,6 +2402,49 @@ const kTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.rou
 
 async function loadUsage() {
   $("usage-kpis").innerHTML = skeleton(1);
+  $("usage-models").innerHTML = skeleton(3);
+  let u;
+  try { u = await api("/admin/api/usage"); }
+  catch (e) { $("usage-models").innerHTML = errBox(e.message, "loadUsage"); return; }
+
+  const capNote = u.daily_request_cap
+    ? `${u.calls_left_today} left today`
+    : "no limit set";
+  const budgetNote = u.monthly_budget_usd
+    ? `budget ${usd(u.monthly_budget_usd)}` : "no budget set";
+
+  $("usage-kpis").innerHTML =
+    kpi("AI calls today", u.today.calls, capNote, "", "⚡", "orange") +
+    kpi("Tokens today", kTok(u.today.input_tokens + u.today.output_tokens),
+        `in ${kTok(u.today.input_tokens)} · out ${kTok(u.today.output_tokens)}`, "", "🔤", "blue") +
+    kpi("Spend this month", u.all_free ? "₹0 (free)" : usd(u.month.cost_usd),
+        u.all_free ? "on the free tier" : budgetNote, "", "💰", "green") +
+    kpi("Monthly at this rate", u.all_free ? "₹0" : usd(u.projected_month_usd),
+        `${u.month.calls} calls so far`, "", "📈", "purple");
+
+  const s = u.series || [];
+  const max = Math.max(1, ...s.map((d) => d.calls));
+  $("usage-chart").innerHTML = s.length
+    ? `<div style="display:flex;align-items:flex-end;gap:3px;height:130px">` +
+      s.map((d) => `<div title="${d.date}: ${d.calls} calls, ${kTok(d.tokens)} tokens"
+        onclick="toast('${d.date}: ${d.calls} calls, ${kTok(d.tokens)} tokens')"
+        style="flex:1;min-width:0;background:var(--g-blue);border-radius:3px 3px 0 0;cursor:pointer;
+        height:${Math.max(3, (d.calls / max) * 100)}%"></div>`).join("") + `</div>
+      <div class="muted" style="display:flex;justify-content:space-between;margin-top:6px">
+        <span>${s[0].date.slice(5)}</span><span>today</span></div>`
+    : emptyBox("No AI calls recorded yet.", "📊");
+
+  const rows = u.by_purpose || [];
+  const totTok = rows.reduce((a, r) => a + r.tokens, 0) || 1;
+  $("usage-purpose").innerHTML = rows.length
+    ? rows.map((r) => `
+      <div class="sumrow"><span>${esc(PURPOSE_LABEL[r.purpose] || r.purpose)}</span>
+        <span>${r.calls} calls · ${kTok(r.tokens)}${u.all_free ? "" : " · " + usd(r.cost_usd)}</span></div>
+      <div style="height:5px;background:var(--n100);border-radius:3px;margin-bottom:8px">
+        <div style="height:5px;width:${Math.round((r.tokens / totTok) * 100)}%;background:var(--g-orange);border-radius:3px"></div>
+      </div>`).join("")
+    : `<p class="muted">Nothing this month yet.</p>`;
+
   const byModel = u.month.by_model || [];
   $("usage-models").innerHTML =
     '<p class="muted">Provider: <b>' + esc(u.provider) + '</b> · ' + esc(u.models.smart) + ' / ' + esc(u.models.cheap) + '</p>' +
@@ -2434,7 +2477,7 @@ async function loadUsage() {
     (customers.length ? '<div style="margin-top:14px"><b>By customer — multiple active orders / no safe order link</b><table class="tbl" style="margin-top:8px"><thead><tr><th>Customer</th><th>Calls</th><th>Tokens</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
       customerRows + '</tbody></table></div>' : "") +
     '<p class="muted" style="margin-top:10px">Order attribution is conservative: only one active order gets an order-level link; multiple active orders stay at customer level.</p>';
-
+}
 const PURPOSE_LABEL = {
   reply: "Customer replies", intent: "Understanding messages", extract: "Reading bills/commands",
   vision: "Bill from photo", query: "Your questions", marketing: "Writing campaigns",
