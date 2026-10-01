@@ -2429,11 +2429,11 @@ async function loadUsage() {
     kpi("Linked AI calls", linkedCalls, "Customer/order context available", "", "🔗", "blue") +
     kpi("Unlinked calls", un.calls || 0, "Background/system AI", "", "🧩", "orange") +
     kpi("Unlinked cost", u.all_free ? "₹0 (free)" : usd(un.cost_usd), "Not safely assignable to an order", "", "⚠️", "purple") +
-    (orders.length ? '<div style="margin-top:14px"><b>By order — exact link available</b><table class="tbl" style="margin-top:8px"><thead><tr><th>Order</th><th>Customer</th><th>Calls</th><th>Tokens</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
-      orderRows + '</tbody></table></div>' : '<p class="muted">No unambiguous order-linked AI calls yet.</p>') +
+    (orders.length ? '<div style="margin-top:14px"><b>By order — one active order at call time</b><table class="tbl" style="margin-top:8px"><thead><tr><th>Order</th><th>Customer</th><th>Calls</th><th>Tokens</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
+      orderRows + '</tbody></table></div>' : '<p class="muted">No single-active-order AI calls yet.</p>') +
     (customers.length ? '<div style="margin-top:14px"><b>By customer — multiple active orders / no safe order link</b><table class="tbl" style="margin-top:8px"><thead><tr><th>Customer</th><th>Calls</th><th>Tokens</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
       customerRows + '</tbody></table></div>' : "") +
-    '<p class="muted" style="margin-top:10px">Order attribution is conservative: if a customer has multiple active orders, spend stays at customer level instead of being assigned to the wrong order.</p>';
+    '<p class="muted" style="margin-top:10px">Order attribution is conservative: only one active order gets an order-level link; multiple active orders stay at customer level.</p>';
 
 const PURPOSE_LABEL = {
   reply: "Customer replies", intent: "Understanding messages", extract: "Reading bills/commands",
