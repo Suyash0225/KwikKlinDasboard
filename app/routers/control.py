@@ -1771,25 +1771,78 @@ async def set_tenant_limits(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/session")
-async def open_vendor_session(request: Request, response: Response) -> dict:
-    """Key EK BAAR bhejo (X-API-Key header), badle mein httpOnly cookie.
+class VendorLoginIn(BaseModel):
+    login: str = Field(min_length=1, max_length=254)
+    password: str = Field(min_length=8, max_length=128)
 
-    Verification wahi purana `require_vendor_key` karta hai (router-level
-    dependency) — permission model bilkul nahi badla, sirf key ab browser
-    mein kahin persist nahi hoti. Cookie: httpOnly (JS padh hi nahi sakta,
-    XSS ke baad bhi), SameSite=Strict (CSRF), Secure in production,
-    path=/control (baaki app ko kabhi nahi jaati), 8 ghante.
+
+@router.post("/api/session")
+async def open_vendor_session(
+    request: Request,
+    response: Response,
+    body: VendorLoginIn | None = None,
+    x_api_key: str = Header(default=""),
+) -> dict:
+    """Exchange Control Room credentials for the existing httpOnly session cookie.
+
+    Browser users sign in with login ID + password. The legacy X-API-Key path
+    remains available for scripts/recovery, but the master key is never needed
+    in the browser UI.
     """
     from app.routers.orders import (
         VENDOR_COOKIE,
         VENDOR_SESSION_HOURS,
+        _auth_throttled,
+        _auth_throttle,
+        _vendor_key_matches,
         mint_vendor_token,
     )
 
-    level = getattr(request.state, "vendor_level", "read")
-    label = getattr(request.state, "vendor_label", "env-key")
-    kid = getattr(request.state, "vendor_kid", "env")
+    ip = request.client.host if request.client else "?"
+    if _auth_throttled(ip):
+        raise HTTPException(
+            status_code=429, detail="too many failed attempts — wait 10 minutes"
+        )
+
+    level = None
+    label = ""
+    kid = "env"
+    via = "login"
+
+    if body is not None:
+        configured_id = (settings.CONTROL_LOGIN_ID or "").strip()
+        configured_hash = settings.CONTROL_LOGIN_PASSWORD_HASH or ""
+        login_id = body.login.strip()
+        from app.services import auth as auth_service
+
+        valid_id = bool(configured_id) and __import__("hmac").compare_digest(
+            login_id.casefold(), configured_id.casefold()
+        )
+        valid_password = (
+            bool(configured_hash)
+            and auth_service.verify_password(body.password, configured_hash)
+        )
+        if valid_id and valid_password:
+            level = "danger"
+            label = configured_id
+        else:
+            _auth_throttle.note_failure(ip)
+            raise HTTPException(status_code=401, detail="invalid login or password")
+    elif _vendor_key_matches(x_api_key):
+        # Recovery/CLI compatibility with the existing master key.
+        level = "danger"
+        label = "env-key"
+        via = "header"
+    else:
+        _auth_throttle.note_failure(ip)
+        raise HTTPException(status_code=401, detail="invalid login or password")
+
+    request.state.admin_role = "key"
+    request.state.vendor_level = level
+    request.state.vendor_label = label
+    request.state.vendor_kid = kid
+    request.state.vendor_via = via
+
     response.set_cookie(
         VENDOR_COOKIE,
         mint_vendor_token(level, label, kid),
@@ -1799,7 +1852,7 @@ async def open_vendor_session(request: Request, response: Response) -> dict:
         secure=settings.ENVIRONMENT == "production",
         path="/control",
     )
-    log.info("vendor_session_opened", label=label, level=level)
+    log.info("vendor_session_opened", label=label, level=level, via=via)
     return {"level": level, "label": label, "expires_in_h": VENDOR_SESSION_HOURS}
 
 
