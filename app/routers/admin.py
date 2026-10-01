@@ -688,7 +688,22 @@ async def customers_search(
             .order_by(Customer.last_message_at.desc().nulls_last())
             .limit(limit)
         )
-    rows = (await db.execute(query)).scalars().all()
+    order_count_sq = (
+        select(func.count(Order.id))
+        .where(Order.customer_id == Customer.id)
+        .correlate(Customer)
+        .scalar_subquery()
+    )
+    last_order_sq = (
+        select(func.max(Order.created_at))
+        .where(Order.customer_id == Customer.id)
+        .correlate(Customer)
+        .scalar_subquery()
+    )
+    query = query.with_only_columns(
+        Customer, order_count_sq.label("order_count"), last_order_sq.label("last_order_at")
+    )
+    rows = (await db.execute(query)).all()
     def _mask_phone(phone: str) -> str:
         digits = re.sub(r"\D", "", phone or "")
         if len(digits) >= 10:
@@ -699,12 +714,14 @@ async def customers_search(
         {
             "ref": str(c.id),
             "name": c.name or "Customer",
-            "phone": c.phone,  # existing customer autocomplete depends on this
+            "phone": c.phone,
             "phone_masked": _mask_phone(c.phone),
             "address": c.address,
+            "order_count": int(order_count or 0),
+            "last_order_at": last_order_at.isoformat() if last_order_at else None,
             "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
         }
-        for c in rows
+        for c, order_count, last_order_at in rows
     ]
 
 
