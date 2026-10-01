@@ -108,10 +108,11 @@ class Settings(BaseSettings):
     # home dukaan ka dashboard AUR sab 60 dukaanon ka control, dono khule.
     # Khali = ADMIN_API_KEY hi chalta hai (purana deploy), par WARNING.
     VENDOR_API_KEY: str = ""
-    # Browser login for the vendor Control Room. Store only the scrypt hash,
-    # never the plaintext password, in the production environment.
+    # Browser login for the vendor Control Room.
+    # NOTE: this is intentionally configurable via the production .env;
+    # never commit the actual password to Git.
     CONTROL_LOGIN_ID: str = ""
-    CONTROL_LOGIN_PASSWORD_HASH: str = ""
+    CONTROL_LOGIN_PASSWORD: str = ""
 
     # --- Shop / locale ---
     SHOP_NAME: str
