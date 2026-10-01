@@ -1148,7 +1148,7 @@ async def _handle_inbound_message(
             elif batch_followup:
                 log.info("reply_deferred_to_followup", phone=phone)
             else:
-                reply = await build_ai_reply(db, customer, spoken)
+                reply = await build_ai_reply(db, customer, spoken, conversation_id=convo.id)
                 if reply is None:
                     reply = await _build_customer_reply(db, customer, spoken)
                 if reply and await _newer_inbound_exists(db, customer.id, convo):
