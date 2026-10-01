@@ -13,6 +13,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    op.add_column("tasks", sa.Column("customer_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True))
+    op.create_foreign_key("fk_tasks_customer_id", "tasks", "customers", ["customer_id"], ["id"])
+    op.create_index("ix_tasks_customer_id", "tasks", ["customer_id"])
     op.add_column("tasks", sa.Column("due_at", sa.DateTime(timezone=True), nullable=True))
     op.create_index("ix_tasks_due_at", "tasks", ["due_at"])
 
