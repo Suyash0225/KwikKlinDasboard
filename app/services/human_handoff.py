@@ -116,7 +116,7 @@ async def _reply_one(db: AsyncSession, customer: Customer, inbound: Conversation
             return False
 
         text = current_inbound.message_text or ""
-        reply = await build_ai_reply(db, customer, text)
+        reply = await build_ai_reply(db, customer, text, conversation_id=current_inbound.id)
         if reply is None:
             reply = await _build_customer_reply(db, customer, text)
         if not reply:
