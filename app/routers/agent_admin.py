@@ -97,6 +97,118 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
     return out
 
 
+@router.get("/campaigns/overview", dependencies=[Depends(require_feature("campaigns"))])
+async def campaigns_overview(db: AsyncSession = Depends(get_db)) -> dict:
+    total_campaigns = int((await db.execute(select(func.count()).select_from(Campaign))).scalar_one())
+    status_rows = (await db.execute(select(Campaign.status, func.count()).group_by(Campaign.status))).all()
+    campaign_status = {str(status): int(count) for status, count in status_rows}
+    recipient_rows = (await db.execute(select(CampaignRecipient.status, func.count()).group_by(CampaignRecipient.status))).all()
+    counts = {str(status): int(count) for status, count in recipient_rows}
+    sent = sum(counts.get(s, 0) for s in ("sent", "delivered", "read", "replied"))
+    delivered = sum(counts.get(s, 0) for s in ("delivered", "read", "replied"))
+    running_rows = (await db.execute(
+        select(Campaign).where(Campaign.status.in_(("approved", "sending")))
+        .order_by(Campaign.created_at.desc()).limit(10)
+    )).scalars().all()
+    running = []
+    for campaign in running_rows:
+        stats = await campaign_stats(db, campaign.id)
+        processed = sum(stats.get(s, 0) for s in ("sent","delivered","read","replied","failed","skipped"))
+        total = sum(stats.get(s, 0) for s in ("queued","sent","delivered","read","replied","failed","skipped"))
+        running.append({
+            "id": str(campaign.id), "name": campaign.name, "status": campaign.status,
+            "processed": processed, "total": total,
+            "sent": sum(stats.get(s, 0) for s in ("sent","delivered","read","replied")),
+            "delivered": sum(stats.get(s, 0) for s in ("delivered","read","replied")),
+            "failed": stats.get("failed", 0), "skipped": stats.get("skipped", 0),
+            "replies": stats.get("replied", 0),
+            "progress": round(processed * 100 / total, 1) if total else 0,
+        })
+    return {
+        "total_campaigns": total_campaigns,
+        "messages_sent": sent,
+        "messages_delivered": delivered,
+        "messages_failed": counts.get("failed", 0),
+        "messages_skipped": counts.get("skipped", 0),
+        "replies_received": counts.get("replied", 0),
+        "currently_sending": len(running_rows),
+        "delivery_rate": round(delivered * 100 / sent, 1) if sent else 0,
+        "campaign_status": {
+            "running": campaign_status.get("sending", 0) + campaign_status.get("approved", 0),
+            "completed": campaign_status.get("sent", 0),
+            "failed": campaign_status.get("failed", 0),
+            "cancelled": campaign_status.get("cancelled", 0),
+            "draft": campaign_status.get("draft", 0),
+        },
+        "running_campaigns": running,
+    }
+
+
+@router.get("/campaigns/{campaign_id}", dependencies=[Depends(require_feature("campaigns"))])
+async def campaign_detail(campaign_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        cid = uuid_module.UUID(campaign_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid campaign id") from exc
+    campaign = await db.get(Campaign, cid)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    stats = await campaign_stats(db, campaign.id)
+    rows = (await db.execute(
+        select(CampaignRecipient, Customer)
+        .join(Customer, Customer.id == CampaignRecipient.customer_id)
+        .where(CampaignRecipient.campaign_id == campaign.id)
+        .order_by(CampaignRecipient.updated_at.desc())
+    )).all()
+    recipients = [{
+        "id": str(rec.id), "customer_id": str(cust.id),
+        "customer": cust.name or "Customer", "phone": cust.phone,
+        "status": rec.status, "detail": rec.detail,
+        "wa_message_id": rec.wa_message_id,
+        "status_at": rec.updated_at.isoformat() if rec.updated_at else None,
+        "replied": rec.status == "replied",
+    } for rec, cust in rows]
+    return {
+        "id": str(campaign.id), "name": campaign.name, "segment": campaign.segment,
+        "status": campaign.status, "message_text": campaign.message_text,
+        "created_by": campaign.created_by,
+        "created_at": campaign.created_at.isoformat() if campaign.created_at else None,
+        "scheduled_at": campaign.scheduled_at.isoformat() if campaign.scheduled_at else None,
+        "sent_at": campaign.sent_at.isoformat() if campaign.sent_at else None,
+        "creative_file": (campaign.stats or {}).get("creative_file"),
+        "selected_customer_count": len((campaign.stats or {}).get("selected_customer_ids") or []),
+        "stats": stats, "recipients": recipients,
+    }
+
+
+@router.delete("/campaigns/{campaign_id}", dependencies=[Depends(require_admin_owner), Depends(require_feature("campaigns"))])
+async def delete_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    try:
+        cid = uuid_module.UUID(campaign_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid campaign id") from exc
+    campaign = await db.get(Campaign, cid)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    if campaign.status in ("approved", "sending"):
+        raise HTTPException(status_code=409, detail="cancel the running campaign before deleting it")
+    creative_file = (campaign.stats or {}).get("creative_file")
+    await db.execute(delete(CampaignRecipient).where(CampaignRecipient.campaign_id == campaign.id))
+    await db.execute(update(Coupon).where(Coupon.campaign_id == campaign.id).values(campaign_id=None))
+    await db.delete(campaign)
+    await db.commit()
+    if creative_file:
+        try:
+            (Path(__file__).resolve().parent.parent / "media" / creative_file).unlink(missing_ok=True)
+        except Exception:
+            log.warning("campaign_creative_delete_failed", campaign=str(cid))
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="campaign_deleted",
+        args={"campaign": str(cid), "name": campaign.name}, result="deleted",
+    )
+    return {"ok": True, "id": campaign_id}
+
+
 @router.post("/campaigns/upload-image", dependencies=[Depends(require_feature("campaigns"))])
 async def upload_campaign_image(
     file: UploadFile = File(...),
