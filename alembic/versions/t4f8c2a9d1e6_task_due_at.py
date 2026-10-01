@@ -5,6 +5,7 @@ Revises: z3e9a7b4c1d8
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import UUID
 
 revision = "t4f8c2a9d1e6"
 down_revision = "z3e9a7b4c1d8"
