@@ -144,6 +144,26 @@ async def campaigns_overview(db: AsyncSession = Depends(get_db)) -> dict:
     }
 
 
+@router.get("/campaigns/failed", dependencies=[Depends(require_feature("campaigns"))])
+async def campaign_failed_messages(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    rows = (await db.execute(
+        select(CampaignRecipient, Campaign, Customer)
+        .join(Campaign, Campaign.id == CampaignRecipient.campaign_id)
+        .join(Customer, Customer.id == CampaignRecipient.customer_id)
+        .where(CampaignRecipient.status == "failed")
+        .order_by(CampaignRecipient.updated_at.desc())
+        .limit(200)
+    )).all()
+    return [{
+        "customer": cust.name or "Customer",
+        "phone": cust.phone,
+        "error": rec.detail or "Send failed",
+        "time": rec.updated_at.isoformat() if rec.updated_at else None,
+        "campaign": camp.name,
+        "campaign_id": str(camp.id),
+    } for rec, camp, cust in rows]
+
+
 @router.get("/campaigns/{campaign_id}", dependencies=[Depends(require_feature("campaigns"))])
 async def campaign_detail(campaign_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     try:
