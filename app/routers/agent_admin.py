@@ -993,6 +993,39 @@ class TaskIn(BaseModel):
     urgent: bool = False
 
 
+@router.get("/tasks/customers/{customer_id}/orders")
+async def task_customer_orders(customer_id: str, db: AsyncSession = Depends(get_db)) -> list[dict]:
+    """Return active/running orders for the selected customer."""
+    from app.models import Customer as _C, Order as _O
+    try:
+        cid = uuid_module.UUID(customer_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid customer")
+    customer = await db.get(_C, cid)
+    if customer is None or not customer.is_active:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    rows = (
+        await db.execute(
+            select(_O)
+            .where(_O.customer_id == customer.id)
+            .where(_O.status.not_in(["DELIVERED", "CANCELLED"]))
+            .order_by(_O.created_at.desc())
+            .limit(30)
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": str(o.id),
+            "order_number": o.order_number,
+            "status": o.status,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+            "expected_delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
+            "total_amount": float(o.total_amount or 0),
+        }
+        for o in rows
+    ]
+
+
 @router.get("/tasks/customers")
 async def task_customer_search(
     q: str = Query(default="", max_length=80),
