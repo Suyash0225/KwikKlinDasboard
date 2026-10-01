@@ -1577,7 +1577,7 @@ function showSignin() {
   $("main").classList.add("hidden");
   $("signedout").classList.remove("hidden");
   $("session-label").textContent = STR[L].signedOut;
-  const k = $("key");
+  const k = $("login");
   if (k) k.focus();
 }
 function showApp(level, label) {
@@ -1623,13 +1623,16 @@ function lazySections() {
 document.addEventListener("DOMContentLoaded", () => {
   $("signin").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const input = $("key");
-    const key = input.value.trim();
-    input.value = "";                       // never keep it around
-    if (!key) return;
+    const login = $("login").value.trim();
+    const password = $("password").value;
+    $("password").value = "";              // never keep it around
+    if (!login || !password) return;
     try {
       const s = await (await fetchOrThrow("/control/api/session", {
-        method: "POST", headers: { "X-API-Key": key }, credentials: "same-origin",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ login, password }),
+        credentials: "same-origin",
       })).json();
       showApp(s.level, s.label);
       toast(`Signed in as ${s.label}`);
@@ -1638,7 +1641,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) { toast("Sign-in failed: " + err.message, "err"); }
   });
 
-  addEyeToggle($("key"));
+  addEyeToggle($("password"));
   $("btn-signout").addEventListener("click", signOut);
   $("btn-add").addEventListener("click", addTenantModal);
   $("btn-backup").addEventListener("click", runBackup);

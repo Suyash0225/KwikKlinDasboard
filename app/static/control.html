@@ -23,11 +23,14 @@
   </div>
 </header>
 
-<!-- Sign-in: the key is sent ONCE and exchanged for an httpOnly cookie. -->
-<form id="signin" class="toolbar" autocomplete="off">
-  <label class="sr-only" for="key">Admin API key</label>
-  <input id="key" name="kk-admin-key" type="password" placeholder="Admin API key" autofocus
-         autocomplete="new-password" spellcheck="false" required>
+<!-- Sign-in: credentials are exchanged once for an httpOnly session cookie. -->
+<form id="signin" class="toolbar" autocomplete="on">
+  <label class="sr-only" for="login">Control Room login ID</label>
+  <input id="login" name="username" type="text" placeholder="Login ID" autofocus
+         autocomplete="username" spellcheck="false" required>
+  <label class="sr-only" for="password">Control Room password</label>
+  <input id="password" name="password" type="password" placeholder="Password"
+         autocomplete="current-password" spellcheck="false" required>
   <button type="submit" class="btn-primary">Sign in</button>
 </form>
 
@@ -44,8 +47,8 @@
 <section id="signedout" class="state">
   <span class="ico">🔐</span>
   <div class="title">Sign in to see your clients</div>
-  <p>Paste your admin API key above. It is exchanged for a secure session cookie —
-     the key itself is never stored in this browser.</p>
+  <p>Sign in with your Control Room login. Your password is exchanged for a secure
+     session cookie and is never stored in this browser.</p>
 </section>
 
 <main id="main" class="hidden">
