@@ -159,7 +159,8 @@ _AGENT_SYSTEM = (
 )
 
 async def _run_agentic_customer_turn(
-    db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False
+    db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False,
+    conversation_id=None,
 ) -> str | None:
     """Real tool-calling loop: model chooses -> backend executes -> model continues."""
     try:
