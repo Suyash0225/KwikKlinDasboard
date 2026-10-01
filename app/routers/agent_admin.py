@@ -988,7 +988,7 @@ class TaskIn(BaseModel):
     staff: str | None = None
     order_number: str | None = None
     customer_id: str | None = None
-    kind: str = Field(default="general", pattern="^(general|pickup|wash|dry|iron|delivery)$")
+    kind: str = Field(default="general", pattern="^(general|pickup|wash|dry|iron|delivery|packing|custom)$")
     due_at: datetime | None = None
     urgent: bool = False
 
@@ -1196,6 +1196,40 @@ async def create_task_api(body: TaskIn, db: AsyncSession = Depends(get_db)) -> d
         "customer_id": str(customer.id) if customer else None,
         "due_at": task.due_at.isoformat() if task.due_at else None,
     }
+
+class TaskAssignIn(BaseModel):
+    staff: str = Field(min_length=1, max_length=120)
+
+
+@router.post("/tasks/{code}/assign")
+async def assign_task_api(
+    code: str, body: TaskAssignIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Owner manually assigns/reassigns an open task to an active staff member."""
+    from app.models import Staff as _S
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    if task.status != "OPEN":
+        raise HTTPException(status_code=409, detail="Only open tasks can be assigned")
+    staff = await task_service.find_staff(db, body.staff)
+    if staff is None:
+        raise HTTPException(status_code=404, detail=f"'{body.staff}' active staff mein nahi mila")
+
+    old = await db.get(_S, task.assigned_staff_id) if task.assigned_staff_id else None
+    task.assigned_staff_id = staff.id
+    db.add(task)
+    await db.commit()
+    await task_service.send_task_to(db, task, staff)
+    await audit.record(
+        actor_role="admin", actor="dashboard", action="task_reassigned",
+        args={"code": task.code, "from": old.name if old else None, "to": staff.name},
+        result="manual assignment",
+    )
+    return {"ok": True, "code": task.code, "staff": staff.name, "staff_id": str(staff.id)}
+
 
 @router.post("/tasks/{code}/done")
 async def complete_task_api(code: str, db: AsyncSession = Depends(get_db)) -> dict:
