@@ -11,8 +11,10 @@ rakhe gaye hain: client ka user chahe kuch bhi ho, yahan nahi ghus sakta.
 
 from datetime import datetime, timedelta, timezone
 
+import hmac
+
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1815,7 +1817,7 @@ async def open_vendor_session(
         login_id = body.login.strip()
         from app.services import auth as auth_service
 
-        valid_id = bool(configured_id) and __import__("hmac").compare_digest(
+        valid_id = bool(configured_id) and hmac.compare_digest(
             login_id.casefold(), configured_id.casefold()
         )
         valid_password = (
