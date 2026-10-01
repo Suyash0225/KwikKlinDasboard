@@ -9,7 +9,7 @@ the owner can put in his own numbers without a migration.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,6 +29,19 @@ class LlmUsage(Base, TenantScoped):
     model: Mapped[str] = mapped_column(String(60), index=True)
     # what the call was for: reply | extract | vision | query | social ...
     purpose: Mapped[str] = mapped_column(String(24), default="other", index=True)
+
+    # Attribution: these are optional because background jobs may have no
+    # customer/order context. When present they let the dashboard show the
+    # real AI cost by customer and (when unambiguous) order.
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id", ondelete="SET NULL"), index=True
+    )
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL"), index=True
+    )
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), index=True
+    )
 
     input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

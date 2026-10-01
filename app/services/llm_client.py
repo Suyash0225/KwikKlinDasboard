@@ -184,6 +184,8 @@ async def _record_usage(
             db.add(
                 LlmUsage(
                     provider=provider, model=model, purpose=_purpose.get() or "other",
+                    customer_id=_customer_id.get(), order_id=_order_id.get(),
+                    conversation_id=_conversation_id.get(),
                     input_tokens=int(in_tok or 0), output_tokens=int(out_tok or 0),
                     latency_ms=latency_ms, ok=ok,
                 )
@@ -196,6 +198,27 @@ async def _record_usage(
 # What the current call is for — set by callers via track(); read by the
 # recorder. A ContextVar keeps it correct under concurrent requests.
 _purpose: ContextVar[str] = ContextVar("llm_purpose", default="other")
+_customer_id: ContextVar[object | None] = ContextVar("llm_customer_id", default=None)
+_order_id: ContextVar[object | None] = ContextVar("llm_order_id", default=None)
+_conversation_id: ContextVar[object | None] = ContextVar("llm_conversation_id", default=None)
+
+
+@contextmanager
+def attribution(*, customer_id=None, order_id=None, conversation_id=None):
+    """Attach optional business context to every LLM call in this scope.
+
+    Missing context is intentional for background jobs. Never guess an order:
+    callers only provide an order when it is unambiguous.
+    """
+    tc = _customer_id.set(customer_id)
+    to = _order_id.set(order_id)
+    tv = _conversation_id.set(conversation_id)
+    try:
+        yield
+    finally:
+        _customer_id.reset(tc)
+        _order_id.reset(to)
+        _conversation_id.reset(tv)
 
 
 @contextmanager

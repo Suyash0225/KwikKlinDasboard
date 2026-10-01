@@ -159,7 +159,8 @@ _AGENT_SYSTEM = (
 )
 
 async def _run_agentic_customer_turn(
-    db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False
+    db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False,
+    conversation_id=None,
 ) -> str | None:
     """Real tool-calling loop: model chooses -> backend executes -> model continues."""
     try:
@@ -203,8 +204,9 @@ async def _run_agentic_customer_turn(
                     "otherwise give the final customer reply."
                 )
 
-            with llm_client.track("agentic_tool_loop"):
-                out = await llm_client.ask_json(
+            with llm_client.attribution(customer_id=customer.id, conversation_id=conversation_id):
+                with llm_client.track("agentic_tool_loop"):
+                    out = await llm_client.ask_json(
                     system=_AGENT_SYSTEM,
                     user_text=user_payload,
                     schema=_AGENT_TOOL_SCHEMA,
@@ -271,19 +273,19 @@ _TOOL_ROUTER_SYSTEM = (
 )
 
 async def _select_customer_tools(
-    db: AsyncSession, customer: Customer, text: str
+    db: AsyncSession, customer: Customer, text: str, *, conversation_id=None
 ) -> dict[str, int]:
     """LLM selects read-only tools; backend validates args and executes them."""
-    del db, customer
     try:
-        with llm_client.track("tool_router"):
-            out = await llm_client.ask_json(
-                system=_TOOL_ROUTER_SYSTEM,
-                user_text=f"Customer message:\n{text[:1000]}",
-                schema=_TOOL_CALL_SCHEMA,
-                model=llm_client.MODEL_CHEAP,
-                max_tokens=300,
-            )
+        with llm_client.attribution(customer_id=customer.id):
+            with llm_client.track("tool_router"):
+                out = await llm_client.ask_json(
+                    system=_TOOL_ROUTER_SYSTEM,
+                    user_text=f"Customer message:\n{text[:1000]}",
+                    schema=_TOOL_CALL_SCHEMA,
+                    model=llm_client.MODEL_CHEAP,
+                    max_tokens=300,
+                )
         selected: dict[str, int] = {}
         for call in out.get("tool_calls") or []:
             name = call.get("name")
@@ -412,7 +414,8 @@ def _needs_new_customer_onboarding(
 
 
 async def build_ai_reply(
-    db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False
+    db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False,
+    conversation_id=None,
 ) -> str | None:
     """Return a reply for a customer message, or None to use rule-based flow.
 
@@ -485,9 +488,18 @@ async def build_ai_reply(
     # a SMART composer call receives only the facts those tools returned.
     # The backend executes the selected tools; the model never gets SQL or a
     # database session. Transactional actions and safety decisions remain in code.
+    # Link customer-facing AI spend to the customer's active order only when
+    # there is exactly one active order. Never guess when multiple orders exist.
+    usage_orders = await get_active_orders_for_phone(db, customer.phone)
+    usage_order_id = str(usage_orders[0].id) if len(usage_orders) == 1 else None
     try:
-        selected_tools = await _select_customer_tools(db, customer, text)
-        ctx = await _gather_context(db, customer, text, selected_tools)
+        with llm_client.attribution(
+            customer_id=customer.id, order_id=usage_order_id, conversation_id=conversation_id
+        ):
+            selected_tools = await _select_customer_tools(
+                db, customer, text, conversation_id=conversation_id
+            )
+            ctx = await _gather_context(db, customer, text, selected_tools)
     except Exception:
         # No facts means the model could invent prices/dates. Deterministic
         # webhook rules will handle the message instead.
@@ -496,8 +508,11 @@ async def build_ai_reply(
 
     prompt = _build_prompt(ctx, text, "auto")
     try:
-        with llm_client.track("reply"):
-            out = await llm_client.ask_json(
+        with llm_client.attribution(
+            customer_id=customer.id, order_id=usage_order_id, conversation_id=conversation_id
+        ):
+            with llm_client.track("reply"):
+                out = await llm_client.ask_json(
                 system=_COMPOSE_SYSTEM,
                 user_text=prompt,
                 schema=_REPLY_SCHEMA,
@@ -546,7 +561,7 @@ async def build_ai_reply(
     if changed_profile and not sandbox:
         await db.commit()
 
-    active_orders = await get_active_orders_for_phone(db, customer.phone)
+    active_orders = usage_orders
     from app.models import Lead
     lead = (
         await db.execute(select(Lead).where(Lead.phone == customer.phone))

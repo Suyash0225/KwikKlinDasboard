@@ -59,8 +59,9 @@ async def test_gemini_call_is_recorded(monkeypatch) -> None:
     async with async_session_factory() as s:
         before = len((await s.execute(select(LlmUsage))).scalars().all())
 
-    with llm.track("reply"):
-        await llm._gemini_generate("sys", "hello", "test-gemini", 100, None, None)
+    with llm.attribution(customer_id=None, order_id=None):
+        with llm.track("reply"):
+            await llm._gemini_generate("sys", "hello", "test-gemini", 100, None, None)
 
     async with async_session_factory() as s:
         rows = (
@@ -69,6 +70,18 @@ async def test_gemini_call_is_recorded(monkeypatch) -> None:
     assert len(rows) == 1
     assert rows[0].input_tokens == 321 and rows[0].output_tokens == 47
     assert rows[0].purpose == "reply", "the caller's tag must land on the row"
+    assert rows[0].customer_id is None and rows[0].order_id is None
+
+
+async def test_usage_attribution_context_is_isolated() -> None:
+    assert llm._customer_id.get() is None
+    with llm.attribution(customer_id="customer-1", order_id="order-1", conversation_id="conversation-1"):
+        assert llm._customer_id.get() == "customer-1"
+        assert llm._order_id.get() == "order-1"
+        assert llm._conversation_id.get() == "conversation-1"
+    assert llm._customer_id.get() is None
+    assert llm._order_id.get() is None
+    assert llm._conversation_id.get() is None
 
 
 async def test_recording_never_breaks_the_reply(monkeypatch) -> None:

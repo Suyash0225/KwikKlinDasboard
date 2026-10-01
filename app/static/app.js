@@ -2402,68 +2402,38 @@ const kTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.rou
 
 async function loadUsage() {
   $("usage-kpis").innerHTML = skeleton(1);
-  $("usage-models").innerHTML = skeleton(3);
-  let u;
-  try { u = await api("/admin/api/usage"); }
-  catch (e) { $("usage-models").innerHTML = errBox(e.message, "loadUsage"); return; }
-
-  const capNote = u.daily_request_cap
-    ? `${u.calls_left_today} left today`
-    : "no limit set";
-  const budgetNote = u.monthly_budget_usd
-    ? `budget ${usd(u.monthly_budget_usd)}` : "no budget set";
-
-  $("usage-kpis").innerHTML =
-    kpi("AI calls today", u.today.calls, capNote, "", "⚡", "orange") +
-    kpi("Tokens today", kTok(u.today.input_tokens + u.today.output_tokens),
-        `in ${kTok(u.today.input_tokens)} · out ${kTok(u.today.output_tokens)}`, "", "🔤", "blue") +
-    kpi("Spend this month", u.all_free ? "₹0 (free)" : usd(u.month.cost_usd),
-        u.all_free ? "on the free tier" : budgetNote, "", "💰", "green") +
-    kpi("Monthly at this rate", u.all_free ? "₹0" : usd(u.projected_month_usd),
-        `${u.month.calls} calls so far`, "", "📈", "purple");
-
-  // simple bar chart — no library, scales to the busiest day
-  const s = u.series || [];
-  const max = Math.max(1, ...s.map((d) => d.calls));
-  $("usage-chart").innerHTML = s.length
-    ? `<div style="display:flex;align-items:flex-end;gap:3px;height:130px">` +
-      // tap = toast with the numbers; title alone is invisible on touch
-      s.map((d) => `<div title="${d.date}: ${d.calls} calls, ${kTok(d.tokens)} tokens"
-        onclick="toast('${d.date}: ${d.calls} calls, ${kTok(d.tokens)} tokens')"
-        style="flex:1;min-width:0;background:var(--g-blue);border-radius:3px 3px 0 0;cursor:pointer;
-        height:${Math.max(3, (d.calls / max) * 100)}%"></div>`).join("") + `</div>
-      <div class="muted" style="display:flex;justify-content:space-between;margin-top:6px">
-        <span>${s[0].date.slice(5)}</span><span>today</span></div>`
-    : emptyBox("No AI calls recorded yet.", "📊");
-
-  const rows = u.by_purpose || [];
-  const totTok = rows.reduce((a, r) => a + r.tokens, 0) || 1;
-  $("usage-purpose").innerHTML = rows.length
-    ? rows.map((r) => `
-      <div class="sumrow"><span>${esc(PURPOSE_LABEL[r.purpose] || r.purpose)}</span>
-        <span>${r.calls} calls · ${kTok(r.tokens)}${u.all_free ? "" : " · " + usd(r.cost_usd)}</span></div>
-      <div style="height:5px;background:var(--n100);border-radius:3px;margin-bottom:8px">
-        <div style="height:5px;width:${Math.round((r.tokens / totTok) * 100)}%;background:var(--g-orange);border-radius:3px"></div>
-      </div>`).join("")
-    : `<p class="muted">Nothing this month yet.</p>`;
-
-  // table on wide screens + stacked cards on phones — .tbl is hidden <768px
   const byModel = u.month.by_model || [];
-  $("usage-models").innerHTML = `
-    <p class="muted">Provider: <b>${esc(u.provider)}</b> · ${esc(u.models.smart)} / ${esc(u.models.cheap)}</p>
-    <table class="tbl"><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Cost</th></tr></thead>
-    <tbody>${byModel.map((m) => `<tr>
-      <td><b>${esc(m.model)}</b></td><td>${m.calls}</td>
-      <td>${kTok(m.input_tokens)}</td><td>${kTok(m.output_tokens)}</td>
-      <td class="money">${m.priced ? usd(m.cost_usd) : '<span class="muted">free</span>'}</td>
-    </tr>`).join("") || `<tr><td colspan="5" class="muted">No calls this month.</td></tr>`}</tbody></table>
-    <div class="rowcards">${byModel.map((m) => `
-      <div class="rowcard"><div class="r1"><b>${esc(m.model)}</b>
-        <span class="money">${m.priced ? usd(m.cost_usd) : "free"}</span></div>
-      <div class="kv"><span>${m.calls} calls</span><span>in ${kTok(m.input_tokens)} · out ${kTok(m.output_tokens)}</span></div>
-      </div>`).join("") || `<p class="muted">No calls this month.</p>`}</div>
-    <p class="muted" style="margin-top:10px">Rates and limits can be changed in Settings — past usage is re-priced with the new rates too.</p>`;
-}
+  $("usage-models").innerHTML =
+    '<p class="muted">Provider: <b>' + esc(u.provider) + '</b> · ' + esc(u.models.smart) + ' / ' + esc(u.models.cheap) + '</p>' +
+    '<table class="tbl"><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
+    (byModel.map((m) => '<tr><td><b>' + esc(m.model) + '</b></td><td>' + m.calls + '</td><td>' + kTok(m.input_tokens) + '</td><td>' +
+      kTok(m.output_tokens) + '</td><td>' + (m.failed || 0) + '</td><td class="money">' + (m.priced ? usd(m.cost_usd) : '<span class="muted">free</span>') + '</td></tr>').join("")
+      || '<tr><td colspan="6" class="muted">No calls this month.</td></tr>') + '</tbody></table>' +
+    '<div class="rowcards">' + (byModel.map((m) => '<div class="rowcard"><div class="r1"><b>' + esc(m.model) + '</b><span class="money">' +
+      (m.priced ? usd(m.cost_usd) : "free") + '</span></div><div class="kv"><span>' + m.calls + ' calls · ' + (m.failed || 0) + ' failed</span><span>in ' +
+      kTok(m.input_tokens) + ' · out ' + kTok(m.output_tokens) + '</span></div></div>').join("") || '<p class="muted">No calls this month.</p>') + '</div>' +
+    '<p class="muted" style="margin-top:10px">Rates and limits can be changed in Settings — past usage is re-priced with the new rates too.</p>';
+
+  const a = u.attribution || {};
+  const orders = a.by_order || [];
+  const customers = a.by_customer || [];
+  const un = a.unattributed || {calls: 0, tokens: 0, cost_usd: 0};
+  const linkedCalls = orders.reduce((n, x) => n + x.calls, 0) + customers.reduce((n, x) => n + x.calls, 0);
+  const orderRows = orders.slice(0, 20).map(x =>
+    '<tr><td><b>' + esc(x.order_number) + '</b></td><td>' + esc(x.customer_name) + '</td><td>' + x.calls + '</td><td>' + kTok(x.tokens) + '</td><td>' +
+    (x.failed_calls || 0) + '</td><td class="money">' + (u.all_free ? "free" : usd(x.cost_usd)) + '</td></tr>').join("");
+  const customerRows = customers.slice(0, 20).map(x =>
+    '<tr><td><b>' + esc(x.customer_name) + '</b></td><td>' + x.calls + '</td><td>' + kTok(x.tokens) + '</td><td>' + (x.failed_calls || 0) + '</td><td class="money">' +
+    (u.all_free ? "free" : usd(x.cost_usd)) + '</td></tr>').join("");
+  $("usage-attribution").innerHTML =
+    kpi("Linked AI calls", linkedCalls, "Customer/order context available", "", "🔗", "blue") +
+    kpi("Unlinked calls", un.calls || 0, "Background/system AI", "", "🧩", "orange") +
+    kpi("Unlinked cost", u.all_free ? "₹0 (free)" : usd(un.cost_usd), "Not safely assignable to an order", "", "⚠️", "purple") +
+    (orders.length ? '<div style="margin-top:14px"><b>By order — one active order at call time</b><table class="tbl" style="margin-top:8px"><thead><tr><th>Order</th><th>Customer</th><th>Calls</th><th>Tokens</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
+      orderRows + '</tbody></table></div>' : '<p class="muted">No single-active-order AI calls yet.</p>') +
+    (customers.length ? '<div style="margin-top:14px"><b>By customer — multiple active orders / no safe order link</b><table class="tbl" style="margin-top:8px"><thead><tr><th>Customer</th><th>Calls</th><th>Tokens</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
+      customerRows + '</tbody></table></div>' : "") +
+    '<p class="muted" style="margin-top:10px">Order attribution is conservative: only one active order gets an order-level link; multiple active orders stay at customer level.</p>';
 
 const PURPOSE_LABEL = {
   reply: "Customer replies", intent: "Understanding messages", extract: "Reading bills/commands",
