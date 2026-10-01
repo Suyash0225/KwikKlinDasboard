@@ -1108,8 +1108,12 @@ async def list_tasks(
                 "eta_text": t.eta_text,
                 "due_at": t.due_at.isoformat() if t.due_at else None,
                 "kind": t.kind,
-                "customer_id": str(order.customer_id) if order else None,
-                "customer_name": (await db.get(Customer, order.customer_id)).name if order and order.customer_id else None,
+                "customer_id": str(t.customer_id) if t.customer_id else (str(order.customer_id) if order else None),
+                "customer_name": (
+                    (await db.get(Customer, t.customer_id)).name
+                    if t.customer_id else
+                    ((await db.get(Customer, order.customer_id)).name if order and order.customer_id else None)
+                ),
                 "created_by": t.created_by,
                 "created_at": t.created_at.isoformat(),
                 "completed_at": t.completed_at.isoformat() if t.completed_at else None,
@@ -1152,7 +1156,7 @@ async def create_task_api(body: TaskIn, db: AsyncSession = Depends(get_db)) -> d
     task = await task_service.create_task(
         db, title=body.title, staff=staff, order=order,
         urgent=body.urgent, created_by="dashboard", kind=body.kind,
-        due_at=body.due_at,
+        due_at=body.due_at, customer=customer,
     )
     return {
         "code": task.code, "id": str(task.id), "kind": task.kind,
