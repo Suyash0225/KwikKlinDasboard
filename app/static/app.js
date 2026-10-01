@@ -3,6 +3,9 @@
 
 "use strict";
 
+// Capture the query string before auth/navigation code can rewrite the URL.
+const qs = new URLSearchParams(location.search);
+
 if (new URLSearchParams(location.search).get("probe")) {
   document.title = "PROBE-BOOT";
   window.addEventListener("error", (e) => {
