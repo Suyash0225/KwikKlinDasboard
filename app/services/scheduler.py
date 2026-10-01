@@ -284,6 +284,15 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
             await run_task_followups()
     except Exception:
         log.exception("task_followups_failed")
+    # Deterministic SLA: promised delivery ke urgent window me aate hi
+    # order + existing tasks ko URGENT karo. No LLM/token.
+    try:
+        from app.services.order_priority import refresh_urgent_orders
+        async with async_session_factory() as db:
+            await refresh_urgent_orders(db, today=now_ist.date())
+    except Exception:
+        log.exception("urgent_priority_refresh_failed")
+
     # Ops agent: delivery promise ke 3 din pehle hi washer ko actual
     # kaam/ping mile. Ye DB-only planner hai — koi LLM/token nahi.
     try:

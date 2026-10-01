@@ -13,7 +13,7 @@ from sqlalchemy import select, text as sqltext
 
 from app.database import async_session_factory
 from app.models import Order, OrderStatus, Staff, StaffRole, Task
-from app.services import app_settings, ops_agent, order_service, tasks as task_service, tenant_context, turnaround
+from app.services import app_settings, ops_agent, order_priority, order_service, tasks as task_service, tenant_context, turnaround
 from tests.test_staff_panel import _purge_staff, _staff, _tenant, purge_phones
 
 SLUG = "ops-agent-shop"
@@ -73,6 +73,23 @@ async def test_bill_creates_wash_task_for_the_least_busy_washer(shop) -> None:
     assert ts[0].assigned_staff_id == shop["w2"] and ts[0].created_by == "agent"
     async with async_session_factory() as db:
         assert (await db.get(Order, o.id)).assigned_washer_id == shop["w2"]
+
+
+async def test_delivery_window_promotes_order_and_open_task_to_urgent(shop, sent) -> None:
+    o = await _order(expected_delivery=date.today() + timedelta(days=1))
+
+    async with async_session_factory() as db:
+        before = await db.get(Order, o.id)
+        assert before.priority == "normal"
+
+        promoted = await order_priority.refresh_urgent_orders(db, today=date.today())
+        assert promoted == 1
+
+        after = await db.get(Order, o.id)
+        assert after.priority == "urgent"
+
+    ts = await _tasks(o.id)
+    assert ts and all(t.urgent for t in ts if t.status == "OPEN")
 
 
 async def test_wash_task_waits_until_three_days_before_delivery(shop, sent) -> None:
