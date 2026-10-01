@@ -2545,7 +2545,7 @@ function renderTasks() {
         ${t.kind ? `<span class="badge">${esc(t.kind)}</span>` : ""}
         ${t.customer_name ? `<span class="badge">👤 ${esc(t.customer_name)}</span>` : ""}
         ${t.order_number ? `<span class="badge">${esc(t.order_number)}</span>` : ""}
-        ${t.due_at ? `<span class="badge ${new Date(t.due_at) < new Date() && open ? "warn" : ""}">⏰ ${when(t.due_at)}</span>` : ""}
+        ${t.due_at ? `<span class="badge ${new Date(t.due_at) < new Date() && open ? "warn" : ""}">⏰ ${whenIST(t.due_at)} IST</span>` : ""}
         ${t.ping_count ? `<span class="badge">reminded ${t.ping_count}×</span>` : ""}
         ${t.escalated ? `<span class="badge warn">escalated to you</span>` : ""}
         ${t.awaiting_reply ? `<span class="badge warn">❓ sawaal — jawab baaki</span>` : ""}
@@ -2566,6 +2566,9 @@ function renderTasks() {
    thread use nahi kar pata tha. */
 const when = (s) => (s ? new Date(s).toLocaleString("en-IN", {
   day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+}) : "—");
+const whenIST = (s) => (s ? new Date(s).toLocaleString("en-IN", {
+  timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true,
 }) : "—");
 
 /* Card par click -> poori kahani ek jagah: kise diya, kab, kitni baar
@@ -2588,7 +2591,7 @@ function taskDetail(code) {
       ${t.order_number ? row("Order", esc(t.order_number)) : ""}
       ${t.customer_name ? row("Customer", esc(t.customer_name)) : ""}
       ${t.kind ? row("Type", esc(t.kind)) : ""}
-      ${t.due_at ? row("Due", when(t.due_at)) : ""}
+      ${t.due_at ? row("Due", `${whenIST(t.due_at)} IST`) : ""}
       ${row("Created", `${when(t.created_at)}${t.created_by ? ` · ${esc(t.created_by)}` : ""}`)}
       ${row("Last reminder", when(t.last_ping_at))}
       ${row("Times asked", t.ping_count || 0)}
