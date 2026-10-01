@@ -724,16 +724,12 @@ async def _assign_task(db: AsyncSession, args: str) -> str:
         "pickup": "Pickup", "delivery": "Delivery", "wash": "Wash",
         "dry": "Dry", "iron": "Iron", "general": "Task",
     }[kind]
-    title = f"{action_word} — {title_who}"
-    if due_at:
-        title += f" — {due_at.astimezone(IST).strftime('%d %b %Y')}"
-
-    instruction = _re.sub(
-        r"(?i)\b(customer|grahak|no|number|phone|mobile)\b", " ", what
-    )
-    instruction = " ".join(instruction.split()).strip(" |")
-    if instruction and instruction.lower() not in {kind, action_word.lower()}:
-        title += f": {instruction[:350]}"
+    if kind in {"pickup", "delivery"} and customer is not None:
+        title = f"{action_word} — {title_who}"
+    elif kind == "general":
+        title = what[:350]
+    else:
+        title = f"{action_word} — {title_who}" if customer is not None else what[:350]
 
     if customer is not None and due_at is not None:
         day_start = due_at.astimezone(IST).replace(
