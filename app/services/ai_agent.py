@@ -203,8 +203,9 @@ async def _run_agentic_customer_turn(
                     "otherwise give the final customer reply."
                 )
 
-            with llm_client.track("agentic_tool_loop"):
-                out = await llm_client.ask_json(
+            with llm_client.attribution(customer_id=customer.id):
+                with llm_client.track("agentic_tool_loop"):
+                    out = await llm_client.ask_json(
                     system=_AGENT_SYSTEM,
                     user_text=user_payload,
                     schema=_AGENT_TOOL_SCHEMA,
