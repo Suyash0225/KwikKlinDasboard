@@ -75,7 +75,7 @@ TOOL_SPECS = [
         "when": "owner gives someone WORK to do ('Ravi se bol do X ka order urgent hai', "
                 "'Ajit ko bol do pickup karna hai') — banta hai trackable kaam, agent khud "
                 "follow-up karega jab tak wo jawab na de",
-        "args": "name | kaam (seedhe unse baat karte hue likho, 'pucho ki' mat likho)",
+        "args": "staff name | kaam | customer name/phone | date/time (optional)",
     },
     {
         "name": "task_list",
@@ -480,14 +480,158 @@ async def _ping_staff(db: AsyncSession, args: str) -> str:
     return f"{st.name} ko bhej diya: {message}"
 
 
-async def _assign_task(db: AsyncSession, args: str) -> str:
-    """Give someone work and start tracking it. args: 'Name | what to do'."""
-    from app.services import tasks as task_service
+def _parse_task_schedule(text: str, *, now_ist: datetime | None = None) -> tuple[datetime | None, str | None]:
+    """Parse an owner-friendly pickup/task date into an IST due_at."""
+    import calendar as _calendar
+    import re as _re
 
-    name, _, what = args.partition("|")
-    name, what = name.strip(), what.strip()
+    now = now_ist or datetime.now(IST)
+    raw = " ".join((text or "").split())
+    low = raw.lower()
+    months = {m.lower(): i for i, m in enumerate(_calendar.month_name) if m}
+    months.update({m.lower(): i for i, m in enumerate(_calendar.month_abbr) if m})
+    weekdays = {
+        "monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1,
+        "wednesday": 2, "wed": 2, "thursday": 3, "thu": 3, "thur": 3,
+        "friday": 4, "fri": 4, "saturday": 5, "sat": 5, "sunday": 6, "sun": 6,
+    }
+
+    target_date = None
+    weekday_name = None
+    iso = _re.search(r"(?<!\d)(20\d{2})-(\d{1,2})-(\d{1,2})(?!\d)", low)
+    if iso:
+        try:
+            target_date = datetime(
+                int(iso.group(1)), int(iso.group(2)), int(iso.group(3)), tzinfo=IST
+            ).date()
+        except ValueError:
+            return None, f"Date '{iso.group(0)}' valid nahi hai."
+
+    if target_date is None:
+        dm = _re.search(
+            r"(?<!\d)(\d{1,2})(?:st|nd|rd|th)?\s+"
+            r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+            r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+            r"(?:\s+(20\d{2}))?(?!\w)",
+            low,
+        )
+        if dm:
+            month_text = dm.group(2)
+            month = next(
+                (n for name, n in months.items()
+                 if name == month_text or month_text.startswith(name[:3])),
+                None,
+            )
+            if month is None:
+                return None, f"Month '{month_text}' samajh nahi aaya."
+            year = int(dm.group(3)) if dm.group(3) else now.year
+            try:
+                candidate = datetime(
+                    year, month, int(dm.group(1)), tzinfo=IST
+                ).date()
+            except ValueError:
+                return None, f"Date '{dm.group(0)}' valid nahi hai."
+            if dm.group(3) is None and candidate < now.date():
+                candidate = datetime(
+                    year + 1, month, int(dm.group(1)), tzinfo=IST
+                ).date()
+            target_date = candidate
+
+    for word, wd in weekdays.items():
+        if _re.search(rf"(?<!\w){_re.escape(word)}(?!\w)", low):
+            weekday_name = word
+            break
+
+    if target_date is None and weekday_name is not None:
+        days_ahead = (weekdays[weekday_name] - now.date().weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        target_date = now.date() + timedelta(days=days_ahead)
+
+    if target_date is None:
+        return None, None
+
+    if weekday_name is not None and target_date.weekday() != weekdays[weekday_name]:
+        actual = target_date.strftime("%A")
+        wanted = weekday_name.title()
+        return None, (
+            f"{target_date.strftime('%d %b %Y')} {actual} hai, "
+            f"{wanted} nahi. Date/weekday dobara check karo."
+        )
+
+    tm = _re.search(
+        r"(?<!\d)(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?!\w)", low
+    )
+    if tm:
+        hour = int(tm.group(1))
+        minute = int(tm.group(2) or 0)
+        if not 1 <= hour <= 12 or minute > 59:
+            return None, "Time valid nahi hai."
+        if tm.group(3) == "pm" and hour != 12:
+            hour += 12
+        if tm.group(3) == "am" and hour == 12:
+            hour = 0
+    else:
+        hour, minute = 9, 0
+
+    return datetime(
+        target_date.year, target_date.month, target_date.day,
+        hour, minute, tzinfo=IST,
+    ), None
+
+
+def _extract_customer_details(text: str) -> tuple[str | None, str | None]:
+    """Extract an explicit customer phone + name without guessing from dates."""
+    import re as _re
+
+    raw = " ".join((text or "").split())
+    phone_m = _re.search(
+        r"(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)", raw
+    )
+    phone = phone_m.group(0) if phone_m else None
+
+    cleaned = raw
+    if phone_m:
+        cleaned = cleaned[:phone_m.start()] + " " + cleaned[phone_m.end():]
+    cleaned = _re.sub(r"(?i)\b(customer|grahak)\b", " ", cleaned)
+    cleaned = _re.sub(r"(?i)\b(no|number|phone|mobile)\b", " ", cleaned)
+    cleaned = _re.sub(
+        r"(?i)\b(pick[- ]?up|pickup|pick|collect|task|kaam|urgent|jaldi|jldi|turant|abhi)\b",
+        " ", cleaned,
+    )
+    cleaned = _re.sub(
+        r"(?i)\b(?:on|for|at)\s+(?:monday|mon|tuesday|tue|tues|wednesday|wed|"
+        r"thursday|thu|thur|friday|fri|saturday|sat|sunday|sun)\b",
+        " ", cleaned,
+    )
+    cleaned = _re.sub(
+        r"(?i)\b(?:monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|"
+        r"friday|fri|saturday|sat|sunday|sun)\b",
+        " ", cleaned,
+    )
+    cleaned = _re.sub(
+        r"(?i)\b(?:\d{1,2})(?:st|nd|rd|th)?\s+"
+        r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+        r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+20\d{2})?\b",
+        " ", cleaned,
+    )
+    cleaned = _re.sub(r"(?i)\b(?:on|for|at)\b", " ", cleaned)
+    cleaned = _re.sub(r"[^A-Za-z .'-]", " ", cleaned)
+    name = " ".join(cleaned.split()).strip(" .-'")
+    return phone, (name or None)
+
+
+async def _assign_task(db: AsyncSession, args: str) -> str:
+    """Create a real tracked task from natural owner language."""
+    from app.services import tasks as task_service
+    from app.models import TASK_OPEN, Task as _Task
+    import re as _re
+
+    parts = [p.strip() for p in (args or "").split("|") if p.strip()]
+    name = parts[0] if parts else ""
+    what = " | ".join(parts[1:]).strip()
     if not name or not what:
-        return "Format: assign_task('Naam | kya karna hai')"
+        return "Format: assign_task('Ajit | pickup | customer name | phone | date')"
 
     staff = await task_service.find_staff(db, name)
     if staff is None:
@@ -496,22 +640,127 @@ async def _assign_task(db: AsyncSession, args: str) -> str:
         )
         return f"'{name}' saaf nahi hua. Staff hain: {names}"
 
-    import re as _re
+    low = what.lower()
+    kind = "general"
+    if _re.search(r"\bpick[- ]?up\b|\bcollect(?:ion)?\b", low):
+        kind = "pickup"
+    elif _re.search(r"\bdeliver(?:y)?\b", low):
+        kind = "delivery"
+    elif _re.search(r"\bwash(?:ing)?\b", low):
+        kind = "wash"
+    elif _re.search(r"\bdry(?:ing)?\b", low):
+        kind = "dry"
+    elif _re.search(r"\biron(?:ing)?\b", low):
+        kind = "iron"
 
-    urgent = bool(_re.search(r"urgent|jaldi|jldi|turant|abhi|maang", what, _re.I))
-    order = None
-    m = _re.search(r"\bKK-\d{8}-\d{2,}\b", what, _re.I)
-    if m:
-        order = (
-            await db.execute(select(Order).where(Order.order_number == m.group(0).upper()))
+    urgent = bool(_re.search(
+        r"\burgent\b|\bjaldi\b|\bjldi\b|\bturant\b|\babhi\b", low
+    ))
+    due_at, date_error = _parse_task_schedule(what)
+    if date_error:
+        return f"Task nahi banaya: {date_error}"
+
+    phone, customer_name = _extract_customer_details(what)
+    if len(parts) >= 3:
+        explicit = " ".join(parts[2:])
+        p2, n2 = _extract_customer_details(explicit)
+        phone = phone or p2
+        customer_name = n2 or customer_name
+
+    customer = None
+    if phone:
+        try:
+            normalized = normalize_phone(phone)
+        except ValueError:
+            return f"Customer number '{phone}' valid mobile number nahi lag raha."
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == normalized))
         ).scalar_one_or_none()
+        if customer is None:
+            if not customer_name:
+                return f"{normalized} database mein nahi mila. Customer ka naam bhi batao."
+            customer = Customer(phone=normalized, name=customer_name[:120])
+            db.add(customer)
+            await db.flush()
+        elif customer_name and not customer.name:
+            customer.name = customer_name[:120]
+
+    if customer is None and customer_name:
+        rows = (
+            await db.execute(
+                select(Customer).where(
+                    Customer.is_active.is_(True),
+                    Customer.name.ilike(f"%{customer_name}%"),
+                ).limit(5)
+            )
+        ).scalars().all()
+        if len(rows) == 1:
+            customer = rows[0]
+        elif len(rows) > 1:
+            return "Customer naam se ek se zyada mile. Phone number bhi batao."
+
+    order = None
+    if customer is not None:
+        from app.services.order_service import ACTIVE_STATUSES
+        active_orders = (
+            await db.execute(
+                select(Order)
+                .where(
+                    Order.customer_id == customer.id,
+                    Order.status.in_(ACTIVE_STATUSES),
+                )
+                .order_by(Order.created_at.desc())
+                .limit(10)
+            )
+        ).scalars().all()
+        if len(active_orders) == 1:
+            order = active_orders[0]
+
+    title_who = (
+        customer.name if customer is not None and customer.name
+        else (customer.phone if customer else "customer")
+    )
+    action_word = {
+        "pickup": "Pickup", "delivery": "Delivery", "wash": "Wash",
+        "dry": "Dry", "iron": "Iron", "general": "Task",
+    }[kind]
+    if kind in {"pickup", "delivery"} and customer is not None:
+        title = f"{action_word} — {title_who}"
+    elif kind == "general":
+        title = what[:350]
+    else:
+        title = f"{action_word} — {title_who}" if customer is not None else what[:350]
+
+    if customer is not None and due_at is not None:
+        day_start = due_at.astimezone(IST).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        day_end = day_start + timedelta(days=1)
+        existing = (
+            await db.execute(
+                select(_Task).where(
+                    _Task.assigned_staff_id == staff.id,
+                    _Task.customer_id == customer.id,
+                    _Task.kind == kind,
+                    _Task.status == TASK_OPEN,
+                    _Task.due_at >= day_start.astimezone(timezone.utc),
+                    _Task.due_at < day_end.astimezone(timezone.utc),
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return f"Ye task pehle se bana hua hai [{existing.code}]: {existing.title}"
 
     task = await task_service.create_task(
-        db, title=what, staff=staff, order=order, urgent=urgent, created_by="owner"
+        db, title=title, staff=staff, order=order, customer=customer,
+        urgent=urgent, created_by="owner", kind=kind, due_at=due_at,
     )
     return (
-        f"{staff.name} ko de diya [{task.code}]: {what}"
+        f"{staff.name} ko de diya [{task.code}]: {title}"
         + (" (URGENT)" if urgent else "")
+        + (f". Customer: {customer.name or customer.phone}" if customer else "")
+        + (f". Date: {due_at.astimezone(IST).strftime('%A, %d %b %Y')}" if due_at else "")
+        + (f". Running order {order.order_number} bhi link kar diya." if order else "")
         + ". Jawab na aane par main khud yaad dilata rahunga."
     )
 
