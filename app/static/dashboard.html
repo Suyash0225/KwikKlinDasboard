@@ -473,6 +473,15 @@
         <div class="card"><b>By purpose</b><div id="usage-purpose" style="margin-top:10px"></div></div>
       </div>
       <div class="card" style="margin-top:14px"><b>By model</b><div id="usage-models" style="margin-top:10px"></div></div>
+      <div class="card" style="margin-top:14px">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+          <div><b>AI cost attribution</b><p class="muted" style="margin:4px 0 0">
+            Customer/order level cost is shown only when the backend has an unambiguous link.
+            Failed attempts are counted separately and do not add token cost unless the provider returned tokens.
+          </p></div>
+        </div>
+        <div id="usage-attribution" style="margin-top:10px"></div>
+      </div>
     </section>
 
     <!-- Tasks -->
