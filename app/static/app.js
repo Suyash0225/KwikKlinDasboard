@@ -2542,7 +2542,10 @@ function renderTasks() {
       <div class="tc-title">${t.urgent ? "🔴 " : ""}${esc(t.title)}</div>
       <div class="tc-meta">
         <span class="badge role">${t.staff ? esc(t.staff) : "unassigned"}</span>
+        ${t.kind ? `<span class="badge">${esc(t.kind)}</span>` : ""}
+        ${t.customer_name ? `<span class="badge">👤 ${esc(t.customer_name)}</span>` : ""}
         ${t.order_number ? `<span class="badge">${esc(t.order_number)}</span>` : ""}
+        ${t.due_at ? `<span class="badge ${new Date(t.due_at) < new Date() && open ? "warn" : ""}">⏰ ${when(t.due_at)}</span>` : ""}
         ${t.ping_count ? `<span class="badge">reminded ${t.ping_count}×</span>` : ""}
         ${t.escalated ? `<span class="badge warn">escalated to you</span>` : ""}
         ${t.awaiting_reply ? `<span class="badge warn">❓ sawaal — jawab baaki</span>` : ""}
@@ -2583,6 +2586,9 @@ function taskDetail(code) {
     <div class="dtl">
       ${row("Given to", t.staff ? esc(t.staff) : "unassigned")}
       ${t.order_number ? row("Order", esc(t.order_number)) : ""}
+      ${t.customer_name ? row("Customer", esc(t.customer_name)) : ""}
+      ${t.kind ? row("Type", esc(t.kind)) : ""}
+      ${t.due_at ? row("Due", when(t.due_at)) : ""}
       ${row("Created", `${when(t.created_at)}${t.created_by ? ` · ${esc(t.created_by)}` : ""}`)}
       ${row("Last reminder", when(t.last_ping_at))}
       ${row("Times asked", t.ping_count || 0)}
