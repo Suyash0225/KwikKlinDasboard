@@ -523,6 +523,20 @@ async def _assign_task(db: AsyncSession, args: str) -> str:
     customer = None
     if order is not None:
         customer = await db.get(Customer, order.customer_id)
+    else:
+        # Link an owner command to an existing customer when the name/phone is
+        # unambiguous. Never guess between multiple customers.
+        digits = "".join(ch for ch in what if ch.isdigit())
+        clauses = [Customer.name.ilike(f"%{what}%")]
+        if len(digits) >= 8:
+            clauses.append(Customer.phone.ilike(f"%{digits}%"))
+        matches = (
+            await db.execute(
+                select(Customer).where(or_(*clauses), Customer.is_active.is_(True)).limit(2)
+            )
+        ).scalars().all()
+        if len(matches) == 1:
+            customer = matches[0]
 
     task = await task_service.create_task(
         db, title=what, staff=staff, order=order, customer=customer,
