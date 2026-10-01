@@ -75,7 +75,7 @@ TOOL_SPECS = [
         "when": "owner gives someone WORK to do ('Ravi se bol do X ka order urgent hai', "
                 "'Ajit ko bol do pickup karna hai') — banta hai trackable kaam, agent khud "
                 "follow-up karega jab tak wo jawab na de",
-        "args": "name | kaam (seedhe unse baat karte hue likho, 'pucho ki' mat likho)",
+        "args": "staff name | kaam | customer name/phone | date/time (optional)",
     },
     {
         "name": "task_list",
