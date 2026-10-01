@@ -3431,10 +3431,10 @@ async function openCampaignDetail(id) {
     const processed=(s.sent||0)+(s.delivered||0)+(s.read||0)+(s.replied||0)+(s.failed||0)+(s.skipped||0);
     const pct=total?Math.round(processed*100/total):0;
     const recipientRows=(c.recipients||[]).map(r=>
-      '<tr><td>'+esc(r.customer)+'</td><td>'+esc(r.phone)+'</td><td><span class="camp-badge '+(r.status==="failed"?"failed":r.status==="replied"?"replied":r.status==="skipped"?"skipped":"completed")+'">'+esc(r.status)+'</span></td><td>'+esc(r.status_at?fmtWhen(r.status_at):"—")+'</td><td>'+(r.replied?"<span class=\"camp-reply-badge\">Replied</span>":"—")+'</td></tr>'
+      '<tr><td>'+esc(r.customer)+'</td><td>'+esc(r.phone)+'</td><td><span class="camp-badge '+(r.status==="failed"?"failed":r.status==="replied"?"replied":r.status==="skipped"?"skipped":"completed")+'">'+esc(r.status)+'</span></td><td>'+esc(r.status_at?fmtWhen(r.status_at):"—")+'</td><td>'+(r.reply?'<span class="camp-reply-badge">Replied</span><div class="camp-reply-text">'+esc(r.reply.text||"")+'</div>':"—")+'</td></tr>'
     ).join("") || '<tr><td colspan="5" class="muted">No recipient records.</td></tr>';
     openModal('<div class="camp-detail-head"><div><h3>'+esc(c.name)+'</h3><p class="muted">'+esc(SEGMENT_LABEL[c.segment]||c.segment)+' · '+esc(c.status)+'</p></div><span class="camp-badge '+campaignStatusClass(c.status)+'">'+esc(campaignStatusLabel(c.status))+'</span></div>'+
-      '<div class="camp-detail-meta"><div><span>Created</span><b>'+fmtWhen(c.created_at)+'</b></div><div><span>Started</span><b>'+fmtWhen(c.created_at)+'</b></div><div><span>Completed</span><b>'+fmtWhen(c.sent_at)+'</b></div></div>'+
+      '<div class="camp-detail-meta"><div><span>Created</span><b>'+fmtWhen(c.created_at)+'</b></div><div><span>Started</span><b>—</b></div><div><span>Completed</span><b>'+fmtWhen(c.sent_at)+'</b></div></div>'+
       '<div class="camp-detail-stats"><div><span>Recipients</span><b>'+total+'</b></div><div><span>Sent</span><b>'+(s.sent||0)+'</b></div><div><span>Delivered</span><b>'+(s.delivered||0)+'</b></div><div><span>Read</span><b>'+(s.read||0)+'</b></div><div><span>Replies</span><b>'+(s.replied||0)+'</b></div><div><span>Failed</span><b>'+(s.failed||0)+'</b></div><div><span>Skipped</span><b>'+(s.skipped||0)+'</b></div></div>'+
       '<div class="camp-detail-progress"><div><span style="width:'+pct+'%"></span></div><b>'+pct+'% processed</b></div>'+
       '<div class="camp-detail-message"><b>Message</b><p>'+esc(c.message_text)+'</p></div>'+
