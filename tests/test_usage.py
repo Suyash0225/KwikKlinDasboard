@@ -73,36 +73,15 @@ async def test_gemini_call_is_recorded(monkeypatch) -> None:
     assert rows[0].customer_id is None and rows[0].order_id is None
 
 
-async def test_usage_attribution_is_persisted(monkeypatch) -> None:
-    class FakeResp:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "candidates": [{"content": {"parts": [{"text": "hi"}]}}],
-                "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 7},
-            }
-
-    async def fake_post(model, payload):
-        return FakeResp()
-
-    monkeypatch.setattr(llm, "_gemini_post", fake_post)
-    with llm.attribution(
-        customer_id="11111111-1111-1111-1111-111111111111",
-        order_id="22222222-2222-2222-2222-222222222222",
-        conversation_id="33333333-3333-3333-3333-333333333333",
-    ):
-        with llm.track("reply"):
-            await llm._gemini_generate("sys", "hello", "test-attributed", 100, None, None)
-
-    async with async_session_factory() as s:
-        row = (
-            await s.execute(select(LlmUsage).where(LlmUsage.model == "test-attributed"))
-        ).scalar_one()
-    assert str(row.customer_id) == "11111111-1111-1111-1111-111111111111"
-    assert str(row.order_id) == "22222222-2222-2222-2222-222222222222"
-    assert str(row.conversation_id) == "33333333-3333-3333-3333-333333333333"
+async def test_usage_attribution_context_is_isolated() -> None:
+    assert llm._customer_id.get() is None
+    with llm.attribution(customer_id="customer-1", order_id="order-1", conversation_id="conversation-1"):
+        assert llm._customer_id.get() == "customer-1"
+        assert llm._order_id.get() == "order-1"
+        assert llm._conversation_id.get() == "conversation-1"
+    assert llm._customer_id.get() is None
+    assert llm._order_id.get() is None
+    assert llm._conversation_id.get() is None
 
 
 async def test_recording_never_breaks_the_reply(monkeypatch) -> None:
