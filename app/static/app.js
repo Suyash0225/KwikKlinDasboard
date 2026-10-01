@@ -3128,7 +3128,7 @@ function renderSegments(segs) {
   const sel = $("camp-seg");
   if (sel) {
     const keys = ["all_active","active_regular","lapsed","high_value"];
-    sel.innerHTML = keys.filter((k) => segs.counts[k] != null).map((k) => '<option value="' + k + '">' + (SEGMENT_LABEL[k] || k) + '</option>').join("");
+    sel.innerHTML = keys.filter((k) => segs.counts[k] != null).map((k) => '<option value="' + k + '">' + (SEGMENT_LABEL[k] || k) + '</option>').join("") + '<option value="selected">Selected customers</option>';
   }
   window.CAMPAIGN_SEG_COUNTS = segs.counts || {}; updateCampaignAudienceCount();
 }
