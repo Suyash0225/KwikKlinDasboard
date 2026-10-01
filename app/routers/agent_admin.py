@@ -985,9 +985,94 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
 
 class TaskIn(BaseModel):
     title: str = Field(min_length=2, max_length=2000)
-    staff: str | None = None          # name or phone
+    staff: str | None = None
     order_number: str | None = None
+    customer_id: str | None = None
+    kind: str = Field(default="general", pattern="^(general|pickup|wash|dry|iron|delivery)$")
+    due_at: datetime | None = None
     urgent: bool = False
+
+
+@router.get("/tasks/customers/{customer_id}/orders")
+async def task_customer_orders(customer_id: str, db: AsyncSession = Depends(get_db)) -> list[dict]:
+    """Return active/running orders for the selected customer."""
+    from app.models import Customer as _C, Order as _O
+    try:
+        cid = uuid_module.UUID(customer_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid customer")
+    customer = await db.get(_C, cid)
+    if customer is None or not customer.is_active:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    rows = (
+        await db.execute(
+            select(_O)
+            .where(_O.customer_id == customer.id)
+            .where(_O.status.not_in(["DELIVERED", "CANCELLED"]))
+            .order_by(_O.created_at.desc())
+            .limit(30)
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": str(o.id),
+            "order_number": o.order_number,
+            "status": o.status,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+            "expected_delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
+            "total_amount": float(o.total_amount or 0),
+        }
+        for o in rows
+    ]
+
+
+@router.get("/tasks/customers")
+async def task_customer_search(
+    q: str = Query(default="", max_length=80),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Search existing customers in the live tenant database."""
+    term = q.strip()
+    if len(term) < 2:
+        return []
+    digits = re.sub(r"\D", "", term)
+    clauses = [Customer.name.ilike(f"%{term}%")]
+    if len(digits) >= 3:
+        clauses.append(Customer.phone.ilike(f"%{digits}%"))
+    from sqlalchemy import or_ as _or
+    rows = (
+        await db.execute(
+            select(Customer)
+            .where(Customer.is_active.is_(True), _or(*clauses))
+            .order_by(Customer.last_message_at.desc().nulls_last(), Customer.created_at.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+    return [{"id": str(c.id), "name": c.name or "Customer", "phone": c.phone, "address": c.address or ""} for c in rows]
+
+
+class TaskCustomerIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    phone: str = Field(min_length=8, max_length=20)
+    address: str | None = Field(default=None, max_length=1000)
+
+
+@router.post("/tasks/customers", status_code=201)
+async def create_task_customer(body: TaskCustomerIn, db: AsyncSession = Depends(get_db)) -> dict:
+    phone = normalize_phone(body.phone)
+    existing = (await db.execute(select(Customer).where(Customer.phone == phone))).scalar_one_or_none()
+    if existing:
+        if body.name.strip() and not existing.name:
+            existing.name = body.name.strip()
+        if body.address and not existing.address:
+            existing.address = body.address.strip()
+        await db.commit()
+        return {"id": str(existing.id), "name": existing.name or body.name.strip(), "phone": existing.phone, "existing": True}
+    customer = Customer(phone=phone, name=body.name.strip(), address=body.address.strip() if body.address else None)
+    db.add(customer)
+    await db.commit()
+    await db.refresh(customer)
+    return {"id": str(customer.id), "name": customer.name, "phone": customer.phone, "existing": False}
 
 
 @router.get("/tasks")
@@ -1054,6 +1139,14 @@ async def list_tasks(
                 # kya samay diya; ye pehle sirf DB mein tha, kahin dikhta nahi
                 "last_ping_at": t.last_ping_at.isoformat() if t.last_ping_at else None,
                 "eta_text": t.eta_text,
+                "due_at": t.due_at.isoformat() if t.due_at else None,
+                "kind": t.kind,
+                "customer_id": str(t.customer_id) if t.customer_id else (str(order.customer_id) if order else None),
+                "customer_name": (
+                    (await db.get(Customer, t.customer_id)).name
+                    if t.customer_id else
+                    ((await db.get(Customer, order.customer_id)).name if order and order.customer_id else None)
+                ),
                 "created_by": t.created_by,
                 "created_at": t.created_at.isoformat(),
                 "completed_at": t.completed_at.isoformat() if t.completed_at else None,
@@ -1064,12 +1157,13 @@ async def list_tasks(
 
 @router.post("/tasks", status_code=201)
 async def create_task_api(body: TaskIn, db: AsyncSession = Depends(get_db)) -> dict:
-    from app.models import Order as _O
+    from app.models import Order as _O, Customer as _C
     from app.services import tasks as task_service
 
     staff = await task_service.find_staff(db, body.staff or "") if body.staff else None
     if body.staff and staff is None:
         raise HTTPException(status_code=400, detail=f"'{body.staff}' staff list mein nahi mila")
+
     order = None
     if body.order_number:
         order = (
@@ -1078,12 +1172,30 @@ async def create_task_api(body: TaskIn, db: AsyncSession = Depends(get_db)) -> d
         if order is None:
             raise HTTPException(status_code=404, detail=f"{body.order_number} nahi mila")
 
+    customer = None
+    if body.customer_id:
+        try:
+            customer = await db.get(_C, uuid_module.UUID(body.customer_id))
+        except (ValueError, AttributeError):
+            customer = None
+        if customer is None or not customer.is_active:
+            raise HTTPException(status_code=404, detail="Customer not found")
+    elif order is not None:
+        customer = await db.get(_C, order.customer_id)
+
+    if order is not None and customer is not None and order.customer_id != customer.id:
+        raise HTTPException(status_code=400, detail="Selected customer does not match this order")
+
     task = await task_service.create_task(
         db, title=body.title, staff=staff, order=order,
-        urgent=body.urgent, created_by="dashboard",
+        urgent=body.urgent, created_by="dashboard", kind=body.kind,
+        due_at=body.due_at, customer=customer,
     )
-    return {"code": task.code, "id": str(task.id)}
-
+    return {
+        "code": task.code, "id": str(task.id), "kind": task.kind,
+        "customer_id": str(customer.id) if customer else None,
+        "due_at": task.due_at.isoformat() if task.due_at else None,
+    }
 
 @router.post("/tasks/{code}/done")
 async def complete_task_api(code: str, db: AsyncSession = Depends(get_db)) -> dict:

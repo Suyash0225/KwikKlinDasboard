@@ -41,6 +41,9 @@ class Task(Base, TenantScoped):
     order_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("orders.id"), index=True
     )
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id"), index=True
+    )
 
     status: Mapped[str] = mapped_column(
         String(12), default=TASK_OPEN, server_default=TASK_OPEN, index=True
@@ -54,6 +57,7 @@ class Task(Base, TenantScoped):
     )
     # what the staff member said when asked "kab tak?" ("sham tak", "kal 11 baje")
     eta_text: Mapped[str | None] = mapped_column(String(120))
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
     created_by: Mapped[str] = mapped_column(String(40), default="owner")
     # whatever the assignee said back — the agent writes their reply here
