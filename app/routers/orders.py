@@ -99,6 +99,16 @@ async def require_admin_key(
     if request.url.path == "/control/api/session" and request.method == "POST":
         return
 
+    # Browser login validates the Login ID + password in /control/api/session.
+    # That endpoint must be reachable before the vendor session cookie exists.
+    if request.url.path == "/control/api/session" and request.method == "POST":
+        return
+
+    # Google OAuth redirects cannot carry X-API-Key. The callback validates
+    # its short-lived HttpOnly state cookie before touching tenant data.
+    if request.url.path == "/control/api/google-business/callback":
+        return
+
     ip = request.client.host if request.client else "?"
     if _auth_throttled(ip):
         log.warning("admin_api_throttled", ip=ip)
