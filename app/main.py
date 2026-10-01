@@ -17,6 +17,7 @@ from app.database import engine
 from app.routers.admin import router as admin_router
 from app.routers.agent_admin import router as agent_admin_router
 from app.routers.orders import router as orders_router
+from app.routers.google_analytics import router as google_analytics_router
 from app.routers.webhook import router as webhook_router
 from app.utils.logger import configure_logging
 
@@ -308,6 +309,9 @@ app.include_router(staff_panel_router)
 from app.routers.google_business import router as google_business_router
 
 app.include_router(google_business_router)
+
+# Google Analytics 4 OAuth + realtime reporting connection
+app.include_router(google_analytics_router)
 
 # Static assets for the dashboard (CSS/JS — no secrets, safe to serve openly)
 from pathlib import Path
