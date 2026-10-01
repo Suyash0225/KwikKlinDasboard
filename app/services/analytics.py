@@ -15,29 +15,15 @@ class AnalyticsError(Exception):
     pass
 
 
-async def _ga_access_token() -> str:
-    if not (settings.GA4_REFRESH_TOKEN and settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET):
-        raise AnalyticsError("GA4 reporting is not connected")
-    async with httpx.AsyncClient(timeout=20) as c:
-        r = await c.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": settings.GOOGLE_CLIENT_ID,
-                "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                "refresh_token": settings.GA4_REFRESH_TOKEN,
-                "grant_type": "refresh_token",
-            },
-        )
-    if r.status_code != 200:
-        raise AnalyticsError("GA4 Google authorization expired or lacks analytics.readonly")
-    return r.json()["access_token"]
+async def _ga_access_token(db) -> str:
+    from app.services.ga4_reporting import access_token
+    return await access_token(db)
 
-
-async def ga4_realtime() -> dict:
+async def ga4_realtime(db) -> dict:
     if not settings.GA4_PROPERTY_ID:
         return {"configured": False, "active_users": 0, "views": 0, "events": 0}
     token = await _ga_access_token()
-    url = f"https://analyticsdata.googleapis.com/v1beta/properties/{settings.GA4_PROPERTY_ID}:runRealtimeReport"
+    url = f"https://analyticsdata.googleapis.com/v1beta/properties/{property_id}:runRealtimeReport"
     body = {
         "metrics": [
             {"name": "activeUsers"},
@@ -60,7 +46,7 @@ async def ga4_realtime() -> dict:
     }
 
 
-async def ga4_daily(days: int = 7) -> dict:
+async def ga4_daily(db, days: int = 7) -> dict:
     if not settings.GA4_PROPERTY_ID:
         return {"configured": False, "rows": []}
     token = await _ga_access_token()
@@ -139,7 +125,7 @@ async def gbp_performance(db, days: int = 30) -> dict:
 async def growth_snapshot(db) -> dict:
     website = {"configured": False, "error": None}
     try:
-        website = {**await ga4_realtime(), "error": None}
+        website = {**await ga4_realtime(db), "error": None}
     except Exception as exc:
         website["error"] = str(exc)
     gmb = {"configured": False, "error": None}
