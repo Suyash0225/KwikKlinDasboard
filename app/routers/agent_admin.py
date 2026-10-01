@@ -75,7 +75,7 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
     out = []
     for c in rows:
         stats = c.stats or {}
-        if c.status in ("sending", "sent", "approved"):
+        if c.status not in ("draft", "suggested"):
             stats = await campaign_stats(db, c.id)
         out.append(
             {
@@ -180,6 +180,18 @@ async def campaign_detail(campaign_id: str, db: AsyncSession = Depends(get_db)) 
         .where(CampaignRecipient.campaign_id == campaign.id)
         .order_by(CampaignRecipient.updated_at.desc())
     )).all()
+    wamids = [rec.wa_message_id for rec, _ in rows if rec.wa_message_id]
+    reply_rows = []
+    if wamids:
+        reply_rows = (await db.execute(
+            select(Conversation.reply_to_wamid, Conversation.message_text, Conversation.created_at)
+            .where(
+                Conversation.direction == Direction.INBOUND,
+                Conversation.reply_to_wamid.in_(wamids),
+            )
+            .order_by(Conversation.created_at.asc())
+        )).all()
+    replies = {wamid: {"text": text, "at": at} for wamid, text, at in reply_rows}
     recipients = [{
         "id": str(rec.id), "customer_id": str(cust.id),
         "customer": cust.name or "Customer", "phone": cust.phone,
@@ -187,6 +199,7 @@ async def campaign_detail(campaign_id: str, db: AsyncSession = Depends(get_db)) 
         "wa_message_id": rec.wa_message_id,
         "status_at": rec.updated_at.isoformat() if rec.updated_at else None,
         "replied": rec.status == "replied",
+        "reply": replies.get(rec.wa_message_id),
     } for rec, cust in rows]
     return {
         "id": str(campaign.id), "name": campaign.name, "segment": campaign.segment,
@@ -215,6 +228,7 @@ async def delete_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)) 
     creative_file = (campaign.stats or {}).get("creative_file")
     await db.execute(delete(CampaignRecipient).where(CampaignRecipient.campaign_id == campaign.id))
     await db.execute(update(Coupon).where(Coupon.campaign_id == campaign.id).values(campaign_id=None))
+    campaign_name = campaign.name
     await db.delete(campaign)
     await db.commit()
     if creative_file:
@@ -224,7 +238,7 @@ async def delete_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)) 
             log.warning("campaign_creative_delete_failed", campaign=str(cid))
     await audit.record(
         actor_role="admin", actor="dashboard", action="campaign_deleted",
-        args={"campaign": str(cid), "name": campaign.name}, result="deleted",
+        args={"campaign": str(cid), "name": campaign_name}, result="deleted",
     )
     return {"ok": True, "id": campaign_id}
 
