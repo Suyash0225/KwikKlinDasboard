@@ -177,6 +177,8 @@ DEFAULTS: dict[str, Any] = {
     # {refresh_token (encrypted), account, location, title, email, choices}
     # Credential hai — settings API isse browser ko kabhi nahi bhejti.
     "gbp_connection": {},
+    # GA4 OAuth connection {refresh_token encrypted, property_id, property_name, choices}.
+    "ga4_connection": {},
     # Aakhri sync ke reviews: {rating, count, reviews[], synced_at, error}
     "gbp_reviews": {},
     "google_review_link": "",    # bheja jata hai sirf 4-5 star par
