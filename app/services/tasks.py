@@ -153,6 +153,7 @@ async def create_task(
     created_by: str = "owner",
     notify: bool = True,
     kind: str = "general",
+    due_at: datetime | None = None,
 ) -> Task:
     """Record the task and tell the assignee. Returns the saved Task."""
     task = Task(
@@ -163,6 +164,7 @@ async def create_task(
         urgent=urgent,
         created_by=created_by[:40],
         kind=kind,
+        due_at=due_at,
     )
     db.add(task)
     await db.commit()
@@ -222,6 +224,8 @@ async def _send_to_assignee(
                 ]
                 if order.expected_delivery:
                     lines.append(f"📅 Delivery: {order.expected_delivery.strftime('%d %b %Y')}")
+                if task.due_at:
+                    lines.append(f"⏰ Task due: {task.due_at.astimezone(IST).strftime('%d %b %Y, %I:%M %p')}")
                 if task.kind in ("pickup", "delivery") and customer and customer.address:
                     lines.append(f"📍 Address: {customer.address.strip()}")
                 # Financial information is owner/manager-only. Task
