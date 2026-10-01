@@ -196,3 +196,31 @@ async def test_loop_stops_after_max_rounds(monkeypatch) -> None:
 
     assert calls["n"] == ba.MAX_TOOL_ROUNDS, "loop must be bounded"
     assert "2 order active" in ans
+
+
+async def test_parse_task_schedule_supports_weekday_and_explicit_date() -> None:
+    due, error = at._parse_task_schedule(
+        "pickup for Uma Shankar Agrwal customer no +919839983077 on Monday 5 October",
+        now_ist=datetime(2026, 10, 1, 10, 0, tzinfo=at.IST),
+    )
+    assert error is None
+    assert due is not None
+    assert due.date().isoformat() == "2026-10-05"
+    assert due.weekday() == 0
+
+
+async def test_parse_task_schedule_rejects_wrong_weekday() -> None:
+    due, error = at._parse_task_schedule(
+        "pickup on Tuesday 5 October",
+        now_ist=datetime(2026, 10, 1, 10, 0, tzinfo=at.IST),
+    )
+    assert due is None
+    assert error and "Monday" in error
+
+
+async def test_extract_customer_phone_and_name() -> None:
+    phone, name = at._extract_customer_details(
+        "pickup for customer no +919839983077 Uma Shankar agrwal on Monday 5 October"
+    )
+    assert phone == "+919839983077"
+    assert name == "Uma Shankar agrwal"
