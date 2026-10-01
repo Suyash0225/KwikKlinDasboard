@@ -2743,12 +2743,30 @@ async function searchTaskCustomers(value) {
   }, 180);
 }
 
+async function loadTaskCustomerOrders(customerId) {
+  const wrap = $("nt-order-wrap"), sel = $("nt-order-select");
+  if (!wrap || !sel) return;
+  wrap.style.display = "";
+  sel.innerHTML = '<option value="">No order selected</option><option disabled>Loading running orders…</option>';
+  try {
+    const rows = await api("/admin/api/tasks/customers/" + encodeURIComponent(customerId) + "/orders");
+    sel.innerHTML = '<option value="">No order selected</option>' +
+      rows.map(o => `<option value="${esc(o.order_number)}">${esc(o.order_number)} · ${esc(o.status)} · ₹${Number(o.total_amount || 0).toLocaleString("en-IN")}</option>`).join("");
+    if (!rows.length) {
+      sel.innerHTML = '<option value="">No running order</option>';
+    }
+  } catch (e) {
+    sel.innerHTML = '<option value="">Could not load orders</option>';
+  }
+}
+
 function selectTaskCustomer(id, name, phone) {
   TASK_CUSTOMER = { id, name, phone };
   $("nt-customer").value = name + " · " + phone;
   $("nt-customer-id").value = id;
   $("nt-cust-results").innerHTML = "";
   $("nt-order").value = "";
+  loadTaskCustomerOrders(id);
 }
 
 function newTaskCustomerModal() {
@@ -2793,9 +2811,10 @@ function newTaskModal() {
         <div id="nt-cust-results" class="acp"></div>
         <button type="button" class="btn ghost sm" style="margin-top:6px" onclick="newTaskCustomerModal()">＋ Add new customer</button>
       </div>
-      <div class="setfield"><label>Order <span class="muted">(optional)</span></label>
-        <input id="nt-order" placeholder="KK-20261001-01">
-        <small class="muted">If an order is selected, its customer must match the customer above.</small></div>
+      <div class="setfield" id="nt-order-wrap" style="display:none"><label>Running order <span class="muted">(optional)</span></label>
+        <select id="nt-order-select"><option value="">Select running order</option></select>
+        <input id="nt-order" type="hidden">
+        <small class="muted">Customer select karte hi uske active/running orders yahan automatically aayenge.</small></div>
       <div class="split2">
         <div class="setfield"><label>Assign to</label>
           <select id="nt-staff"><option value="">No staff yet</option>${opts}</select></div>
@@ -2814,6 +2833,7 @@ function newTaskModal() {
       <button class="btn" id="nt-go">Create & send task</button>
     </div>`);
   $("nt-customer").oninput = () => searchTaskCustomers($("nt-customer").value);
+  $("nt-order-select").onchange = () => { $("nt-order").value = $("nt-order-select").value; };
   $("nt-go").onclick = (e) => busy(e.target, async () => {
     const title = $("nt-title").value.trim();
     if (title.length < 2) { $("nt-err").textContent = "Instructions/task detail likhiye."; return; }
