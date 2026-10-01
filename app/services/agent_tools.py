@@ -481,13 +481,7 @@ async def _ping_staff(db: AsyncSession, args: str) -> str:
 
 
 def _parse_task_schedule(text: str, *, now_ist: datetime | None = None) -> tuple[datetime | None, str | None]:
-    """Parse an owner-friendly pickup/task date into an IST due_at.
-
-    Supports ISO dates, '5 October', '5 Oct 2026', 'Monday 5 October',
-    and a weekday by itself ('next Monday'). If a weekday and date are both
-    supplied they must agree; the agent must never silently move a task to a
-    different day.
-    """
+    """Parse an owner-friendly pickup/task date into an IST due_at."""
     import calendar as _calendar
     import re as _re
 
@@ -504,38 +498,47 @@ def _parse_task_schedule(text: str, *, now_ist: datetime | None = None) -> tuple
 
     target_date = None
     weekday_name = None
-
-    iso = _re.search(r"(?<!\\d)(20\\d{2})-(\\d{1,2})-(\\d{1,2})(?!\\d)", low)
+    iso = _re.search(r"(?<!\d)(20\d{2})-(\d{1,2})-(\d{1,2})(?!\d)", low)
     if iso:
         try:
-            target_date = datetime(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)), tzinfo=IST).date()
+            target_date = datetime(
+                int(iso.group(1)), int(iso.group(2)), int(iso.group(3)), tzinfo=IST
+            ).date()
         except ValueError:
             return None, f"Date '{iso.group(0)}' valid nahi hai."
 
     if target_date is None:
         dm = _re.search(
-            r"(?<!\\d)(\\d{1,2})(?:st|nd|rd|th)?\\s+"
+            r"(?<!\d)(\d{1,2})(?:st|nd|rd|th)?\s+"
             r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
             r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-            r"(?:\\s+(20\\d{2}))?(?!\\w)",
+            r"(?:\s+(20\d{2}))?(?!\w)",
             low,
         )
         if dm:
             month_text = dm.group(2)
-            month = next((n for name, n in months.items() if name == month_text or month_text.startswith(name[:3])), None)
+            month = next(
+                (n for name, n in months.items()
+                 if name == month_text or month_text.startswith(name[:3])),
+                None,
+            )
             if month is None:
                 return None, f"Month '{month_text}' samajh nahi aaya."
             year = int(dm.group(3)) if dm.group(3) else now.year
             try:
-                candidate = datetime(year, month, int(dm.group(1)), tzinfo=IST).date()
+                candidate = datetime(
+                    year, month, int(dm.group(1)), tzinfo=IST
+                ).date()
             except ValueError:
                 return None, f"Date '{dm.group(0)}' valid nahi hai."
             if dm.group(3) is None and candidate < now.date():
-                candidate = datetime(year + 1, month, int(dm.group(1)), tzinfo=IST).date()
+                candidate = datetime(
+                    year + 1, month, int(dm.group(1)), tzinfo=IST
+                ).date()
             target_date = candidate
 
     for word, wd in weekdays.items():
-        if _re.search(rf"(?<!\\w){_re.escape(word)}(?!\\w)", low):
+        if _re.search(rf"(?<!\w){_re.escape(word)}(?!\w)", low):
             weekday_name = word
             break
 
@@ -551,15 +554,18 @@ def _parse_task_schedule(text: str, *, now_ist: datetime | None = None) -> tuple
     if weekday_name is not None and target_date.weekday() != weekdays[weekday_name]:
         actual = target_date.strftime("%A")
         wanted = weekday_name.title()
-        return None, f"{target_date.strftime('%d %b %Y')} {actual} hai, {wanted} nahi. Date/weekday dobara check karo."
+        return None, (
+            f"{target_date.strftime('%d %b %Y')} {actual} hai, "
+            f"{wanted} nahi. Date/weekday dobara check karo."
+        )
 
-    # Optional clock time. If only a date was supplied, 09:00 IST is the
-    # operational task time; the exact date remains the source of truth.
-    tm = _re.search(r"(?<!\\d)(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)(?!\\w)", low)
+    tm = _re.search(
+        r"(?<!\d)(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?!\w)", low
+    )
     if tm:
         hour = int(tm.group(1))
         minute = int(tm.group(2) or 0)
-        if not 1 <= hour <= 12:
+        if not 1 <= hour <= 12 or minute > 59:
             return None, "Time valid nahi hai."
         if tm.group(3) == "pm" and hour != 12:
             hour += 12
@@ -568,7 +574,10 @@ def _parse_task_schedule(text: str, *, now_ist: datetime | None = None) -> tuple
     else:
         hour, minute = 9, 0
 
-    return datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=IST), None
+    return datetime(
+        target_date.year, target_date.month, target_date.day,
+        hour, minute, tzinfo=IST,
+    ), None
 
 
 def _extract_customer_details(text: str) -> tuple[str | None, str | None]:
@@ -576,41 +585,46 @@ def _extract_customer_details(text: str) -> tuple[str | None, str | None]:
     import re as _re
 
     raw = " ".join((text or "").split())
-    phone_m = _re.search(r"(?<!\\d)(?:\\+91[\\s-]?)?[6-9]\\d{9}(?!\\d)", raw)
+    phone_m = _re.search(
+        r"(?<!\d)(?:\+91[\s-]?)?[6-9]\d{9}(?!\d)", raw
+    )
     phone = phone_m.group(0) if phone_m else None
 
     cleaned = raw
     if phone_m:
         cleaned = cleaned[:phone_m.start()] + " " + cleaned[phone_m.end():]
-    cleaned = _re.sub(r"(?i)\\b(customer|grahak)\\b", " ", cleaned)
-    cleaned = _re.sub(r"(?i)\\b(no|number|phone|mobile)\\b", " ", cleaned)
-    cleaned = _re.sub(r"(?i)\\b(pick[- ]?up|pickup|pick|collect|task|kaam|urgent|jaldi|jldi|turant|abhi)\\b", " ", cleaned)
+    cleaned = _re.sub(r"(?i)\b(customer|grahak)\b", " ", cleaned)
+    cleaned = _re.sub(r"(?i)\b(no|number|phone|mobile)\b", " ", cleaned)
     cleaned = _re.sub(
-        r"(?i)\\b(?:on|for|at)\\s+(?:monday|mon|tuesday|tue|tues|wednesday|wed|"
-        r"thursday|thu|thur|friday|fri|saturday|sat|sunday|sun)\\b", " ", cleaned
-    )
-    cleaned = _re.sub(
-        r"(?i)\\b(?:\\d{1,2})(?:st|nd|rd|th)?\\s+"
-        r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
-        r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\\s+20\\d{2})?\\b",
+        r"(?i)\b(pick[- ]?up|pickup|pick|collect|task|kaam|urgent|jaldi|jldi|turant|abhi)\b",
         " ", cleaned,
     )
-    cleaned = _re.sub(r"(?i)\\b(?:on|for|at)\\b", " ", cleaned)
+    cleaned = _re.sub(
+        r"(?i)\b(?:on|for|at)\s+(?:monday|mon|tuesday|tue|tues|wednesday|wed|"
+        r"thursday|thu|thur|friday|fri|saturday|sat|sunday|sun)\b",
+        " ", cleaned,
+    )
+    cleaned = _re.sub(
+        r"(?i)\b(?:monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|"
+        r"friday|fri|saturday|sat|sunday|sun)\b",
+        " ", cleaned,
+    )
+    cleaned = _re.sub(
+        r"(?i)\b(?:\d{1,2})(?:st|nd|rd|th)?\s+"
+        r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+        r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+20\d{2})?\b",
+        " ", cleaned,
+    )
+    cleaned = _re.sub(r"(?i)\b(?:on|for|at)\b", " ", cleaned)
     cleaned = _re.sub(r"[^A-Za-z .'-]", " ", cleaned)
     name = " ".join(cleaned.split()).strip(" .-'")
     return phone, (name or None)
 
 
 async def _assign_task(db: AsyncSession, args: str) -> str:
-    """Create a real tracked task from natural owner language.
-
-    Accepted examples:
-      'Ajit | pickup for Uma Shankar Agrwal customer no +919839983077 on Monday 5 October'
-      'Ajit | pickup | Uma Shankar Agrwal | +919839983077 | Monday 5 October'
-    """
+    """Create a real tracked task from natural owner language."""
     from app.services import tasks as task_service
     from app.models import TASK_OPEN, Task as _Task
-
     import re as _re
 
     parts = [p.strip() for p in (args or "").split("|") if p.strip()]
@@ -628,25 +642,25 @@ async def _assign_task(db: AsyncSession, args: str) -> str:
 
     low = what.lower()
     kind = "general"
-    if _re.search(r"\\bpick[- ]?up\\b|\\bcollect(?:ion)?\\b", low):
+    if _re.search(r"\bpick[- ]?up\b|\bcollect(?:ion)?\b", low):
         kind = "pickup"
-    elif _re.search(r"\\bdeliver(?:y)?\\b", low):
+    elif _re.search(r"\bdeliver(?:y)?\b", low):
         kind = "delivery"
-    elif _re.search(r"\\bwash(?:ing)?\\b", low):
+    elif _re.search(r"\bwash(?:ing)?\b", low):
         kind = "wash"
-    elif _re.search(r"\\bdry(?:ing)?\\b", low):
+    elif _re.search(r"\bdry(?:ing)?\b", low):
         kind = "dry"
-    elif _re.search(r"\\biron(?:ing)?\\b", low):
+    elif _re.search(r"\biron(?:ing)?\b", low):
         kind = "iron"
 
-    urgent = bool(_re.search(r"\\burgent\\b|\\bjaldi\\b|\\bjldi\\b|\\bturant\\b|\\babhi\\b", low))
+    urgent = bool(_re.search(
+        r"\burgent\b|\bjaldi\b|\bjldi\b|\bturant\b|\babhi\b", low
+    ))
     due_at, date_error = _parse_task_schedule(what)
     if date_error:
         return f"Task nahi banaya: {date_error}"
 
     phone, customer_name = _extract_customer_details(what)
-    # Pipe-delimited input is even safer: the model can explicitly provide
-    # customer name/phone/date instead of relying on sentence cleanup.
     if len(parts) >= 3:
         explicit = " ".join(parts[2:])
         p2, n2 = _extract_customer_details(explicit)
@@ -671,9 +685,6 @@ async def _assign_task(db: AsyncSession, args: str) -> str:
         elif customer_name and not customer.name:
             customer.name = customer_name[:120]
 
-    # If a name was supplied without a phone, only use it when exactly one
-    # active customer matches. Never attach a task to the wrong similarly-named
-    # customer.
     if customer is None and customer_name:
         rows = (
             await db.execute(
@@ -694,7 +705,10 @@ async def _assign_task(db: AsyncSession, args: str) -> str:
         active_orders = (
             await db.execute(
                 select(Order)
-                .where(Order.customer_id == customer.id, Order.status.in_(ACTIVE_STATUSES))
+                .where(
+                    Order.customer_id == customer.id,
+                    Order.status.in_(ACTIVE_STATUSES),
+                )
                 .order_by(Order.created_at.desc())
                 .limit(10)
             )
@@ -702,28 +716,29 @@ async def _assign_task(db: AsyncSession, args: str) -> str:
         if len(active_orders) == 1:
             order = active_orders[0]
 
-    title_who = customer.name if customer is not None and customer.name else (customer.phone if customer else "customer")
+    title_who = (
+        customer.name if customer is not None and customer.name
+        else (customer.phone if customer else "customer")
+    )
     action_word = {
-        "pickup": "Pickup",
-        "delivery": "Delivery",
-        "wash": "Wash",
-        "dry": "Dry",
-        "iron": "Iron",
-        "general": "Task",
+        "pickup": "Pickup", "delivery": "Delivery", "wash": "Wash",
+        "dry": "Dry", "iron": "Iron", "general": "Task",
     }[kind]
     title = f"{action_word} — {title_who}"
     if due_at:
         title += f" — {due_at.astimezone(IST).strftime('%d %b %Y')}"
-    # Preserve useful free-form instructions while removing obvious metadata.
-    instruction = _re.sub(r"(?i)\\b(customer|grahak|no|number|phone|mobile)\\b", " ", what)
+
+    instruction = _re.sub(
+        r"(?i)\b(customer|grahak|no|number|phone|mobile)\b", " ", what
+    )
     instruction = " ".join(instruction.split()).strip(" |")
     if instruction and instruction.lower() not in {kind, action_word.lower()}:
         title += f": {instruction[:350]}"
 
-    # Idempotency: repeating the same owner instruction must not create two
-    # pickups for the same customer/staff/day.
     if customer is not None and due_at is not None:
-        day_start = due_at.astimezone(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+        day_start = due_at.astimezone(IST).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         day_end = day_start + timedelta(days=1)
         existing = (
             await db.execute(
@@ -741,15 +756,8 @@ async def _assign_task(db: AsyncSession, args: str) -> str:
             return f"Ye task pehle se bana hua hai [{existing.code}]: {existing.title}"
 
     task = await task_service.create_task(
-        db,
-        title=title,
-        staff=staff,
-        order=order,
-        customer=customer,
-        urgent=urgent,
-        created_by="owner",
-        kind=kind,
-        due_at=due_at,
+        db, title=title, staff=staff, order=order, customer=customer,
+        urgent=urgent, created_by="owner", kind=kind, due_at=due_at,
     )
     return (
         f"{staff.name} ko de diya [{task.code}]: {title}"
