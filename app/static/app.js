@@ -3116,267 +3116,338 @@ async function dlServer(path, name) {
   a.href = URL.createObjectURL(await r.blob()); a.download = name; a.click();
 }
 
-/* ============================= campaigns ============================= */
+/* ============================= campaign control center ============================= */
+let CAMPAIGN_SELECTED_CUSTOMERS = [];
+let CAMPAIGN_CUSTOMER_CACHE = {};
+let CAMPAIGN_SEARCH_TIMER = null;
+let CAMPAIGN_PICKER_ROWS = [];
+let CAMPAIGN_POLL_TIMER = null;
+
+function campaignStatusClass(status) {
+  return status === "sending" || status === "approved" ? "running"
+    : status === "sent" ? "completed"
+    : status === "cancelled" ? "cancelled"
+    : status === "failed" ? "failed" : "draft";
+}
+function campaignStatusLabel(status) {
+  return status === "sending" ? "Running" : status === "approved" ? "Starting"
+    : status === "sent" ? "Completed" : status === "cancelled" ? "Cancelled"
+    : status === "failed" ? "Failed" : "Draft";
+}
+function campaignKpi(icon, value, label, tone, action) {
+  return '<button type="button" class="camp-kpi camp-kpi-' + tone + '"' + (action ? ' onclick="' + action + '"' : '') +
+    '><span class="camp-kpi-icon">' + icon + '</span><strong>' + esc(String(value ?? 0)) +
+    '</strong><small>' + esc(label) + '</small></button>';
+}
+function renderCampaignOverview(d) {
+  const k = $("camp-kpis");
+  if (k) k.innerHTML = [
+    campaignKpi("📣", d.total_campaigns, "Total Campaigns", "blue"),
+    campaignKpi("✓", d.messages_sent, "Messages Sent", "orange"),
+    campaignKpi("✓✓", d.messages_delivered, "Messages Delivered", "green"),
+    campaignKpi("!", d.messages_failed, "Messages Failed", "red", "openFailedCampaignMessages()"),
+    campaignKpi("⏭", d.messages_skipped, "Messages Skipped", "gray"),
+    campaignKpi("↩", d.replies_received, "Replies Received", "purple"),
+    campaignKpi("▶", d.currently_sending, "Currently Sending", "orange", "document.getElementById('camp-running')?.scrollIntoView({behavior:'smooth',block:'center'})"),
+    campaignKpi("％", d.delivery_rate + "%", "Delivery Rate", "green")
+  ].join("");
+  const s = d.campaign_status || {};
+  const status = $("camp-status-grid");
+  if (status) status.innerHTML =
+    '<div><span>Running</span><b>' + (s.running || 0) + '</b></div>' +
+    '<div><span>Completed</span><b>' + (s.completed || 0) + '</b></div>' +
+    '<div><span>Failed</span><b>' + (s.failed || 0) + '</b></div>' +
+    '<div><span>Cancelled</span><b>' + (s.cancelled || 0) + '</b></div>';
+  const run = $("camp-running");
+  if (!run) return;
+  const rows = d.running_campaigns || [];
+  run.innerHTML = rows.length ? '<div class="camp-running-title">Currently running</div>' + rows.map((x) =>
+    '<div class="camp-running-row">' +
+      '<div class="camp-running-main"><div><b>' + esc(x.name) + '</b><span class="camp-badge running">' + esc(campaignStatusLabel(x.status)) + '</span></div>' +
+      '<small>' + x.processed + ' / ' + x.total + ' processed · Sent ' + x.sent + ' · Failed ' + x.failed + ' · Skipped ' + x.skipped + ' · Replies ' + x.replies + '</small></div>' +
+      '<div class="camp-progress"><span style="width:' + Math.min(100, Number(x.progress) || 0) + '%"></span></div>' +
+      '<div class="camp-running-foot"><span>' + (Number(x.progress) || 0) + '%</span><button class="btn ghost sm" onclick="openCampaignDetail(\'' + x.id + '\')">View details</button></div>' +
+    '</div>'
+  ).join("") : '<div class="camp-running-empty">No campaign is currently sending.</div>';
+}
 async function loadCampaigns() {
+  clearTimeout(CAMPAIGN_POLL_TIMER);
   $("seg-cards").innerHTML = "";
   try {
-    const [segs, camps] = await Promise.all([api("/admin/api/segments"), api("/admin/api/campaigns")]);
-    renderSegments(segs); renderCampaigns(camps); selectCampaignAudience($("camp-seg")?.value || "all_active", false); updateCampaignPreview();
-  } catch (e) { $("camp-list").innerHTML = errBox(e.message, "loadCampaigns"); }
+    const [overview, segs, camps] = await Promise.all([
+      api("/admin/api/campaigns/overview"),
+      api("/admin/api/segments"),
+      api("/admin/api/campaigns")
+    ]);
+    renderCampaignOverview(overview);
+    renderSegments(segs);
+    renderCampaigns(camps);
+    selectCampaignAudience($("camp-seg")?.value || "all_active", false);
+    updateCampaignPreview();
+    if ((overview.running_campaigns || []).length) {
+      CAMPAIGN_POLL_TIMER = setTimeout(loadCampaigns, 10000);
+    }
+  } catch (e) {
+    if ($("camp-kpis")) $("camp-kpis").innerHTML = errBox(e.message, "loadCampaigns");
+    if ($("camp-list")) $("camp-list").innerHTML = errBox(e.message, "loadCampaigns");
+  }
 }
 function renderSegments(segs) {
   const sel = $("camp-seg");
   if (sel) {
     const keys = ["all_active","active_regular","lapsed","high_value"];
-    sel.innerHTML = keys.filter((k) => segs.counts[k] != null).map((k) => '<option value="' + k + '">' + (SEGMENT_LABEL[k] || k) + '</option>').join("") + '<option value="selected">Selected customers</option>';
+    sel.innerHTML = keys.filter((k) => segs.counts[k] != null)
+      .map((k) => '<option value="' + k + '">' + esc(SEGMENT_LABEL[k] || k) + '</option>').join("") + '<option value="selected">Selected customers</option>';
   }
-  window.CAMPAIGN_SEG_COUNTS = segs.counts || {}; updateCampaignAudienceCount();
-}
-let CAMPAIGN_SELECTED_CUSTOMERS = [];
-let CAMPAIGN_CUSTOMER_CACHE = {};
-let CAMPAIGN_VISIBLE_CUSTOMERS = [];
-let CAMPAIGN_SEARCH_TIMER = null;
-let CAMPAIGN_PICKER_ROWS = [];
-
-function renderCampaignSelectedCustomers() {
-  const box = $("camp-selected-list"), count = $("camp-selected-count");
-  if (count) count.textContent = CAMPAIGN_SELECTED_CUSTOMERS.length + " selected";
-  if (box) box.innerHTML = CAMPAIGN_SELECTED_CUSTOMERS.length
-    ? CAMPAIGN_SELECTED_CUSTOMERS.map((x) =>
-        '<button type="button" class="camp-selected-chip" onclick="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
-        '<span>✓</span><b>' + esc(x.name || "Customer") + '</b><small>' + esc(x.phone || x.phone_masked || "") + '</small><i>×</i></button>'
-      ).join("")
-    : '<span class="muted">No customers selected yet.</span>';
+  window.CAMPAIGN_SEG_COUNTS = segs.counts || {};
   updateCampaignAudienceCount();
 }
-
-function campaignCustomerRowHtml(x) {
-  const selected = CAMPAIGN_SELECTED_CUSTOMERS.some((c) => c.ref === x.ref);
-  return '<label class="camp-customer-row ' + (selected ? "selected" : "") + '">' +
-    '<input class="camp-customer-check" type="checkbox" ' + (selected ? "checked" : "") +
-      ' onchange="toggleCampaignCustomer(\'' + esc(x.ref) + '\')">' +
-    '<span class="camp-customer-avatar">' + esc((x.name || "?").slice(0, 1).toUpperCase()) + '</span>' +
-    '<span style="min-width:0;flex:1"><b>' + esc(x.name || "Customer") + '</b>' +
-      '<small>' + esc(x.phone || x.phone_masked || "") + '</small></span>' +
-  '</label>';
-}
-
-function renderCampaignCustomerPickerRows(rows) {
-  CAMPAIGN_PICKER_ROWS = rows || [];
-  CAMPAIGN_PICKER_ROWS.forEach((x) => { CAMPAIGN_CUSTOMER_CACHE[x.ref] = x; });
-  const box = $("camp-customer-results");
-  if (!box) return;
-  box.innerHTML = CAMPAIGN_PICKER_ROWS.length
-    ? CAMPAIGN_PICKER_ROWS.map(campaignCustomerRowHtml).join("")
-    : '<div class="muted" style="padding:16px;text-align:center">No matching active customer found.</div>';
-}
-
-async function loadCampaignCustomerPicker(value = "") {
-  const q = String(value || "").trim();
-  clearTimeout(CAMPAIGN_SEARCH_TIMER);
-  CAMPAIGN_SEARCH_TIMER = setTimeout(async () => {
-    try {
-      const url = "/admin/api/customers/search?limit=25" + (q ? "&q=" + encodeURIComponent(q) : "");
-      const rows = await api(url);
-      renderCampaignCustomerPickerRows(rows);
-      const meta = $("camp-picker-result-count");
-      if (meta) meta.textContent = rows.length + (rows.length === 50 ? "+" : "") + " customers shown";
-    } catch (e) {
-      const box = $("camp-customer-results");
-      if (box) box.innerHTML = errBox(e.message, "openCampaignCustomerPicker");
-    }
-  }, q ? 180 : 0);
-}
-
-async function openCampaignCustomerPicker() {
-  openModal(`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-    <div><h3 style="margin:0">👥 Select customers</h3>
-      <p class="muted" style="margin:4px 0 0">Tick the customers who should receive this campaign.</p></div>
-    <b id="camp-picker-result-count" class="pill">Loading…</b>
-  </div>
-  <div style="margin-top:14px">
-    <input id="camp-customer-search" type="search" placeholder="Search by customer name or mobile number…"
-      style="width:100%;box-sizing:border-box" oninput="loadCampaignCustomerPicker(this.value)">
-  </div>
-  <div class="camp-picker-actions" style="margin-top:10px">
-    <button type="button" class="btn ghost sm" onclick="selectAllVisibleCampaignCustomers()">Select all visible</button>
-    <button type="button" class="btn ghost sm" onclick="clearCampaignSelection()">Clear selection</button>
-  </div>
-  <div id="camp-customer-results" class="camp-customer-results" style="max-height:52vh;overflow:auto;margin-top:10px">
-    <div class="muted" style="padding:16px;text-align:center">Loading customers…</div>
-  </div>
-  <div class="btnrow" style="margin-top:14px">
-    <button class="btn ghost" onclick="closeModal()">Cancel</button>
-    <button class="btn" onclick="closeModal();renderCampaignSelectedCustomers()">Done — <span id="camp-picker-selected-count">${CAMPAIGN_SELECTED_CUSTOMERS.length}</span> selected</button>
-  </div>`);
-  await loadCampaignCustomerPicker("");
-  const input = $("camp-customer-search");
-  if (input) input.focus();
-}
-
-function selectAllVisibleCampaignCustomers() {
-  const selected = new Set(CAMPAIGN_SELECTED_CUSTOMERS.map((x) => x.ref));
-  CAMPAIGN_PICKER_ROWS.forEach((x) => {
-    if (!selected.has(x.ref)) CAMPAIGN_SELECTED_CUSTOMERS.push(x);
-  });
-  renderCampaignSelectedCustomers();
-  renderCampaignCustomerPickerRows(CAMPAIGN_PICKER_ROWS);
-  const count = $("camp-picker-selected-count");
-  if (count) count.textContent = CAMPAIGN_SELECTED_CUSTOMERS.length;
-  updateCampaignPreview();
-}
-
-function clearCampaignSelection() {
-  CAMPAIGN_SELECTED_CUSTOMERS = [];
-  renderCampaignSelectedCustomers();
-  renderCampaignCustomerPickerRows(CAMPAIGN_PICKER_ROWS);
-  const count = $("camp-picker-selected-count");
-  if (count) count.textContent = "0";
-  updateCampaignPreview();
-}
-
-async function toggleCampaignCustomer(ref) {
-  const i = CAMPAIGN_SELECTED_CUSTOMERS.findIndex((x) => x.ref === ref);
-  if (i >= 0) {
-    CAMPAIGN_SELECTED_CUSTOMERS.splice(i, 1);
-  } else {
-    const found = CAMPAIGN_CUSTOMER_CACHE[ref];
-    if (!found) { toast("Customer not loaded. Search again.", true); return; }
-    CAMPAIGN_SELECTED_CUSTOMERS.push(found);
-  }
-  renderCampaignSelectedCustomers();
-  renderCampaignCustomerPickerRows(CAMPAIGN_PICKER_ROWS);
-  const count = $("camp-picker-selected-count");
-  if (count) count.textContent = CAMPAIGN_SELECTED_CUSTOMERS.length;
-  updateCampaignPreview();
-}
-
-function selectCampaignAudience(segment, doPreview=true) {
-  const sel = $("camp-seg"); if (sel) sel.value = segment;
-  document.querySelectorAll(".camp-audience").forEach((b) => b.classList.toggle("active", b.dataset.segment === segment));
-  const picker = $("camp-selected-picker");
-  if (picker) picker.hidden = segment !== "selected";
-  const label = segment === "selected" ? "Selected customers" : (SEGMENT_LABEL[segment] || segment);
-  const count = segment === "selected" ? CAMPAIGN_SELECTED_CUSTOMERS.length : window.CAMPAIGN_SEG_COUNTS?.[segment];
-  if ($("camp-audience-count")) $("camp-audience-count").textContent = count == null ? "Audience unavailable" : count + " customer" + (count === 1 ? "" : "s") + " selected";
-  if ($("camp-summary-audience")) $("camp-summary-audience").textContent = label;
-  if (doPreview) updateCampaignPreview();
-}
-function updateCampaignAudienceCount() {
-  const segment = $("camp-seg")?.value || "all_active";
-  selectCampaignAudience(segment, false);
-  const count = segment === "selected"
-    ? CAMPAIGN_SELECTED_CUSTOMERS.length
-    : window.CAMPAIGN_SEG_COUNTS?.[segment];
-  if ($("camp-summary-count-label")) {
-    $("camp-summary-count-label").textContent = segment === "selected" ? "Selected customers" : "Recipients";
-  }
-  if ($("camp-summary-count")) {
-    $("camp-summary-count").textContent = count == null
-      ? "—"
-      : segment === "selected" ? String(count) : "~ " + count + " customers";
-  }
-}
-function prefillCampaign(seg) {
-  selectCampaignAudience(seg, false); $("camp-name").value = (SEGMENT_LABEL[seg] || seg) + " - " + new Date().toISOString().slice(0, 10); updateCampaignPreview();
-  $("camp-name").scrollIntoView({ behavior: "smooth", block: "center" });
-}
 function renderCampaigns(camps) {
-  if (!camps.length) { $("camp-list").innerHTML = emptyBox("No campaigns yet. Create your first campaign above.", "📣"); return; }
+  if (!camps.length) {
+    $("camp-list").innerHTML = emptyBox("No campaigns yet. Create your first campaign above.", "📣");
+    return;
+  }
   $("camp-list").innerHTML = camps.map((c) => {
-    const s = c.stats || {}, img = c.creative_file ? '<img class="camp-history-img" src="/admin/media/' + encodeURIComponent(c.creative_file) + '" alt="Campaign creative">' : "";
-    return '<div class="camp-history-item"><div class="camp-history-item-top"><div><b>' + esc(c.name) + '</b><div class="muted">' + esc(SEGMENT_LABEL[c.segment] || c.segment) + ' · ' + new Date(c.created_at).toLocaleString() + '</div></div><span class="pill ' + (c.status === "sent" ? "PAID" : c.status === "cancelled" ? "CANCELLED" : "PARTIAL") + '">' + esc(c.status) + '</span></div>' + img +
-      '<div class="camp-history-msg">' + esc(c.message_text) + '</div>' + (c.segment === "selected" ? '<div class="camp-history-audience">Selected customers: <b>' + (c.selected_customer_count || 0) + '</b></div>' : '') + '<div class="camp-history-stats">Sent <b>' + (s.sent || 0) + '</b> · Delivered <b>' + (s.delivered || 0) + '</b> · Read <b>' + (s.read || 0) + '</b> · Replied <b>' + (s.replied || 0) + '</b> · Failed <b>' + (s.failed || 0) + '</b> · Skipped <b>' + (s.skipped || 0) + '</b></div>' +
-      (["draft","suggested"].includes(c.status) ? '<div class="act"><button class="btn sm ok" onclick="approveCampaign(\'' + c.id + '\')">Start sending</button><button class="btn sm ghost" onclick="cancelCampaign(\'' + c.id + '\')">Cancel</button></div>' : '') + '</div>';
+    const s = c.stats || {};
+    const cls = campaignStatusClass(c.status);
+    const img = c.creative_file ? '<img class="camp-history-img" src="/admin/media/' + encodeURIComponent(c.creative_file) + '" alt="Campaign creative">' : "";
+    const actions =
+      '<details class="camp-actions"><summary aria-label="Campaign actions">⋮</summary><div>' +
+      '<button onclick="openCampaignDetail(\'' + c.id + '\')">View details</button>' +
+      (["approved","sending"].includes(c.status) ? '<button onclick="cancelCampaign(\'' + c.id + '\')">Cancel campaign</button>' : "") +
+      (["approved","sending"].includes(c.status) ? "" : '<button class="danger" onclick="deleteCampaign(\'' + c.id + '\')">Delete campaign</button>') +
+      '</div></details>';
+    return '<article class="camp-history-item">' +
+      '<div class="camp-history-item-top"><div class="camp-history-name"><b>' + esc(c.name) + '</b><div class="muted">' +
+        esc(SEGMENT_LABEL[c.segment] || c.segment) + ' · ' + new Date(c.created_at).toLocaleString() + '</div></div>' +
+        '<div class="camp-history-actions"><span class="camp-badge ' + cls + '">' + esc(campaignStatusLabel(c.status)) + '</span>' + actions + '</div></div>' +
+      img +
+      '<div class="camp-history-msg">' + esc(c.message_text) + '</div>' +
+      '<div class="camp-history-meta">' +
+        '<span>Recipients <b>' + (s.queued || s.sent || 0) + '</b></span>' +
+        '<span>Sent <b>' + (s.sent || 0) + '</b></span><span>Delivered <b>' + (s.delivered || 0) + '</b></span>' +
+        '<span>Failed <b>' + (s.failed || 0) + '</b></span><span>Replies <b>' + (s.replied || 0) + '</b></span>' +
+        '<span>Skipped <b>' + (s.skipped || 0) + '</b></span></div>' +
+      (c.segment === "selected" ? '<div class="camp-history-audience">Selected customers: <b>' + (c.selected_customer_count || 0) + '</b></div>' : '') +
+      (["draft","suggested"].includes(c.status) ? '<div class="act"><button class="btn sm" onclick="approveCampaign(\'' + c.id + '\')">Start sending</button><button class="btn sm ghost" onclick="cancelCampaign(\'' + c.id + '\')">Cancel</button></div>' : '') +
+      '</article>';
   }).join("");
 }
 function updateCampaignMsgCount() {
-  const el = $("camp-msg"), count = $("camp-msg-count"); if (el && count) count.textContent = el.value.length + "/4000";
+  const el = $("camp-msg"), count = $("camp-msg-count");
+  if (el && count) count.textContent = el.value.length + "/4000";
 }
 function updateCampaignPreview() {
   const msg = $("camp-msg")?.value.trim();
   if ($("camp-preview-text")) $("camp-preview-text").textContent = msg || "Your campaign message will appear here…";
   if ($("camp-summary-name")) $("camp-summary-name").textContent = $("camp-name")?.value.trim() || "—";
   if ($("camp-summary-image")) $("camp-summary-image").textContent = window.CAMPAIGN_CUSTOM_IMAGE ? "1 image attached" : "No image";
-  const now = new Date();
-  if ($("camp-preview-time")) $("camp-preview-time").textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if ($("camp-preview-time")) $("camp-preview-time").textContent = new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
   updateCampaignAudienceCount();
 }
 function resetCampaignForm() {
   CAMPAIGN_SELECTED_CUSTOMERS = [];
   CAMPAIGN_CUSTOMER_CACHE = {};
-  CAMPAIGN_VISIBLE_CUSTOMERS = [];
-  if ($("camp-customer-search")) $("camp-customer-search").value = "";
-  if ($("camp-customer-results")) $("camp-customer-results").innerHTML = '<div class="muted">Start typing to find customers.</div>';
+  CAMPAIGN_PICKER_ROWS = [];
+  window.CAMPAIGN_CUSTOM_IMAGE = null;
+  if ($("camp-name")) $("camp-name").value = "";
+  if ($("camp-msg")) $("camp-msg").value = "";
+  if ($("camp-image")) $("camp-image").value = "";
+  if ($("camp-image-preview")) $("camp-image-preview").innerHTML = "";
+  if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
   if ($("camp-selected-list")) $("camp-selected-list").innerHTML = "";
   if ($("camp-selected-count")) $("camp-selected-count").textContent = "0 selected";
-  ["camp-name","camp-msg"].forEach((id) => { if ($(id)) $(id).value = ""; }); window.CAMPAIGN_CUSTOM_IMAGE = null;
-  if ($("camp-image")) $("camp-image").value = ""; if ($("camp-image-preview")) $("camp-image-preview").innerHTML = ""; if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
-  updateCampaignMsgCount(); selectCampaignAudience("all_active", false); updateCampaignPreview(); $("camp-name")?.focus();
+  updateCampaignMsgCount();
+  selectCampaignAudience("all_active", false);
+  updateCampaignPreview();
+  $("camp-name")?.focus();
+  window.scrollTo({top:0,behavior:"smooth"});
 }
-function scrollCampaignHistory() { $("camp-history")?.scrollIntoView({ behavior: "smooth", block: "start" }); }
+function scrollCampaignHistory() { $("camp-history")?.scrollIntoView({behavior:"smooth",block:"start"}); }
 async function uploadCampaignImage(input) {
-  const file = input.files && input.files[0]; if (!file) return;
-
-  // Show the selected image immediately — don't wait for the server upload.
-  // This keeps the WhatsApp preview feeling live while the final creative is uploaded.
+  const file = input.files && input.files[0];
+  if (!file) return;
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) { input.value=""; toast("Choose JPG, PNG or WEBP", true); return; }
+  if (file.size > 8 * 1024 * 1024) { input.value=""; toast("Image is too large (8MB max)", true); return; }
   if (window.CAMPAIGN_PREVIEW_URL) URL.revokeObjectURL(window.CAMPAIGN_PREVIEW_URL);
   window.CAMPAIGN_PREVIEW_URL = URL.createObjectURL(file);
   const localUrl = window.CAMPAIGN_PREVIEW_URL;
   $("camp-image-preview").innerHTML = '<div class="camp-image-card"><img src="' + localUrl + '" alt="Campaign image preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';
   $("camp-preview-image").innerHTML = '<img src="' + localUrl + '" alt="Campaign image">';
   updateCampaignPreview();
-
   try {
     const fd = new FormData(); fd.append("file", file);
-    const d = await api("/admin/api/campaigns/upload-image", { method: "POST", body: fd });
+    const d = await api("/admin/api/campaigns/upload-image", {method:"POST",body:fd});
     window.CAMPAIGN_CUSTOM_IMAGE = d.creative_file;
     const url = "/admin/media/" + encodeURIComponent(d.creative_file);
-    // Keep the already-visible preview in place, then switch it to the saved creative URL.
     $("camp-image-preview").innerHTML = '<div class="camp-image-card"><img src="' + url + '" alt="Campaign image preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';
     $("camp-preview-image").innerHTML = '<img src="' + url + '" alt="Campaign image">';
     updateCampaignPreview(); toast("Campaign image uploaded");
-  } catch (e) {
-    input.value = "";
-    window.CAMPAIGN_CUSTOM_IMAGE = null;
-    if ($("camp-image-preview")) $("camp-image-preview").innerHTML = "";
-    if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
-    if (window.CAMPAIGN_PREVIEW_URL) { URL.revokeObjectURL(window.CAMPAIGN_PREVIEW_URL); window.CAMPAIGN_PREVIEW_URL = null; }
-    updateCampaignPreview();
-    toast(e.message, true);
+  } catch(e) {
+    input.value=""; window.CAMPAIGN_CUSTOM_IMAGE=null;
+    $("camp-image-preview").innerHTML=""; $("camp-preview-image").innerHTML="";
+    if(window.CAMPAIGN_PREVIEW_URL){URL.revokeObjectURL(window.CAMPAIGN_PREVIEW_URL);window.CAMPAIGN_PREVIEW_URL=null;}
+    updateCampaignPreview(); toast(e.message,true);
   }
 }
 function removeCampaignImage() {
-  window.CAMPAIGN_CUSTOM_IMAGE = null;
-  if ($("camp-image")) $("camp-image").value = "";
-  if ($("camp-image-preview")) $("camp-image-preview").innerHTML = "";
-  if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
-  if (window.CAMPAIGN_PREVIEW_URL) { URL.revokeObjectURL(window.CAMPAIGN_PREVIEW_URL); window.CAMPAIGN_PREVIEW_URL = null; }
+  window.CAMPAIGN_CUSTOM_IMAGE=null;
+  if($("camp-image")) $("camp-image").value="";
+  if($("camp-image-preview")) $("camp-image-preview").innerHTML="";
+  if($("camp-preview-image")) $("camp-preview-image").innerHTML="";
+  if(window.CAMPAIGN_PREVIEW_URL){URL.revokeObjectURL(window.CAMPAIGN_PREVIEW_URL);window.CAMPAIGN_PREVIEW_URL=null;}
   updateCampaignPreview();
 }
 async function createCampaign(btn) {
-  const name = $("camp-name").value.trim(), message = $("camp-msg").value.trim(), segment = $("camp-seg").value;
-  if (!name) { toast("Give the campaign a name", true); return; } if (!message) { toast("Paste your campaign message first", true); return; } if (!segment) { toast("Select an audience", true); return; }
-  const count = segment === "selected" ? CAMPAIGN_SELECTED_CUSTOMERS.length : (window.CAMPAIGN_SEG_COUNTS?.[segment] || 0);
-  if (!count) { toast(segment === "selected" ? "Select at least one customer" : "No customers are available in this audience", true); return; }
-  await busy(btn, async () => {
-    const draft = await api("/admin/api/campaigns", { method: "POST", body: {
-      name, segment, message_text: message,
-      selected_customer_ids: segment === "selected" ? CAMPAIGN_SELECTED_CUSTOMERS.map((x) => x.ref) : [],
-      coupon_code: null, creative_file: window.CAMPAIGN_CUSTOM_IMAGE || null
-    }});
-    try { const r = await api("/admin/api/campaigns/" + draft.id + "/approve", { method: "POST" }); toast("Campaign started — " + r.queued + " customers queued"); }
-    catch (e) { toast("Draft saved, but sending could not be started: " + e.message, true); }
-    resetCampaignForm(); loadCampaigns();
+  const name=$("camp-name").value.trim(), message=$("camp-msg").value.trim(), segment=$("camp-seg").value;
+  if(!name){toast("Give the campaign a name",true);return;}
+  if(!message){toast("Paste your campaign message first",true);return;}
+  if(!segment){toast("Select an audience",true);return;}
+  const count=segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.length:(window.CAMPAIGN_SEG_COUNTS?.[segment]||0);
+  if(!count){toast(segment==="selected"?"Select at least one customer":"No customers are available in this audience",true);return;}
+  confirmDialog("Start this campaign now? Only eligible customers will be messaged. The existing 15–20 second sending gap and opt-out rules remain active.",async()=>{
+    await busy(btn,async()=>{
+      const draft=await api("/admin/api/campaigns",{method:"POST",body:{
+        name,segment,message_text:message,
+        selected_customer_ids:segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.map(x=>x.ref):[],
+        coupon_code:null,creative_file:window.CAMPAIGN_CUSTOM_IMAGE||null
+      }});
+      try{
+        const result=await api("/admin/api/campaigns/"+draft.id+"/approve",{method:"POST"});
+        toast("Campaign started successfully — "+result.queued+" customers queued");
+        resetCampaignForm(); loadCampaigns();
+      }catch(e){
+        toast("Draft saved, but sending could not be started: "+e.message,true);
+        loadCampaigns();
+      }
+    });
   });
 }
 function approveCampaign(id) {
-  confirmDialog("Start this campaign now? Only eligible customers will be messaged, and sending continues on the server.", async () => {
-    try { const r = await api("/admin/api/campaigns/" + id + "/approve", { method: "POST" }); toast("Campaign started — " + r.queued + " customers queued"); loadCampaigns(); } catch (e) { toast(e.message, true); }
+  confirmDialog("Start this campaign now? Only eligible customers will be messaged.",async()=>{
+    try{const r=await api("/admin/api/campaigns/"+id+"/approve",{method:"POST"});toast("Campaign started successfully — "+r.queued+" queued");loadCampaigns();}
+    catch(e){toast(e.message,true);}
   });
 }
 async function cancelCampaign(id) {
-  try { await api("/admin/api/campaigns/" + id + "/cancel", { method: "POST" }); toast("Campaign cancelled"); loadCampaigns(); } catch (e) { toast(e.message, true); }
+  confirmDialog("Cancel this campaign? Sending will stop after the current message.",async()=>{
+    try{await api("/admin/api/campaigns/"+id+"/cancel",{method:"POST"});toast("Campaign cancelled");loadCampaigns();}
+    catch(e){toast(e.message,true);}
+  });
+}
+async function deleteCampaign(id) {
+  confirmDialog("Delete this campaign? Campaign history and its associated recipient records may be permanently removed. Sent WhatsApp/customer conversation history is not deleted.",async()=>{
+    try{await api("/admin/api/campaigns/"+id,{method:"DELETE"});toast("Campaign deleted");loadCampaigns();}
+    catch(e){toast(e.message,true);}
+  });
+}
+function renderCampaignSelectedCustomers() {
+  const box=$("camp-selected-list"), count=$("camp-selected-count");
+  if(count) count.textContent=CAMPAIGN_SELECTED_CUSTOMERS.length+" selected";
+  if(box) box.innerHTML=CAMPAIGN_SELECTED_CUSTOMERS.length?CAMPAIGN_SELECTED_CUSTOMERS.map(x=>
+    '<button type="button" class="camp-selected-chip" onclick="toggleCampaignCustomer(\''+esc(x.ref)+'\')"><span>✓</span><b>'+esc(x.name||"Customer")+'</b><small>'+esc(x.phone||"")+'</small><i>×</i></button>'
+  ).join(""):'<span class="muted">No customers selected yet.</span>';
+  updateCampaignAudienceCount();
+}
+function campaignCustomerRowHtml(x) {
+  const selected=CAMPAIGN_SELECTED_CUSTOMERS.some(c=>c.ref===x.ref);
+  const orders=x.order_count!=null?'<small>'+x.order_count+' order'+(x.order_count===1?"":"s")+(x.last_order_at?' · Last '+fmtDate(x.last_order_at):"")+'</small>':"";
+  return '<label class="camp-customer-row '+(selected?"selected":"")+'"><input class="camp-customer-check" type="checkbox" '+(selected?"checked":"")+
+    ' onchange="toggleCampaignCustomer(\''+esc(x.ref)+'\')"><span class="camp-customer-avatar">'+esc((x.name||"?").slice(0,1).toUpperCase())+
+    '</span><span class="camp-customer-info"><b>'+esc(x.name||"Customer")+'</b><small>'+esc(x.phone||"")+'</small>'+orders+'</span></label>';
+}
+function renderCampaignCustomerPickerRows(rows) {
+  CAMPAIGN_PICKER_ROWS=rows||[];
+  CAMPAIGN_PICKER_ROWS.forEach(x=>CAMPAIGN_CUSTOMER_CACHE[x.ref]=x);
+  const box=$("camp-customer-results");
+  if(!box)return;
+  box.innerHTML=CAMPAIGN_PICKER_ROWS.length?CAMPAIGN_PICKER_ROWS.map(campaignCustomerRowHtml).join(""):'<div class="muted camp-picker-empty">No matching active customer found.</div>';
+}
+async function loadCampaignCustomerPicker(value="") {
+  const q=String(value||"").trim();
+  clearTimeout(CAMPAIGN_SEARCH_TIMER);
+  CAMPAIGN_SEARCH_TIMER=setTimeout(async()=>{
+    try{
+      const url="/admin/api/customers/search?limit=25"+(q?"&q="+encodeURIComponent(q):"");
+      const rows=await api(url); renderCampaignCustomerPickerRows(rows);
+      const meta=$("camp-picker-result-count"); if(meta)meta.textContent=rows.length+" customers shown";
+    }catch(e){const box=$("camp-customer-results");if(box)box.innerHTML=errBox(e.message,"customer search");}
+  },q?180:0);
+}
+async function openCampaignCustomerPicker() {
+  openModal('<div class="camp-modal-head"><div><h3>👥 Select customers</h3><p class="muted">Search the existing customer database by name or phone.</p></div><b id="camp-picker-result-count" class="pill">Loading…</b></div>'+
+    '<input id="camp-customer-search" class="camp-modal-search" type="search" placeholder="Search customers by name or mobile number…" oninput="loadCampaignCustomerPicker(this.value)">'+
+    '<div class="camp-picker-actions"><button type="button" class="btn ghost sm" onclick="selectAllVisibleCampaignCustomers()">Select all visible</button><button type="button" class="btn ghost sm" onclick="clearCampaignSelection()">Clear all</button></div>'+
+    '<div id="camp-customer-results" class="camp-customer-results camp-modal-results"><div class="muted camp-picker-empty">Loading customers…</div></div>'+
+    '<div class="btnrow camp-modal-footer"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" onclick="closeModal();renderCampaignSelectedCustomers()">Done — <span id="camp-picker-selected-count">'+CAMPAIGN_SELECTED_CUSTOMERS.length+'</span> selected</button></div>');
+  await loadCampaignCustomerPicker("");
+  $("camp-customer-search")?.focus();
+}
+function selectAllVisibleCampaignCustomers() {
+  const selected=new Set(CAMPAIGN_SELECTED_CUSTOMERS.map(x=>x.ref));
+  CAMPAIGN_PICKER_ROWS.forEach(x=>{if(!selected.has(x.ref))CAMPAIGN_SELECTED_CUSTOMERS.push(x);});
+  renderCampaignCustomerPickerRows(CAMPAIGN_PICKER_ROWS); renderCampaignSelectedCustomers();
+  const count=$("camp-picker-selected-count");if(count)count.textContent=CAMPAIGN_SELECTED_CUSTOMERS.length;
+}
+function clearCampaignSelection() {
+  CAMPAIGN_SELECTED_CUSTOMERS=[]; renderCampaignCustomerPickerRows(CAMPAIGN_PICKER_ROWS); renderCampaignSelectedCustomers();
+  const count=$("camp-picker-selected-count");if(count)count.textContent="0";
+}
+function toggleCampaignCustomer(ref) {
+  const i=CAMPAIGN_SELECTED_CUSTOMERS.findIndex(x=>x.ref===ref);
+  if(i>=0)CAMPAIGN_SELECTED_CUSTOMERS.splice(i,1);
+  else if(CAMPAIGN_CUSTOMER_CACHE[ref])CAMPAIGN_SELECTED_CUSTOMERS.push(CAMPAIGN_CUSTOMER_CACHE[ref]);
+  renderCampaignCustomerPickerRows(CAMPAIGN_PICKER_ROWS); renderCampaignSelectedCustomers();
+  const count=$("camp-picker-selected-count");if(count)count.textContent=CAMPAIGN_SELECTED_CUSTOMERS.length;
+}
+function selectCampaignAudience(segment, doPreview=true) {
+  const sel=$("camp-seg");if(sel)sel.value=segment;
+  document.querySelectorAll(".camp-audience").forEach(b=>b.classList.toggle("active",b.dataset.segment===segment));
+  const picker=$("camp-selected-picker");if(picker)picker.hidden=segment!=="selected";
+  const label=segment==="selected"?"Selected Customers":(SEGMENT_LABEL[segment]||segment);
+  const count=segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.length:window.CAMPAIGN_SEG_COUNTS?.[segment];
+  if($("camp-audience-count"))$("camp-audience-count").textContent=count==null?"Audience unavailable":count+" customer"+(count===1?"":"s")+" selected";
+  if($("camp-summary-audience"))$("camp-summary-audience").textContent=label;
+  if(doPreview)updateCampaignPreview();
+}
+function updateCampaignAudienceCount() {
+  const segment=$("camp-seg")?.value||"all_active";
+  selectCampaignAudience(segment,false);
+  const count=segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.length:window.CAMPAIGN_SEG_COUNTS?.[segment];
+  if($("camp-summary-count-label"))$("camp-summary-count-label").textContent=segment==="selected"?"Selected customers":"Recipients";
+  if($("camp-summary-count"))$("camp-summary-count").textContent=count==null?"—":segment==="selected"?String(count):"~ "+count+" customers";
+}
+function prefillCampaign(seg) {
+  selectCampaignAudience(seg,false);
+  if($("camp-name"))$("camp-name").value=(SEGMENT_LABEL[seg]||seg)+" - "+new Date().toISOString().slice(0,10);
+  updateCampaignPreview();
+  $("camp-name")?.scrollIntoView({behavior:"smooth",block:"center"});
+}
+async function openCampaignDetail(id) {
+  try {
+    const c=await api("/admin/api/campaigns/"+id);
+    const s=c.stats||{};
+    const total=(s.queued||0)+(s.sent||0)+(s.delivered||0)+(s.read||0)+(s.replied||0)+(s.failed||0)+(s.skipped||0)+(s.holdout||0);
+    const processed=(s.sent||0)+(s.delivered||0)+(s.read||0)+(s.replied||0)+(s.failed||0)+(s.skipped||0);
+    const pct=total?Math.round(processed*100/total):0;
+    const recipientRows=(c.recipients||[]).map(r=>
+      '<tr><td>'+esc(r.customer)+'</td><td>'+esc(r.phone)+'</td><td><span class="camp-badge '+(r.status==="failed"?"failed":r.status==="replied"?"replied":r.status==="skipped"?"skipped":"completed")+'">'+esc(r.status)+'</span></td><td>'+esc(r.status_at?fmtWhen(r.status_at):"—")+'</td><td>'+(r.reply?'<span class="camp-reply-badge">Replied</span><div class="camp-reply-text">'+esc(r.reply.text||"")+'</div>':"—")+'</td></tr>'
+    ).join("") || '<tr><td colspan="5" class="muted">No recipient records.</td></tr>';
+    openModal('<div class="camp-detail-head"><div><h3>'+esc(c.name)+'</h3><p class="muted">'+esc(SEGMENT_LABEL[c.segment]||c.segment)+' · '+esc(c.status)+'</p></div><span class="camp-badge '+campaignStatusClass(c.status)+'">'+esc(campaignStatusLabel(c.status))+'</span></div>'+
+      '<div class="camp-detail-meta"><div><span>Created</span><b>'+fmtWhen(c.created_at)+'</b></div><div><span>Started</span><b>—</b></div><div><span>Completed</span><b>'+fmtWhen(c.sent_at)+'</b></div></div>'+
+      '<div class="camp-detail-stats"><div><span>Recipients</span><b>'+total+'</b></div><div><span>Sent</span><b>'+(s.sent||0)+'</b></div><div><span>Delivered</span><b>'+(s.delivered||0)+'</b></div><div><span>Read</span><b>'+(s.read||0)+'</b></div><div><span>Replies</span><b>'+(s.replied||0)+'</b></div><div><span>Failed</span><b>'+(s.failed||0)+'</b></div><div><span>Skipped</span><b>'+(s.skipped||0)+'</b></div></div>'+
+      '<div class="camp-detail-progress"><div><span style="width:'+pct+'%"></span></div><b>'+pct+'% processed</b></div>'+
+      '<div class="camp-detail-message"><b>Message</b><p>'+esc(c.message_text)+'</p></div>'+
+      '<div class="camp-detail-table-wrap"><table class="camp-detail-table"><thead><tr><th>Customer</th><th>Phone</th><th>Status</th><th>Status time</th><th>Reply</th></tr></thead><tbody>'+recipientRows+'</tbody></table></div>'+
+      '<div class="btnrow camp-modal-footer"><button class="btn" onclick="closeModal()">Close</button></div>');
+  }catch(e){toast(e.message,true);}
+}
+async function openFailedCampaignMessages() {
+  try {
+    const rows=await api("/admin/api/campaigns/failed");
+    const body=rows.length?rows.map(r=>'<div class="camp-failed-row"><div><b>'+esc(r.customer)+'</b><small>'+esc(r.phone)+'</small></div><div><b>'+esc(r.campaign)+'</b><small>'+esc(r.error)+'</small></div><time>'+esc(r.time?fmtWhen(r.time):"—")+'</time></div>').join(""):'<div class="camp-picker-empty">No failed campaign messages.</div>';
+    openModal('<div class="camp-detail-head"><div><h3>⚠ Failed Messages</h3><p class="muted">Actual failed recipient records from campaign sending.</p></div></div><div class="camp-failed-list">'+body+'</div><div class="btnrow camp-modal-footer"><button class="btn" onclick="closeModal()">Close</button></div>');
+  }catch(e){toast(e.message,true);}
 }
 /* ============================= template studio ============================= */
 let TPL_BTNS = [];
