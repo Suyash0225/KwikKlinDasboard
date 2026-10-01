@@ -2700,41 +2700,129 @@ async function pingAllTasks(btn) {
   });
 }
 
-function newTaskModal() {
-  const opts = (STAFF || []).filter((s) => s.is_active)
-    .map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
-  openModal(`<h3>New task</h3>
+let TASK_CUSTOMER = null;
+let TASK_CUSTOMER_TIMER = null;
+
+function taskDueISO(value) {
+  if (!value) return null;
+  // Task dates are shop-local IST, regardless of the device/browser timezone.
+  const d = new Date(value + ":00+05:30");
+  if (Number.isNaN(d.getTime())) throw new Error("Due date/time is invalid");
+  return d.toISOString();
+}
+
+async function searchTaskCustomers(value) {
+  const q = (value || "").trim();
+  const box = $("nt-cust-results");
+  if (!box) return;
+  clearTimeout(TASK_CUSTOMER_TIMER);
+  if (q.length < 2) { box.innerHTML = ""; return; }
+  TASK_CUSTOMER_TIMER = setTimeout(async () => {
+    try {
+      const rows = await api("/admin/api/tasks/customers?q=" + encodeURIComponent(q));
+      if (!rows.length) {
+        box.innerHTML = '<button type="button" class="acitem muted" onclick="newTaskCustomerModal()">No customer found — + Add new</button>';
+        return;
+      }
+      box.innerHTML = rows.map(c => `
+        <button type="button" class="acitem" onclick="selectTaskCustomer('${esc(c.id)}','${esc(c.name)}','${esc(c.phone)}')">
+          <b>${esc(c.name)}</b><span>${esc(c.phone)}</span>
+        </button>`).join("");
+    } catch (err) {
+      box.innerHTML = '<div class="muted" style="padding:8px">Could not search customers.</div>';
+    }
+  }, 180);
+}
+
+function selectTaskCustomer(id, name, phone) {
+  TASK_CUSTOMER = { id, name, phone };
+  $("nt-customer").value = name + " · " + phone;
+  $("nt-customer-id").value = id;
+  $("nt-cust-results").innerHTML = "";
+  $("nt-order").value = "";
+}
+
+function newTaskCustomerModal() {
+  openModal(`<h3>➕ Add customer</h3>
     <div class="frm">
-      <div class="setfield"><label for="nt-title">What needs doing</label>
-        <input id="nt-title" placeholder="Deliver Sharma ji's order today itself" autofocus>
-        <small>Write it as if you're talking to them — this exact message goes to their WhatsApp.</small>
-        <small class="fielderr" id="nt-err"></small></div>
-      <div class="split2">
-        <div class="setfield"><label for="nt-staff">Assign to</label>
-          <select id="nt-staff">${opts || '<option value="">no staff yet</option>'}</select></div>
-        <div class="setfield"><label for="nt-order">Order (optional)</label>
-          <input id="nt-order" placeholder="KK-20260805-01"></div>
-      </div>
-      <div class="setfield"><label for="nt-urgent">Urgent?</label>
-        <select id="nt-urgent"><option value="false">Normal</option><option value="true">Urgent — follow up sooner</option></select></div>
+      <div class="setfield"><label>Name</label><input id="nc-name" placeholder="Customer name" autofocus></div>
+      <div class="setfield"><label>WhatsApp / Mobile</label><input id="nc-phone" type="tel" inputmode="numeric" placeholder="98765 43210"></div>
+      <div class="setfield"><label>Address <span class="muted">(optional)</span></label><textarea id="nc-address" rows="2" placeholder="Pickup/delivery address"></textarea></div>
+      <small class="fielderr" id="nc-err"></small>
     </div>
-    <div class="btnrow">
-      <button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn" id="nt-go">Send and track</button>
-    </div>`);
-  $("nt-go").onclick = (e) => busy(e.target, async () => {
-    const title = $("nt-title").value.trim();
-    if (title.length < 2) { $("nt-err").textContent = "Please write the task."; return; }
-    const r = await api("/admin/api/tasks", { method: "POST", body: {
-      title, staff: $("nt-staff").value || null,
-      order_number: $("nt-order").value.trim() || null,
-      urgent: $("nt-urgent").value === "true",
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal();newTaskModal()">Back</button><button class="btn" id="nc-save">Save customer</button></div>`);
+  $("nc-save").onclick = (e) => busy(e.target, async () => {
+    const name = $("nc-name").value.trim(), phone = $("nc-phone").value.trim();
+    if (!name || phone.replace(/\D/g, "").length < 10) { $("nc-err").textContent = "Name and valid mobile number are required."; return; }
+    const r = await api("/admin/api/tasks/customers", { method: "POST", body: {
+      name, phone, address: $("nc-address").value.trim() || null
     }});
-    closeModal(); toast(`${r.code} sent`); loadTasks();
+    TASK_CUSTOMER = r;
+    closeModal();
+    newTaskModal();
+    selectTaskCustomer(r.id, r.name, r.phone);
+    toast(r.existing ? "Existing customer selected" : "Customer added");
   });
 }
 
-/* ============================= expenses ============================= */
+function newTaskModal() {
+  TASK_CUSTOMER = null;
+  const opts = (STAFF || []).filter((s) => s.is_active)
+    .map((s) => `<option value="${esc(s.name)}">${esc(s.name)} · ${esc(s.role || "")}</option>`).join("");
+  openModal(`<h3>New task</h3>
+    <p class="muted" style="margin-top:-6px">Database-linked work item — customer, order, staff and due time stay connected.</p>
+    <div class="frm">
+      <div class="setfield"><label>Task type</label>
+        <select id="nt-kind">
+          <option value="pickup">🧺 Pickup</option><option value="wash">🧼 Washing</option>
+          <option value="iron">👔 Ironing</option><option value="dry">💨 Drying</option>
+          <option value="delivery">🚚 Delivery</option><option value="general">📋 General</option>
+        </select></div>
+      <div class="setfield"><label>Customer <span class="muted">(optional for general tasks)</span></label>
+        <input id="nt-customer" placeholder="Search existing customer by name or WhatsApp…" autocomplete="off">
+        <input id="nt-customer-id" type="hidden">
+        <div id="nt-cust-results" class="acp"></div>
+        <button type="button" class="btn ghost sm" style="margin-top:6px" onclick="newTaskCustomerModal()">＋ Add new customer</button>
+      </div>
+      <div class="setfield"><label>Order <span class="muted">(optional)</span></label>
+        <input id="nt-order" placeholder="KK-20261001-01">
+        <small class="muted">If an order is selected, its customer must match the customer above.</small></div>
+      <div class="split2">
+        <div class="setfield"><label>Assign to</label>
+          <select id="nt-staff"><option value="">No staff yet</option>${opts}</select></div>
+        <div class="setfield"><label>Due date & time <span class="muted">IST</span></label>
+          <input id="nt-due" type="datetime-local"></div>
+      </div>
+      <div class="setfield"><label>Instructions</label>
+        <textarea id="nt-title" rows="3" placeholder="Pick clothes from customer, check count, create bill…"></textarea>
+        <small>The task and its linked customer/order are stored in the database. The same details are sent to the assignee on WhatsApp.</small>
+        <small class="fielderr" id="nt-err"></small></div>
+      <div class="setfield"><label>Priority</label>
+        <select id="nt-urgent"><option value="false">Normal</option><option value="true">Urgent</option></select></div>
+    </div>
+    <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="nt-go">Create & send task</button>
+    </div>`);
+  $("nt-customer").oninput = () => searchTaskCustomers($("nt-customer").value);
+  $("nt-go").onclick = (e) => busy(e.target, async () => {
+    const title = $("nt-title").value.trim();
+    if (title.length < 2) { $("nt-err").textContent = "Instructions/task detail likhiye."; return; }
+    const due = $("nt-due").value ? taskDueISO($("nt-due").value) : null;
+    const r = await api("/admin/api/tasks", { method: "POST", body: {
+      title,
+      kind: $("nt-kind").value,
+      staff: $("nt-staff").value || null,
+      order_number: $("nt-order").value.trim() || null,
+      customer_id: $("nt-customer-id").value || null,
+      due_at: due,
+      urgent: $("nt-urgent").value === "true",
+    }});
+    closeModal(); toast(`${r.code} created and assigned`); loadTasks();
+  });
+}
+
+/* ============================= expenses============================= */
 // Server ki list (built-in + owner ki apni) — staff panel aur AI agent bhi
 // yahi dekhte hain. loadExpenses bharta hai.
 let EXP_CATS = [];
