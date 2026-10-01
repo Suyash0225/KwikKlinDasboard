@@ -203,7 +203,7 @@ async def _run_agentic_customer_turn(
                     "otherwise give the final customer reply."
                 )
 
-            with llm_client.attribution(customer_id=customer.id):
+            with llm_client.attribution(customer_id=customer.id, conversation_id=conversation_id):
                 with llm_client.track("agentic_tool_loop"):
                     out = await llm_client.ask_json(
                     system=_AGENT_SYSTEM,
@@ -272,7 +272,7 @@ _TOOL_ROUTER_SYSTEM = (
 )
 
 async def _select_customer_tools(
-    db: AsyncSession, customer: Customer, text: str
+    db: AsyncSession, customer: Customer, text: str, *, conversation_id=None
 ) -> dict[str, int]:
     """LLM selects read-only tools; backend validates args and executes them."""
     try:
@@ -413,7 +413,8 @@ def _needs_new_customer_onboarding(
 
 
 async def build_ai_reply(
-    db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False
+    db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False,
+    conversation_id=None,
 ) -> str | None:
     """Return a reply for a customer message, or None to use rule-based flow.
 
@@ -491,8 +492,12 @@ async def build_ai_reply(
     usage_orders = await get_active_orders_for_phone(db, customer.phone)
     usage_order_id = str(usage_orders[0].id) if len(usage_orders) == 1 else None
     try:
-        with llm_client.attribution(customer_id=customer.id, order_id=usage_order_id):
-            selected_tools = await _select_customer_tools(db, customer, text)
+        with llm_client.attribution(
+            customer_id=customer.id, order_id=usage_order_id, conversation_id=conversation_id
+        ):
+            selected_tools = await _select_customer_tools(
+                db, customer, text, conversation_id=conversation_id
+            )
             ctx = await _gather_context(db, customer, text, selected_tools)
     except Exception:
         # No facts means the model could invent prices/dates. Deterministic
@@ -502,7 +507,9 @@ async def build_ai_reply(
 
     prompt = _build_prompt(ctx, text, "auto")
     try:
-        with llm_client.attribution(customer_id=customer.id, order_id=usage_order_id):
+        with llm_client.attribution(
+            customer_id=customer.id, order_id=usage_order_id, conversation_id=conversation_id
+        ):
             with llm_client.track("reply"):
                 out = await llm_client.ask_json(
                 system=_COMPOSE_SYSTEM,
