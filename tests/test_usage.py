@@ -59,8 +59,9 @@ async def test_gemini_call_is_recorded(monkeypatch) -> None:
     async with async_session_factory() as s:
         before = len((await s.execute(select(LlmUsage))).scalars().all())
 
-    with llm.track("reply"):
-        await llm._gemini_generate("sys", "hello", "test-gemini", 100, None, None)
+    with llm.attribution(customer_id=None, order_id=None):
+        with llm.track("reply"):
+            await llm._gemini_generate("sys", "hello", "test-gemini", 100, None, None)
 
     async with async_session_factory() as s:
         rows = (
@@ -69,6 +70,39 @@ async def test_gemini_call_is_recorded(monkeypatch) -> None:
     assert len(rows) == 1
     assert rows[0].input_tokens == 321 and rows[0].output_tokens == 47
     assert rows[0].purpose == "reply", "the caller's tag must land on the row"
+    assert rows[0].customer_id is None and rows[0].order_id is None
+
+
+async def test_usage_attribution_is_persisted(monkeypatch) -> None:
+    class FakeResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "candidates": [{"content": {"parts": [{"text": "hi"}]}}],
+                "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 7},
+            }
+
+    async def fake_post(model, payload):
+        return FakeResp()
+
+    monkeypatch.setattr(llm, "_gemini_post", fake_post)
+    with llm.attribution(
+        customer_id="11111111-1111-1111-1111-111111111111",
+        order_id="22222222-2222-2222-2222-222222222222",
+        conversation_id="33333333-3333-3333-3333-333333333333",
+    ):
+        with llm.track("reply"):
+            await llm._gemini_generate("sys", "hello", "test-attributed", 100, None, None)
+
+    async with async_session_factory() as s:
+        row = (
+            await s.execute(select(LlmUsage).where(LlmUsage.model == "test-attributed"))
+        ).scalar_one()
+    assert str(row.customer_id) == "11111111-1111-1111-1111-111111111111"
+    assert str(row.order_id) == "22222222-2222-2222-2222-222222222222"
+    assert str(row.conversation_id) == "33333333-3333-3333-3333-333333333333"
 
 
 async def test_recording_never_breaks_the_reply(monkeypatch) -> None:
