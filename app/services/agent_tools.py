@@ -499,6 +499,20 @@ async def _assign_task(db: AsyncSession, args: str) -> str:
     import re as _re
 
     urgent = bool(_re.search(r"urgent|jaldi|jldi|turant|abhi|maang", what, _re.I))
+    low = what.lower()
+    if _re.search(r"\b(pickup|pick up|utha|collect)\b", low):
+        kind = "pickup"
+    elif _re.search(r"\b(wash|washing|dhulai|dhona)\b", low):
+        kind = "wash"
+    elif _re.search(r"\b(iron|ironing|press|istri)\b", low):
+        kind = "iron"
+    elif _re.search(r"\b(delivery|deliver|pahucha|pahunchana)\b", low):
+        kind = "delivery"
+    elif _re.search(r"\b(pack|packing|fold|pack kar)\b", low):
+        kind = "packing"
+    else:
+        kind = "custom"
+
     order = None
     m = _re.search(r"\bKK-\d{8}-\d{2,}\b", what, _re.I)
     if m:
@@ -506,8 +520,27 @@ async def _assign_task(db: AsyncSession, args: str) -> str:
             await db.execute(select(Order).where(Order.order_number == m.group(0).upper()))
         ).scalar_one_or_none()
 
+    customer = None
+    if order is not None:
+        customer = await db.get(Customer, order.customer_id)
+    else:
+        # Link an owner command to an existing customer when the name/phone is
+        # unambiguous. Never guess between multiple customers.
+        digits = "".join(ch for ch in what if ch.isdigit())
+        clauses = [Customer.name.ilike(f"%{what}%")]
+        if len(digits) >= 8:
+            clauses.append(Customer.phone.ilike(f"%{digits}%"))
+        matches = (
+            await db.execute(
+                select(Customer).where(or_(*clauses), Customer.is_active.is_(True)).limit(2)
+            )
+        ).scalars().all()
+        if len(matches) == 1:
+            customer = matches[0]
+
     task = await task_service.create_task(
-        db, title=what, staff=staff, order=order, urgent=urgent, created_by="owner"
+        db, title=what, staff=staff, order=order, customer=customer,
+        urgent=urgent, created_by="owner", kind=kind
     )
     return (
         f"{staff.name} ko de diya [{task.code}]: {what}"

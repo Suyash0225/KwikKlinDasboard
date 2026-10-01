@@ -37,6 +37,7 @@ QUIET_START, QUIET_END = settings.QUIET_HOURS_START, settings.QUIET_HOURS_END
 # making the WhatsApp/dashboard workflow collaborative.
 SHARED_TEAM_ROLES = {"WASHER", "SUPERVISOR", "DELIVERY"}
 SHARED_JOB_KINDS = {"pickup", "delivery"}
+TASK_KINDS = {"general", "pickup", "wash", "dry", "iron", "delivery", "packing", "custom"}
 
 def _task_team_matches_staff(task: Task, staff: Staff) -> bool:
     role = staff.role.name
@@ -157,6 +158,33 @@ async def create_task(
     due_at: datetime | None = None,
 ) -> Task:
     """Record the task and tell the assignee. Returns the saved Task."""
+    kind = (kind or "general").strip().lower()
+    if kind not in TASK_KINDS:
+        raise ValueError(f"Unsupported task kind: {kind}")
+
+    # Idempotency at the application layer. The partial unique indexes added
+    # in the migration are the final concurrency guard; this fast path also
+    # avoids duplicate WhatsApp notifications in normal sequential calls.
+    if order is not None or customer is not None:
+        from sqlalchemy import and_
+        identity = []
+        if order is not None:
+            identity.extend([Task.order_id == order.id, Task.kind == kind])
+        else:
+            identity.extend([
+                Task.customer_id == customer.id,
+                Task.order_id.is_(None),
+                Task.kind == kind,
+            ])
+        existing = (
+            await db.execute(
+                select(Task).where(Task.status == TASK_OPEN, *identity).limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            log.info("task_duplicate_prevented", code=existing.code, kind=kind)
+            return existing
+
     task = Task(
         code=await _next_code(db),
         title=title.strip(),
@@ -264,6 +292,8 @@ async def _send_to_assignee(
         elif task.kind == "iron": head = "👔 IRONING KAAM"
         elif task.kind == "pickup": head = "🛵 PICKUP KAAM"
         elif task.kind == "delivery": head = "🚚 DELIVERY KAAM"
+        elif task.kind == "packing": head = "📦 PACKING KAAM"
+        elif task.kind == "custom": head = "🛠️ CUSTOM KAAM"
         complete_line = "Neeche diye gaye status menu se current status select karein."
         update_line = "Please status menu se current task status update karein."
     else:
@@ -273,6 +303,8 @@ async def _send_to_assignee(
         elif task.kind == "iron": head = "👔 IRONING TASK"
         elif task.kind == "pickup": head = "🧺 PICKUP TASK"
         elif task.kind == "delivery": head = "🚚 DELIVERY TASK"
+        elif task.kind == "packing": head = "📦 PACKING TASK"
+        elif task.kind == "custom": head = "🛠️ CUSTOM TASK"
         complete_line = "Select the current task status from the menu below."
         update_line = "Please use the status menu to keep the task updated."
     if first:
