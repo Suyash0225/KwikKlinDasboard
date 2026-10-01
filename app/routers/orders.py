@@ -351,6 +351,15 @@ async def require_vendor_key(
         log.warning("vendor_api_throttled", ip=ip)
         raise HTTPException(status_code=429, detail="too many failed attempts — wait 10 minutes")
 
+    # Browser login must be reachable before the vendor session cookie exists.
+    if request.url.path == "/control/api/session" and request.method == "POST":
+        return
+
+    # Google OAuth redirects cannot carry X-API-Key. The callback validates
+    # its short-lived HttpOnly state cookie before touching tenant data.
+    if request.url.path == "/control/api/google-business/callback":
+        return
+
     # 1. browser panel ka cookie session (key browser mein kahin nahi hoti)
     if not x_api_key and kk_vendor:
         got = await verify_vendor_token(kk_vendor)
