@@ -30,5 +30,5 @@ async def access_token(db) -> str:
             },
         )
     if r.status_code != 200:
-        raise AnalyticsError("GA4 Google authorization expired or lacks analytics.readonly")
+        raise GA4ReportingError("GA4 Google authorization expired or lacks analytics.readonly")
     return r.json()["access_token"]
