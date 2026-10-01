@@ -897,23 +897,27 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
                     func.count().label("calls"),
                     func.coalesce(func.sum(LlmUsage.input_tokens), 0),
                     func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+                    func.count().filter(LlmUsage.ok.is_(False)).label("failed"),
                 )
                 .where(LlmUsage.at >= since)
                 .group_by(LlmUsage.model)
             )
         ).all()
         by_model, calls, tin, tout, cost = [], 0, 0, 0, 0.0
-        for model, n, i, o in rows:
+        for model, n, i, o, failed in rows:
             c = _cost(model, i, o)
             by_model.append({
                 "model": model, "calls": n, "input_tokens": int(i),
                 "output_tokens": int(o), "cost_usd": round(c, 4),
+                "failed": int(failed or 0),
                 "priced": bool((rates.get(model) or {}).get("in") or (rates.get(model) or {}).get("out")),
             })
             calls += n; tin += int(i); tout += int(o); cost += c
         by_model.sort(key=lambda m: (-m["cost_usd"], -m["calls"]))
         return {
             "calls": calls, "input_tokens": tin, "output_tokens": tout,
+            "failed_calls": sum(int(m.get("failed", 0)) for m in by_model),
+            "successful_calls": max(calls - sum(int(m.get("failed", 0)) for m in by_model), 0),
             "cost_usd": round(cost, 4), "by_model": by_model,
         }
 
@@ -961,6 +965,72 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
         for d, n, i, o in series_rows
     ]
 
+    # Attribution: customer-facing calls are linked to the customer and,
+    # when exactly one active order existed at call time, that order.
+    # Cost is always calculated per model before grouping, so mixed-model rows
+    # cannot accidentally inherit a zero/free rate.
+    from app.models import Customer as _Customer, Order as _Order
+
+    attr_rows = (
+        await db.execute(
+            select(
+                LlmUsage.order_id,
+                _Order.order_number,
+                _Order.customer_id,
+                _Customer.name,
+                LlmUsage.model,
+                func.count(),
+                func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+                func.count().filter(LlmUsage.ok.is_(False)),
+            )
+            .outerjoin(_Order, _Order.id == LlmUsage.order_id)
+            .outerjoin(_Customer, _Customer.id == LlmUsage.customer_id)
+            .where(LlmUsage.at >= month_start)
+            .group_by(LlmUsage.order_id, _Order.order_number, _Order.customer_id,
+                      _Customer.name, LlmUsage.model)
+        )
+    ).all()
+
+    order_acc: dict[str, dict] = {}
+    customer_acc: dict[str, dict] = {}
+    unattributed_calls = unattributed_tokens = 0
+    unattributed_cost = 0.0
+    for oid, order_number, customer_id, customer_name, model, n, i, o, failed in attr_rows:
+        i, o, n, failed = int(i), int(o), int(n), int(failed or 0)
+        cost = _cost(model, i, o)
+        if oid and order_number:
+            key = str(oid)
+            e = order_acc.setdefault(key, {
+                "order_id": key, "order_number": order_number,
+                "customer_name": customer_name or "Unknown customer",
+                "calls": 0, "failed_calls": 0, "tokens": 0, "cost_usd": 0.0,
+            })
+            e["calls"] += n; e["failed_calls"] += failed
+            e["tokens"] += i + o; e["cost_usd"] += cost
+        elif customer_id:
+            key = str(customer_id)
+            e = customer_acc.setdefault(key, {
+                "customer_id": key, "customer_name": customer_name or "Unknown customer",
+                "calls": 0, "failed_calls": 0, "tokens": 0, "cost_usd": 0.0,
+            })
+            e["calls"] += n; e["failed_calls"] += failed
+            e["tokens"] += i + o; e["cost_usd"] += cost
+        else:
+            unattributed_calls += n
+            unattributed_tokens += i + o
+            unattributed_cost += cost
+
+    by_order = sorted(order_acc.values(), key=lambda x: (-x["cost_usd"], -x["calls"]))
+    by_customer = sorted(customer_acc.values(), key=lambda x: (-x["cost_usd"], -x["calls"]))
+    for e in by_order + by_customer:
+        e["cost_usd"] = round(e["cost_usd"], 4)
+
+    priced_models = any(
+        bool((rates.get(model) or {}).get("in") or (rates.get(model) or {}).get("out"))
+        for model in {m["model"] for m in month["by_model"]}
+    )
+
     # simple run-rate projection for the rest of the month
     day_of_month = now_ist.day
     projected = round(month["cost_usd"] / day_of_month * 30, 4) if day_of_month else 0.0
@@ -979,7 +1049,16 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
         "monthly_budget_usd": budget,
         "projected_month_usd": projected,
         # honest flag: free-tier models price at 0, so a 0 total is not a bug
-        "all_free": month["cost_usd"] == 0,
+        "all_free": not priced_models,
+        "attribution": {
+            "by_order": by_order[:50],
+            "by_customer": by_customer[:50],
+            "unattributed": {
+                "calls": unattributed_calls,
+                "tokens": unattributed_tokens,
+                "cost_usd": round(unattributed_cost, 4),
+            },
+        },
     }
 
 
