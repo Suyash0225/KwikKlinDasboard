@@ -1813,16 +1813,14 @@ async def open_vendor_session(
 
     if body is not None:
         configured_id = (settings.CONTROL_LOGIN_ID or "").strip()
-        configured_hash = settings.CONTROL_LOGIN_PASSWORD_HASH or ""
+        configured_password = settings.CONTROL_LOGIN_PASSWORD or ""
         login_id = body.login.strip()
-        from app.services import auth as auth_service
 
         valid_id = bool(configured_id) and hmac.compare_digest(
             login_id.casefold(), configured_id.casefold()
         )
-        valid_password = (
-            bool(configured_hash)
-            and auth_service.verify_password(body.password, configured_hash)
+        valid_password = bool(configured_password) and hmac.compare_digest(
+            body.password, configured_password
         )
         if valid_id and valid_password:
             level = "danger"
