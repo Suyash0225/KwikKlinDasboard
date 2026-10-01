@@ -33,3 +33,13 @@ def test_task_due_migration_links_customer_and_due_at():
     assert 'add_column("tasks", sa.Column("customer_id"' in migration
     assert 'create_foreign_key("fk_tasks_customer_id"' in migration
     assert 'add_column("tasks", sa.Column("due_at"' in migration
+
+
+def test_selected_customer_loads_running_orders():
+    router = (ROOT / "app/routers/agent_admin.py").read_text()
+    js = (ROOT / "app/static/app.js").read_text()
+    assert '"/tasks/customers/{customer_id}/orders"' in router
+    assert "_O.customer_id == customer.id" in router
+    assert '"/admin/api/tasks/customers/" + encodeURIComponent(customerId) + "/orders"' in js
+    assert "nt-order-select" in js
+    assert "loadTaskCustomerOrders" in js
