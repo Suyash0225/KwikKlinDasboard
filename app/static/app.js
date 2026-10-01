@@ -561,15 +561,66 @@ function sheetGo(sec) { closeSheet(); go(sec); }
 let DASH = null, SUMMARY = null, dashFilter = { status: "", pay: "", q: "", page: 1 };
 const PAGE = 25;
 
+async function connectGA4() {
+  try {
+    const d = await api("/admin/api/ga4/connect-url", { method: "POST" });
+    if (!d.url) throw new Error("Google connection URL missing");
+    window.location.href = d.url;
+  } catch (e) {
+    alert("GA4 connect failed: " + e.message);
+  }
+}
+
+async function disconnectGA4() {
+  if (!confirm("Disconnect Google Analytics 4 from this dashboard?")) return;
+  try {
+    await api("/admin/api/ga4/disconnect", { method: "POST" });
+    await loadGrowthAnalytics();
+  } catch (e) {
+    alert("GA4 disconnect failed: " + e.message);
+  }
+}
+
+async function selectGA4Property() {
+  const el = $("ga4-property-picker");
+  if (!el || !el.value) return;
+  try {
+    await api("/admin/api/ga4/property", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ property_id: el.value }),
+    });
+    await loadGrowthAnalytics();
+  } catch (e) {
+    alert("GA4 property selection failed: " + e.message);
+  }
+}
+
 async function loadGrowthAnalytics() {
   const box = $("growth-analytics-body");
   if (!box) return;
   try {
-    const d = await api("/admin/api/growth-analytics");
+    const [d, ga4] = await Promise.all([
+      api("/admin/api/growth-analytics"),
+      api("/admin/api/ga4/status"),
+    ]);
     const w = d.website || {}, g = d.gmb || {}, m = d.campaign || {};
-    const wStatus = w.configured
-      ? `🟢 <b>${w.active_users || 0}</b> active now · ${w.views || 0} views · ${w.events || 0} events`
-      : `⚪ GA4 not connected${w.error ? ` — ${esc(w.error)}` : ""}`;
+    let wStatus;
+    if (w.configured) {
+      wStatus = `🟢 <b>${w.active_users || 0}</b> active now · ${w.views || 0} views · ${w.events || 0} events
+        <div style="margin-top:6px"><small class="muted">GA4: ${esc(ga4.property_name || ga4.property_id)}</small>
+        <button class="btn sm ghost" style="margin-left:6px" onclick="connectGA4()">Reconnect</button>
+        <button class="btn sm ghost" style="margin-left:4px" onclick="disconnectGA4()">Disconnect</button></div>`;
+    } else {
+      const choices = ga4.choices || [];
+      const picker = choices.length > 1
+        ? `<select id="ga4-property-picker" class="input sm" style="margin-top:8px;max-width:100%">
+            ${choices.map(p => `<option value="${esc(p.property_id)}">${esc(p.property_name)}</option>`).join("")}
+          </select><button class="btn sm" style="margin-left:6px" onclick="selectGA4Property()">Use property</button>`
+        : "";
+      wStatus = `⚪ GA4 not connected${w.error ? ` — ${esc(w.error)}` : ""}
+        <div style="margin-top:8px"><button class="btn sm" onclick="connectGA4()">Connect GA4</button>${picker}</div>`;
+    }
     const gm = g.metrics || {};
     const gStatus = g.configured
       ? `🟢 Website clicks <b>${gm.WEBSITE_CLICKS || 0}</b> · Calls <b>${gm.CALL_CLICKS || 0}</b> · Directions <b>${gm.BUSINESS_DIRECTION_REQUESTS || 0}</b>`
