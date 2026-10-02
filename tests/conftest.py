@@ -54,7 +54,10 @@ async def purge_phones(*phones: str) -> None:
             f"DELETE FROM campaign_recipients WHERE customer_id IN {sub}",
             f"DELETE FROM open_questions WHERE customer_id IN {sub}",
             # pickup/delivery tasks point at orders — they must go first
-            # Tasks can point directly at the customer OR through an order.\n            # Both must be removed before deleting the customer.\n            f"DELETE FROM tasks WHERE customer_id IN {sub}",\n            f"DELETE FROM tasks WHERE order_id IN {orders_sub}",
+            # Tasks can point directly at the customer OR through an order.
+            # Both must be removed before deleting the customer.
+            f"DELETE FROM tasks WHERE customer_id IN {sub}",
+            f"DELETE FROM tasks WHERE order_id IN {orders_sub}",
             f"DELETE FROM escalations WHERE customer_id IN {sub}",
             f"DELETE FROM conversations WHERE customer_id IN {sub}",
             f"DELETE FROM orders WHERE customer_id IN {sub}",
