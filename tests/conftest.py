@@ -210,7 +210,7 @@ def _no_live_llm(monkeypatch):
     """
     # Keep the general suite deterministic even when the local .env selects
     # OpenRouter. Individual provider tests can override these values.
-    monkeypatch.setattr(llm_module, "PROVIDER", "anthropic")
+    # Production runs WAHA, but the regression suite exercises the\n    # provider-neutral Meta payload path and never talks to a real transport.\n    monkeypatch.setattr(settings, "WHATSAPP_PROVIDER", "meta")\n\n    monkeypatch.setattr(llm_module, "PROVIDER", "anthropic")
     monkeypatch.setattr(llm_module, "MODEL_CHEAP", "claude-haiku-4-5")
     monkeypatch.setattr(llm_module, "MODEL_SMART", "claude-sonnet-5")
     llm_module._circuit_failures.clear()
