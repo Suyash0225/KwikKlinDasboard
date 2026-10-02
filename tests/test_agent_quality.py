@@ -124,7 +124,8 @@ async def test_staff_relay_cannot_create_task() -> None:
 async def test_customer_instruction_never_becomes_admin_task(monkeypatch) -> None:
     """'customer ko ...' must route to the customer, never to the sender/admin."""
     from app.models import Customer
-    # Remove leftovers from an interrupted run before inserting the fixed customer.\n    await purge_phones("+919999900092")
+    # Remove leftovers from an interrupted run before inserting the fixed customer.
+    await purge_phones("+919999900092")
 
     sent: list[dict] = []
 
