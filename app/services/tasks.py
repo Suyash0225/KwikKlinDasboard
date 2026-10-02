@@ -378,7 +378,7 @@ _JOB = {
         "done_q": "Delivery ho gayi?",
         "yes_title": "✅ Delivered",
         "customer_line": "Your clothes are on the way",
-        "done_reply": "👍 Delivery marked as done. Customer updated.",
+        "done_reply": "🙏 Shukriya! Delivery marked as done. Customer updated.",
     },
 }
 
