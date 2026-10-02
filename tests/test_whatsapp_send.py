@@ -10,7 +10,9 @@ import pytest
 
 import app.services.whatsapp as whatsapp_module
 from app.database import async_session_factory
+from sqlalchemy import select
 from app.models import Customer, Conversation
+from app.services import waha
 from app.services.whatsapp import Button, ListRow, send_message
 from tests.conftest import TEST_CUSTOMER_PHONE
 
@@ -42,7 +44,7 @@ async def _capture(monkeypatch) -> list[dict]:
         seen.append({"path": path, "payload": payload})
         return {"id": "wamid.TESTLIST"}
 
-    monkeypatch.setattr(whatsapp_module.waha, "_post", _post)
+    monkeypatch.setattr(waha, "_post", _post)
     return seen
 
 
@@ -138,7 +140,7 @@ async def test_the_inbox_records_what_the_list_offered(open_window, monkeypatch)
     async with async_session_factory() as s:
         conv = (
             await s.execute(
-                __import__("sqlalchemy").select(Conversation).where(
+                select(Conversation).where(
                     Conversation.wa_message_id == "wamid.TESTLIST"
                 )
             )
