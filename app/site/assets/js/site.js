@@ -140,7 +140,7 @@ function enhanceServerReviewCards() {
     if (!textEl) return;
 
     card.dataset.reviewEnhanced = "true";
-    card.dataset.rating = card.querySelector(".stars")?.getAttribute("aria-label")?.match(/\\d+(?:\\.\\d+)?/)?.[0] || "";
+    card.dataset.rating = card.querySelector(".stars")?.getAttribute("aria-label")?.match(/\d+(?:\.\d+)?/)?.[0] || "";
     card.dataset.reviewName = card.querySelector(".who b, .who .author")?.textContent?.trim() || "Google reviewer";
     card.dataset.fullText = textEl.textContent?.trim() || "";
     const replyText = card.querySelector(".reply")?.textContent?.replace(/^Response from the owner\s*/i, "").trim() || "";
