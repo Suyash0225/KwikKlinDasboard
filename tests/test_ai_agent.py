@@ -109,15 +109,21 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
     async def fake_ask_json(**kw):
         nonlocal calls
         calls += 1
-        if calls == 1:
-            intake = {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False}
+
+        # build_ai_reply makes one cheap read-only tool-router call before
+        # the smart compose call. Keep that separate from compose responses.
+        if calls in {1, 3}:
+            return {"tool_calls": []}
+
+        if calls == 2:
             return {
                 "reply": "Ji, apna naam bata dijiye.",
                 "intent": "NEW_ORDER", "language": "hi",
                 "action": "CREATE_LEAD", "action_reason": "new enquiry",
                 "escalate": False, "escalation_reason": "", "admin_note": "",
-                "intake": intake,
+                "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
             }
+
         return {
             "reply": "Ji, main aapki request note kar leta hoon. — Kwik Klin",
             "intent": "NEW_ORDER", "language": "hi",
@@ -140,6 +146,7 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
         reply = await build_ai_reply(db, cust, "mujhe laundry chahiye")
 
     assert "name" in reply.lower() or "naam" in reply.lower()
+
     async with async_session_factory() as db:
         cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
         reply = await build_ai_reply(db, cust, "Rahul Sharma, 12 Lanka, Varanasi")
