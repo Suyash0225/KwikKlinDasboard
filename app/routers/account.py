@@ -696,7 +696,7 @@ async def change_password(
         db, p.user, ip=request.client.host if request.client else "",
         user_agent=request.headers.get("user-agent", ""),
     )
-    _set_cookie(response, token)
+    _set_cookie(response, token, secure=request.url.scheme == "https")
     log.info("password_changed", user=p.user.email)
     return {"ok": True}
 
@@ -883,7 +883,7 @@ async def _signup_google_inner(body, request, response, db) -> dict:
         db, user, ip=request.client.host if request.client else "",
         user_agent=request.headers.get("user-agent", ""),
     )
-    _set_cookie(response, token)
+    _set_cookie(response, token, secure=request.url.scheme == "https")
     response.delete_cookie(google_auth.PENDING_COOKIE, path="/")
     is_home = await auth.is_home_user(db, user)
     return {
