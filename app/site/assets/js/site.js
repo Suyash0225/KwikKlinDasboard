@@ -79,11 +79,74 @@ fetch("/api/plans").then((r) => r.ok ? r.json() : null).then((d) => {
 
 /* ---------- live Google reviews (/api/public/reviews, cached server-side) ---------- */
 const starStr = (n) => "★★★★★".slice(0, Math.round(n)) + "☆☆☆☆☆".slice(0, 5 - Math.round(n));
+
 const moreBtn = document.getElementById("rev-more");
 if (moreBtn) moreBtn.onclick = () => {
   document.querySelectorAll(".review[data-more]").forEach((r) => (r.hidden = false));
   moreBtn.parentElement.remove();
 };
+
+/* ---------- compact Google review cards + accessible full-review modal ---------- */
+const reviewModal = document.getElementById("review-modal");
+const reviewDialog = reviewModal?.querySelector(".review-modal__dialog");
+const reviewModalStars = document.getElementById("review-modal-stars");
+const reviewModalTitle = document.getElementById("review-modal-title");
+const reviewModalText = document.getElementById("review-modal-text");
+const reviewModalReply = document.getElementById("review-modal-reply");
+const reviewModalReplyText = reviewModalReply?.querySelector("p");
+let reviewModalReturnFocus = null;
+
+function openReviewModal(card, trigger) {
+  if (!reviewModal || !reviewDialog) return;
+  reviewModalReturnFocus = trigger || null;
+
+  const rating = Number(card.dataset.rating || 0);
+  const name = card.dataset.reviewName || card.querySelector(".who b, .who .author")?.textContent?.trim() || "Google reviewer";
+  const fullText = card.dataset.fullText || card.querySelector(".review-text, p")?.textContent?.trim() || "";
+  const fullReply = card.dataset.fullReply || card.querySelector(".reply p")?.textContent?.trim() || "";
+
+  reviewModalStars.textContent = starStr(rating);
+  reviewModalStars.setAttribute("aria-label", rating + " out of 5 stars");
+  reviewModalTitle.textContent = name;
+  reviewModalText.textContent = fullText;
+
+  if (fullReply) {
+    reviewModalReply.hidden = false;
+    reviewModalReplyText.textContent = fullReply;
+  } else {
+    reviewModalReply.hidden = true;
+    reviewModalReplyText.textContent = "";
+  }
+
+  reviewModal.hidden = false;
+  reviewModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("review-modal-open");
+  requestAnimationFrame(() => reviewDialog.focus());
+}
+
+function closeReviewModal() {
+  if (!reviewModal || reviewModal.hidden) return;
+  reviewModal.hidden = true;
+  reviewModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("review-modal-open");
+  if (reviewModalReturnFocus?.isConnected) reviewModalReturnFocus.focus();
+  reviewModalReturnFocus = null;
+}
+
+document.addEventListener("click", (e) => {
+  const trigger = e.target.closest(".review-read-more");
+  if (trigger) {
+    e.preventDefault();
+    const card = trigger.closest(".review");
+    if (card) openReviewModal(card, trigger);
+    return;
+  }
+  if (e.target.closest("[data-review-close]")) closeReviewModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && reviewModal && !reviewModal.hidden) closeReviewModal();
+});
+
 // Business Profile reviews already rendered by the server -> Places fallback not needed
 if (!document.querySelector("[data-gbp]")) fetch("/api/public/reviews").then((r) => r.ok ? r.json() : null).then((d) => {
   if (!d || !d.configured) return;
@@ -98,27 +161,57 @@ if (!document.querySelector("[data-gbp]")) fetch("/api/public/reviews").then((r)
   if (!good.length) return;
   const gl = document.querySelector(".glogo");
   document.getElementById("review-list").replaceChildren(...good.map((r) => {
-    const card = document.createElement("article"); card.className = "review";
-    const s = document.createElement("div"); s.className = "stars"; s.textContent = starStr(r.rating);
+    const card = document.createElement("article");
+    card.className = "review";
+    card.dataset.rating = r.rating;
+    card.dataset.reviewName = r.author || "Google reviewer";
+    card.dataset.fullText = r.text || "";
+
+    const s = document.createElement("div");
+    s.className = "stars";
+    s.textContent = starStr(r.rating);
     s.setAttribute("aria-label", r.rating + " out of 5 stars");
+
     const p = document.createElement("p");
-    p.textContent = r.text.length > 280 ? r.text.slice(0, 277).trimEnd() + "…" : r.text;
-    const who = document.createElement("div"); who.className = "who";
+    p.className = "review-text";
+    p.textContent = r.text || "";
+
+    const readMore = document.createElement("button");
+    readMore.type = "button";
+    readMore.className = "review-read-more";
+    readMore.textContent = "Read more →";
+
+    const who = document.createElement("div");
+    who.className = "who";
     let av;
     if (r.author_photo) {
-      av = document.createElement("img"); av.src = r.author_photo; av.alt = ""; av.loading = "lazy";
-      av.referrerPolicy = "no-referrer"; av.width = 40; av.height = 40;
+      av = document.createElement("img");
+      av.src = r.author_photo;
+      av.alt = "";
+      av.loading = "lazy";
+      av.referrerPolicy = "no-referrer";
+      av.width = 40;
+      av.height = 40;
     } else {
-      av = document.createElement("span"); av.className = "av"; av.textContent = (r.author || "G")[0].toUpperCase();
+      av = document.createElement("span");
+      av.className = "av";
+      av.textContent = (r.author || "G")[0].toUpperCase();
     }
+
     const meta = document.createElement("div");
     const name = document.createElement(r.author_url ? "a" : "b");
     name.textContent = r.author;
-    if (r.author_url) { name.href = r.author_url; name.target = "_blank"; name.rel = "noopener"; name.className = "author"; }
-    const when = document.createElement("small"); when.textContent = r.when + " · Google";
+    if (r.author_url) {
+      name.href = r.author_url;
+      name.target = "_blank";
+      name.rel = "noopener";
+      name.className = "author";
+    }
+    const when = document.createElement("small");
+    when.textContent = (r.when ? r.when + " · " : "") + "Google Review";
     meta.append(name, when);
     who.append(av, meta, gl.cloneNode(true));
-    card.append(s, p, who);
+    card.append(s, p, readMore, who);
     return card;
   }));
 }).catch(() => {});
