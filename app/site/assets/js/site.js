@@ -133,6 +133,32 @@ function closeReviewModal() {
   reviewModalReturnFocus = null;
 }
 
+function enhanceServerReviewCards() {
+  document.querySelectorAll(".review").forEach((card) => {
+    if (card.dataset.reviewEnhanced === "true") return;
+    const textEl = card.querySelector(".review-text, p");
+    if (!textEl) return;
+
+    card.dataset.reviewEnhanced = "true";
+    card.dataset.rating = card.querySelector(".stars")?.getAttribute("aria-label")?.match(/\\d+(?:\\.\\d+)?/)?.[0] || "";
+    card.dataset.reviewName = card.querySelector(".who b, .who .author")?.textContent?.trim() || "Google reviewer";
+    card.dataset.fullText = textEl.textContent?.trim() || "";
+    const replyText = card.querySelector(".reply")?.textContent?.replace(/^Response from the owner\\s*/i, "").trim() || "";
+    card.dataset.fullReply = replyText;
+
+    const needsMore = card.dataset.fullText.length > 180 || replyText.length > 100;
+    if (needsMore && !card.querySelector(".review-read-more")) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "review-read-more";
+      button.textContent = "Read more →";
+      textEl.insertAdjacentElement("afterend", button);
+    }
+  });
+}
+
+enhanceServerReviewCards();
+
 document.addEventListener("click", (e) => {
   const trigger = e.target.closest(".review-read-more");
   if (trigger) {
