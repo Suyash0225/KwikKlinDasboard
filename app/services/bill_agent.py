@@ -353,8 +353,10 @@ async def _handle_task_button(
     # ownership/audit, but any active member of the matching operational team
     # may act on the shared queue.
     staff = (
-        await db.execute(select(Staff).where(Staff.phone == sender_phone))
-    ).scalar_one_or_none()
+        await db.execute(
+            select(Staff).where(Staff.phone == sender_phone).order_by(Staff.created_at.asc())
+        )
+    ).scalars().first()
     if staff is not None:
         if not await task_service.staff_can_access_task(db, task, staff):
             return "Ye task aapki team ke shared queue mein nahi hai."
