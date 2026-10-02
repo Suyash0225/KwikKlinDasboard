@@ -43,7 +43,8 @@ def _by_key(body: dict) -> dict:
     return {c["key"]: c for c in body["checks"]}
 
 
-async def test_waha_health_checks_come_back(client, vendor) -> None:
+async def test_waha_health_checks_come_back(client, vendor, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "WHATSAPP_PROVIDER", "waha")
     r = await client.get(URL, headers=vendor)
 
     assert r.status_code == 200
