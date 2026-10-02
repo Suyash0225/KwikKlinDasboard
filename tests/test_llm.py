@@ -15,6 +15,8 @@ def _force_anthropic(monkeypatch):
     """These first tests exercise the Claude path regardless of .env;
     Gemini-path tests re-patch PROVIDER themselves."""
     monkeypatch.setattr(llm, "PROVIDER", "anthropic")
+    monkeypatch.setattr(llm, "MODEL_CHEAP", "claude-haiku-4-5")
+    monkeypatch.setattr(llm, "MODEL_SMART", "claude-sonnet-5")
 
 
 def _fake_response(text: str):
@@ -49,7 +51,7 @@ async def test_ask_returns_text(monkeypatch) -> None:
         return _fake_response("namaste ji")
 
     _patch_claude(monkeypatch, fake_create)
-    assert await ask(system="s", user_text="hi") == "namaste ji"
+    assert await ask(system="s", user_text="hi", model=llm.MODEL_CHEAP) == "namaste ji"
 
 
 async def test_ask_json_parses(monkeypatch) -> None:
