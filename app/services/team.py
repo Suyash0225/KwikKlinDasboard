@@ -73,16 +73,18 @@ async def admin_phones(db: AsyncSession) -> list[str]:
     This prevents alerts being sent both to the public/shop contact number
     and the owner's admin WhatsApp number.
     """
-    rows = await admins(db)
+    # The configured tenant owner is the authority, independent of whether
+    # his Staff row was accidentally demoted or duplicated. Other active
+    # ADMIN rows are additional owner-side recipients.
     out: list[str] = []
-    for st in rows:
+    fallback = _norm(manager_phone())
+    if fallback:
+        out.append(fallback)
+    for st in await admins(db):
         p = _norm(st.phone)
         if p and p not in out:
             out.append(p)
-    if out:
-        return out
-    fallback = _norm(manager_phone())
-    return [fallback] if fallback else []
+    return out
 
 
 async def is_admin_phone(db: AsyncSession, phone: str) -> bool:
@@ -92,6 +94,11 @@ async def is_admin_phone(db: AsyncSession, phone: str) -> bool:
 
 async def alert_recipients(db: AsyncSession) -> list[tuple[str, str]]:
     """The single primary admin for customer/AI escalation alerts."""
+    # Escalations must always reach the configured owner first. A Staff ADMIN
+    # row is an additional recipient, not a replacement for the owner.
+    phone = _norm(manager_phone())
+    if phone:
+        return [(phone, "Admin")]
     phone = await primary_admin_phone(db)
     return [(phone, "Admin")] if phone else []
 
