@@ -374,8 +374,8 @@
     <div class="rev-head reveal">
       <div>
         <span class="eyebrow">Rated on Google</span>
-        <h2 id="rev-title">Trusted by 1,000+ families in Varanasi</h2>
-        <p class="lead">Our rating and reviews, shown live from Google.</p>
+        <h2 id="rev-title">Customer Reviews</h2>
+        <p class="lead">Trusted by customers across Varanasi</p>
       </div>
       {{GBP_SUMMARY}}
       <div class="gcard" id="gcard" hidden>
@@ -413,6 +413,28 @@
     <!-- All reviews from the shop's own Google Business Profile (server-rendered, synced every 6h) -->
     {{GBP_REVIEWS}}
     <div class="reviews" id="review-list" aria-live="polite"></div>
+
+    <div class="review-modal" id="review-modal" hidden aria-hidden="true">
+      <div class="review-modal__backdrop" data-review-close></div>
+      <div class="review-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="review-modal-title" tabindex="-1">
+        <button class="review-modal__close" type="button" data-review-close aria-label="Close review">
+          <span aria-hidden="true">×</span>
+        </button>
+        <div class="review-modal__source">
+          <span class="review-modal__google-dot" aria-hidden="true">G</span>
+          <span>Google Review</span>
+        </div>
+        <div class="review-modal__stars" id="review-modal-stars" aria-label=""></div>
+        <h3 id="review-modal-title"></h3>
+        <div class="review-modal__body">
+          <p id="review-modal-text"></p>
+          <div class="review-modal__reply" id="review-modal-reply" hidden>
+            <b>Response from the owner</b>
+            <p></p>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
