@@ -396,7 +396,8 @@ async def _login_inner(body, request, response, db, email, ip) -> dict:
     from app.services import audit
 
     await audit.record(
-        actor_role="user", actor=user.email, action="login",        args={"ip": ip, "role": user.role,
+        actor_role="user", actor=user.email, action="login",
+        args={"ip": ip, "role": user.role,
               "tenant": tenant.slug if tenant else None},
     )
     return {
@@ -605,7 +606,7 @@ async def _invite_accept_inner(body, request, response, db) -> dict:
     token = await auth.start_session(
         db, user, ip=ip, user_agent=request.headers.get("user-agent", "")
     )
-    _set_cookie(response, token)
+    _set_cookie(response, token, secure=request.url.scheme == "https")
     is_home = await auth.is_home_user(db, user)
     return {
         "ok": True,
@@ -795,8 +796,9 @@ async def _google_callback_inner(request, code, state, error, db) -> Response:
         )
         is_home = await auth.is_home_user(db, user)
         resp = RedirectResponse(url=_dashboard_url(await db.get(Tenant, user.tenant_id), is_home), status_code=303)
-        _set_cookie(resp, token)
-        resp.delete_cookie(google_auth.STATE_COOKIE, path="/")        log.info("google_login_ok", email=user.email, is_home=is_home)
+        _set_cookie(resp, token, secure=request.url.scheme == "https")
+        resp.delete_cookie(google_auth.STATE_COOKIE, path="/")
+        log.info("google_login_ok", email=user.email, is_home=is_home)
         return resp
 
     # naya banda: pehchaan sambhal ke rakho, baaki detail form se lo
@@ -995,7 +997,8 @@ async def billing_summary(
     if t is None:
         raise HTTPException(status_code=400, detail="Tenant not found")
     plan = plans.get(t.plan)
-    limits = plans.effective_limits(t)    month_start = datetime.now(timezone.utc).replace(
+    limits = plans.effective_limits(t)
+    month_start = datetime.now(timezone.utc).replace(
         day=1, hour=0, minute=0, second=0, microsecond=0
     )
     orders_used = (
