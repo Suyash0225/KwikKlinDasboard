@@ -2125,4 +2125,4 @@ async def whatsapp_health(db: AsyncSession = Depends(get_db)) -> dict:
             ))).scalar_one_or_none()
     checks.append({"key": "inbound", "label": "Last inbound message", "ok": bool(last),
                    "detail": last.isoformat() if last else "No inbound message recorded"})
-    return {"provider": "waha", "checks": checks}
+    return {"provider": settings.WHATSAPP_PROVIDER or "unset", "checks": checks}
