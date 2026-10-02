@@ -30,7 +30,7 @@ from app.models import (
     Rate,
 )
 from app.routers.orders import require_admin_owner, require_feature
-from app.services import app_settings, audit
+from app.services import app_settings, audit, wa_templates
 from app.services.marketing import (
     campaign_stats,
     compute_segments,
