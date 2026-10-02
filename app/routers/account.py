@@ -396,7 +396,8 @@ async def _login_inner(body, request, response, db, email, ip) -> dict:
     from app.services import audit
 
     await audit.record(
-        actor_role="user", actor=user.email, action="login",        args={"ip": ip, "role": user.role,
+        actor_role="user", actor=user.email, action="login",
+        args={"ip": ip, "role": user.role,
               "tenant": tenant.slug if tenant else None},
     )
     return {
@@ -996,7 +997,8 @@ async def billing_summary(
     if t is None:
         raise HTTPException(status_code=400, detail="Tenant not found")
     plan = plans.get(t.plan)
-    limits = plans.effective_limits(t)    month_start = datetime.now(timezone.utc).replace(
+    limits = plans.effective_limits(t)
+    month_start = datetime.now(timezone.utc).replace(
         day=1, hour=0, minute=0, second=0, microsecond=0
     )
     orders_used = (
