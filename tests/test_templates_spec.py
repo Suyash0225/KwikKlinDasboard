@@ -22,7 +22,7 @@ def test_bill_button_templates_carry_the_bill_token():
     from app.services.templates import BILL_BUTTON, STANDARD_SPECS, TEMPLATES, build_template
 
     with_btn = {n for n, t in TEMPLATES.items() if t.get("url_button")}
-    assert with_btn == {"kk_bill_details", "kk_order_ready", "kk_payment_received", "kk_partial_delivery"}
+    assert with_btn == {"kk_bill_details", "kk_order_ready", "kk_payment_received", "kk_bill_requested", "kk_payment_reminder", "kk_partial_delivery"}
     for name in with_btn:
         btns = STANDARD_SPECS[name].get("buttons") or []
         assert any(b["type"] == "URL" and b["url"].endswith("/b/{{1}}") for b in btns), name
