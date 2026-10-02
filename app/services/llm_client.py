@@ -46,7 +46,7 @@ SECONDARY_FALLBACK_PROVIDER = getattr(settings, "LLM_SECONDARY_FALLBACK_PROVIDER
 _PROVIDER_MODELS = {
     "gemini": ("gemini-3.5-flash-lite", "gemini-3.5-flash"),
     "anthropic": ("claude-haiku-4-5", "claude-sonnet-5"),
-    "openrouter": ("openrouter/free", "openrouter/free"),
+    "openrouter": (settings.OPENROUTER_MODEL, settings.OPENROUTER_MODEL),
 }
 MODEL_CHEAP, MODEL_SMART = _PROVIDER_MODELS[PROVIDER]
 _CIRCUIT_FAILURE_THRESHOLD = 3

@@ -90,15 +90,18 @@ async def shops(client):
             await db.commit()
 
 
-async def test_list_registers_approved_for_sending(client, graph) -> None:
+async def test_list_returns_local_registry_for_waha(client, graph) -> None:
     r = await client.get("/admin/api/templates", headers=AUTH)
     assert r.status_code == 200
     rows = r.json()
-    assert rows[0]["name"] == "kk_dyn_ready" and rows[0]["status"] == "APPROVED"
-    assert next(x for x in rows if x["name"] == "kk_rejected_one")["rejected_reason"] == "INVALID_FORMAT"
+    names = {x["name"] for x in rows}
+    assert "kk_order_ready" in names
+    assert "kk_payment_reminder" in names
+    assert all(x["status"] == "UNKNOWN" for x in rows)
+    assert graph == [], "WAHA template registry must not contact Meta"
     from app.services.templates import build_template
 
-    assert build_template("kk_dyn_ready", ["KK-20260803-01"])["name"] == "kk_dyn_ready"
+    assert build_template("kk_order_ready", ["KK-20260803-01"])["name"] == "kk_order_ready"
 
 
 async def test_create_validates_and_submits(client, graph) -> None:
@@ -131,45 +134,51 @@ async def test_delete_template(client, graph) -> None:
     assert r.status_code == 200 and r.json()["deleted"] == "kk_old_one"
 
 
-async def test_studio_uses_the_logged_in_shops_own_waba(client, graph, shops) -> None:
+async def test_studio_uses_local_registry_for_logged_in_shop(client, graph, shops) -> None:
     client.cookies.set(auth.SESSION_COOKIE, shops["e"])
     r = await client.get("/admin/api/templates", headers=AUTH)
     assert r.status_code == 200
-    assert graph[-1]["path"].startswith(E_WABA) and graph[-1]["token"] == E_TOKEN
+    assert any(x["name"] == "kk_order_ready" for x in r.json())
+    assert graph == [], "WAHA Template Studio must not contact Meta"
 
 
 async def test_unconnected_shop_never_touches_home_waba(client, graph, shops) -> None:
     client.cookies.set(auth.SESSION_COOKIE, shops["f"])
-    for r in (
-        await client.get("/admin/api/templates", headers=AUTH),
-        await client.post("/admin/api/templates", headers=AUTH, json={
-            "name": "leak_try", "category": "UTILITY", "body": "Hello there {{1}} ok", "samples": ["x"]}),
-        await client.delete("/admin/api/templates/kk_order_ready", headers=AUTH),
-    ):
-        assert r.status_code == 400 and "not connected" in r.json()["detail"]
-    assert graph == [], "shop without WhatsApp reached Meta (home creds leaked)"
+
+    r = await client.get("/admin/api/templates", headers=AUTH)
+    assert r.status_code == 200
+    assert any(x["name"] == "kk_order_ready" for x in r.json())
+
+    r = await client.post("/admin/api/templates", headers=AUTH, json={
+        "name": "leak_try", "category": "UTILITY",
+        "body": "Hello there {{1}} ok", "samples": ["x"],
+    })
+    assert r.status_code == 400 and "not connected" in r.json()["detail"]
+
+    r = await client.delete("/admin/api/templates/kk_order_ready", headers=AUTH)
+    assert r.status_code == 400 and "not connected" in r.json()["detail"]
+
+    assert graph == [], "unconnected shop reached Meta (home creds leaked)"
 
 
-async def test_control_submits_standard_templates_per_shop(client, graph, shops) -> None:
+async def test_control_template_registry_is_local_for_each_shop(client, graph, shops) -> None:
     r = await client.get(f"/control/api/tenants/{E_SLUG}/whatsapp/templates", headers=CTL)
     assert r.status_code == 200
-    by_name = {t["name"]: t["status"] for t in r.json()["templates"]}
-    assert by_name["kk_order_ready"] == "APPROVED" and by_name["kk_picked_up"] == "NOT_SUBMITTED"
-    assert by_name["kk_partial_delivery"] == "NEEDS_UPDATE"      # button ke bina purana approved
+    payload = r.json()
+    assert payload["state"] == "local"
+    by_name = {t["name"]: t["status"] for t in payload["templates"]}
+    assert by_name["kk_order_ready"] == "LOCAL"
+    assert by_name["kk_picked_up"] == "LOCAL"
+    assert graph == []
 
     r = await client.post(f"/control/api/tenants/{E_SLUG}/whatsapp/templates", headers=CTL)
-    assert r.status_code == 200, r.text
-    res = {x["name"]: x["status"] for x in r.json()["results"]}
-    assert res["kk_order_ready"] == "ALREADY_ON_META" and res["kk_picked_up"] == "PENDING"
-    assert all(c["path"].startswith(E_WABA) and c["token"] == E_TOKEN for c in graph)
-    rating = next(c for c in graph if c["method"] == "POST" and c["json"]["name"] == "kk_thankyou_rating")
-    assert any(comp["type"] == "BUTTONS" for comp in rating["json"]["components"])
+    assert r.status_code == 503
+    assert "WAHA/NOWEB" in r.json()["detail"]
 
-    graph.clear()
-    r = await client.post(f"/control/api/tenants/{F_SLUG}/whatsapp/templates", headers=CTL)
-    assert r.status_code == 400 and graph == []
     r = await client.get(f"/control/api/tenants/{F_SLUG}/whatsapp/templates", headers=CTL)
-    assert r.json()["state"] == "not_connected" and graph == []
+    assert r.status_code == 200
+    assert r.json()["state"] == "local"
+    assert graph == [], "Control Room template registry must not contact Meta"
 
 
 async def test_owner_cannot_connect_whatsapp_themselves(client, shops) -> None:
