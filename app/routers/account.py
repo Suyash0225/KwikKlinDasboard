@@ -605,7 +605,7 @@ async def _invite_accept_inner(body, request, response, db) -> dict:
     token = await auth.start_session(
         db, user, ip=ip, user_agent=request.headers.get("user-agent", "")
     )
-    _set_cookie(response, token)
+    _set_cookie(response, token, secure=request.url.scheme == "https")
     is_home = await auth.is_home_user(db, user)
     return {
         "ok": True,
@@ -795,8 +795,9 @@ async def _google_callback_inner(request, code, state, error, db) -> Response:
         )
         is_home = await auth.is_home_user(db, user)
         resp = RedirectResponse(url=_dashboard_url(await db.get(Tenant, user.tenant_id), is_home), status_code=303)
-        _set_cookie(resp, token)
-        resp.delete_cookie(google_auth.STATE_COOKIE, path="/")        log.info("google_login_ok", email=user.email, is_home=is_home)
+        _set_cookie(resp, token, secure=request.url.scheme == "https")
+        resp.delete_cookie(google_auth.STATE_COOKIE, path="/")
+        log.info("google_login_ok", email=user.email, is_home=is_home)
         return resp
 
     # naya banda: pehchaan sambhal ke rakho, baaki detail form se lo
