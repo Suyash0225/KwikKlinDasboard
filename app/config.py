@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     # --- LLM (Phase 4 AI agent) ---
     # anthropic = Claude (sk-ant-... key) | gemini = Google (AIza... key).
     # Only app/services/llm_client.py reads these.
-    LLM_PROVIDER: Literal["anthropic", "gemini"] = "anthropic"
+    LLM_PROVIDER: Literal["anthropic", "gemini", "openrouter"] = "anthropic"
     # Provider used automatically when the primary provider is unavailable.
     # "none" disables cross-provider failover.
     LLM_FALLBACK_PROVIDER: Literal["none", "anthropic", "gemini", "openrouter"] = "anthropic"
@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str
     GEMINI_API_KEY: str = ""
     OPENROUTER_API_KEY: str = ""
+    OPENROUTER_MODEL: str = "qwen/qwen3.8-27b:free"
 
     # --- People ---
     # Manager's WhatsApp number in E.164 form, e.g. +919876543210.
