@@ -224,9 +224,6 @@ def _no_live_llm(monkeypatch):
     async def _gemini_down(model, payload):
         raise httpx.ConnectError("live LLM blocked in tests")
 
-    async def _gemini_down(model, payload):
-        raise httpx.ConnectError("live LLM blocked in tests")
-
     monkeypatch.setattr(llm_module, "_gemini_post", _gemini_down)
 
     async def _anthropic_down(**kwargs):
