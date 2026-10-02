@@ -294,7 +294,7 @@ def sent(monkeypatch) -> list[dict]:
 
 @pytest.fixture(autouse=True)
 def _no_live_whatsapp(monkeypatch):
-    """No test may reach Meta — block the HTTP door, not send_message itself.
+    """No test may reach a real WhatsApp transport — block HTTP doors, not send_message itself.
 
     Patching send_message would hide the window checks and the conversation
     recording that several tests exist to verify. Blocking one layer lower
@@ -305,13 +305,17 @@ def _no_live_whatsapp(monkeypatch):
 
     import app.services.whatsapp as whatsapp_module
 
-    # Meta hands out a UNIQUE id per message; returning a constant made the
-    # second send collide on uq_conversations_wa_message_id. Unique across
-    # the whole run, not just one test — rows outlive the test that made them.
-    async def _blocked(payload, to_phone):
+    # Every transport stub gets a unique message id so conversation rows
+    # never collide across tests.
+    async def _blocked_meta(payload, to_phone):
         return {"messages": [{"id": f"wamid.TESTBLOCKED{_uuid.uuid4().hex[:12]}"}]}
 
-    monkeypatch.setattr(whatsapp_module, "_post_with_retry", _blocked)
+    async def _blocked_waha(path, payload):
+        return {"id": f"wamid.TESTBLOCKED{_uuid.uuid4().hex[:12]}"}
+
+    monkeypatch.setattr(whatsapp_module, "_post_with_retry", _blocked_meta)
+    from app.services import waha
+    monkeypatch.setattr(waha, "_post", _blocked_waha)
 
 
 @pytest.fixture(autouse=True)
