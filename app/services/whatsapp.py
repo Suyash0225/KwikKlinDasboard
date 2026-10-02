@@ -564,8 +564,10 @@ async def _find_recipient(
     """Look up the phone in customers and staff. Staff wins if both match."""
     try:
         staff = (
-            await db.execute(select(Staff).where(Staff.phone == phone))
-        ).scalar_one_or_none()
+            await db.execute(
+                select(Staff).where(Staff.phone == phone).order_by(Staff.created_at.asc())
+            )
+        ).scalars().first()
         if staff:
             return None, staff
         customer = (

@@ -67,22 +67,24 @@ async def primary_admin_phone(db: AsyncSession) -> str:
 
 
 async def admin_phones(db: AsyncSession) -> list[str]:
-    """Actual active ADMIN staff are the owner recipients.
+    """Configured tenant owner first, then other active ADMIN recipients.
 
-    MANAGER_PHONE is only a legacy fallback when no ADMIN staff row exists.
+    The configured owner remains authoritative even if the Staff row is missing or demoted.
     This prevents alerts being sent both to the public/shop contact number
     and the owner's admin WhatsApp number.
     """
-    rows = await admins(db)
+    # The configured tenant owner is the authority, independent of whether
+    # his Staff row was accidentally demoted or duplicated. Other active
+    # ADMIN rows are additional owner-side recipients.
     out: list[str] = []
-    for st in rows:
+    fallback = _norm(manager_phone())
+    if fallback:
+        out.append(fallback)
+    for st in await admins(db):
         p = _norm(st.phone)
         if p and p not in out:
             out.append(p)
-    if out:
-        return out
-    fallback = _norm(manager_phone())
-    return [fallback] if fallback else []
+    return out
 
 
 async def is_admin_phone(db: AsyncSession, phone: str) -> bool:
@@ -91,9 +93,8 @@ async def is_admin_phone(db: AsyncSession, phone: str) -> bool:
 
 
 async def alert_recipients(db: AsyncSession) -> list[tuple[str, str]]:
-    """The single primary admin for customer/AI escalation alerts."""
-    phone = await primary_admin_phone(db)
-    return [(phone, "Admin")] if phone else []
+    """All owner-side recipients for customer/AI escalation alerts."""
+    return [(phone, "Admin") for phone in await admin_phones(db) if phone]
 
 
 async def notify_admins(db: AsyncSession, text: str, *, skip_phone: str = "") -> int:

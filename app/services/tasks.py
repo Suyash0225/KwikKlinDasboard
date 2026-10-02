@@ -378,7 +378,7 @@ _JOB = {
         "done_q": "Delivery ho gayi?",
         "yes_title": "✅ Delivered",
         "customer_line": "Your clothes are on the way",
-        "done_reply": "👍 Delivery marked as done. Customer updated.",
+        "done_reply": "🙏 Shukriya! Delivery marked as done. Customer updated.",
     },
 }
 
@@ -455,7 +455,7 @@ async def _create_job_task(db: AsyncSession, order, kind: str) -> Task | None:
             f"{cfg['emoji']} {cfg['head']} [{task.code}] — {order.order_number}\n"
             f"{who} · {customer.phone if customer else ''}\n"
             + (f"📍 Address: {addr}\n" if addr else "")
-            + "\nPlease select the current task status from the menu below."
+            + f"\n\n{cfg['ask']}\nPlease select the current task status from the menu below."
         )
         delivered = "no"
         try:

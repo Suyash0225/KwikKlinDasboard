@@ -921,9 +921,15 @@ async def _handle_inbound_message(
                     text += f" {extra}"
 
     # Staff phone? Record against staff. Otherwise upsert customer.
+    # Old/test data can contain duplicate staff rows for a phone. An
+    # inbound webhook must remain processable; role/power checks are handled
+    # separately by team.is_admin_phone(), so do not let a duplicate row
+    # crash the webhook with MultipleResultsFound.
     staff = (
-        await db.execute(select(Staff).where(Staff.phone == phone))
-    ).scalar_one_or_none()
+        await db.execute(
+            select(Staff).where(Staff.phone == phone).order_by(Staff.created_at.asc())
+        )
+    ).scalars().first()
     customer: Customer | None = None
     if staff is None:
         customer = (
