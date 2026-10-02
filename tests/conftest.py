@@ -208,11 +208,12 @@ def _no_live_llm(monkeypatch):
     regression suite must never depend on a developer's local .env or spend
     a real API quota. Provider-specific tests patch their lower-level call.
     """
-    # Keep the general suite deterministic even when the local .env selects
-    # OpenRouter. Individual provider tests can override these values.
-    monkeypatch.setattr(llm_module, "PROVIDER", "anthropic")
-    monkeypatch.setattr(llm_module, "MODEL_CHEAP", "claude-haiku-4-5")
-    monkeypatch.setattr(llm_module, "MODEL_SMART", "claude-sonnet-5")
+    # Never let a developer's local .env select a real provider during tests.
+    # Individual tests intentionally patch PROVIDER/model values themselves.
+    # Keep provider-specific tests on their selected provider; do not let
+    # unrelated configured fallbacks change the expected exception/result.
+    monkeypatch.setattr(llm_module, "FALLBACK_PROVIDER", llm_module.PROVIDER)
+    monkeypatch.setattr(llm_module, "SECONDARY_FALLBACK_PROVIDER", llm_module.PROVIDER)
     llm_module._circuit_failures.clear()
     llm_module._circuit_open_until.clear()
 
@@ -220,15 +221,6 @@ def _no_live_llm(monkeypatch):
         raise httpx.ConnectError("live OpenRouter blocked in tests")
 
     monkeypatch.setattr(llm_module, "_openrouter_generate", _openrouter_down)
-
-    async def _gemini_down(model, payload):
-        raise httpx.ConnectError("live LLM blocked in tests")
-
-    Everything above (ask_json, classify_intent, ...) runs for real and sees
-    a 'network outage', so the degrade paths behave exactly like production
-    without a connection. Tests that want LLM behavior patch a higher layer
-    (ask_json / build_ai_reply / _gemini_post) and their patch wins.
-    """
 
     async def _gemini_down(model, payload):
         raise httpx.ConnectError("live LLM blocked in tests")

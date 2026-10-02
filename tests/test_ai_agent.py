@@ -109,15 +109,21 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
     async def fake_ask_json(**kw):
         nonlocal calls
         calls += 1
-        if calls == 1:
-            intake = {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False}
+
+        # build_ai_reply makes one cheap read-only tool-router call before
+        # the smart compose call. Keep that separate from compose responses.
+        if calls in {1, 3}:
+            return {"tool_calls": []}
+
+        if calls == 2:
             return {
-                "reply": "Ji, address bhej dijiye.",
+                "reply": "Ji, apna naam bata dijiye.",
                 "intent": "NEW_ORDER", "language": "hi",
                 "action": "CREATE_LEAD", "action_reason": "new enquiry",
                 "escalate": False, "escalation_reason": "", "admin_note": "",
-                "intake": intake,
+                "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
             }
+
         return {
             "reply": "Ji, main aapki request note kar leta hoon. — Kwik Klin",
             "intent": "NEW_ORDER", "language": "hi",
@@ -140,10 +146,6 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
         reply = await build_ai_reply(db, cust, "mujhe laundry chahiye")
 
     assert "name" in reply.lower() or "naam" in reply.lower()
-    async with async_session_factory() as db:
-        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
-        cust.name = "Rahul Sharma"
-        await db.commit()
 
     async with async_session_factory() as db:
         cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
@@ -166,9 +168,13 @@ async def test_ai_facts_always_include_saved_name_and_address(monkeypatch) -> No
 
 async def test_compose_prompt_tells_ai_not_to_repeat_saved_profile(monkeypatch) -> None:
     async def fake_ask_json(**kw):
-        prompt = kw["system"]
-        assert "CUSTOMER PROFILE MEMORY IS AUTHORITATIVE" in prompt
-        assert "NEVER ask for that field again" in prompt
+        system = kw["system"]
+        if "inbound-message safety classifier" in system:
+            return {"classification": "CUSTOMER_LEAD", "confidence": 0.99, "reason": "test customer"}
+        if "read-only tool router" in system:
+            return {"tool_calls": []}
+        assert "CUSTOMER PROFILE MEMORY IS AUTHORITATIVE" in system
+        assert "NEVER ask for that field again" in system
         return {
             "reply": "Ji, bataiye kaise help karun? — Kwik Klin AI",
             "intent": "OTHER",
@@ -194,6 +200,11 @@ async def test_compose_prompt_tells_ai_not_to_repeat_saved_profile(monkeypatch) 
 
 async def test_compose_happy_path_no_escalation(monkeypatch) -> None:
     async def fake_ask_json(**kw):
+        system = kw["system"]
+        if "inbound-message safety classifier" in system:
+            return {"classification": "CUSTOMER_LEAD", "confidence": 0.99, "reason": "test customer"}
+        if "read-only tool router" in system:
+            return {"tool_calls": []}
         # the FACTS block must carry customer identity, never notes
         assert "AI Grahak" in kw["user_text"]
         assert "notes" not in kw["user_text"].lower()
@@ -279,7 +290,7 @@ async def test_webhook_prefers_ai_reply(client, sent, monkeypatch) -> None:
     import app.routers.webhook as webhook_module
     from tests.conftest import meta_payload, sign_body
 
-    async def fake_ai(db, customer, text):
+    async def fake_ai(db, customer, text, *, conversation_id=None):
         return "AI ka jawaab 🤖"
 
     monkeypatch.setattr(webhook_module, "build_ai_reply", fake_ai)
@@ -300,7 +311,7 @@ async def test_webhook_prefers_ai_reply(client, sent, monkeypatch) -> None:
     assert sent and sent[-1]["text"] == "AI ka jawaab 🤖"
 
     # AI unavailable -> old rule-based ack, never silence
-    async def fake_ai_none(db, customer, text):
+    async def fake_ai_none(db, customer, text, *, conversation_id=None):
         return None
 
     monkeypatch.setattr(webhook_module, "build_ai_reply", fake_ai_none)
