@@ -1,18 +1,8 @@
-"""/control/api/whatsapp/health — chaar check, aur kyun chaaron chahiye.
+"""WhatsApp health contract for the WAHA/NOWEB architecture.
 
-Per-tenant creds jodte waqt live validate hote hain. Home dukaan ke creds
-.env se aate hain aur unka koi check tha hi nahi.
-
-Teen alag kharabiyan bahar se ek jaisi dikhti hain — "bot jawab nahi de
-raha" — aur inka ilaaj alag-alag hai:
-
-  token expire       -> bhejna band, aana chalu
-  APP_SECRET galat   -> bhejna chalu, aana band (403)
-  messages subscribe -> dono chup, Meta verification phir bhi pass
-
-Isliye ye endpoint chaaron alag-alag batata hai, ek "sab theek/kharab"
-nahi. Aakhri check — aakhri INBOUND message — asli saboot hai: upar sab
-hara aur wo khali, matlab gadbad aane wale raste mein hai.
+The endpoint intentionally reports only checks that this application can
+actually perform without Meta/Graph calls: configured provider, WAHA base
+URL, and whether any inbound WhatsApp message has been recorded recently.
 """
 
 import pytest
