@@ -481,9 +481,10 @@ async def build_ai_reply(
             if not (customer.name or "").strip():
                 log.info("new_lead_profile_needs_name_fast_path", phone=customer.phone)
                 return "Welcome to Kwik Klin! 😊 May I know your name, please?"
-            if not (customer.address or "").strip():
-                log.info("new_lead_profile_needs_address_fast_path", phone=customer.phone)
-                return "Thank you! 🙏 Please share your full address with a nearby landmark, so we can assist you properly."
+            # Once the name is known, let the normal composer run so it
+            # can extract an address from the customer's current message/history.
+            # The deterministic post-composer onboarding check below will ask
+            # for the address only when extraction did not find one.
 
     # Billing is a transactional action, not a language-generation task.
     # Handle it only after media normalization and the global AI switch.
