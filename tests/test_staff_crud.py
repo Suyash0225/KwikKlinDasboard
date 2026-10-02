@@ -13,7 +13,7 @@ from sqlalchemy import delete, select
 
 from app.config import settings
 from app.database import async_session_factory
-from app.models import Conversation, Order, Staff, StaffRole
+from app.models import Conversation, Order, Staff, StaffRole, Task
 from app.services import app_settings, order_service
 from tests.conftest import TEST_CUSTOMER_PHONE, purge_phones
 
@@ -30,6 +30,14 @@ async def _purge_staff(*phones: str) -> None:
             await s.execute(select(Staff).where(Staff.phone.in_(phones)))
         ).scalars().all()
         for st in rows:
+            # Tasks also reference staff directly. Release the assignment before
+            # removing the fixture staff row; production delete behavior keeps
+            # the task itself intact.
+            await s.execute(
+                Task.__table__.update()
+                .where(Task.assigned_staff_id == st.id)
+                .values(assigned_staff_id=None)
+            )
             await s.execute(delete(Conversation).where(Conversation.staff_id == st.id))
             await s.execute(
                 Order.__table__.update()
