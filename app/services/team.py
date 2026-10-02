@@ -93,14 +93,8 @@ async def is_admin_phone(db: AsyncSession, phone: str) -> bool:
 
 
 async def alert_recipients(db: AsyncSession) -> list[tuple[str, str]]:
-    """The single primary admin for customer/AI escalation alerts."""
-    # Escalations must always reach the configured owner first. A Staff ADMIN
-    # row is an additional recipient, not a replacement for the owner.
-    phone = _norm(manager_phone())
-    if phone:
-        return [(phone, "Admin")]
-    phone = await primary_admin_phone(db)
-    return [(phone, "Admin")] if phone else []
+    """All owner-side recipients for customer/AI escalation alerts."""
+    return [(phone, "Admin") for phone in await admin_phones(db) if phone]
 
 
 async def notify_admins(db: AsyncSession, text: str, *, skip_phone: str = "") -> int:
