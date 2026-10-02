@@ -208,11 +208,8 @@ def _no_live_llm(monkeypatch):
     regression suite must never depend on a developer's local .env or spend
     a real API quota. Provider-specific tests patch their lower-level call.
     """
-    # Keep the general suite deterministic even when the local .env selects
-    # OpenRouter. Individual provider tests can override these values.
-    monkeypatch.setattr(llm_module, "PROVIDER", "anthropic")
-    monkeypatch.setattr(llm_module, "MODEL_CHEAP", "claude-haiku-4-5")
-    monkeypatch.setattr(llm_module, "MODEL_SMART", "claude-sonnet-5")
+    # Never let a developer's local .env select a real provider during tests.
+    # Individual tests intentionally patch PROVIDER/model values themselves.
     llm_module._circuit_failures.clear()
     llm_module._circuit_open_until.clear()
 
