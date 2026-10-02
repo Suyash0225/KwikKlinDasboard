@@ -16,6 +16,12 @@ from app.models import Customer
 from app.services.whatsapp import Button, ListRow, send_message
 from tests.conftest import TEST_CUSTOMER_PHONE
 
+@pytest.fixture(autouse=True)
+def meta_provider(monkeypatch):
+    # These tests assert the provider-neutral Meta interactive payload.
+    monkeypatch.setattr(whatsapp_module.settings, "WHATSAPP_PROVIDER", "meta")
+
+
 ROWS = [
     ListRow(id="pick:o:KK-20260809-01", title="KK-20260809-01", description="Pooja — 1 x Lehenga"),
     ListRow(id="pick:t:T-11", title="T-11 · press", description="5 kapde press karne hain"),
