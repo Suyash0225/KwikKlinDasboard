@@ -15,8 +15,6 @@ def _force_anthropic(monkeypatch):
     """These first tests exercise the Claude path regardless of .env;
     Gemini-path tests re-patch PROVIDER themselves."""
     monkeypatch.setattr(llm, "PROVIDER", "anthropic")
-    monkeypatch.setattr(llm, "MODEL_CHEAP", "claude-haiku-4-5")
-    monkeypatch.setattr(llm, "MODEL_SMART", "claude-sonnet-5")
 
 
 def _fake_response(text: str):
@@ -47,11 +45,11 @@ def _patch_claude(monkeypatch, create):
 
 async def test_ask_returns_text(monkeypatch) -> None:
     async def fake_create(**kw):
-        assert kw["model"] == llm.MODEL_CHEAP
+        assert kw["model"] == "claude-haiku-4-5"
         return _fake_response("namaste ji")
 
     _patch_claude(monkeypatch, fake_create)
-    assert await ask(system="s", user_text="hi", model=llm.MODEL_CHEAP) == "namaste ji"
+    assert await ask(system="s", user_text="hi", model="claude-haiku-4-5") == "namaste ji"
 
 
 async def test_ask_json_parses(monkeypatch) -> None:
@@ -195,7 +193,7 @@ async def test_smart_rate_limited_falls_back_to_cheap(monkeypatch) -> None:
         system="s", user_text="hi", schema={"type": "object"}, model=llm.MODEL_SMART
     )
     assert out == {"reply": "sasta jawaab"}
-    assert models_called == [llm.MODEL_SMART, llm.MODEL_CHEAP]
+    assert models_called == [llm.MODEL_SMART, llm.MODEL_SMART, llm.MODEL_CHEAP]
 
 
 async def test_gemini_safety_block_is_hard_error(monkeypatch) -> None:
