@@ -155,7 +155,7 @@ async def test_customer_instruction_never_becomes_admin_task(monkeypatch) -> Non
     assert "Namaste Rahul" in sent[0]["text"]
     assert "T-" not in sent[0]["text"]
     assert reply
-    await purge_phones("+919999900092")\n
+    await purge_phones("+919999900092")
 
 # --- 2. manager facts expose staff chat status ---
 
