@@ -124,7 +124,8 @@ async def test_staff_relay_cannot_create_task() -> None:
 async def test_customer_instruction_never_becomes_admin_task(monkeypatch) -> None:
     """'customer ko ...' must route to the customer, never to the sender/admin."""
     from app.models import Customer
-    # Remove leftovers from an interrupted run before inserting the fixed customer.\n    await purge_phones("+919999900092")\n
+    # Remove leftovers from an interrupted run before inserting the fixed customer.\n    await purge_phones("+919999900092")
+
     sent: list[dict] = []
 
     async def fake_send(db, *, to_phone, text=None, **kw):
@@ -154,7 +155,7 @@ async def test_customer_instruction_never_becomes_admin_task(monkeypatch) -> Non
     assert "Namaste Rahul" in sent[0]["text"]
     assert "T-" not in sent[0]["text"]
     assert reply
-    await purge_phones("+919999900092")\n
+    await purge_phones("+919999900092")
 
 # --- 2. manager facts expose staff chat status ---
 
