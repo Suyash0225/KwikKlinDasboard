@@ -67,9 +67,9 @@ async def primary_admin_phone(db: AsyncSession) -> str:
 
 
 async def admin_phones(db: AsyncSession) -> list[str]:
-    """Actual active ADMIN staff are the owner recipients.
+    """Configured tenant owner first, then other active ADMIN recipients.
 
-    MANAGER_PHONE is only a legacy fallback when no ADMIN staff row exists.
+    The configured owner remains authoritative even if the Staff row is missing or demoted.
     This prevents alerts being sent both to the public/shop contact number
     and the owner's admin WhatsApp number.
     """
