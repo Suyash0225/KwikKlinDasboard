@@ -166,6 +166,10 @@ async def test_ai_facts_always_include_saved_name_and_address(monkeypatch) -> No
 
 async def test_compose_prompt_tells_ai_not_to_repeat_saved_profile(monkeypatch) -> None:
     async def fake_ask_json(**kw):
+        # The production flow has a cheap read-only router before the
+        # smart composer. Keep this test focused on the composer prompt.
+        if kw["schema"] is agent_module._TOOL_CALL_SCHEMA:
+            return {"tool_calls": []}
         prompt = kw["system"]
         assert "CUSTOMER PROFILE MEMORY IS AUTHORITATIVE" in prompt
         assert "NEVER ask for that field again" in prompt
@@ -194,6 +198,8 @@ async def test_compose_prompt_tells_ai_not_to_repeat_saved_profile(monkeypatch) 
 
 async def test_compose_happy_path_no_escalation(monkeypatch) -> None:
     async def fake_ask_json(**kw):
+        if kw["schema"] is agent_module._TOOL_CALL_SCHEMA:
+            return {"tool_calls": []}
         # the FACTS block must carry customer identity, never notes
         assert "AI Grahak" in kw["user_text"]
         assert "notes" not in kw["user_text"].lower()
@@ -279,7 +285,7 @@ async def test_webhook_prefers_ai_reply(client, sent, monkeypatch) -> None:
     import app.routers.webhook as webhook_module
     from tests.conftest import meta_payload, sign_body
 
-    async def fake_ai(db, customer, text):
+    async def fake_ai(db, customer, text, **kwargs):
         return "AI ka jawaab 🤖"
 
     monkeypatch.setattr(webhook_module, "build_ai_reply", fake_ai)
@@ -300,7 +306,7 @@ async def test_webhook_prefers_ai_reply(client, sent, monkeypatch) -> None:
     assert sent and sent[-1]["text"] == "AI ka jawaab 🤖"
 
     # AI unavailable -> old rule-based ack, never silence
-    async def fake_ai_none(db, customer, text):
+    async def fake_ai_none(db, customer, text, **kwargs):
         return None
 
     monkeypatch.setattr(webhook_module, "build_ai_reply", fake_ai_none)
