@@ -199,7 +199,6 @@ async def signup(body: SignupIn, db: AsyncSession = Depends(get_db)) -> dict:
         "next": "login",
     }
 
-
 # --------------------------------------------------------------------------
 # payment
 # --------------------------------------------------------------------------
@@ -294,14 +293,14 @@ class LoginIn(BaseModel):
     password: str
 
 
-def _set_cookie(response: Response, token: str) -> None:
+def _set_cookie(response: Response, token: str, *, secure: bool) -> None:
     response.set_cookie(
         auth.SESSION_COOKIE,
         token,
         max_age=auth.SESSION_DAYS * 86400,
         httponly=True,
         samesite="lax",
-        secure=True,
+        secure=secure,
         path="/",
     )
 
@@ -391,14 +390,13 @@ async def _login_inner(body, request, response, db, email, ip) -> dict:
     token = await auth.start_session(
         db, user, ip=ip, user_agent=request.headers.get("user-agent", "")
     )
-    _set_cookie(response, token)
+    _set_cookie(response, token, secure=request.url.scheme == "https")
     tenant = await db.get(Tenant, user.tenant_id) if user.tenant_id else None
     is_home = await auth.is_home_user(db, user)
     from app.services import audit
 
     await audit.record(
-        actor_role="user", actor=user.email, action="login",
-        args={"ip": ip, "role": user.role,
+        actor_role="user", actor=user.email, action="login",        args={"ip": ip, "role": user.role,
               "tenant": tenant.slug if tenant else None},
     )
     return {
@@ -539,7 +537,9 @@ def _subscription_out(t: Tenant | None) -> dict | None:
 
 
 @router.get("/api/session/adopt/{token}", include_in_schema=False)
-async def adopt_session(token: str, db: AsyncSession = Depends(get_db)):
+async def adopt_session(
+    token: str, request: Request, db: AsyncSession = Depends(get_db)
+):
     """Impersonation link: valid session token -> cookie set -> dashboard.
 
     Token khud hi auth hai (30-min TTL, danger-key se bana, audit-logged).
@@ -552,7 +552,7 @@ async def adopt_session(token: str, db: AsyncSession = Depends(get_db)):
     if user is None:
         return RedirectResponse(url="/join#login", status_code=303)
     resp = RedirectResponse(url="/admin", status_code=303)
-    _set_cookie(resp, token)
+    _set_cookie(resp, token, secure=request.url.scheme == "https")
     log.info("session_adopted", user=user.email)
     return resp
 
@@ -597,7 +597,6 @@ async def invite_accept(
 
 async def _invite_accept_inner(body, request, response, db) -> dict:
     from app.services import invites
-
     try:
         user = await invites.accept_invite(db, token=body.token, password=body.password)
     except ValueError as exc:
@@ -797,8 +796,7 @@ async def _google_callback_inner(request, code, state, error, db) -> Response:
         is_home = await auth.is_home_user(db, user)
         resp = RedirectResponse(url=_dashboard_url(await db.get(Tenant, user.tenant_id), is_home), status_code=303)
         _set_cookie(resp, token)
-        resp.delete_cookie(google_auth.STATE_COOKIE, path="/")
-        log.info("google_login_ok", email=user.email, is_home=is_home)
+        resp.delete_cookie(google_auth.STATE_COOKIE, path="/")        log.info("google_login_ok", email=user.email, is_home=is_home)
         return resp
 
     # naya banda: pehchaan sambhal ke rakho, baaki detail form se lo
@@ -997,8 +995,7 @@ async def billing_summary(
     if t is None:
         raise HTTPException(status_code=400, detail="Tenant not found")
     plan = plans.get(t.plan)
-    limits = plans.effective_limits(t)
-    month_start = datetime.now(timezone.utc).replace(
+    limits = plans.effective_limits(t)    month_start = datetime.now(timezone.utc).replace(
         day=1, hour=0, minute=0, second=0, microsecond=0
     )
     orders_used = (
