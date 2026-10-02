@@ -140,7 +140,7 @@ STANDARD_SPECS: dict[str, dict] = {
     "kk_payment_reminder": {
         "purpose": "Payment reminder",
         "body": "Reminder: ₹{{1}} is pending for order {{2}}. {{3}}",
-        "samples": ["150", "KK-20260916-01"],
+        "samples": ["150", "KK-20260916-01", "Please clear the pending amount."],
         "buttons": [BILL_BUTTON],
     },
     "kk_staff_alert": {
