@@ -210,7 +210,7 @@ def _no_live_llm(monkeypatch):
     """
     # Keep the general suite deterministic even when the local .env selects
     # OpenRouter. Individual provider tests can override these values.
-    # Production runs WAHA, but the regression suite exercises the\n    # provider-neutral Meta payload path and never talks to a real transport.\n    monkeypatch.setattr(settings, "WHATSAPP_PROVIDER", "meta")\n\n    monkeypatch.setattr(llm_module, "PROVIDER", "anthropic")
+    monkeypatch.setattr(llm_module, "PROVIDER", "anthropic")
     monkeypatch.setattr(llm_module, "MODEL_CHEAP", "claude-haiku-4-5")
     monkeypatch.setattr(llm_module, "MODEL_SMART", "claude-sonnet-5")
     llm_module._circuit_failures.clear()
@@ -223,12 +223,6 @@ def _no_live_llm(monkeypatch):
 
     async def _gemini_down(model, payload):
         raise httpx.ConnectError("live LLM blocked in tests")
-
-    Everything above (ask_json, classify_intent, ...) runs for real and sees
-    a 'network outage', so the degrade paths behave exactly like production
-    without a connection. Tests that want LLM behavior patch a higher layer
-    (ask_json / build_ai_reply / _gemini_post) and their patch wins.
-    """
 
     async def _gemini_down(model, payload):
         raise httpx.ConnectError("live LLM blocked in tests")
