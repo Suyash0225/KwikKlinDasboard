@@ -465,6 +465,26 @@ async def build_ai_reply(
             return None
 
 
+    # Fast-path unknown customers before any LLM call.
+    #
+    # This is both a latency/cost optimization and a correctness guard:
+    # onboarding is deterministic, so a router/composer model must never be
+    # allowed to invent a name/address and accidentally mark the profile
+    # complete. Existing orders and existing lead stages are left alone.
+    if not sandbox:
+        usage_orders = await get_active_orders_for_phone(db, customer.phone)
+        from app.models import Lead
+        lead = (
+            await db.execute(select(Lead).where(Lead.phone == customer.phone))
+        ).scalar_one_or_none()
+        if _needs_new_customer_onboarding("NEW_ORDER", usage_orders, lead, customer):
+            if not (customer.name or "").strip():
+                log.info("new_lead_profile_needs_name_fast_path", phone=customer.phone)
+                return "Welcome to Kwik Klin! 😊 May I know your name, please?"
+            if not (customer.address or "").strip():
+                log.info("new_lead_profile_needs_address_fast_path", phone=customer.phone)
+                return "Thank you! 🙏 Please share your full address with a nearby landmark, so we can assist you properly."
+
     # Billing is a transactional action, not a language-generation task.
     # Handle it only after media normalization and the global AI switch.
     if re.search(r"\b(?:bill|invoice)\b", text, re.I):
@@ -490,7 +510,9 @@ async def build_ai_reply(
     # database session. Transactional actions and safety decisions remain in code.
     # Link customer-facing AI spend to the customer's active order only when
     # there is exactly one active order. Never guess when multiple orders exist.
-    usage_orders = await get_active_orders_for_phone(db, customer.phone)
+    # Reuse the order lookup from the onboarding fast-path when possible.
+    if sandbox:
+        usage_orders = await get_active_orders_for_phone(db, customer.phone)
     usage_order_id = str(usage_orders[0].id) if len(usage_orders) == 1 else None
     try:
         with llm_client.attribution(
