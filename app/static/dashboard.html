@@ -683,6 +683,11 @@
             <small>Uses the address typed on the customer. Keep off until addresses are reliable.</small>
           </div>
           <div class="setfield">
+            <label for="set-openrouter-key">OpenRouter API key</label>
+            <input id="set-openrouter-key" type="password" autocomplete="new-password" placeholder="Paste OpenRouter key">
+            <small>Optional. Saved encrypted; the key is never shown back. Leave blank to keep the existing key or use the .env fallback.</small>
+          </div>
+          <div class="setfield">
             <label for="set-autoassign">Agent assigns work automatically</label>
             <select id="set-autoassign">
               <option value="true">On — every bill gets washer + pickup/delivery tasks</option>
