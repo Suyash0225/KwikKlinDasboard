@@ -57,6 +57,8 @@ DEFAULTS: dict[str, Any] = {
     # OpenRouter credential is entered by the shop owner from Settings.
     # It is encrypted at rest and never returned to the browser.
     "openrouter_api_key": "",
+    # env = keep deployment default; openrouter = use the owner-entered key.
+    "llm_provider": "env",
     # operations
     "standup_hour": 10,             # daily staff standup (Asia/Kolkata hour)
     # Automatic delivery promise: working days only; Sunday/holidays are skipped.
