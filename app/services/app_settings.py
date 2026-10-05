@@ -300,5 +300,6 @@ async def all_settings(db: AsyncSession) -> dict[str, Any]:
     merged = dict(DEFAULTS)
     for r in rows:
         if r.key in merged:
-            merged[r.key] = r.value.get("v", merged[r.key])
+            value = r.value.get("v", merged[r.key])
+            merged[r.key] = decrypt(value or "") if r.key in _SECRET_SETTINGS else value
     return merged
