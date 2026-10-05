@@ -283,10 +283,10 @@ async def set_value(db: AsyncSession, key: str, value: Any) -> None:
             )
         )
     ).scalar_one_or_none()
+    stored = encrypt(str(value)) if key in _SECRET_SETTINGS and value else value
     if row is None:
-        db.add(SettingKV(key=key, value={"v": value}, tenant_id=tid))
+        db.add(SettingKV(key=key, value={"v": stored}, tenant_id=tid))
     else:
-        stored = encrypt(str(value)) if key in _SECRET_SETTINGS and value else value
         row.value = {"v": stored}
     await db.commit()
     log.info("setting_updated", key=key)
