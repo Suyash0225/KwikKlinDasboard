@@ -597,13 +597,26 @@ async def _openrouter_generate(
             "json_schema": {"name": "kwikklin_response", "strict": True, "schema": schema},
         }
 
+    # Owner-entered key wins over the .env bootstrap key. app_settings decrypts it.
+    api_key = (settings.OPENROUTER_API_KEY or "").strip()
+    try:
+        from app.database import async_session_factory
+        from app.services import app_settings
+        async with async_session_factory() as db:
+            configured_key = await app_settings.get(db, "openrouter_api_key")
+        api_key = (configured_key or api_key).strip()
+    except Exception:
+        log.exception("openrouter_admin_key_read_failed")
+    if not api_key:
+        raise LLMAuthError("OPENROUTER_API_KEY is not configured")
+
     started = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             resp = await client.post(
                 _OPENROUTER_BASE,
                 headers={
-                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                     "HTTP-Referer": settings.APP_BASE_URL,
                     "X-Title": settings.SHOP_NAME,
