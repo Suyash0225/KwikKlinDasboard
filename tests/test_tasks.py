@@ -613,3 +613,47 @@ async def test_menu_response_is_saved_as_ai_readable_context() -> None:
     assert "Order KK-20260928-01 -> action 'done'" in _conversation_for_ai(
         "[button:ord:KK-20260928-01:done] ✅ Ho gaya"
     )
+
+
+async def test_waha_display_text_task_status_stays_deterministic(sent) -> None:
+    """WAHA list replies without an id must not fall through to the LLM."""
+    from app.services import bill_agent
+
+    phone = "+919999900099"
+    async with async_session_factory() as db:
+        staff = Staff(
+            phone=phone,
+            name="Delivery Display Test",
+            role=StaffRole.DELIVERY,
+            is_active=True,
+            last_message_at=datetime.now(timezone.utc),
+        )
+        db.add(staff)
+        await db.commit()
+        sid = staff.id
+        task = await _mk(
+            db,
+            sid,
+            title="Pickup for Display Test",
+            kind="pickup",
+            notify=False,
+        )
+        code = task.code
+
+    try:
+        async with async_session_factory() as db:
+            reply = await bill_agent._handle_task_menu_display_text(
+                db,
+                phone,
+                "Delivery Display Test",
+                "Done Pickup or delivery completed",
+            )
+            assert reply is not None
+            updated = await task_service.get_by_code(db, code)
+            assert updated.status == TASK_DONE
+            assert code in reply or "done" in reply.lower()
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.code == code))
+            await db.execute(delete(Staff).where(Staff.id == sid))
+            await db.commit()
