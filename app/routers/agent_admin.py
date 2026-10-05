@@ -1763,7 +1763,7 @@ async def agents_overview(db: AsyncSession = Depends(get_db)) -> dict:
 
 
 # Settings whose values are credentials — never sent back to the browser.
-_SECRET_SETTINGS = {"ig_access_token", "gbp_connection"}
+_SECRET_SETTINGS = {"ig_access_token", "gbp_connection", "openrouter_api_key"}
 # Sirf vendor Control panel likhta hai (routers/control.py) — dukaan ke
 # dashboard ke generic settings PUT se nahi, warna koi token/listing badal de.
 _READONLY_SETTINGS = {

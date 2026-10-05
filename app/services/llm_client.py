@@ -304,7 +304,20 @@ async def _generate_with_fallback(
         _provider_failed(provider)
         raise last_exc or LLMUnavailable(f"{provider} unavailable")
 
-    providers = [PROVIDER]
+    # Owner can switch the primary provider from the admin dashboard without
+    # editing .env or restarting the service. "env" keeps the deployment default.
+    runtime_provider = PROVIDER
+    try:
+        from app.database import async_session_factory
+        from app.services import app_settings
+        async with async_session_factory() as db:
+            configured_provider = await app_settings.get(db, "llm_provider")
+        if configured_provider in _PROVIDER_MODELS:
+            runtime_provider = configured_provider
+    except Exception:
+        log.exception("llm_provider_setting_read_failed")
+
+    providers = [runtime_provider]
     for fallback_provider in (FALLBACK_PROVIDER, SECONDARY_FALLBACK_PROVIDER):
         if fallback_provider in _PROVIDER_MODELS and fallback_provider not in providers:
             providers.append(fallback_provider)
@@ -597,13 +610,26 @@ async def _openrouter_generate(
             "json_schema": {"name": "kwikklin_response", "strict": True, "schema": schema},
         }
 
+    # Owner-entered key wins over the .env bootstrap key. app_settings decrypts it.
+    api_key = (settings.OPENROUTER_API_KEY or "").strip()
+    try:
+        from app.database import async_session_factory
+        from app.services import app_settings
+        async with async_session_factory() as db:
+            configured_key = await app_settings.get(db, "openrouter_api_key")
+        api_key = (configured_key or api_key).strip()
+    except Exception:
+        log.exception("openrouter_admin_key_read_failed")
+    if not api_key:
+        raise LLMAuthError("OPENROUTER_API_KEY is not configured")
+
     started = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             resp = await client.post(
                 _OPENROUTER_BASE,
                 headers={
-                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                     "HTTP-Referer": settings.APP_BASE_URL,
                     "X-Title": settings.SHOP_NAME,
