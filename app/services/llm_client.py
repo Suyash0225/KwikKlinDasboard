@@ -304,7 +304,20 @@ async def _generate_with_fallback(
         _provider_failed(provider)
         raise last_exc or LLMUnavailable(f"{provider} unavailable")
 
-    providers = [PROVIDER]
+    # Owner can switch the primary provider from the admin dashboard without
+    # editing .env or restarting the service. "env" keeps the deployment default.
+    runtime_provider = PROVIDER
+    try:
+        from app.database import async_session_factory
+        from app.services import app_settings
+        async with async_session_factory() as db:
+            configured_provider = await app_settings.get(db, "llm_provider")
+        if configured_provider in _PROVIDER_MODELS:
+            runtime_provider = configured_provider
+    except Exception:
+        log.exception("llm_provider_setting_read_failed")
+
+    providers = [runtime_provider]
     for fallback_provider in (FALLBACK_PROVIDER, SECONDARY_FALLBACK_PROVIDER):
         if fallback_provider in _PROVIDER_MODELS and fallback_provider not in providers:
             providers.append(fallback_provider)
