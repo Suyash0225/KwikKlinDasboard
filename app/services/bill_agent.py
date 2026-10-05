@@ -349,6 +349,11 @@ async def _handle_task_menu_display_text(
     if not raw or raw.startswith("[button:"):
         return None
 
+    def _display_key(value: str) -> str:
+        # WAHA/WhatsApp UI may drop emoji from the selected row title.
+        return " ".join(re.sub(r"[^a-z0-9]+", " ", value.casefold()).split())
+    raw_key = _display_key(raw)
+
     staff = (
         await db.execute(
             select(Staff).where(Staff.phone == sender_phone).order_by(Staff.created_at.asc())
@@ -365,7 +370,9 @@ async def _handle_task_menu_display_text(
         for row in await task_status_menu(db, task.code):
             title = " ".join(str(row.title or "").split()).casefold()
             desc = " ".join(str(row.description or "").split()).casefold()
-            if raw in {title, f"{title} {desc}".strip(), desc}:
+            if raw in {title, f"{title} {desc}".strip(), desc} or raw_key in {
+                _display_key(title), _display_key(f"{title} {desc}"), _display_key(desc)
+            }:
                 candidates.append((row.id, row.title))
     if len(candidates) != 1:
         return None
