@@ -3979,6 +3979,8 @@ async function loadSettings() {
     $("set-standup").value = s.standup_hour;
     $("set-route").value = String(!!s.staff_show_route);
     $("set-autoassign").value = String(s.agent_auto_assign !== false);
+    const lp = $("set-llm-provider");
+    if (lp) lp.value = s.llm_provider || "env";
     const ork = $("set-openrouter-key");
     if (ork) { ork.value = ""; ork.placeholder = s.openrouter_api_key ? "•••••••• (configured — enter new key to replace)" : "Paste OpenRouter key"; }
     const lim = s.stage_limit_hours || {};
@@ -4476,6 +4478,7 @@ async function saveOps(btn) {
       ["staff_show_route", $("set-route").value === "true"],
       ["agent_auto_assign", $("set-autoassign").value === "true"],
       ...((($("set-openrouter-key")?.value || "").trim()) ? [["openrouter_api_key", $("set-openrouter-key").value.trim()]] : []),
+      ["llm_provider", $("set-llm-provider").value],
       ["stage_limit_hours", Object.fromEntries(STAGE_LIMIT_KEYS.map(([k]) =>
         [k, Math.max(1, Math.min(720, parseInt($(`sl-${k}`).value, 10) || 24))]))],
       ["urgent_charge_type", $("set-urg-type").value],
