@@ -8,6 +8,9 @@ token ka koi bhi kaam dukaan ke browser se na ho. Status owner ke APNE
 tenant ka hi hota hai (middleware session se context set karta hai).
 """
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,9 +41,27 @@ async def status_for(db: AsyncSession) -> dict:
         "count": data.get("count"),
         "stored": len(data.get("reviews") or []),
         "synced_at": data.get("synced_at", ""),
+        "auto_post": await __import__("app.services.gbp_auto_post", fromlist=["status"]).status(db),
     }
 
 
 @router.get("/status")
 async def status(db: AsyncSession = Depends(get_db)) -> dict:
     return await status_for(db)
+
+
+
+@router.put("/auto-post")
+async def set_auto_post(enabled: bool, db: AsyncSession = Depends(get_db)) -> dict:
+    """Turn daily AI Google Business Profile posting on/off."""
+    await app_settings.set_value(db, "gbp_auto_post_enabled", bool(enabled))
+    from app.services import gbp_auto_post
+    return await gbp_auto_post.status(db)
+
+
+@router.post("/auto-post/run")
+async def run_auto_post(db: AsyncSession = Depends(get_db)) -> dict:
+    """Run today's post immediately (useful for first-time verification)."""
+    from app.services import gbp_auto_post
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+    return await gbp_auto_post.auto_post_daily(db, now_ist)

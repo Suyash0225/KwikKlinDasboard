@@ -83,6 +83,10 @@ def start() -> None:
     _scheduler.add_job(
         _gbp_reviews_tick, CronTrigger(hour="*/6", minute=20, timezone=IST), id="gbp-reviews"
     )
+    # Daily Google Business Profile post.
+    _scheduler.add_job(
+        _gbp_daily_post_tick, CronTrigger(hour=10, minute=15, timezone=IST), id="gbp-daily-post"
+    )
     _scheduler.start()
     log.info("scheduler_started", jobs=["hourly", "human-handoff", "nightly", "tunnel-guard", "durability", "gbp-reviews"])
 
@@ -186,6 +190,23 @@ async def _for_each_tenant(job_name: str, fn) -> None:
                 await fn(now_ist)
         except Exception:
             log.exception("tenant_job_failed", job=job_name, tenant=slug)
+
+
+async def _gbp_daily_post_tick() -> None:
+    """Publish one AI-generated Google Business Profile post per connected tenant."""
+    from app.services import gbp_auto_post
+
+    if not gbp_auto_post.gbp.enabled():
+        return
+
+    async def one(now_ist: datetime) -> None:
+        async with async_session_factory() as db:
+            try:
+                await gbp_auto_post.auto_post_daily(db, now_ist)
+            except Exception as exc:
+                log.warning("gbp_daily_post_failed", error=str(exc)[:300])
+
+    await _for_each_tenant("gbp-daily-post", one)
 
 
 async def _gbp_reviews_tick() -> None:
