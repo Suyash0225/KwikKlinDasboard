@@ -165,7 +165,6 @@ function initReviewCarousel() {
   const cards = [...reviews.querySelectorAll(".review")];
   if (!cards.length) return;
 
-  // Slider shows every review; the old "Show all" button is no longer needed.
   cards.forEach((card) => { card.hidden = false; card.removeAttribute("data-more"); });
   document.querySelector(".more-wrap")?.remove();
 
@@ -198,54 +197,53 @@ function initReviewCarousel() {
   controls.append(prev, dots, next);
   viewport.insertAdjacentElement("afterend", controls);
 
-  let index = 0;
+  let page = 0;
   let visible = 3;
   let timer;
 
   const getVisible = () => window.matchMedia("(max-width:640px)").matches ? 1
     : window.matchMedia("(max-width:980px)").matches ? 2 : 3;
-  const getMax = () => Math.max(0, cards.length - visible);
+  const getPages = () => Math.max(1, Math.ceil(cards.length / visible));
 
   function renderDots() {
     dots.replaceChildren();
-    const pages = Math.max(1, getMax() + 1);
-    for (let i = 0; i < pages; i++) {
+    for (let i = 0; i < getPages(); i++) {
       const dot = document.createElement("button");
       dot.type = "button";
-      dot.className = "review-carousel-dot" + (i === index ? " active" : "");
-      dot.setAttribute("aria-label", "Show review " + (i + 1));
-      dot.onclick = () => { index = i; render(); restart(); };
+      dot.className = "review-carousel-dot" + (i === page ? " active" : "");
+      dot.setAttribute("aria-label", "Show review group " + (i + 1));
+      dot.onclick = () => { page = i; render(); restart(); };
       dots.appendChild(dot);
     }
   }
 
   function render() {
     visible = getVisible();
-    index = Math.min(index, getMax());
-    const step = 100 / visible;
-    const gap = visible === 1 ? 14 : visible === 2 ? 18 : 18;
-    const shift = index * (step + ((gap * (visible - 1)) / visible / 1));
-    // CSS gap is included through per-card basis; translate by one card + gap.
+    const pages = getPages();
+    page = Math.min(page, pages - 1);
+
     const cardWidth = cards[0].getBoundingClientRect().width;
-    const actualStep = cardWidth + gap;
-    reviews.style.transform = "translateX(-" + (index * actualStep) + "px)";
-    [...dots.children].forEach((d, i) => d.classList.toggle("active", i === index));
-    prev.disabled = index === 0;
-    next.disabled = index === getMax();
+    const gap = visible === 1 ? 14 : 18;
+    const step = (cardWidth + gap) * visible;
+
+    reviews.style.transform = "translateX(-" + (page * step) + "px)";
+    [...dots.children].forEach((d, i) => d.classList.toggle("active", i === page));
+    prev.disabled = page === 0;
+    next.disabled = page === pages - 1;
   }
 
   function restart() {
     clearInterval(timer);
-    if (cards.length > visible) {
+    if (getPages() > 1) {
       timer = setInterval(() => {
-        index = index >= getMax() ? 0 : index + 1;
+        page = page >= getPages() - 1 ? 0 : page + 1;
         render();
-      }, 5000);
+      }, 5500);
     }
   }
 
-  prev.onclick = () => { index = Math.max(0, index - 1); render(); restart(); };
-  next.onclick = () => { index = Math.min(getMax(), index + 1); render(); restart(); };
+  prev.onclick = () => { page = Math.max(0, page - 1); render(); restart(); };
+  next.onclick = () => { page = Math.min(getPages() - 1, page + 1); render(); restart(); };
 
   reviews.dataset.carouselReady = "true";
   renderDots();
