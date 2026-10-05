@@ -159,6 +159,101 @@ function enhanceServerReviewCards() {
 
 enhanceServerReviewCards();
 
+function initReviewCarousel() {
+  const reviews = document.querySelector(".reviews[data-gbp], .reviews");
+  if (!reviews || reviews.dataset.carouselReady === "true") return;
+  const cards = [...reviews.querySelectorAll(".review")];
+  if (!cards.length) return;
+
+  // Slider shows every review; the old "Show all" button is no longer needed.
+  cards.forEach((card) => { card.hidden = false; card.removeAttribute("data-more"); });
+  document.querySelector(".more-wrap")?.remove();
+
+  const viewport = document.createElement("div");
+  viewport.className = "reviews-viewport";
+  reviews.parentNode.insertBefore(viewport, reviews);
+  viewport.appendChild(reviews);
+
+  const controls = document.createElement("div");
+  controls.className = "review-carousel-controls";
+  controls.setAttribute("aria-label", "Customer reviews carousel");
+
+  const prev = document.createElement("button");
+  prev.type = "button";
+  prev.className = "review-carousel-btn";
+  prev.setAttribute("aria-label", "Previous reviews");
+  prev.textContent = "‹";
+
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "review-carousel-btn";
+  next.setAttribute("aria-label", "Next reviews");
+  next.textContent = "›";
+
+  const dots = document.createElement("div");
+  dots.style.display = "flex";
+  dots.style.gap = "7px";
+  dots.style.alignItems = "center";
+
+  controls.append(prev, dots, next);
+  viewport.insertAdjacentElement("afterend", controls);
+
+  let index = 0;
+  let visible = 3;
+  let timer;
+
+  const getVisible = () => window.matchMedia("(max-width:640px)").matches ? 1
+    : window.matchMedia("(max-width:980px)").matches ? 2 : 3;
+  const getMax = () => Math.max(0, cards.length - visible);
+
+  function renderDots() {
+    dots.replaceChildren();
+    const pages = Math.max(1, getMax() + 1);
+    for (let i = 0; i < pages; i++) {
+      const dot = document.createElement("button");
+      dot.type = "button";
+      dot.className = "review-carousel-dot" + (i === index ? " active" : "");
+      dot.setAttribute("aria-label", "Show review " + (i + 1));
+      dot.onclick = () => { index = i; render(); restart(); };
+      dots.appendChild(dot);
+    }
+  }
+
+  function render() {
+    visible = getVisible();
+    index = Math.min(index, getMax());
+    const step = 100 / visible;
+    const gap = visible === 1 ? 14 : visible === 2 ? 18 : 18;
+    const shift = index * (step + ((gap * (visible - 1)) / visible / 1));
+    // CSS gap is included through per-card basis; translate by one card + gap.
+    const cardWidth = cards[0].getBoundingClientRect().width;
+    const actualStep = cardWidth + gap;
+    reviews.style.transform = "translateX(-" + (index * actualStep) + "px)";
+    [...dots.children].forEach((d, i) => d.classList.toggle("active", i === index));
+    prev.disabled = index === 0;
+    next.disabled = index === getMax();
+  }
+
+  function restart() {
+    clearInterval(timer);
+    if (cards.length > visible) {
+      timer = setInterval(() => {
+        index = index >= getMax() ? 0 : index + 1;
+        render();
+      }, 5000);
+    }
+  }
+
+  prev.onclick = () => { index = Math.max(0, index - 1); render(); restart(); };
+  next.onclick = () => { index = Math.min(getMax(), index + 1); render(); restart(); };
+
+  reviews.dataset.carouselReady = "true";
+  renderDots();
+  requestAnimationFrame(() => { render(); restart(); });
+  window.addEventListener("resize", () => { renderDots(); render(); restart(); }, { passive: true });
+}
+initReviewCarousel();
+
 document.addEventListener("click", (e) => {
   const trigger = e.target.closest(".review-read-more");
   if (trigger) {
