@@ -14,8 +14,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import SettingKV
+from app.services.secrets import decrypt, encrypt
 
 log = structlog.get_logger()
+
+_SECRET_SETTINGS = {"openrouter_api_key"}
 
 # Single source of defaults — also drives the Settings UI.
 DEFAULTS: dict[str, Any] = {
@@ -51,6 +54,9 @@ DEFAULTS: dict[str, Any] = {
     "llm_daily_request_cap": 0,
     # What you're willing to spend per month on AI (USD). 0 = no budget set.
     "llm_monthly_budget_usd": 0.0,
+    # OpenRouter credential is entered by the shop owner from Settings.
+    # It is encrypted at rest and never returned to the browser.
+    "openrouter_api_key": "",
     # operations
     "standup_hour": 10,             # daily staff standup (Asia/Kolkata hour)
     # Automatic delivery promise: working days only; Sunday/holidays are skipped.
@@ -231,6 +237,8 @@ async def get(db: AsyncSession, key: str) -> Any:
     if row is None:
         return default
     value = row.value.get("v", default)
+    if key in _SECRET_SETTINGS:
+        return decrypt(value or "") or ""
     if key == "llm_rates":
         return {**DEFAULTS["llm_rates"], **(value or {})}
     return value
@@ -276,7 +284,8 @@ async def set_value(db: AsyncSession, key: str, value: Any) -> None:
     if row is None:
         db.add(SettingKV(key=key, value={"v": value}, tenant_id=tid))
     else:
-        row.value = {"v": value}
+        stored = encrypt(str(value)) if key in _SECRET_SETTINGS and value else value
+        row.value = {"v": stored}
     await db.commit()
     log.info("setting_updated", key=key)
 
