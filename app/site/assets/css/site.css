@@ -249,8 +249,8 @@ header { position:sticky; top:0; z-index:30; background:rgba(255,255,255,.82); -
 .review {
   min-width:0;
   flex:0 0 calc((100% - 36px) / 3);
-  height:430px;
-  min-height:430px;
+  height:360px;
+  min-height:360px;
   background:#fff;
   border:1px solid rgba(15,23,42,.08);
   border-radius:16px;
@@ -271,15 +271,15 @@ header { position:sticky; top:0; z-index:30; background:rgba(255,255,255,.82); -
   line-height:1.6;
   display:-webkit-box;
   -webkit-box-orient:vertical;
-  -webkit-line-clamp:7;
-  line-clamp:7;
+  -webkit-line-clamp:3;
+  line-clamp:3;
   overflow:hidden;
 }
 .review .reply {
   flex:none;
-  -webkit-line-clamp:3;
-  line-clamp:3;
-  max-height:92px;
+  -webkit-line-clamp:2;
+  line-clamp:2;
+  max-height:70px;
 }
 .review-carousel-controls {
   display:flex;
@@ -319,7 +319,7 @@ header { position:sticky; top:0; z-index:30; background:rgba(255,255,255,.82); -
 @media (max-width:640px) {
   .reviews-viewport { margin-top:24px; }
   .reviews { gap:14px; }
-  .review { flex-basis:100%; height:410px; min-height:410px; padding:17px; }
+  .review { flex-basis:100%; height:350px; min-height:350px; padding:17px; }
 }
 .review-read-more {
   align-self:flex-start;
