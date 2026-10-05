@@ -334,6 +334,48 @@ _WORK_PICK_RE = re.compile(r"^\s*\[button:pick:(o|t):([^\]:]+)\]", re.I)
 _ORDER_BTN_RE = re.compile(r"^\s*\[button:ord:(KK-\S+?):(done|later|problem)\]", re.I)
 
 
+async def _handle_task_menu_display_text(
+    db: AsyncSession, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """Recover a task-list selection when WhatsApp/WAHA sends display text only.
+
+    Some WhatsApp engines do not preserve the interactive row id in the
+    normalized inbound message. In that case the visible text can look like
+    "Done Pickup or delivery completed". Resolve it against the sender's
+    actual open-task menu, then feed the resulting task id to the same
+    deterministic handler. Never call the LLM for this.
+    """
+    raw = " ".join((text or "").split()).strip().casefold()
+    if not raw or raw.startswith("[button:"):
+        return None
+
+    staff = (
+        await db.execute(
+            select(Staff).where(Staff.phone == sender_phone).order_by(Staff.created_at.asc())
+        )
+    ).scalars().first()
+    if staff is None:
+        return None
+
+    from app.services import tasks as task_service
+    from app.services.work_orders import task_status_menu
+
+    candidates: list[tuple[str, str]] = []
+    for task in await task_service.open_tasks_for_staff(db, staff.id):
+        for row in await task_status_menu(db, task.code):
+            title = " ".join(str(row.title or "").split()).casefold()
+            desc = " ".join(str(row.description or "").split()).casefold()
+            if raw in {title, f"{title} {desc}".strip(), desc}:
+                candidates.append((row.id, row.title))
+    if len(candidates) != 1:
+        return None
+
+    action_id, _ = candidates[0]
+    return await _handle_task_button(
+        db, sender_phone, sender_label, f"[button:{action_id}]"
+    )
+
+
 async def _handle_task_button(
     db: AsyncSession, sender_phone: str, sender_label: str, text: str
 ) -> str | None:
@@ -1173,6 +1215,14 @@ async def handle_staff_message(
     btn_reply = await _handle_task_button(db, sender_phone, sender_label, text or "")
     if btn_reply is not None:
         return btn_reply
+    # WAHA/NOWEB can deliver a list selection as its visible title/description
+    # without the row id. Resolve that text against the staff's open tasks
+    # before the generic AI path; status changes remain zero-LLM and deterministic.
+    display_reply = await _handle_task_menu_display_text(
+        db, sender_phone, sender_label, text or ""
+    )
+    if display_reply is not None:
+        return display_reply
     ord_reply = await _handle_order_button(db, sender_phone, sender_label, text or "")
     if ord_reply is not None:
         return ord_reply
