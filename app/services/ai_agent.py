@@ -31,6 +31,17 @@ from app.services.action_policy import ACTION_EXECUTION_RULES, business_policy_t
 
 log = structlog.get_logger()
 
+
+_SIMPLE_GREETING_RE = re.compile(
+    r"^\\s*(?:hi|hii|hiii|hello|hey|heyy|hy|namaste|namaskar)\\s*[!.?,]*\\s*$",
+    re.I,
+)
+
+
+def _is_simple_greeting(text: str) -> bool:
+    """Cheap deterministic check for greetings; avoid wasting LLM calls."""
+    return bool(_SIMPLE_GREETING_RE.fullmatch(text or ""))
+
 _REPLY_SCHEMA = {
     "type": "object",
     "properties": {
@@ -276,6 +287,11 @@ async def _select_customer_tools(
     db: AsyncSession, customer: Customer, text: str, *, conversation_id=None
 ) -> dict[str, int]:
     """LLM selects read-only tools; backend validates args and executes them."""
+    # Simple greetings need no database lookup/tool selection. Returning an
+    # empty set keeps the turn to a single customer-facing composer call.
+    if _is_simple_greeting(text):
+        return {}
+
     try:
         with llm_client.attribution(customer_id=customer.id):
             with llm_client.track("tool_router"):
@@ -474,7 +490,9 @@ async def build_ai_reply(
             log.warning("ai_paused_automated_sender", phone=customer.phone)
             return None
 
-        if await should_suppress_inbound(text):
+        # Greetings cannot be business/vendor spam. Skipping the classifier
+        # saves one LLM round-trip and makes WhatsApp greetings responsive.
+        if not _is_simple_greeting(text) and await should_suppress_inbound(text):
             return None
 
 
