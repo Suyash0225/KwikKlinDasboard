@@ -2494,7 +2494,7 @@ async function loadUsage() {
   $("usage-purpose").innerHTML = rows.length
     ? rows.map((r) => `
       <div class="sumrow"><span>${esc(PURPOSE_LABEL[r.purpose] || r.purpose)}</span>
-        <span>${r.calls} calls · ${kTok(r.tokens)}${u.all_free ? "" : " · " + usd(r.cost_usd)}</span></div>
+        <span>${r.calls} calls · ${kTok(r.tokens)}${u.all_free ? "" : " · " + inrCost(r.cost_inr)}</span></div>
       <div style="height:5px;background:var(--n100);border-radius:3px;margin-bottom:8px">
         <div style="height:5px;width:${Math.round((r.tokens / totTok) * 100)}%;background:var(--g-orange);border-radius:3px"></div>
       </div>`).join("")
