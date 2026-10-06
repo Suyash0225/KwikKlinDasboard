@@ -80,7 +80,7 @@ def _provider_models(provider: str) -> tuple[str, str]:
 # A customer is staring at WhatsApp. The SDK's own default is ten MINUTES —
 # by then the person has phoned the shop, and our reply arrives as noise.
 # Better to give up fast and let the rule-based fallback answer.
-TIMEOUT_SECONDS = 45.0
+TIMEOUT_SECONDS = 75.0
 IMAGE_TIMEOUT_SECONDS = 90.0
 
 # Transient failures (429 / 5xx) get retried here with exponential backoff
