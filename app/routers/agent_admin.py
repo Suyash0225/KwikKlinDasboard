@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
 import structlog
+import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -1093,7 +1094,9 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
     for e in by_purpose:
         e["cost_usd"] = round(e["cost_usd"], 4)
 
-    # daily series for the chart
+    # Daily series is the accounting basis for INR. Every day's USD
+    # usage is converted using that day's USD/INR historical mid-market rate,
+    # rather than today's FX rate.
     series_rows = (
         await db.execute(
             select(
@@ -1106,10 +1109,81 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
             .group_by("d").order_by("d")
         )
     ).all()
-    series = [
-        {"date": d.date().isoformat(), "calls": n, "tokens": int(i) + int(o)}
-        for d, n, i, o in series_rows
-    ]
+
+    fx_by_date: dict[str, float] = {}
+    fx_source = "Frankfurter USD/INR historical mid-market"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            fx_resp = await client.get(
+                "https://api.frankfurter.dev/v2/rates",
+                params={
+                    "from": window_start.date().isoformat(),
+                    "to": now_ist.date().isoformat(),
+                    "base": "USD",
+                    "quotes": "INR",
+                },
+            )
+            fx_resp.raise_for_status()
+            for item in fx_resp.json():
+                if item.get("date") and item.get("rate"):
+                    fx_by_date[str(item["date"])] = float(item["rate"])
+    except Exception:
+        log.warning("llm_usage_fx_unavailable", exc_info=True)
+        fx_source = "unavailable"
+
+    def _fx_for_date(day: str) -> float | None:
+        if day in fx_by_date:
+            return fx_by_date[day]
+        earlier = [d for d in fx_by_date if d <= day]
+        return fx_by_date[max(earlier)] if earlier else None
+
+    series = []
+    for d, n, i, o in series_rows:
+        day = d.date().isoformat()
+        fx = _fx_for_date(day)
+        series.append({
+            "date": day,
+            "calls": int(n),
+            "input_tokens": int(i),
+            "output_tokens": int(o),
+            "tokens": int(i) + int(o),
+            "fx_usd_inr": fx,
+            "cost_usd": 0.0,
+            "cost_inr": None,
+        })
+
+    # Price each day/model separately so mixed-model usage remains exact.
+    daily_model_rows = (
+        await db.execute(
+            select(
+                func.date_trunc("day", LlmUsage.at).label("d"),
+                LlmUsage.model,
+                func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+            )
+            .where(LlmUsage.at >= window_start)
+            .group_by("d", LlmUsage.model)
+        )
+    ).all()
+    daily_map = {row["date"]: row for row in series}
+    for d, model, i, o in daily_model_rows:
+        day = d.date().isoformat()
+        row = daily_map.get(day)
+        if row:
+            row["cost_usd"] += _cost(model, int(i), int(o))
+    for row in series:
+        row["cost_usd"] = round(row["cost_usd"], 6)
+        if row["fx_usd_inr"] is not None:
+            row["cost_inr"] = round(row["cost_usd"] * row["fx_usd_inr"], 4)
+
+    month_cost_inr = round(
+        sum((row["cost_inr"] or 0.0) for row in series
+            if row["date"] >= month_start.date().isoformat()), 4
+    )
+    today_cost_inr = round(
+        sum((row["cost_inr"] or 0.0) for row in series
+            if row["date"] == now_ist.date().isoformat()), 4
+    )
 
     # Attribution: customer-facing calls are linked to the customer and,
     # when exactly one active order existed at call time, that order.
@@ -1186,10 +1260,11 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
     return {
         "provider": PROVIDER,
         "models": {"cheap": MODEL_CHEAP, "smart": MODEL_SMART},
-        "today": today,
-        "month": month,
+        "today": {**today, "cost_inr": today_cost_inr},
+        "month": {**month, "cost_inr": month_cost_inr},
         "by_purpose": by_purpose,
         "series": series,
+        "fx": {"base": "USD", "quote": "INR", "source": fx_source},
         "daily_request_cap": cap,
         "calls_left_today": max(cap - today["calls"], 0) if cap else None,
         "monthly_budget_usd": budget,
