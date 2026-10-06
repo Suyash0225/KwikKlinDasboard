@@ -459,7 +459,20 @@ async def build_ai_reply(
     # Safety guard: unsolicited business promotions/vendors/spam must never
     # reach the customer-facing AI or the lead-creation action.
     if not sandbox:
-        from app.services.inbound_guard import should_suppress_inbound
+        from app.services.inbound_guard import (
+            looks_like_automated_agent,
+            should_suppress_inbound,
+        )
+
+        # If the other side explicitly identifies itself as an AI/bot, stop this
+        # customer's AI permanently until a human/admin resumes the thread.
+        # This is deterministic and happens before any LLM call, preventing bot-to-bot loops.
+        if looks_like_automated_agent(text):
+            customer.agent_paused = True
+            customer.agent_paused_at = _dt.now(_tz.utc)
+            await db.commit()
+            log.warning("ai_paused_automated_sender", phone=customer.phone)
+            return None
 
         if await should_suppress_inbound(text):
             return None
