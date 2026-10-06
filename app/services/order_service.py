@@ -686,6 +686,89 @@ async def record_payment(
     return order
 
 
+async def add_billing_adjustment(
+    db: AsyncSession,
+    order: Order,
+    *,
+    label: str,
+    amount: Decimal,
+    kind: str = "extra_charge",
+    note: str | None = None,
+    changed_by: str = "dashboard",
+) -> Order:
+    """Add a durable extra/due charge to the same order JSONB used by receipts.
+
+    'due_charge' is intentionally an explicit additional payable amount; normal
+    due remains derived from total_amount - amount_paid.
+    """
+    label = " ".join((label or "").split())[:120]
+    if not label:
+        raise OrderError("charge label is required")
+    amount = Decimal(amount).quantize(Decimal("0.01"))
+    if amount <= 0:
+        raise OrderError("charge amount must be positive")
+    if kind not in {"extra_charge", "due_charge"}:
+        raise OrderError("unknown billing adjustment type")
+
+    import uuid
+    lines = list(order.items or [])
+    lines.append({
+        "type": label,
+        "service": "Additional Charge",
+        "qty": 1,
+        "rate": float(amount),
+        "amount": float(amount),
+        "unit": "pc",
+        "kind": kind,
+        "adjustment_id": uuid.uuid4().hex,
+        "note": (note or "")[:300] or None,
+        "added_by": changed_by[:80],
+        "added_at": datetime.now(timezone.utc).isoformat(),
+    })
+    order.items = lines
+    order.recalculate_total_from_adjustments(amount)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception("billing_adjustment_failed", order_number=order.order_number)
+        raise
+    log.info("billing_adjustment_added", order_number=order.order_number, label=label, amount=str(amount), kind=kind, by=changed_by)
+    return order
+
+
+async def remove_billing_adjustment(
+    db: AsyncSession,
+    order: Order,
+    *,
+    adjustment_id: str,
+    changed_by: str = "dashboard",
+) -> Order:
+    lines = list(order.items or [])
+    found = None
+    kept = []
+    for item in lines:
+        if isinstance(item, dict) and item.get("kind") in {"extra_charge", "due_charge"} and item.get("adjustment_id") == adjustment_id:
+            if found is not None:
+                raise OrderError("duplicate adjustment id")
+            found = item
+            continue
+        kept.append(item)
+    if found is None:
+        raise OrderError("billing adjustment not found")
+    amount = Decimal(str(found.get("amount") or 0)).quantize(Decimal("0.01"))
+    order.items = kept
+    order.recalculate_total_from_adjustments(-amount)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception("billing_adjustment_remove_failed", order_number=order.order_number)
+        raise
+    log.info("billing_adjustment_removed", order_number=order.order_number, adjustment_id=adjustment_id, amount=str(amount), by=changed_by)
+    return order
+
+
 async def set_expected_delivery(
     db: AsyncSession,
     order: Order,
