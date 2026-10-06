@@ -2545,7 +2545,7 @@ function calcUsageSimulator() {
   const series = window.__LLM_USAGE?.series || [];
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const todayKey = now.toISOString().slice(0, 10);
+  const todayKey = isoDateLocal(now);
   const estimateDay = (d) => {
     const usdCost = (Number(d.input_tokens || 0) / 1e6) * inputRate + (Number(d.output_tokens || 0) / 1e6) * outputRate;
     return { usd: usdCost, inr: d.fx_usd_inr ? usdCost * Number(d.fx_usd_inr) : null };
