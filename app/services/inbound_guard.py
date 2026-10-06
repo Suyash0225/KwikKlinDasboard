@@ -139,7 +139,11 @@ async def classify_inbound_message(text: str) -> dict[str, Any]:
 
 
 async def should_suppress_inbound(text: str) -> bool:
-    """Suppress only high-confidence non-customer inbound messages."""
+    """Suppress high-confidence non-customer messages, but let automated-agent
+    messages reach build_ai_reply so that it can persistently pause that thread.
+    """
+    if looks_like_automated_agent(text):
+        return False
     result = await classify_inbound_message(text)
     classification = result["classification"]
     confidence = result["confidence"]
