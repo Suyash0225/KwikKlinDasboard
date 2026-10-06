@@ -2508,7 +2508,7 @@ async function loadUsage() {
       kTok(m.output_tokens) + '</td><td>' + (m.failed || 0) + '</td><td class="money">' + (m.priced ? inrCost(m.cost_inr) : '<span class="muted">free</span>') + '</td></tr>').join("")
       || '<tr><td colspan="6" class="muted">No calls this month.</td></tr>') + '</tbody></table>' +
     '<div class="rowcards">' + (byModel.map((m) => '<div class="rowcard"><div class="r1"><b>' + esc(m.model) + '</b><span class="money">' +
-      (m.priced ? usd(m.cost_usd) : "free") + '</span></div><div class="kv"><span>' + m.calls + ' calls · ' + (m.failed || 0) + ' failed</span><span>in ' +
+      (m.priced ? inrCost(m.cost_inr) : "free") + '</span></div><div class="kv"><span>' + m.calls + ' calls · ' + (m.failed || 0) + ' failed</span><span>in ' +
       kTok(m.input_tokens) + ' · out ' + kTok(m.output_tokens) + '</span></div></div>').join("") || '<p class="muted">No calls this month.</p>') + '</div>' +
     '<p class="muted" style="margin-top:10px">Rates and limits can be changed in Settings — past usage is re-priced with the new rates too.</p>';
 
@@ -2522,7 +2522,7 @@ async function loadUsage() {
     (x.failed_calls || 0) + '</td><td class="money">' + (u.all_free ? "free" : inrCost(x.cost_inr)) + '</td></tr>').join("");
   const customerRows = customers.slice(0, 20).map(x =>
     '<tr><td><b>' + esc(x.customer_name) + '</b></td><td>' + x.calls + '</td><td>' + kTok(x.tokens) + '</td><td>' + (x.failed_calls || 0) + '</td><td class="money">' +
-    (u.all_free ? "free" : usd(x.cost_usd)) + '</td></tr>').join("");
+    (u.all_free ? "free" : inrCost(x.cost_inr)) + '</td></tr>').join("");
   $("usage-attribution").innerHTML =
     kpi("Linked AI calls", linkedCalls, "Customer/order context available", "", "🔗", "blue") +
     kpi("Unlinked calls", un.calls || 0, "Background/system AI", "", "🧩", "orange") +
