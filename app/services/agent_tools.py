@@ -180,6 +180,11 @@ async def _order_detail(db: AsyncSession, args: str) -> str:
     ]
     if o.notes:
         lines.append(f"Internal note: {o.notes[:200]}")
+    adjustments = o.billing_adjustments()
+    if adjustments:
+        lines.append("Billing adjustments:")
+        for a in adjustments:
+            lines.append(f"  {a.get('adjustment_id')} | {a.get('kind')} | {a.get('type')} | ₹{a.get('amount', 0)}")
 
     hist = (
         (
