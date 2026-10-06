@@ -1189,13 +1189,14 @@ async def _try_staff_expense_closing(
 
     if not entries:
         try:
-            out = await llm_client.ask_json(
-                system=_EXPENSE_SYSTEM,
-                user_text=raw[:1000],
-                schema=_EXPENSE_SCHEMA,
-                model=llm_client.MODEL_CHEAP,
-                max_tokens=250,
-            )
+            with llm_client.track("staff_expense_extract"):
+                out = await llm_client.ask_json(
+                    system=_EXPENSE_SYSTEM,
+                    user_text=raw[:1000],
+                    schema=_EXPENSE_SCHEMA,
+                    model=llm_client.MODEL_CHEAP,
+                    max_tokens=250,
+                )
             if out.get("no_expense"):
                 await exp_svc.mark_daily_closing_submitted(db, staff.id, today, total=Decimal("0"))
                 return "Aaj ka expense report ₹0 ke saath submit ho gaya."
