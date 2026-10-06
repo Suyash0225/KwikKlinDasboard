@@ -484,16 +484,16 @@
       <div class="card" style="margin-top:14px">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
           <div><b>💰 Paid AI cost simulator</b><p class="muted" style="margin:4px 0 0">
-            Current free-model token usage ko kisi paid model ki rate par calculate karo. Isse provider change karne se pehle monthly cost ka estimate milega.
+            Current free-model token usage ko paid model ki USD rate par calculate karo. Result INR mein milega, har usage date ke USD/INR historical rate ke basis par.
           </p></div>
         </div>
         <div class="split2" style="margin-top:12px">
           <div>
-            <label>Input price ($ / 1M tokens)</label>
+            <label>Input price (USD / 1M tokens)</label>
             <input id="usage-sim-in" type="number" min="0" step="0.0001" value="0.05" inputmode="decimal">
           </div>
           <div>
-            <label>Output price ($ / 1M tokens)</label>
+            <label>Output price (USD / 1M tokens)</label>
             <input id="usage-sim-out" type="number" min="0" step="0.0001" value="0.20" inputmode="decimal">
           </div>
         </div>

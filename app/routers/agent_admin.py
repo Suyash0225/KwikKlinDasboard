@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
 import structlog
+import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -1089,15 +1090,37 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
         e["calls"] += n
         e["tokens"] += int(i) + int(o)
         e["cost_usd"] += _cost(model, int(i), int(o))
+    purpose_daily_rows = (
+        await db.execute(
+            select(
+                func.date_trunc("day", func.timezone("Asia/Kolkata", LlmUsage.at)).label("d"),
+                LlmUsage.purpose,
+                LlmUsage.model,
+                func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+            )
+            .where(LlmUsage.at >= month_start)
+            .group_by("d", LlmUsage.purpose, LlmUsage.model)
+        )
+    ).all()
+    purpose_cost_inr: dict[str, float] = {}
+    for d, purpose, model, i, o in purpose_daily_rows:
+        fx = _fx_for_date(d.date().isoformat())
+        if fx is not None:
+            purpose_cost_inr[purpose] = purpose_cost_inr.get(purpose, 0.0) + _cost(model, int(i), int(o)) * fx
+
     by_purpose = sorted(acc.values(), key=lambda x: -x["tokens"])
     for e in by_purpose:
         e["cost_usd"] = round(e["cost_usd"], 4)
+        e["cost_inr"] = round(purpose_cost_inr.get(e["purpose"], 0.0), 4)
 
-    # daily series for the chart
+    # Daily series is the accounting basis for INR. Every day's USD
+    # usage is converted using that day's USD/INR historical mid-market rate,
+    # rather than today's FX rate.
     series_rows = (
         await db.execute(
             select(
-                func.date_trunc("day", LlmUsage.at).label("d"),
+                func.date_trunc("day", func.timezone("Asia/Kolkata", LlmUsage.at)).label("d"),
                 func.count(),
                 func.coalesce(func.sum(LlmUsage.input_tokens), 0),
                 func.coalesce(func.sum(LlmUsage.output_tokens), 0),
@@ -1106,10 +1129,90 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
             .group_by("d").order_by("d")
         )
     ).all()
-    series = [
-        {"date": d.date().isoformat(), "calls": n, "tokens": int(i) + int(o)}
-        for d, n, i, o in series_rows
-    ]
+
+    fx_by_date: dict[str, float] = {}
+    fx_source = "Frankfurter USD/INR historical mid-market"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            fx_resp = await client.get(
+                "https://api.frankfurter.dev/v2/rates",
+                params={
+                    "from": window_start.date().isoformat(),
+                    "to": now_ist.date().isoformat(),
+                    "base": "USD",
+                    "quotes": "INR",
+                },
+            )
+            fx_resp.raise_for_status()
+            for item in fx_resp.json():
+                if item.get("date") and item.get("rate"):
+                    fx_by_date[str(item["date"])] = float(item["rate"])
+    except Exception:
+        log.warning("llm_usage_fx_unavailable", exc_info=True)
+        fx_source = "unavailable"
+
+    def _fx_for_date(day: str) -> float | None:
+        if day in fx_by_date:
+            return fx_by_date[day]
+        earlier = [d for d in fx_by_date if d <= day]
+        return fx_by_date[max(earlier)] if earlier else None
+
+    series = []
+    for d, n, i, o in series_rows:
+        day = d.date().isoformat()
+        fx = _fx_for_date(day)
+        series.append({
+            "date": day,
+            "calls": int(n),
+            "input_tokens": int(i),
+            "output_tokens": int(o),
+            "tokens": int(i) + int(o),
+            "fx_usd_inr": fx,
+            "cost_usd": 0.0,
+            "cost_inr": None,
+        })
+
+    # Price each day/model separately so mixed-model usage remains exact.
+    daily_model_rows = (
+        await db.execute(
+            select(
+                func.date_trunc("day", func.timezone("Asia/Kolkata", LlmUsage.at)).label("d"),
+                LlmUsage.model,
+                func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+            )
+            .where(LlmUsage.at >= window_start)
+            .group_by("d", LlmUsage.model)
+        )
+    ).all()
+    daily_map = {row["date"]: row for row in series}
+    for d, model, i, o in daily_model_rows:
+        day = d.date().isoformat()
+        row = daily_map.get(day)
+        if row:
+            row["cost_usd"] += _cost(model, int(i), int(o))
+    for row in series:
+        row["cost_usd"] = round(row["cost_usd"], 6)
+        if row["fx_usd_inr"] is not None:
+            row["cost_inr"] = round(row["cost_usd"] * row["fx_usd_inr"], 4)
+
+    model_cost_inr: dict[str, float] = {}
+    for d, model, i, o in daily_model_rows:
+        day = d.date().isoformat()
+        fx = _fx_for_date(day)
+        if fx is not None:
+            model_cost_inr[model] = model_cost_inr.get(model, 0.0) + _cost(model, int(i), int(o)) * fx
+    for m in month["by_model"]:
+        m["cost_inr"] = round(model_cost_inr.get(m["model"], 0.0), 4)
+
+    month_cost_inr = round(
+        sum((row["cost_inr"] or 0.0) for row in series
+            if row["date"] >= month_start.date().isoformat()), 4
+    )
+    today_cost_inr = round(
+        sum((row["cost_inr"] or 0.0) for row in series
+            if row["date"] == now_ist.date().isoformat()), 4
+    )
 
     # Attribution: customer-facing calls are linked to the customer and,
     # when exactly one active order existed at call time, that order.
@@ -1120,6 +1223,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
     attr_rows = (
         await db.execute(
             select(
+                func.date_trunc("day", func.timezone("Asia/Kolkata", LlmUsage.at)).label("d"),
                 LlmUsage.order_id,
                 _Order.order_number,
                 _Order.customer_id,
@@ -1133,7 +1237,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
             .outerjoin(_Order, _Order.id == LlmUsage.order_id)
             .outerjoin(_Customer, _Customer.id == LlmUsage.customer_id)
             .where(LlmUsage.at >= month_start)
-            .group_by(LlmUsage.order_id, _Order.order_number, _Order.customer_id,
+            .group_by("d", LlmUsage.order_id, _Order.order_number, _Order.customer_id,
                       _Customer.name, LlmUsage.model)
         )
     ).all()
@@ -1142,18 +1246,21 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
     customer_acc: dict[str, dict] = {}
     unattributed_calls = unattributed_tokens = 0
     unattributed_cost = 0.0
-    for oid, order_number, customer_id, customer_name, model, n, i, o, failed in attr_rows:
+    unattributed_cost_inr = 0.0
+    for d, oid, order_number, customer_id, customer_name, model, n, i, o, failed in attr_rows:
         i, o, n, failed = int(i), int(o), int(n), int(failed or 0)
         cost = _cost(model, i, o)
+        fx = _fx_for_date(d.date().isoformat())
+        cost_inr = cost * fx if fx is not None else 0.0
         if oid and order_number:
             key = str(oid)
             e = order_acc.setdefault(key, {
                 "order_id": key, "order_number": order_number,
                 "customer_name": customer_name or "Unknown customer",
-                "calls": 0, "failed_calls": 0, "tokens": 0, "cost_usd": 0.0,
+                "calls": 0, "failed_calls": 0, "tokens": 0, "cost_usd": 0.0, "cost_inr": 0.0,
             })
             e["calls"] += n; e["failed_calls"] += failed
-            e["tokens"] += i + o; e["cost_usd"] += cost
+            e["tokens"] += i + o; e["cost_usd"] += cost; e["cost_inr"] += cost_inr
         elif customer_id:
             key = str(customer_id)
             e = customer_acc.setdefault(key, {
@@ -1166,11 +1273,13 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
             unattributed_calls += n
             unattributed_tokens += i + o
             unattributed_cost += cost
+            unattributed_cost_inr += cost_inr
 
     by_order = sorted(order_acc.values(), key=lambda x: (-x["cost_usd"], -x["calls"]))
     by_customer = sorted(customer_acc.values(), key=lambda x: (-x["cost_usd"], -x["calls"]))
     for e in by_order + by_customer:
         e["cost_usd"] = round(e["cost_usd"], 4)
+        e["cost_inr"] = round(e.get("cost_inr", 0.0), 4)
 
     priced_models = any(
         bool((rates.get(model) or {}).get("in") or (rates.get(model) or {}).get("out"))
@@ -1186,10 +1295,11 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
     return {
         "provider": PROVIDER,
         "models": {"cheap": MODEL_CHEAP, "smart": MODEL_SMART},
-        "today": today,
-        "month": month,
+        "today": {**today, "cost_inr": today_cost_inr},
+        "month": {**month, "cost_inr": month_cost_inr},
         "by_purpose": by_purpose,
         "series": series,
+        "fx": {"base": "USD", "quote": "INR", "source": fx_source},
         "daily_request_cap": cap,
         "calls_left_today": max(cap - today["calls"], 0) if cap else None,
         "monthly_budget_usd": budget,
@@ -1203,6 +1313,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
                 "calls": unattributed_calls,
                 "tokens": unattributed_tokens,
                 "cost_usd": round(unattributed_cost, 4),
+                "cost_inr": round(unattributed_cost_inr, 4),
             },
         },
     }
