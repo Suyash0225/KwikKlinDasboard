@@ -77,7 +77,7 @@ _CANCEL_RE = re.compile(r"^\s*(nahi+|no|na|cancel|rehne do|❌|mat( banao)?)\s*$
 # Fixed-choice prompts use WhatsApp list menus. Free-form answers (ETA, issue
 # description, bill edits) remain normal text because those need real input.
 _EXPENSE_NO_RE = re.compile(
-    r"^\s*(?:no\s+expense|no\s+exp|koi\s+(?:kharcha|expense)\s+nahi(?:\s+hua)?|kuch\s+(?:kharcha|expense)\s+nahi(?:\s+hua)?)\s*$",
+    r"^\s*(?:no\s+expense|no\s+exp|koi\s+(?:kharcha|expense)\s+(?:nahi|nhi|nahin)(?:\s+hua)?|kuch\s+(?:kharcha|expense)\s+(?:nahi|nhi|nahin)(?:\s+hua)?)\s*$",
     re.I,
 )
 _EXPENSE_HINT_RE = re.compile(
