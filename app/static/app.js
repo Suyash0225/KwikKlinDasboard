@@ -1594,7 +1594,6 @@ function calcBill() {
   }
   $("nb-urg-sum").hidden = !(NB_URG.on && urg);
   $("nb-urg-sumamt").textContent = money(urg);
-  if ($("nb-charges")) nbPaintCharges();
   const extra = NB_CHARGES.reduce((sum, c) => sum + Math.max(0, Number(c.amount) || 0), 0);
   const pct = (parseFloat(SETTINGS_CACHE.gst_percent) || 18) / 100;
   const gst = $("nb-gst").checked ? Math.round((sub - disc + urg + extra) * pct * 100) / 100 : 0;
