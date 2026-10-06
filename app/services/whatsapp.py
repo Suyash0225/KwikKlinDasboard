@@ -54,7 +54,7 @@ AI_BLOCKED_TEST_PHONES = frozenset({"9876543210", "9999900201", "9999900291"})
 
 
 def _blocked_test_recipient(phone: str) -> bool:
-    digits = re.sub(r"\\D", "", str(phone or ""))
+    digits = re.sub(r"\D", "", str(phone or ""))
     return digits[-10:] in AI_BLOCKED_TEST_PHONES if len(digits) >= 10 else False
 
 
