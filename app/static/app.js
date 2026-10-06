@@ -839,6 +839,7 @@ function billMenu(num) {
       <button class="btn ghost" onclick="closeModal();printReceiptFromOrder('${num}')">🖨 Print receipt</button>
       <button class="btn ghost" onclick="closeModal();shareBillFromOrder('${num}')">📲 Share on WhatsApp</button>
       <button class="btn ghost" onclick="closeModal();messageMenu('${num}')">💬 Send a message</button>
+      <button class="btn ghost" onclick="closeModal();billingChargeModal('${num}')">➕ Add charge / due</button>
       <button class="btn ghost" onclick="closeModal();editBillModal('${num}')">✏️ Edit bill</button>
       <button class="btn ghost danger-ic" onclick="closeModal();deleteBillModal('${num}')">🗑 Delete bill</button>
     </div>
@@ -1098,6 +1099,7 @@ async function orderDetail(number) {
       ${(o.items || []).map((i) => `<div class="sumrow"><span>${i.qty} × ${esc(i.type || i.garment || i.service || "?")}</span><span>${i.amount != null ? money(i.amount) : ""}</span></div>`
         + (piecesCount(i.pieces) ? `<div class="muted" style="font-size:12.5px;margin:-4px 0 6px">👕 ${esc(piecesLabel(i.pieces))}</div>` : "")).join("")}
       <div class="sumrow"><span>Discount</span><span>${money(o.discount_amount || 0)}</span></div>
+      ${(o.billing_adjustments || []).length ? `<hr class="hr"><b>Additional charges</b>${(o.billing_adjustments || []).map((a) => `<div class="sumrow"><span>${esc(a.type || "Additional charge")}</span><span>${money(a.amount || 0)}</span></div>`).join("")}` : ""}
       <div class="sumrow"><span>GST</span><span>${money(o.gst_amount || 0)}</span></div>
       <div class="sumrow total"><span>Total</span><span>${o.total_amount ? money(o.total_amount) : "—"}</span></div>
       <div class="sumrow"><span>Paid</span><span>${money(o.amount_paid)} <span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></span></div>
@@ -1231,6 +1233,39 @@ let NB_SVC = "";
    date "urgent delivery days" par aa jaati hai. Order urgent banta hai —
    washerman ke work order par 🔴 URGENT, staff list mein sabse upar. */
 let NB_URG = { on: false, manual: false };
+let NB_CHARGES = [];
+
+function nbAddCharge() {
+  NB_CHARGES.push({ label: '', amount: 0, kind: 'extra_charge' });
+  nbPaintCharges();
+  const i = NB_CHARGES.length - 1;
+  setTimeout(() => $("nb-charge-label-" + i)?.focus(), 0);
+}
+function nbDelCharge(i) { NB_CHARGES.splice(i, 1); nbPaintCharges(); calcBill(); }
+function nbPaintCharges() {
+  const box = $("nb-charges"); if (!box) return;
+  box.innerHTML = NB_CHARGES.map((c, i) => '<div class="sumrow" style="gap:8px;align-items:center">' +
+    '<input id="nb-charge-label-' + i + '" placeholder="Charge name (e.g. Pickup)" value="' + esc(c.label) + '" oninput="NB_CHARGES[' + i + '].label=this.value;calcBill()">' +
+    '<select onchange="NB_CHARGES[' + i + '].kind=this.value;calcBill()"><option value="extra_charge" ' + (c.kind === 'extra_charge' ? 'selected' : '') + '>Extra charge</option><option value="due_charge" ' + (c.kind === 'due_charge' ? 'selected' : '') + '>Additional due</option></select>' +
+    '<input type="number" min="0" step="0.01" inputmode="decimal" value="' + (c.amount || '') + '" placeholder="₹" oninput="NB_CHARGES[' + i + '].amount=parseFloat(this.value)||0;calcBill()">' +
+    '<button type="button" class="btn sm ghost danger-ic" onclick="nbDelCharge(' + i + ')">✕</button></div>').join('');
+}
+
+async function billingChargeModal(number) {
+  openModal('<h3>➕ Add charge — ' + esc(number) + '</h3><div class="frm">' +
+    '<div><label>Charge / due name</label><input id="bc-label" placeholder="Pickup charge" autofocus></div>' +
+    '<div><label>Amount (₹)</label><input id="bc-amount" type="number" min="0.01" step="0.01"></div>' +
+    '<div><label>Type</label><select id="bc-kind"><option value="extra_charge">Extra charge</option><option value="due_charge">Additional due</option></select></div>' +
+    '<div><label>Note</label><input id="bc-note" placeholder="Why was this added?"></div></div>' +
+    '<p class="muted">Normal Due = Total − Paid. This adds a real bill adjustment and never overwrites payment history.</p>' +
+    '<div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" id="bc-save">Add to bill</button></div>');
+  $("bc-save").onclick = (e) => busy(e.target, async () => {
+    const label = $("bc-label").value.trim(), amount = parseFloat($("bc-amount").value);
+    if (!label || !(amount > 0)) throw new Error('Charge name and positive amount are required');
+    await api('/orders/' + encodeURIComponent(number) + '/billing-adjustment', { method: 'POST', body: { label, amount, kind: $("bc-kind").value, note: $("bc-note").value.trim() || null, changed_by: 'dashboard' } });
+    closeModal(); toast('Charge added'); loadDashboard(); if ($("bills-list")) loadBills();
+  });
+}
 const urgCfg = () => {
   const s = SETTINGS_CACHE || {};
   const days = parseInt(s.urgent_delivery_days);
@@ -1559,9 +1594,11 @@ function calcBill() {
   }
   $("nb-urg-sum").hidden = !(NB_URG.on && urg);
   $("nb-urg-sumamt").textContent = money(urg);
+  if ($("nb-charges")) nbPaintCharges();
+  const extra = NB_CHARGES.reduce((sum, c) => sum + Math.max(0, Number(c.amount) || 0), 0);
   const pct = (parseFloat(SETTINGS_CACHE.gst_percent) || 18) / 100;
-  const gst = $("nb-gst").checked ? Math.round((sub - disc + urg) * pct * 100) / 100 : 0;
-  const total = Math.max(0, sub - disc + urg + gst);
+  const gst = $("nb-gst").checked ? Math.round((sub - disc + urg + extra) * pct * 100) / 100 : 0;
+  const total = Math.max(0, sub - disc + urg + extra + gst);
   const adv = parseFloat($("nb-adv").value) || 0;
   $("nb-sub").textContent = money(sub);
   $("nb-gstamt").textContent = money(gst);
@@ -1584,7 +1621,7 @@ function calcBill() {
     if ($("nb-date").value) bits.push(`Delivery ${fmtDate($("nb-date").value)}`);
     $("nb-more-sum").textContent = bits.join(" · ");
   }
-  return { sub, disc, gst, total, adv, urg };
+  return { sub, disc, gst, total, adv, urg, extra };
 }
 /* SECURITY: the customer's NAME comes from their WhatsApp profile — it is
    attacker-controlled text. It must never travel through an inline
@@ -1786,8 +1823,11 @@ async function saveBill(btn) {
       return;
     }
     if (t.urg > 0) {
-      // jaldi ki fees bill ki apni line — receipt par "Urgent charge", kapdon mein nahi ginti
       items.push({ type: "Urgent charge", service: "Urgent", qty: 1, rate: t.urg, amount: t.urg, unit: "pc", kind: "urgent_charge" });
+    }
+    for (const c of NB_CHARGES) {
+      const amount = Math.max(0, Number(c.amount) || 0), label = (c.label || "").trim();
+      if (amount > 0 && label) items.push({ type: label, service: "Additional Charge", qty: 1, rate: amount, amount, unit: "pc", kind: c.kind || "extra_charge" });
     }
     if (NB_PICKUP && !$("nb-pickup-date").value) {
       $("nb-pickup-err").textContent = "Pick the day to collect the clothes.";
@@ -1811,7 +1851,7 @@ async function saveBill(btn) {
     NB_STARTED = 0;
     toast(T.billCreated + " — " + out.order_number);
     showBillSuccess(out);
-    LINES = []; addLine();
+    LINES = []; NB_CHARGES = []; nbPaintCharges(); addLine();
     ["nb-phone", "nb-name", "nb-disc", "nb-adv", "nb-notes", "nb-coupon", "nb-preset"].forEach((id) => ($(id).value = ""));
     nbSetPickup(false);
     nbToggleUrgent(false);   // agla bill normal se shuru (date bhi normal)
