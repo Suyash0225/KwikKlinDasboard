@@ -1090,29 +1090,6 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
         e["calls"] += n
         e["tokens"] += int(i) + int(o)
         e["cost_usd"] += _cost(model, int(i), int(o))
-    purpose_daily_rows = (
-        await db.execute(
-            select(
-                func.date_trunc("day", func.timezone("Asia/Kolkata", LlmUsage.at)).label("d"),
-                LlmUsage.purpose,
-                LlmUsage.model,
-                func.coalesce(func.sum(LlmUsage.input_tokens), 0),
-                func.coalesce(func.sum(LlmUsage.output_tokens), 0),
-            )
-            .where(LlmUsage.at >= month_start)
-            .group_by("d", LlmUsage.purpose, LlmUsage.model)
-        )
-    ).all()
-    purpose_cost_inr: dict[str, float] = {}
-    for d, purpose, model, i, o in purpose_daily_rows:
-        fx = _fx_for_date(d.date().isoformat())
-        if fx is not None:
-            purpose_cost_inr[purpose] = purpose_cost_inr.get(purpose, 0.0) + _cost(model, int(i), int(o)) * fx
-
-    by_purpose = sorted(acc.values(), key=lambda x: -x["tokens"])
-    for e in by_purpose:
-        e["cost_usd"] = round(e["cost_usd"], 4)
-        e["cost_inr"] = round(purpose_cost_inr.get(e["purpose"], 0.0), 4)
 
     # Daily series is the accounting basis for INR. Every day's USD
     # usage is converted using that day's USD/INR historical mid-market rate,
@@ -1157,6 +1134,29 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
         earlier = [d for d in fx_by_date if d <= day]
         return fx_by_date[max(earlier)] if earlier else None
 
+    purpose_daily_rows = (
+        await db.execute(
+            select(
+                func.date_trunc("day", func.timezone("Asia/Kolkata", LlmUsage.at)).label("d"),
+                LlmUsage.purpose,
+                LlmUsage.model,
+                func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+            )
+            .where(LlmUsage.at >= month_start)
+            .group_by("d", LlmUsage.purpose, LlmUsage.model)
+        )
+    ).all()
+    purpose_cost_inr: dict[str, float] = {}
+    for d, purpose, model, i, o in purpose_daily_rows:
+        fx = _fx_for_date(d.date().isoformat())
+        if fx is not None:
+            purpose_cost_inr[purpose] = purpose_cost_inr.get(purpose, 0.0) + _cost(model, int(i), int(o)) * fx
+
+    by_purpose = sorted(acc.values(), key=lambda x: -x["tokens"])
+    for e in by_purpose:
+        e["cost_usd"] = round(e["cost_usd"], 4)
+        e["cost_inr"] = round(purpose_cost_inr.get(e["purpose"], 0.0), 4)
     series = []
     for d, n, i, o in series_rows:
         day = d.date().isoformat()
