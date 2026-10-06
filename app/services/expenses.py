@@ -19,9 +19,12 @@ from app.models import Expense
 from app.services import app_settings
 
 BUILTIN_CATEGORIES = (
+    "Fuel", "Material", "Vehicle/Maintenance",
     "Detergent", "Electricity", "Rent", "Salary", "Transport", "Maintenance", "Other",
 )
 MAX_CUSTOM = 30
+_CLOSING_KEY = "staff_expense_closings"
+_CLOSING_KEEP_DAYS = 45
 
 
 class CategoryError(ValueError):
@@ -112,3 +115,25 @@ async def record(
     db.add(exp)
     await db.commit()
     return exp
+
+
+async def is_daily_closing_submitted(db: AsyncSession, staff_id, spent_on: date) -> bool:
+    raw = await app_settings.get(db, _CLOSING_KEY)
+    data = raw if isinstance(raw, dict) else {}
+    return bool(data.get(f"{spent_on.isoformat()}:{staff_id}"))
+
+
+async def mark_daily_closing_submitted(db: AsyncSession, staff_id, spent_on: date, *, total: Decimal = Decimal("0")) -> None:
+    raw = await app_settings.get(db, _CLOSING_KEY)
+    data = dict(raw) if isinstance(raw, dict) else {}
+    data[f"{spent_on.isoformat()}:{staff_id}"] = {"submitted": True, "total": str(total)}
+    cutoff = spent_on.toordinal() - _CLOSING_KEEP_DAYS
+    kept = {}
+    for key, value in data.items():
+        try:
+            d = date.fromisoformat(str(key)[:10])
+        except (ValueError, TypeError):
+            continue
+        if d.toordinal() >= cutoff:
+            kept[key] = value
+    await app_settings.set_value(db, _CLOSING_KEY, kept)
