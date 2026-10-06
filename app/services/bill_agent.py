@@ -1165,7 +1165,7 @@ async def _try_staff_expense_closing(
         return None
 
     from app.services import expenses as exp_svc
-    today = datetime.now(timezone.utc).date()
+    today = today_ist()
     raw = text.strip()
 
     if _EXPENSE_NO_RE.fullmatch(raw):
