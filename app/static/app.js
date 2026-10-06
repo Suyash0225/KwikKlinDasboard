@@ -2458,7 +2458,7 @@ async function loadUsage() {
   $("usage-kpis").innerHTML = skeleton(1);
   $("usage-models").innerHTML = skeleton(3);
   let u;
-  try { u = await api("/admin/api/usage"); }
+  try { u = await api("/admin/api/usage"); window.__LLM_USAGE = u; }
   catch (e) { $("usage-models").innerHTML = errBox(e.message, "loadUsage"); return; }
 
   const capNote = u.daily_request_cap
@@ -2531,6 +2531,34 @@ async function loadUsage() {
     (customers.length ? '<div style="margin-top:14px"><b>By customer — multiple active orders / no safe order link</b><table class="tbl" style="margin-top:8px"><thead><tr><th>Customer</th><th>Calls</th><th>Tokens</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
       customerRows + '</tbody></table></div>' : "") +
     '<p class="muted" style="margin-top:10px">Order attribution is conservative: only one active order gets an order-level link; multiple active orders stay at customer level.</p>';
+  calcUsageSimulator();
+}
+function setUsageSimNemotron() {
+  $("usage-sim-in").value = "0.05";
+  $("usage-sim-out").value = "0.20";
+  calcUsageSimulator();
+}
+function calcUsageSimulator() {
+  const inputRate = Math.max(0, Number($("usage-sim-in")?.value || 0));
+  const outputRate = Math.max(0, Number($("usage-sim-out")?.value || 0));
+  const month = window.__LLM_USAGE?.month;
+  const series = window.__LLM_USAGE?.series || [];
+  const today = window.__LLM_USAGE?.today;
+  if (!month) return;
+  const estimate = (tin, tout) => (tin / 1e6) * inputRate + (tout / 1e6) * outputRate;
+  const monthCost = estimate(month.input_tokens, month.output_tokens);
+  const dayCost = today ? estimate(today.input_tokens, today.output_tokens) : 0;
+  const projected = monthCost && new Date().getDate()
+    ? monthCost / new Date().getDate() * 30 : 0;
+  const last7 = series.slice(-7).reduce((a, d) => a + Number(d.tokens || 0), 0);
+  const last7Cost = last7
+    ? ((last7 * (inputRate + outputRate) / 2) / 1e6) : 0;
+  $("usage-simulator").innerHTML =
+    kpi("This month", usd(monthCost), `${kTok(month.input_tokens)} in · ${kTok(month.output_tokens)} out`, "", "💵", "green") +
+    kpi("Projected 30 days", usd(projected), `${month.calls} calls so far`, "", "📈", "blue") +
+    kpi("Today", usd(dayCost), `${today?.calls || 0} AI calls`, "", "⚡", "orange") +
+    kpi("Last 7 days", usd(last7Cost), `${kTok(last7)} total tokens · rough 50/50 split`, "", "📊", "purple") +
+    `<p class="muted" style="margin-top:10px">Calculation uses the exact input/output token totals recorded by Kwik Klin. It is a forecast, not a provider bill. Actual paid cost can differ if the provider applies caching, discounts, reasoning-token pricing, or different rates.</p>`;
 }
 const PURPOSE_LABEL = {
   reply: "Customer replies", intent: "Understanding messages", extract: "Reading bills/commands",
