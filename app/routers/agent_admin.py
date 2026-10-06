@@ -1093,7 +1093,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
     purpose_daily_rows = (
         await db.execute(
             select(
-                func.date_trunc("day", LlmUsage.at).label("d"),
+                func.date_trunc("day", func.timezone("Asia/Kolkata", LlmUsage.at)).label("d"),
                 LlmUsage.purpose,
                 LlmUsage.model,
                 func.coalesce(func.sum(LlmUsage.input_tokens), 0),
@@ -1120,7 +1120,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
     series_rows = (
         await db.execute(
             select(
-                func.date_trunc("day", LlmUsage.at).label("d"),
+                func.date_trunc("day", func.timezone("Asia/Kolkata", LlmUsage.at)).label("d"),
                 func.count(),
                 func.coalesce(func.sum(LlmUsage.input_tokens), 0),
                 func.coalesce(func.sum(LlmUsage.output_tokens), 0),
@@ -1176,7 +1176,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
     daily_model_rows = (
         await db.execute(
             select(
-                func.date_trunc("day", LlmUsage.at).label("d"),
+                func.date_trunc("day", func.timezone("Asia/Kolkata", LlmUsage.at)).label("d"),
                 LlmUsage.model,
                 func.coalesce(func.sum(LlmUsage.input_tokens), 0),
                 func.coalesce(func.sum(LlmUsage.output_tokens), 0),
@@ -1223,7 +1223,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
     attr_rows = (
         await db.execute(
             select(
-                func.date_trunc("day", LlmUsage.at).label("d"),
+                func.date_trunc("day", func.timezone("Asia/Kolkata", LlmUsage.at)).label("d"),
                 LlmUsage.order_id,
                 _Order.order_number,
                 _Order.customer_id,
