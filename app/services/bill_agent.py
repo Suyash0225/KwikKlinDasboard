@@ -46,6 +46,7 @@ from app.models import (
     PaymentStatus,
     Rate,
     Staff,
+    StaffRole,
 )
 from app.services import app_settings, audit, llm_client
 from app.services.llm_client import LLMAuthError, LLMError, LLMRateLimited
@@ -75,6 +76,44 @@ _CANCEL_RE = re.compile(r"^\s*(nahi+|no|na|cancel|rehne do|❌|mat( banao)?)\s*$
 
 # Fixed-choice prompts use WhatsApp list menus. Free-form answers (ETA, issue
 # description, bill edits) remain normal text because those need real input.
+_EXPENSE_NO_RE = re.compile(
+    r"^\s*(?:no\s+expense|no\s+exp|koi\s+(?:kharcha|expense)\s+(?:nahi|nhi|nahin)(?:\s+hua)?|kuch\s+(?:kharcha|expense)\s+(?:nahi|nhi|nahin)(?:\s+hua)?)\s*$",
+    re.I,
+)
+_EXPENSE_HINT_RE = re.compile(
+    r"\b(?:expense|kharcha|petrol|diesel|cng|fuel|tel|plastic|polythene|carry\s*bag|saman|material|puncture|repair|service|parking|toll)\b",
+    re.I,
+)
+_EXPENSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entries": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "amount": {"type": "number", "minimum": 0.01},
+                    "category": {"type": "string", "enum": ["Fuel", "Material", "Vehicle/Maintenance", "Other"]},
+                    "description": {"type": "string"},
+                },
+                "required": ["amount", "category", "description"],
+                "additionalProperties": False,
+            },
+        },
+        "no_expense": {"type": "boolean"},
+        "needs_clarification": {"type": "boolean"},
+    },
+    "required": ["entries", "no_expense", "needs_clarification"],
+    "additionalProperties": False,
+}
+_EXPENSE_SYSTEM = (
+    "Extract delivery-worker expenses. Fuel=petrol/diesel/CNG/tel. "
+    "Material=plastic/carry bags/packaging/detergent/powder/saman. "
+    "Vehicle/Maintenance=puncture/repair/service/spares. Other=anything else. "
+    "Split multiple expenses. Never invent amounts. If no expense, set no_expense=true. "
+    "If amount/category is missing, set needs_clarification=true."
+)
+
 _FIXED_BTN_RE = re.compile(
     r"^\s*\[button:(bill_confirm|payment_confirm|relay_confirm):([^\]]+)\]",
     re.I,
@@ -763,6 +802,10 @@ async def _handle_task_followup(
     db: AsyncSession, sender_phone: str, sender_label: str, text: str
 ) -> str | None:
     """Button ke baad ka free-text jawab (ETA ya dikkat ki wajah)."""
+    expense_reply = await _try_staff_expense_closing(db, sender_phone=sender_phone, sender_label=sender_label, text=text or "")
+    if expense_reply is not None:
+        return expense_reply
+
     pending = _PENDING.get(sender_phone)
     if not isinstance(
         pending,
@@ -1109,6 +1152,79 @@ async def _staff_reference_lookup(
         f"*Status:* {status_label(order.status)}"
     )
 
+
+
+
+async def _try_staff_expense_closing(
+    db: AsyncSession, *, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    if sender_label == "manager" or not text:
+        return None
+    staff = (await db.execute(select(Staff).where(Staff.phone == sender_phone))).scalar_one_or_none()
+    if staff is None or not staff.is_active or staff.role is not StaffRole.DELIVERY:
+        return None
+
+    from app.services import expenses as exp_svc
+    today = today_ist()
+    raw = text.strip()
+
+    if _EXPENSE_NO_RE.fullmatch(raw):
+        await exp_svc.mark_daily_closing_submitted(db, staff.id, today, total=Decimal("0"))
+        return "Aaj ka expense report ₹0 ke saath submit ho gaya. Kal phir daily report dena hai."
+
+    if not _EXPENSE_HINT_RE.search(raw):
+        return None
+
+    entries = []
+    patterns = (
+        ("Fuel", r"(?:petrol|diesel|cng|fuel|tel)"),
+        ("Material", r"(?:plastic|polythene|carry\s*bag|carrybag|packet|packaging|material|saman|detergent|powder)"),
+        ("Vehicle/Maintenance", r"(?:puncture|repair|servicing|service|spare|vehicle\s*maintenance|bike\s*repair)"),
+        ("Other", r"(?:parking|toll|other|chai|tea)"),
+    )
+    for category, words in patterns:
+        pattern = rf"(?:{words})[^0-9]{{0,25}}(\d{{1,6}}(?:\.\d+)?)|(\d{{1,6}}(?:\.\d+)?)[^0-9]{{0,25}}(?:{words})"
+        for m in re.finditer(pattern, raw, re.I):
+            entries.append((category, Decimal(m.group(1) or m.group(2)), m.group(0).strip()[:120]))
+
+    if not entries:
+        try:
+            with llm_client.track("staff_expense_extract"):
+                out = await llm_client.ask_json(
+                    system=_EXPENSE_SYSTEM,
+                    user_text=raw[:1000],
+                    schema=_EXPENSE_SCHEMA,
+                    model=llm_client.MODEL_CHEAP,
+                    max_tokens=250,
+                )
+            if out.get("no_expense"):
+                await exp_svc.mark_daily_closing_submitted(db, staff.id, today, total=Decimal("0"))
+                return "Aaj ka expense report ₹0 ke saath submit ho gaya."
+            if out.get("needs_clarification") or not out.get("entries"):
+                return "Expense samajh aa gaya, amount/category clear nahi hai. Example: Petrol 200, plastic 80."
+            entries = [(e["category"], Decimal(str(e["amount"])), e.get("description") or e["category"]) for e in out["entries"]]
+        except (LLMError, LLMAuthError, LLMRateLimited):
+            return "Expense save nahi ho paya. Amount + category bhejein, jaise Petrol 200, plastic 80."
+
+    total = Decimal("0")
+    saved = []
+    for category, amount, description in entries:
+        canonical = await exp_svc.canonical_category(db, category)
+        if canonical is None:
+            return "Expense category valid nahi hai. Fuel, Material, Vehicle/Maintenance ya Other mein batayein."
+        await exp_svc.record(
+            db, category=canonical, amount=amount, spent_on=today,
+            description=description, added_by=f"{staff.name} (Delivery)", staff_id=staff.id,
+        )
+        saved.append((canonical, amount))
+        total += amount
+
+    await exp_svc.mark_daily_closing_submitted(db, staff.id, today, total=total)
+    lines = ["Aaj ka expense report submit ho gaya."]
+    lines += [f"- {cat}: ₹{amt:g}" for cat, amt in saved]
+    lines.append(f"Total: ₹{total:g}")
+    lines.append("Kal bhi daily expense report dena mandatory hai.")
+    return "\n".join(lines)
 
 async def handle_staff_message(
     db: AsyncSession, *, sender_phone: str, sender_label: str, text: str

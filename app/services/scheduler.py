@@ -28,7 +28,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.database import async_session_factory
-from app.models import Customer, Order, OrderStatus, PaymentStatus, SentEvent, Staff
+from app.models import Customer, Order, OrderStatus, PaymentStatus, SentEvent, Staff, StaffRole
 from app.services import app_settings, audit
 from app.services.messages import get_message, status_label
 from app.services.order_service import ACTIVE_STATUSES
@@ -62,6 +62,7 @@ def start() -> None:
     # ideal, but cron needs a static hour — so we check inside and run the
     # trigger hourly, firing only when the configured hour matches.
     _scheduler.add_job(_hourly_tick, CronTrigger(minute=0, timezone=IST), id="hourly")
+    _scheduler.add_job(_expense_closing_tick, CronTrigger(hour="20-21", minute=30, timezone=IST), id="staff-expense-closing")
     # Customer human-handoff timer: once a minute, let AI take over a
     # conversation only after the configured grace period has elapsed.
     _scheduler.add_job(
@@ -88,7 +89,7 @@ def start() -> None:
         _gbp_daily_post_tick, CronTrigger(hour=10, minute=15, timezone=IST), id="gbp-daily-post"
     )
     _scheduler.start()
-    log.info("scheduler_started", jobs=["hourly", "human-handoff", "nightly", "tunnel-guard", "durability", "gbp-reviews"])
+    log.info("scheduler_started", jobs=["hourly", "staff-expense-closing", "human-handoff", "nightly", "tunnel-guard", "durability", "gbp-reviews"])
 
 
 def shutdown() -> None:
@@ -137,6 +138,51 @@ async def _unclaim(event_key: str) -> None:
             await s.commit()
     except Exception:
         log.exception("unclaim_failed", event_key=event_key)
+
+
+async def _expense_closing_tick() -> None:
+    await _for_each_tenant("staff-expense-closing", _expense_closing_for_tenant)
+
+
+async def _expense_closing_for_tenant(now_ist: datetime) -> None:
+    from app.services import expenses as exp_svc
+    async with async_session_factory() as db:
+        staff_rows = (await db.execute(select(Staff).where(Staff.is_active, Staff.role == StaffRole.DELIVERY))).scalars().all()
+        for st in staff_rows:
+            if await exp_svc.is_daily_closing_submitted(db, st.id, now_ist.date()):
+                continue
+            final = now_ist.hour == 21
+            key = f"expense-closing:{now_ist.strftime('%Y-%m-%d')}:{st.phone}:{'final' if final else 'first'}"
+            if not await _claim(key):
+                continue
+            if final:
+                text = (f"⚠️ *Daily Expense Closing — FINAL REMINDER*\n{st.name} ji, aaj ka expense report abhi pending hai.\n\n"
+                        "⛽ Fuel · 📦 Material · 🛠️ Vehicle/Maintenance · 💰 Other\n"
+                        "Example: `Petrol 200, plastic 80`\nAgar kuch kharch nahi hua: `No expense`\n\n"
+                        "❗ Aaj ka report submit karna mandatory hai.")
+            else:
+                text = (f"🧾 *Aaj ka Expense Report — Mandatory*\n{st.name} ji, aaj delivery/pickup ke kaam me jo bhi kharcha hua wo abhi WhatsApp par bhej dein.\n\n"
+                        "⛽ Fuel · 📦 Material · 🛠️ Vehicle/Maintenance · 💰 Other\n"
+                        "Example: `Petrol 200, plastic 80`\nKoi kharcha nahi hua to: `No expense`\n\n"
+                        "Report submit karna mandatory hai.")
+            try:
+                await send_message(db, to_phone=st.phone, text=text)
+                if final:
+                    try:
+                        await send_message(
+                            db,
+                            to_phone=manager_phone(),
+                            text=(
+                                f"🔴 *Expense report pending:* {st.name} ne aaj ka daily expense closing "
+                                f"submit nahi kiya hai. Please follow up."
+                            ),
+                        )
+                    except SendError:
+                        log.warning("staff_expense_manager_alert_failed", staff=st.name)
+            except SendError as exc:
+                log.warning("staff_expense_reminder_send_failed", staff=st.name, error=str(exc)[:120])
+                if not exc.transient:
+                    await _unclaim(key)
 
 
 async def _human_handoff_tick() -> None:

@@ -177,6 +177,7 @@ DEFAULTS: dict[str, Any] = {
     # owner ki apni expense categories (built-in list services/expenses.py
     # mein; ye usme JUDTI hain, uski jagah nahi)
     "expense_categories": [],
+    "staff_expense_closings": {},
     # Order Agent SLA (owner's spec): pickup se ginke
     "sla_normal_days": 4,
     "sla_heavy_days": 7,
