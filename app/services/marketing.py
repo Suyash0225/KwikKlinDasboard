@@ -28,7 +28,7 @@ from app.models import (
     Order,
 )
 from app.services import app_settings, audit
-from app.services.whatsapp import SendError, send_image, send_message
+from app.services.whatsapp import SendError, _blocked_test_recipient, send_image, send_message
 
 log = structlog.get_logger()
 
@@ -129,6 +129,8 @@ async def eligible(db: AsyncSession, customer_id) -> tuple[bool, str]:
         return False, "inactive"
     if cust.opted_out or cust.marketing_opt_out:
         return False, "opted_out"
+    if _blocked_test_recipient(cust.phone):
+        return False, "blocked_test_recipient"
     cap = int(await app_settings.get(db, "marketing_freq_cap_per_month"))
     if cust.last_marketing_at:
         min_gap_days = max(1, 30 // max(cap, 1))

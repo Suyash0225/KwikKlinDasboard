@@ -47,6 +47,17 @@ SERVICE_WINDOW = timedelta(hours=24)
 _GRAPH = "https://graph.facebook.com/v21.0"
 
 
+# Hard safety block for known development/test recipients. Automated sends
+# (AI, campaigns, schedulers) must never reach these numbers. Human/manager
+# messages remain possible for debugging when explicitly requested.
+AI_BLOCKED_TEST_PHONES = frozenset({"9876543210", "9999900201", "9999900291"})
+
+
+def _blocked_test_recipient(phone: str) -> bool:
+    digits = re.sub(r"\D", "", str(phone or ""))
+    return digits[-10:] in AI_BLOCKED_TEST_PHONES if len(digits) >= 10 else False
+
+
 class WaCreds:
     """Kis number se bhejna hai — token + phone_number_id ek saath.
 
@@ -241,6 +252,10 @@ async def send_message(
     """
     if settings.WHATSAPP_PROVIDER != "waha":
         raise SendError("WAHA/NOWEB is the only enabled WhatsApp provider", transient=False)
+
+    if _blocked_test_recipient(to_phone) and sent_by not in {"manager", "human"}:
+        log.warning("automated_send_blocked_test_recipient", to=to_phone, sent_by=sent_by)
+        raise SendError("automated send blocked for test recipient", transient=False)
 
     if template_name and (text or buttons or list_rows):
         raise ValueError("template cannot be combined with text/buttons/list")
@@ -457,6 +472,10 @@ async def send_image(
     """Send media through WAHA when configured; keep Meta/DotPe legacy path."""
     if settings.WHATSAPP_PROVIDER != "waha":
         raise SendError("WAHA/NOWEB is the only enabled WhatsApp provider", transient=False)
+
+    if _blocked_test_recipient(to_phone) and sent_by not in {"manager", "human"}:
+        log.warning("automated_image_blocked_test_recipient", to=to_phone, sent_by=sent_by)
+        raise SendError("automated send blocked for test recipient", transient=False)
 
     customer, staff = await _find_recipient(db, to_phone)
 
