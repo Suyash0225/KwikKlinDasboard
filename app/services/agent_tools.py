@@ -66,6 +66,11 @@ TOOL_SPECS = [
         "args": "period (today|week|month)",
     },
     {
+        "name": "billing_adjustment",
+        "when": "owner wants to add/remove an extra charge or additional due on a bill",
+        "args": "order number | label | amount | kind (extra_charge|due_charge)",
+    },
+    {
         "name": "ping_staff",
         "when": "owner asks to message/remind/ask a staff member (haan ping karo, pucho, bol do)",
         "args": "name + message (message ko seedhe unse baat karte hue likho)",
@@ -107,7 +112,7 @@ TOOL_SPECS = [
 # Tools that CHANGE data. The assistant may only claim something is done if
 # one of these actually ran — see bill_agent's unbacked-claim check.
 WRITE_TOOLS = {
-    "add_expense", "add_customer", "set_shop_info", "assign_task", "ping_staff",
+    "add_expense", "add_customer", "set_shop_info", "assign_task", "ping_staff", "billing_adjustment",
 }
 
 
@@ -451,6 +456,34 @@ def _money_fmt(v) -> str:
 # action tool
 # --------------------------------------------------------------------------
 
+
+
+async def _billing_adjustment(db: AsyncSession, args: str) -> str:
+    """AI-controlled bill adjustment. Format: order | label | amount | kind."""
+    import re as _re
+    from app.services.order_service import add_billing_adjustment, get_order
+
+    parts = [p.strip() for p in (args or "").split("|")]
+    if len(parts) < 3:
+        return "Format: billing_adjustment KK-... | Pickup charge | 50 | extra_charge"
+    number, label, raw_amount = parts[:3]
+    kind = (parts[3] if len(parts) >= 4 and parts[3] else "extra_charge").strip().lower()
+    if kind not in {"extra_charge", "due_charge"}:
+        return "Kind sirf extra_charge ya due_charge ho sakta hai."
+    raw_amount = _re.sub(r"(?i)\\b(rs\\.?|inr|rupees?)\\b|[₹,]", "", raw_amount).strip()
+    try:
+        amount = Decimal(raw_amount)
+    except Exception:
+        return "Amount valid nahi hai. Example: 50."
+    if amount <= 0:
+        return "Amount 0 se zyada hona chahiye."
+    try:
+        order = await get_order(db, number)
+        await add_billing_adjustment(db, order, label=label, amount=amount, kind=kind, changed_by="AI")
+    except Exception as exc:
+        return f"Charge nahi laga: {str(exc)[:120]}"
+    word = "extra charge" if kind == "extra_charge" else "additional due"
+    return f"{word} laga diya: {order.order_number} — {label} ₹{amount:.2f}. Naya total ₹{order.total_amount or 0:.2f}; baaki payment system se automatically niklega."
 
 async def _ping_staff(db: AsyncSession, args: str) -> str:
     """Send a message to a staff member. args: 'Name | message'."""
@@ -996,4 +1029,5 @@ _TOOLS = {
     "staff_chat": _staff_chat,
     "money": _money_report,
     "ping_staff": _ping_staff,
+    "billing_adjustment": _billing_adjustment,
 }
