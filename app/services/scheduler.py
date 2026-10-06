@@ -167,6 +167,18 @@ async def _expense_closing_for_tenant(now_ist: datetime) -> None:
                         "Report submit karna mandatory hai.")
             try:
                 await send_message(db, to_phone=st.phone, text=text)
+                if final:
+                    try:
+                        await send_message(
+                            db,
+                            to_phone=manager_phone(),
+                            text=(
+                                f"🔴 *Expense report pending:* {st.name} ne aaj ka daily expense closing "
+                                f"submit nahi kiya hai. Please follow up."
+                            ),
+                        )
+                    except SendError:
+                        log.warning("staff_expense_manager_alert_failed", staff=st.name)
             except SendError as exc:
                 log.warning("staff_expense_reminder_send_failed", staff=st.name, error=str(exc)[:120])
                 if not exc.transient:
