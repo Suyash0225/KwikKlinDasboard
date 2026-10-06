@@ -2452,6 +2452,7 @@ async function loadTplPreview() {
 
 /* ============================= AI usage ============================= */
 const usd = (n) => "$" + Number(n || 0).toFixed(Number(n) >= 1 ? 2 : 4);
+const inrCost = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const kTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n || 0));
 
 async function loadUsage() {
@@ -2471,9 +2472,9 @@ async function loadUsage() {
     kpi("AI calls today", u.today.calls, capNote, "", "⚡", "orange") +
     kpi("Tokens today", kTok(u.today.input_tokens + u.today.output_tokens),
         `in ${kTok(u.today.input_tokens)} · out ${kTok(u.today.output_tokens)}`, "", "🔤", "blue") +
-    kpi("Spend this month", u.all_free ? "₹0 (free)" : usd(u.month.cost_usd),
-        u.all_free ? "on the free tier" : budgetNote, "", "💰", "green") +
-    kpi("Monthly at this rate", u.all_free ? "₹0" : usd(u.projected_month_usd),
+    kpi("Spend this month", u.all_free ? "₹0 (free)" : inrCost(u.month.cost_inr),
+        u.all_free ? "on the free tier" : `${budgetNote} · ${usd(u.month.cost_usd)}`, "", "💰", "green") +
+    kpi("Monthly at this rate", u.all_free ? "₹0" : inrCost((u.month.cost_inr || 0) / Math.max(1, new Date().getDate()) * 30),
         `${u.month.calls} calls so far`, "", "📈", "purple");
 
   const s = u.series || [];
@@ -2504,7 +2505,7 @@ async function loadUsage() {
     '<p class="muted">Provider: <b>' + esc(u.provider) + '</b> · ' + esc(u.models.smart) + ' / ' + esc(u.models.cheap) + '</p>' +
     '<table class="tbl"><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
     (byModel.map((m) => '<tr><td><b>' + esc(m.model) + '</b></td><td>' + m.calls + '</td><td>' + kTok(m.input_tokens) + '</td><td>' +
-      kTok(m.output_tokens) + '</td><td>' + (m.failed || 0) + '</td><td class="money">' + (m.priced ? usd(m.cost_usd) : '<span class="muted">free</span>') + '</td></tr>').join("")
+      kTok(m.output_tokens) + '</td><td>' + (m.failed || 0) + '</td><td class="money">' + (m.priced ? inrCost(m.cost_inr) : '<span class="muted">free</span>') + '</td></tr>').join("")
       || '<tr><td colspan="6" class="muted">No calls this month.</td></tr>') + '</tbody></table>' +
     '<div class="rowcards">' + (byModel.map((m) => '<div class="rowcard"><div class="r1"><b>' + esc(m.model) + '</b><span class="money">' +
       (m.priced ? usd(m.cost_usd) : "free") + '</span></div><div class="kv"><span>' + m.calls + ' calls · ' + (m.failed || 0) + ' failed</span><span>in ' +
@@ -2518,14 +2519,14 @@ async function loadUsage() {
   const linkedCalls = orders.reduce((n, x) => n + x.calls, 0) + customers.reduce((n, x) => n + x.calls, 0);
   const orderRows = orders.slice(0, 20).map(x =>
     '<tr><td><b>' + esc(x.order_number) + '</b></td><td>' + esc(x.customer_name) + '</td><td>' + x.calls + '</td><td>' + kTok(x.tokens) + '</td><td>' +
-    (x.failed_calls || 0) + '</td><td class="money">' + (u.all_free ? "free" : usd(x.cost_usd)) + '</td></tr>').join("");
+    (x.failed_calls || 0) + '</td><td class="money">' + (u.all_free ? "free" : inrCost(x.cost_inr)) + '</td></tr>').join("");
   const customerRows = customers.slice(0, 20).map(x =>
     '<tr><td><b>' + esc(x.customer_name) + '</b></td><td>' + x.calls + '</td><td>' + kTok(x.tokens) + '</td><td>' + (x.failed_calls || 0) + '</td><td class="money">' +
     (u.all_free ? "free" : usd(x.cost_usd)) + '</td></tr>').join("");
   $("usage-attribution").innerHTML =
     kpi("Linked AI calls", linkedCalls, "Customer/order context available", "", "🔗", "blue") +
     kpi("Unlinked calls", un.calls || 0, "Background/system AI", "", "🧩", "orange") +
-    kpi("Unlinked cost", u.all_free ? "₹0 (free)" : usd(un.cost_usd), "Not safely assignable to an order", "", "⚠️", "purple") +
+    kpi("Unlinked cost", u.all_free ? "₹0 (free)" : inrCost(un.cost_inr), "Not safely assignable to an order", "", "⚠️", "purple") +
     (orders.length ? '<div style="margin-top:14px"><b>By order — one active order at call time</b><table class="tbl" style="margin-top:8px"><thead><tr><th>Order</th><th>Customer</th><th>Calls</th><th>Tokens</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
       orderRows + '</tbody></table></div>' : '<p class="muted">No single-active-order AI calls yet.</p>') +
     (customers.length ? '<div style="margin-top:14px"><b>By customer — multiple active orders / no safe order link</b><table class="tbl" style="margin-top:8px"><thead><tr><th>Customer</th><th>Calls</th><th>Tokens</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
@@ -2541,24 +2542,32 @@ function setUsageSimNemotron() {
 function calcUsageSimulator() {
   const inputRate = Math.max(0, Number($("usage-sim-in")?.value || 0));
   const outputRate = Math.max(0, Number($("usage-sim-out")?.value || 0));
-  const month = window.__LLM_USAGE?.month;
   const series = window.__LLM_USAGE?.series || [];
-  const today = window.__LLM_USAGE?.today;
-  if (!month) return;
-  const estimate = (tin, tout) => (tin / 1e6) * inputRate + (tout / 1e6) * outputRate;
-  const monthCost = estimate(month.input_tokens, month.output_tokens);
-  const dayCost = today ? estimate(today.input_tokens, today.output_tokens) : 0;
-  const projected = monthCost && new Date().getDate()
-    ? monthCost / new Date().getDate() * 30 : 0;
-  const last7 = series.slice(-7).reduce((a, d) => a + Number(d.tokens || 0), 0);
-  const last7Cost = last7
-    ? ((last7 * (inputRate + outputRate) / 2) / 1e6) : 0;
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const todayKey = now.toISOString().slice(0, 10);
+  const estimateDay = (d) => {
+    const usdCost = (Number(d.input_tokens || 0) / 1e6) * inputRate + (Number(d.output_tokens || 0) / 1e6) * outputRate;
+    return { usd: usdCost, inr: d.fx_usd_inr ? usdCost * Number(d.fx_usd_inr) : null };
+  };
+  const monthDays = series.filter(d => new Date(d.date + "T00:00:00") >= monthStart);
+  const last7Days = series.slice(-7);
+  const month = monthDays.reduce((a, d) => {
+    const x = estimateDay(d); a.in += Number(d.input_tokens || 0); a.out += Number(d.output_tokens || 0); a.calls += Number(d.calls || 0); a.usd += x.usd; a.inr += x.inr || 0; return a;
+  }, {in:0,out:0,calls:0,usd:0,inr:0});
+  const today = series.find(d => d.date === todayKey);
+  const todayEst = today ? estimateDay(today) : {usd:0,inr:0};
+  const last7 = last7Days.reduce((a, d) => {
+    const x = estimateDay(d); a.tokens += Number(d.tokens || 0); a.usd += x.usd; a.inr += x.inr || 0; return a;
+  }, {tokens:0,usd:0,inr:0});
+  const projected = month.inr && now.getDate() ? month.inr / now.getDate() * 30 : 0;
+  const fxLabel = window.__LLM_USAGE?.fx?.source || "historical USD/INR";
   $("usage-simulator").innerHTML =
-    kpi("This month", usd(monthCost), `${kTok(month.input_tokens)} in · ${kTok(month.output_tokens)} out`, "", "💵", "green") +
-    kpi("Projected 30 days", usd(projected), `${month.calls} calls so far`, "", "📈", "blue") +
-    kpi("Today", usd(dayCost), `${today?.calls || 0} AI calls`, "", "⚡", "orange") +
-    kpi("Last 7 days", usd(last7Cost), `${kTok(last7)} total tokens · rough 50/50 split`, "", "📊", "purple") +
-    `<p class="muted" style="margin-top:10px">Calculation uses the exact input/output token totals recorded by Kwik Klin. It is a forecast, not a provider bill. Actual paid cost can differ if the provider applies caching, discounts, reasoning-token pricing, or different rates.</p>`;
+    kpi("This month", inrCost(month.inr), `${kTok(month.in)} in · ${kTok(month.out)} out · ${usd(month.usd)}`, "", "💵", "green") +
+    kpi("Projected 30 days", inrCost(projected), `${month.calls} calls so far`, "", "📈", "blue") +
+    kpi("Today", inrCost(todayEst.inr), `${today?.calls || 0} AI calls · ${today?.fx_usd_inr ? "₹" + Number(today.fx_usd_inr).toFixed(2) + "/$" : "FX unavailable"}`, "", "⚡", "orange") +
+    kpi("Last 7 days", inrCost(last7.inr), `${kTok(last7.tokens)} tokens · exact input/output`, "", "📊", "purple") +
+    `<p class="muted" style="margin-top:10px">INR conversion uses the USD/INR rate attached to each usage date (${esc(fxLabel)}). No rough 50/50 token split. USD is shown only as a reference. Forecast is an estimate, not a provider invoice.</p>`;
 }
 const PURPOSE_LABEL = {
   reply: "Customer replies", intent: "Understanding messages", extract: "Reading bills/commands",
