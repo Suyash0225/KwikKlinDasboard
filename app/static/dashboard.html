@@ -483,6 +483,28 @@
       <div class="card" style="margin-top:14px"><b>By model</b><div id="usage-models" style="margin-top:10px"></div></div>
       <div class="card" style="margin-top:14px">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+          <div><b>💰 Paid AI cost simulator</b><p class="muted" style="margin:4px 0 0">
+            Current free-model token usage ko kisi paid model ki rate par calculate karo. Isse provider change karne se pehle monthly cost ka estimate milega.
+          </p></div>
+        </div>
+        <div class="split2" style="margin-top:12px">
+          <div>
+            <label>Input price ($ / 1M tokens)</label>
+            <input id="usage-sim-in" type="number" min="0" step="0.0001" value="0.05" inputmode="decimal">
+          </div>
+          <div>
+            <label>Output price ($ / 1M tokens)</label>
+            <input id="usage-sim-out" type="number" min="0" step="0.0001" value="0.20" inputmode="decimal">
+          </div>
+        </div>
+        <div class="filters" style="margin-top:10px">
+          <button class="btn sm" type="button" onclick="calcUsageSimulator()">Calculate</button>
+          <button class="btn ghost sm" type="button" onclick="setUsageSimNemotron()">Nemotron paid ($0.05 / $0.20)</button>
+        </div>
+        <div id="usage-simulator" style="margin-top:12px"></div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
           <div><b>AI cost attribution</b><p class="muted" style="margin:4px 0 0">
             Order-level cost is shown only when the customer had exactly one active order; ambiguous cases stay at customer level.
             Failed attempts are counted separately and do not add token cost unless the provider returned tokens.
