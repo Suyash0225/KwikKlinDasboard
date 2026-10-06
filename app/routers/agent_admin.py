@@ -1246,6 +1246,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
     customer_acc: dict[str, dict] = {}
     unattributed_calls = unattributed_tokens = 0
     unattributed_cost = 0.0
+    unattributed_cost_inr = 0.0
     for d, oid, order_number, customer_id, customer_name, model, n, i, o, failed in attr_rows:
         i, o, n, failed = int(i), int(o), int(n), int(failed or 0)
         cost = _cost(model, i, o)
@@ -1272,6 +1273,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
             unattributed_calls += n
             unattributed_tokens += i + o
             unattributed_cost += cost
+            unattributed_cost_inr += cost_inr
 
     by_order = sorted(order_acc.values(), key=lambda x: (-x["cost_usd"], -x["calls"]))
     by_customer = sorted(customer_acc.values(), key=lambda x: (-x["cost_usd"], -x["calls"]))
@@ -1311,7 +1313,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
                 "calls": unattributed_calls,
                 "tokens": unattributed_tokens,
                 "cost_usd": round(unattributed_cost, 4),
-                "cost_inr": round(sum(((_cost(model, int(i), int(o)) * (_fx_for_date(d.date().isoformat()) or 0.0)) for d, _, _, _, _, model, _, i, o, _ in attr_rows if not _ and False), 0.0), 4),
+                "cost_inr": round(unattributed_cost_inr, 4),
             },
         },
     }
