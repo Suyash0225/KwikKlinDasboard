@@ -1612,7 +1612,7 @@ _BILL_CONTEXT_RE = re.compile(
     r"\\b(?:bill|billing|rate|price|shirt|pant|saree|kurta|kurti|salwar|suit|"
     r"blazer|coat|jacket|jeans|tshirt|t-shirt|bedsheet|blanket|carpet|"
     r"dry\\s*clean|wash|washing|iron|ironing|press|kapde|kapda|clothes|pcs?|"
-    r"piece|quantity|jama|advance)\\b|\\d+",
+    r"piece|quantity|jama|advance)\\b",
     re.I,
 )
 
