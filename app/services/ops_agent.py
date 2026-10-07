@@ -351,6 +351,13 @@ async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStat
         # Manual/status-driven moves must also create the next processing task.
         if new_status in _STAGE_TASKS:
             await _ensure_stage_task(db, order, new_status)
+
+        # READY is the handoff point: processing is complete, so the next
+        # open job must belong to the delivery team. create_delivery_task()
+        # is idempotent and also writes order.assigned_delivery_id, keeping
+        # the DB assignment and the staff task in sync.
+        if new_status is OrderStatus.READY and await enabled(db):
+            await task_service.create_delivery_task(db, order)
     except Exception:
         await db.rollback()
         log.exception("ops_agent_status_hook_failed", order=num)
