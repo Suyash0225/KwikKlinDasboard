@@ -627,7 +627,16 @@ async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)
 
     sent = False
     try:
-        await send_message(db, to_phone=cust.phone, text=text)
+        from app.services.customer_messages import customer_payment_buttons
+
+        await send_message(
+            db,
+            to_phone=cust.phone,
+            text=text,
+            buttons=customer_payment_buttons(),
+            list_button="Payment",
+            list_title="Kwik Klin",
+        )
         sent = True
     except SendError as exc:
         log.info("dashboard_reminder_api_failed", customer=cust.id, error=str(exc))

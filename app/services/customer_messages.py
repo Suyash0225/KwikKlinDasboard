@@ -68,6 +68,18 @@ async def short_review_link(db: AsyncSession, tenant) -> str:
     return links[0]
 
 
+def customer_payment_buttons() -> list[Button]:
+    """Payment actions for a customer-level outstanding-balance reminder.
+
+    The reminder can cover multiple unpaid bills, so Pay Now must open the
+    customer's consolidated statement rather than silently choosing one bill.
+    """
+    return [
+        Button("payment:customer:pay", "💰 Pay Now"),
+        Button("payment:customer:paid", "✅ Already Paid"),
+    ]
+
+
 async def payment_buttons(db: AsyncSession, order: Order) -> list[Button]:
     """Customer payment actions — deliberately simple two-button UX."""
     from app.services import bill_link
