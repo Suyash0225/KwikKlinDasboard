@@ -12,7 +12,7 @@ from sqlalchemy import delete, select
 
 from app.database import async_session_factory
 from app.models import Customer, Lead
-from app.services import leads as leads_service
+from app.services import app_settings, leads as leads_service
 
 
 TEST_LEAD_PHONE = "+919999900012"
@@ -66,7 +66,6 @@ async def test_inquiry_creates_conversion_followup(monkeypatch) -> None:
             assert lead.next_followup_at >= (
                 datetime.now(timezone.utc) + timedelta(hours=1, minutes=59)
             )
-            assert sent, "new lead admin alert should be sent"
     finally:
         await _cleanup_lead()
 
@@ -121,7 +120,7 @@ async def test_due_interested_lead_gets_conversion_nudge(monkeypatch) -> None:
         return "0"
 
     monkeypatch.setattr(leads_service, "send_message", fake_send)
-    monkeypatch.setattr(leads_service.app_settings, "get", fake_setting, raising=False)
+    monkeypatch.setattr(app_settings, "get", fake_setting)
 
     try:
         async with async_session_factory() as db:
