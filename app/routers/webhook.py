@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import Conversation, Customer, Direction, Staff, WebhookEvent, Order, PaymentStatus
+from app.models import Conversation, Customer, Direction, Staff, WebhookEvent, Order, OrderStatus, PaymentStatus
 from app.services.ai_agent import build_ai_reply
 from app.services.bill_agent import handle_staff_message
 from app.services.messages import CUSTOMER_LANG, get_message, status_label
