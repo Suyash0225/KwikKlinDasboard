@@ -436,8 +436,13 @@ async def test_delivery_task_uses_done_pending_menu(sent) -> None:
         db.add(worker)
         await db.commit()
         sid = worker.id
+        from app.models import Customer
+        customer = Customer(phone="+919999900095", name="Rahul ji", is_active=True)
+        db.add(customer)
+        await db.commit()
         task = await _mk(
-            db, sid, title="Rahul ji ka pickup complete karna hai", kind="pickup"
+            db, sid, title="Rahul ji ka pickup complete karna hai",
+            customer=customer, kind="pickup"
         )
     try:
         menu_messages = [c for c in sent if c.get("list_rows") and c.get("to") == "+919999900087"]
@@ -450,6 +455,7 @@ async def test_delivery_task_uses_done_pending_menu(sent) -> None:
         async with async_session_factory() as db:
             await db.execute(delete(Task).where(Task.assigned_staff_id == sid))
             await db.execute(delete(Staff).where(Staff.id == sid))
+            await db.execute(delete(Customer).where(Customer.phone == "+919999900095"))
             await db.commit()
 
 
@@ -745,7 +751,7 @@ async def test_waha_display_text_task_status_stays_deterministic(sent) -> None:
 
 
 async def test_job_task_requires_customer_order(worker) -> None:
-    """Pickup/delivery work must always have a customer-linked order."""
+    """Pickup/delivery work must always be linked to a customer or order."""
     async with async_session_factory() as db:
         st = await db.get(Staff, worker)
         with pytest.raises(ValueError, match="requires a customer or order"):
@@ -797,5 +803,6 @@ async def test_operational_task_links_customer(worker) -> None:
         assert task.customer_id == customer.id
         assert task.order_id is None
         await db.delete(task)
+        await db.flush()
         await db.delete(customer)
         await db.commit()
