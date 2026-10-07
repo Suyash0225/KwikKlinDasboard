@@ -62,6 +62,15 @@ async def qa_staff():
 
 # --- 1. relay rewrites imperatives into a direct question ---
 
+def test_staff_extraction_prompt_is_compact_and_bill_context_is_selective() -> None:
+    """Cost guardrails: command extraction stays small and rate-card detection is selective."""
+    assert len(bill_agent._EXTRACT_SYSTEM) < 1800
+    assert bill_agent._BILL_CONTEXT_RE.search("3 shirt dry clean")
+    assert bill_agent._BILL_CONTEXT_RE.search("Sunita ka bill bhejo")
+    assert not bill_agent._BILL_CONTEXT_RE.search("KK-20261007-01 ka payment 500 cash")
+    assert not bill_agent._BILL_CONTEXT_RE.search("Ravi ko assign kar do")
+
+
 async def test_relay_prompt_forbids_copying_imperative() -> None:
     """The extraction prompt must instruct rewriting, with an example."""
     sys_prompt = bill_agent._EXTRACT_SYSTEM

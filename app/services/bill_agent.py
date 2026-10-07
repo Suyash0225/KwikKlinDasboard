@@ -308,53 +308,24 @@ _EXTRACT_SCHEMA = {
 }
 
 _EXTRACT_SYSTEM = (
-    "You extract structured commands from WhatsApp messages sent by the "
-    "OWNER or STAFF of Kwik Klin laundry (Varanasi). Messages are Hinglish/"
-    "Hindi/English.\n"
-    "Actions:\n"
-    "- new_bill: they describe a customer's clothes to bill (e.g. 'Sharma ji "
-    "3 shirt dry clean 2 saree'). Extract items; for service and garment use "
-    "the EXACT strings from the RATE CARD when they match; qty defaults to 1. "
-    "advance = money already taken (0 if unsaid). Dates in ISO YYYY-MM-DD "
-    "using TODAY for words like kal/parso; '' if unsaid. customer_phone: "
-    "digits only as written, '' if unsaid.\n"
-    "- delay_update / change_delivery_date: change an order delivery promise — extract order_number when given; otherwise extract customer_name. Extract new_date as ISO YYYY-MM-DD. Resolve relative dates such as kal/parso/Friday from TODAY in India (IST). If multiple active orders match a customer name, execution must ask for the order number. Extract internal reason.\n"
-    "- status_update: they state an order's new stage (dhul gaya, ready hai, "
-    "nikal gaya, deliver ho gaya...) — map to one of the status names.\n"
-    "- relay: first understand the OWNER/STAFF instruction, then identify the "
-    "recipient_type as exactly STAFF, CUSTOMER, MANAGER, SELF or UNKNOWN. "
-    "Words such as 'customer ko', 'grahak ko', 'customer', 'customer se', "
-    "'buyer ko' ALWAYS mean CUSTOMER, never STAFF or SELF. 'manager/boss/malik' "
-    "means MANAGER. A named staff member means STAFF. If ambiguous, use UNKNOWN "
-    "and do not create a task for the sender.\n"
-    "  NEVER copy the sender's imperative into relay_message. Rewrite it as the actual "
-    "message/question the recipient should receive. Example: 'Ajit se pucho Rahul ka "
-    "pickup hua?' -> 'Kya aapne Rahul ka pickup kar liya?'. Do not carry over "
-    "pucho/bolo/bata do as an instruction to the recipient. "
-    "  relay_to is the named recipient when known. relay_message is the intended "
-    "meaning, not a copy of the command. Never include 'bolo/bata do/pucho/usse/' "
-    "in relay_message. The sending layer will make the message professional "
-    "before it is sent. Example: 'Ajit se pucho Rahul ka pickup hua?' -> "
-    "recipient_type=STAFF, relay_to=Ajit, relay_message='Rahul ka pickup hua "
-    "ya nahi? Kripya update bata dijiye.'\n"
-    "- set_priority: an order is urgent / no longer urgent ('Sharma ji ka "
-    "urgent hai') — order_number (if named) + customer_name + priority.\n"
-    "- assign_staff: give an order to a staff member ('ye Ravi ko de do') — "
-    "order_number + staff_name.\n"
-    "- add_note: an internal instruction about an order ('collar pe daag "
-    "hai, dhyan se') — order_number + note.\n"
-    "- record_payment: money received for an order ('KK-... ka 200 cash "
-    "mila') — order_number, amount, method (cash/upi/other).\n"
-    "- standup_reply: a STAFF member reporting on their work list ('1 aur 2 "
-    "ho gaya, 3 ka pant pending hai, blanket kal karunga') — done_refs = "
-    "list positions or order numbers that are FINISHED, pending_refs = ones "
-    "explicitly still pending, problem = any issue mentioned (machine "
-    "kharab, paani nahi...) or ''.\n"
-    "- other: anything else (greetings, questions, chatter).\n"
-    "If a CURRENT DRAFT is provided, the message is an edit to it: return "
-    "action=new_bill with the FULL corrected draft (unchanged fields kept). "
-    "Fill every unused field with '' / [] / 0, and new_status with 'NONE' "
-    "unless it is a status_update. Never invent items, phones or prices."
+    "Extract structured commands from OWNER/STAFF WhatsApp messages for Kwik Klin. "
+    "Messages may be Hindi/Hinglish/English. Return ONLY the requested JSON fields. "
+    "Never invent prices, phones, items, dates or recipients. "
+    "Actions: new_bill, delay_update, change_delivery_date, status_update, relay, "
+    "set_priority, assign_staff, add_note, record_payment, standup_reply, other.\n"
+    "new_bill: extract customer name/phone, clothes/items, advance and delivery date. "
+    "Use EXACT service/garment strings from RATE CARD when supplied; qty defaults to 1. "
+    "delay/change_delivery_date: extract order/customer, new date (IST), and reason. "
+    "status_update: map phrases such as dhul gaya/ready/nikal gaya/deliver ho gaya to status. "
+    "relay: classify recipient as STAFF/CUSTOMER/MANAGER/SELF/UNKNOWN. "
+    "customer/grahak/buyer always means CUSTOMER; named staff means STAFF; manager/boss/malik means MANAGER. "
+    "If ambiguous, use UNKNOWN. NEVER copy the sender's imperative into relay_message. "
+    "Rewrite the intended message for the recipient; never include pucho/bolo/bata do in relay_message. "
+    "Example: Ajit se pucho Rahul ka pickup hua? -> Kya aapne Rahul ka pickup kar liya?. "
+    "set_priority/assign_staff/add_note/record_payment: extract the named order/customer/staff, priority/note/payment details. "
+    "standup_reply: done_refs are finished positions/orders; pending_refs are explicitly pending; problem is any issue. "
+    "If CURRENT DRAFT is supplied, return action=new_bill with the FULL corrected draft and preserve unchanged fields. "
+    "Unused fields must be empty/0/[] and new_status must be NONE unless status_update."
 )
 
 
@@ -1505,8 +1476,9 @@ async def handle_staff_message(
             _PENDING.pop(sender_phone, None)
             return get_message("bill_cancelled")
 
-    # Thread memory: the last few messages, so "haan wahi wala" makes sense.
-    history = await _sender_history(db, sender_phone)
+    # History is only useful for an active bill draft. Avoid sending prior
+    # messages for ordinary one-shot staff commands.
+    history = await _sender_history(db, sender_phone) if isinstance(pending, PendingBill) else ""
 
     try:
         if photo is not None:
@@ -1637,31 +1609,54 @@ async def _sender_history(db: AsyncSession, sender_phone: str) -> str:
     return ""
 
 
+_BILL_CONTEXT_RE = re.compile(
+    r"\b(?:bill|billing|rate|price|shirt|pant|saree|kurta|kurti|salwar|suit|"
+    r"blazer|coat|jacket|jeans|tshirt|t-shirt|bedsheet|blanket|carpet|"
+    r"dry\s*clean|wash|washing|iron|ironing|press|kapde|kapda|clothes|pcs?|"
+    r"piece|quantity|jama|advance)\b",
+    re.I,
+)
+
+
 async def _extract(
     db: AsyncSession, text: str, pending: PendingBill | None, history: str = ""
 ) -> dict:
-    rates = (
-        (await db.execute(select(Rate).where(Rate.is_active).order_by(Rate.service, Rate.garment)))
-        .scalars()
-        .all()
-    )
-    card = "\n".join(
-        f"- service={r.service!r} garment={r.garment!r} ₹{r.rate}/{r.unit}" for r in rates
-    )
+    # The rate card is expensive context. It is needed for bill creation/editing,
+    # but not for status, relay, notes, payment, priority, etc.
+    needs_bill_context = pending is not None or bool(_BILL_CONTEXT_RE.search(text or ""))
+    card = ""
+    if needs_bill_context:
+        rates = (
+            (await db.execute(
+                select(Rate).where(Rate.is_active).order_by(Rate.service, Rate.garment)
+            )).scalars().all()
+        )
+        card = "\n".join(
+            f"{r.service}|{r.garment}|{r.rate}/{r.unit}" for r in rates
+        )
+
     today = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
-    prompt = f"RATE CARD:\n{card}\nTODAY: {today}\n"
-    if history:
-        prompt += f"{history}\n"
+    sections = [f"TODAY_IST:{today}"]
+    if card:
+        sections.append(f"RATE_CARD:\n{card}")
+    # Thread history is only useful when editing/continuing a bill draft.
+    if pending and history:
+        sections.append(f"RECENT_CONTEXT:\n{history}")
     if pending:
-        prompt += f"CURRENT DRAFT:\n{json.dumps(pending.draft, default=str)}\n"
-    prompt += f"STAFF MESSAGE:\n{text[:1000]}"
-    return await llm_client.ask_json(
-        system=_EXTRACT_SYSTEM,
-        user_text=prompt,
-        schema=_EXTRACT_SCHEMA,
-        model=llm_client.MODEL_CHEAP,
-        max_tokens=700,
-    )
+        sections.append(f"CURRENT_DRAFT:{json.dumps(pending.draft, default=str, separators=(',', ':'))}")
+    sections.append(f"STAFF_MESSAGE:{(text or '')[:800]}")
+    prompt = "\n\n".join(sections)
+
+    # Every bill/staff extraction must be attributable; otherwise usage falls
+    # into the dashboard's generic "Other" bucket.
+    with llm_client.track("staff_command_extract"):
+        return await llm_client.ask_json(
+            system=_EXTRACT_SYSTEM,
+            user_text=prompt,
+            schema=_EXTRACT_SCHEMA,
+            model=llm_client.MODEL_CHEAP,
+            max_tokens=500,
+        )
 
 
 # Reading a slip is TRANSCRIPTION, not billing. The rate card is
