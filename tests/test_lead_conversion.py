@@ -124,6 +124,7 @@ async def test_due_interested_lead_gets_conversion_nudge(monkeypatch) -> None:
     monkeypatch.setattr(app_settings, "get", fake_setting)
 
     try:
+        run_at = datetime.now(timezone.utc)
         async with async_session_factory() as db:
             db.add(
                 Lead(
@@ -131,14 +132,12 @@ async def test_due_interested_lead_gets_conversion_nudge(monkeypatch) -> None:
                     name="Lead Test",
                     stage="INTERESTED",
                     followup_count=0,
-                    next_followup_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                    next_followup_at=run_at - timedelta(minutes=1),
                 )
             )
             await db.commit()
 
-        sent_count = await leads_service.run_lead_followups(
-            now=datetime.now(timezone.utc).replace(hour=10, minute=0, second=0, microsecond=0)
-        )
+        sent_count = await leads_service.run_lead_followups(now=run_at)
 
         assert sent_count >= 1
         matching = [message for message in sent if message["to"] == TEST_LEAD_PHONE]
