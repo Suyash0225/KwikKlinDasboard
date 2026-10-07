@@ -47,18 +47,22 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Baaki: ₹{due}\nDelivery: {date}{bill_line}\n— {shop}",
         "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Due: ₹{due}\nDelivery: {date}{bill_line}\n— {shop}",
     },
-    # --- lead follow-up ladder (Marketing Agent spec) ---
+    # --- lead conversion follow-up ladder ---
+    "lead_followup_2h": {
+        "hi": "{name} ji, aapne Kwik Klin ki laundry service ke baare mein poocha tha 🙏 Agar aap chahein to main pickup arrange karwa sakta hoon. Aaj pickup kis time convenient rahega? — {shop}",
+        "en": "{name} ji, you recently asked about Kwik Klin's laundry service 🙏 If you'd like, we can arrange a pickup. What time would be convenient today? — {shop}",
+    },
     "lead_day1": {
         "hi": "{name} ji, Kwik Klin se yaad dila rahe hain 🙏 Aaj ya kal kabhi bhi free pickup ho sakta hai — bas time bata dijiye. — {shop}",
         "en": "{name} ji, a gentle reminder from Kwik Klin 🙏 Free pickup today or tomorrow — just tell us a time. — {shop}",
     },
     "lead_day3": {
-        "hi": "{name} ji, ek baar try karke dekhiye — free pickup + delivery, kapde naye jaise. Bata dijiye kab aayein? — {shop}",
-        "en": "{name} ji, give us one try — free pickup + delivery. When shall we come? — {shop}",
+        "hi": "{name} ji, agar laundry ki requirement abhi bhi hai to main aapka pickup confirm karwa sakta hoon 🧺 Aap bas 'haan' ya preferred pickup time bhej dijiye. — {shop}",
+        "en": "{name} ji, if you still need laundry service, I can help confirm your pickup 🧺 Just reply 'yes' or send your preferred pickup time. — {shop}",
     },
     "lead_day7": {
-        "hi": "{name} ji, aapko pareshan nahi karenge 🙏 Kabhi bhi zarurat ho to yahi message kar dijiye, hum pahunch jayenge. Dhanyavaad! — {shop}",
-        "en": "{name} ji, we won't disturb you again 🙏 Whenever you need us, just message here. Thank you! — {shop}",
+        "hi": "{name} ji, aapko baar-baar message nahi karenge 🙏 Jab bhi laundry/pickup ki zarurat ho, isi WhatsApp par message kar dijiye. — {shop}",
+        "en": "{name} ji, we won't keep messaging you 🙏 Whenever you need laundry or pickup, just message us here. — {shop}",
     },
     "pickup_done": {
         "hi": "Namaste! Aapke {count} kapde pickup ho gaye hain ✅ Delivery {date} tak ho jayegi. Order: {order_number} — {shop}",
@@ -494,7 +498,7 @@ def get_override(key: str) -> str | None:
 CUSTOMER_KEYS = frozenset({
     "ack_received", "error_fallback",
     "order_confirmed_no_price",
-    "order_confirmed_bill", "bill_requested", "lead_day1", "lead_day3", "lead_day7",
+    "order_confirmed_bill", "bill_requested", "lead_followup_2h", "lead_day1", "lead_day3", "lead_day7",
     "pickup_done", "pickup_confirmed_customer", "thankyou_rating",
     "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
     "order_ready", "order_out_for_delivery", "order_delivered", "delay_notice",
