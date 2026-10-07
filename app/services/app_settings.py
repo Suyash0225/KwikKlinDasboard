@@ -183,6 +183,9 @@ DEFAULTS: dict[str, Any] = {
     "ga4_connection": {},
     # Aakhri sync ke reviews: {rating, count, reviews[], synced_at, error}
     "gbp_reviews": {},
+    # Google Business daily-post history and toggle.
+    "gbp_auto_posts": [],
+    "gbp_auto_post_enabled": True,
     "google_review_link": "",    # bheja jata hai sirf 4-5 star par
     "google_review_link_2": "",  # doosri listing — customers me rotate hota hai
     # --- live-conversation follow-ups (app/services/engage.py) ---

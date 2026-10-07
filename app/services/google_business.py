@@ -106,6 +106,32 @@ async def exchange_code(code: str, base: str) -> str:
     return data["refresh_token"]
 
 
+def _token_error_message(r: httpx.Response) -> str:
+    """Google OAuth token endpoint ke errors ko owner-actionable banao."""
+    try:
+        body = r.json() or {}
+    except Exception:
+        body = {}
+    error = str(body.get("error") or "").strip().lower()
+    description = str(body.get("error_description") or "").strip()
+
+    if error == "invalid_grant":
+        return (
+            "Google OAuth refresh token expired or was revoked. "
+            "Reconnect Google from the Control panel. If the Google OAuth consent "
+            "screen is still in Testing mode, publish the app before reconnecting; "
+            "Testing-mode refresh tokens can expire after 7 days."
+        )
+    if error in {"unauthorized_client", "invalid_client"}:
+        return (
+            "Google OAuth client credentials are invalid. Check GOOGLE_CLIENT_ID "
+            "and GOOGLE_CLIENT_SECRET in the server configuration."
+        )
+    if description:
+        return f"Google OAuth error: {description[:180]}"
+    return "Google OAuth token refresh failed. Please reconnect Google."
+
+
 async def _access_token(refresh_token: str) -> str:
     async with httpx.AsyncClient(timeout=20) as c:
         r = await c.post(google_auth.TOKEN_URL, data={
@@ -115,9 +141,20 @@ async def _access_token(refresh_token: str) -> str:
             "grant_type": "refresh_token",
         })
     if r.status_code != 200:
-        log.warning("gbp_refresh_failed", status=r.status_code, body=r.text[:200])
-        raise GBPError("Google connection expired or was removed. Please connect Google again.")
-    return r.json()["access_token"]
+        msg = _token_error_message(r)
+        log.warning(
+            "gbp_refresh_failed",
+            status=r.status_code,
+            error=(r.json() or {}).get("error") if r.headers.get("content-type", "").startswith("application/json") else None,
+            body=r.text[:200],
+        )
+        raise GBPError(msg)
+    data = r.json() or {}
+    token = data.get("access_token")
+    if not token:
+        log.warning("gbp_refresh_missing_access_token", status=r.status_code)
+        raise GBPError("Google OAuth returned no access token. Please reconnect Google.")
+    return token
 
 
 async def _paged(c: httpx.AsyncClient, url: str, params: dict, key: str) -> list[dict]:

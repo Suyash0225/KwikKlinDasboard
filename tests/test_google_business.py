@@ -108,3 +108,89 @@ async def test_failed_sync_keeps_old_reviews(monkeypatch) -> None:
         async with async_session_factory() as db:
             await db.execute(sqltext("DELETE FROM settings_kv WHERE tenant_id = :t"), {"t": other})
             await db.commit()
+
+
+async def test_oauth_refresh_invalid_grant_is_actionable(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 400
+        text = '{"error":"invalid_grant","error_description":"Token has been expired or revoked."}'
+        headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {
+                "error": "invalid_grant",
+                "error_description": "Token has been expired or revoked.",
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(gbp.httpx, "AsyncClient", FakeClient)
+
+    with pytest.raises(gbp.GBPError, match="Reconnect Google"):
+        await gbp._access_token("expired-refresh-token")
+
+
+async def test_oauth_refresh_missing_access_token_is_rejected(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 200
+        text = "{}"
+        headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(gbp.httpx, "AsyncClient", FakeClient)
+
+    with pytest.raises(gbp.GBPError, match="no access token"):
+        await gbp._access_token("refresh-token")
+
+
+async def test_status_marks_reauth_required_for_expired_refresh_token() -> None:
+    from app.routers.google_business import status_for
+
+    other = await _tenant("gbp-reauth-shop")
+    try:
+        async with tenant_context.as_tenant(other):
+            async with async_session_factory() as db:
+                await gbp.save_connection(db, {
+                    "refresh_token": "rt",
+                    "account": "accounts/1",
+                    "location": "locations/2",
+                    "title": "Reauth Shop",
+                })
+                await app_settings.set_value(db, "gbp_reviews", {
+                    "error": "Google OAuth refresh token expired or was revoked. Reconnect Google.",
+                })
+                status = await status_for(db)
+
+        assert status["connected"] is True
+        assert status["reauth_required"] is True
+        assert "Reconnect Google" in status["last_error"]
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(sqltext("DELETE FROM settings_kv WHERE tenant_id = :t"), {"t": other})
+            await db.commit()
