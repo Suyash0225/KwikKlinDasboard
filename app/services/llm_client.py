@@ -400,10 +400,16 @@ async def _gemini_generate(
     schema: dict | None,
     image: tuple[str, bytes] | None = None,
 ) -> str:
-    # Floor the budget: Gemini spends output tokens on internal thinking
-    # BEFORE emitting the answer — a low cap truncates mid-JSON. 2048 has
-    # headroom for the thinking burst; tokens on the free tier cost nothing.
-    gen: dict = {"maxOutputTokens": max(max_tokens, 2048)}
+    # Keep output caps close to the caller's real need. Gemini 3.x bills
+    # thinking/output tokens together, so a blanket 2048-token floor wastes
+    # budget on short WhatsApp replies. Thinking level is the primary
+    # quality/cost control; the cheap model can use minimal thinking, while
+    # the smart model gets low thinking for harder turns.
+    thinking_level = "minimal" if model == MODEL_CHEAP else "low"
+    gen: dict = {
+        "maxOutputTokens": max(max_tokens, 512),
+        "thinkingConfig": {"thinkingLevel": thinking_level},
+    }
     if schema is not None:
         gen["responseMimeType"] = "application/json"
         gen["responseSchema"] = _gemini_schema(schema)
@@ -485,6 +491,7 @@ async def _gemini_generate(
         latency_ms=latency_ms,
         input_tokens=usage.get("promptTokenCount"),
         output_tokens=usage.get("candidatesTokenCount"),
+        thinking_tokens=usage.get("thoughtsTokenCount"),
     )
     # guarded at the CALL SITE too: the reply must survive even a bug inside
     # the recorder itself, not just a failed DB write

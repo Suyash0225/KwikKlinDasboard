@@ -272,50 +272,54 @@ async def _run_agentic_customer_turn(
         return None
 
 _TOOL_ROUTER_SYSTEM = (
-    "You are a read-only tool router for a laundry customer-support AI. "
-    "Choose only the minimum tools needed to answer the customer's message. "
-    "The backend executes tools against the authenticated customer. Never request SQL, "
-    "another customer's data, or an action. Available tools:\n"
-    + "\n".join(f"- {name}: {spec.description}" for name, spec in CUSTOMER_READ_TOOLS.items())
-    + "\nRules: order/delivery -> get_customer_orders; bill/invoice/payment due -> "
-      "get_customer_bills; price/rate -> get_shop_rate_card; profile -> get_customer_profile. "
-      "Order history is always scoped by the backend to the last 3 months. "
-      "Use multiple tools when needed. Greetings may return an empty list."
+    "Legacy name retained for compatibility; customer tool selection is now deterministic."
 )
+
+
+def _select_customer_tools_deterministic(text: str) -> dict[str, int]:
+    """Select the minimum read tools without spending an LLM call.
+
+    The customer composer already has the language model for the final reply.
+    Tool selection is a small, predictable routing problem, so keyword routing
+    removes one paid Gemini request from every conversational turn.
+    """
+    lowered = (text or "").casefold()
+    selected: dict[str, int] = {}
+
+    if re.search(
+        r"\b(?:order|orders|kapda|kapde|delivery|deliver|kab milega|status|ready|pickup|pick ?up|washing|wash|iron|ironing|received|mila|mil gaya)\b",
+        lowered,
+    ):
+        selected["get_customer_orders"] = 5
+
+    if re.search(
+        r"\b(?:bill|invoice|payment|pay|paid|due|baaki|baki|kitna dena|receipt|upi)\b",
+        lowered,
+    ):
+        selected["get_customer_bills"] = 5
+
+    if re.search(
+        r"\b(?:price|prices|rate|rates|cost|charge|charges|kitna|kitne|rate card|price list|laundry rate|dhulai|dry ?clean|wash|iron)\b",
+        lowered,
+    ):
+        selected["get_shop_rate_card"] = 20
+
+    if re.search(
+        r"\b(?:my profile|mera naam|mera address|my address|phone number|mobile number|naam kya|address kya)\b",
+        lowered,
+    ):
+        selected["get_customer_profile"] = 1
+
+    return selected
+
 
 async def _select_customer_tools(
     db: AsyncSession, customer: Customer, text: str, *, conversation_id=None
 ) -> dict[str, int]:
-    """LLM selects read-only tools; backend validates args and executes them."""
-    # Simple greetings need no database lookup/tool selection. Returning an
-    # empty set keeps the turn to a single customer-facing composer call.
+    """Select the minimum customer-safe read tools without an LLM call."""
     if _is_simple_greeting(text):
         return {}
-
-    try:
-        with llm_client.attribution(customer_id=customer.id):
-            with llm_client.track("tool_router"):
-                out = await llm_client.ask_json(
-                    system=_TOOL_ROUTER_SYSTEM,
-                    user_text=f"Customer message:\n{text[:1000]}",
-                    schema=_TOOL_CALL_SCHEMA,
-                    model=llm_client.MODEL_CHEAP,
-                    max_tokens=300,
-                )
-        selected: dict[str, int] = {}
-        for call in out.get("tool_calls") or []:
-            name = call.get("name")
-            if name not in CUSTOMER_READ_TOOLS:
-                continue
-            try:
-                limit = max(1, min(int(call.get("limit", 20)), 20))
-            except (TypeError, ValueError):
-                limit = 5
-            selected[name] = limit
-        return selected
-    except LLMError as exc:
-        log.warning("ai_tool_router_failed", error=str(exc)[:150])
-        return {name: 20 for name in CUSTOMER_READ_TOOLS}
+    return _select_customer_tools_deterministic(text)
 
 
 _COMPOSE_SYSTEM = (
@@ -547,7 +551,14 @@ async def build_ai_reply(
                 system=_COMPOSE_SYSTEM,
                 user_text=prompt,
                 schema=_REPLY_SCHEMA,
-                model=llm_client.MODEL_SMART,
+                # Routine WhatsApp replies are high-volume work: use the
+                # cost-efficient model. Complex/long turns still get the smart
+                # model below.
+                model=(
+                    llm_client.MODEL_SMART
+                    if _needs_smart_customer_reply(text)
+                    else llm_client.MODEL_CHEAP
+                ),
                 max_tokens=450,
             )
     except LLMError as exc:
@@ -713,13 +724,28 @@ async def _gather_context(
         log.exception("knowledge_lookup_failed")
         kb = ""
     try:
-        # Keep enough recent conversation to preserve multi-step lead/order
-        # intake. Six messages can lose the customer's earlier name/address.
-        history = await thread_history(db, customer_id=customer.id, limit=20)
+        # Keep a compact recent window. Saved profile fields are authoritative,
+        # so we do not need 20 messages on every paid Gemini call.
+        history = await thread_history(db, customer_id=customer.id, limit=8)
     except Exception:
         log.exception("thread_history_failed")
         history = ""
     return facts, kb, history
+
+
+def _needs_smart_customer_reply(text: str) -> bool:
+    """Use the smart model only for genuinely complex customer turns."""
+    lowered = (text or "").casefold()
+    if len(lowered) > 500:
+        return True
+    return bool(
+        re.search(
+            r"\b(?:complaint|complain|angry|refund|damage|damaged|wrong|missing|"
+            r"discount|negotiate|negotiation|manager|owner|legal|issue|problem|"
+            r"shikayat|nuksan|galat|galti|paise wapas|gussa)\b",
+            lowered,
+        )
+    )
 
 
 def _build_prompt(ctx: tuple[str, str, str], text: str, lang: str) -> str:

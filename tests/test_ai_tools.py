@@ -161,64 +161,50 @@ def test_new_order_still_triggers_new_customer_onboarding():
     )
 
 
+def test_phase_two_router_is_deterministic_and_minimal():
+    from app.services import ai_agent
+
+    assert ai_agent._select_customer_tools_deterministic(
+        "mera order kaha hai?"
+    ) == {"get_customer_orders": 5}
+
+    assert ai_agent._select_customer_tools_deterministic(
+        "mera bill aur payment kitna due hai?"
+    ) == {"get_customer_bills": 5}
+
+    assert ai_agent._select_customer_tools_deterministic(
+        "shirt aur blanket ka rate kitna hai?"
+    ) == {"get_shop_rate_card": 20}
+
+    assert ai_agent._select_customer_tools_deterministic(
+        "mera order status aur bill due kitna hai?"
+    ) == {
+        "get_customer_orders": 5,
+        "get_customer_bills": 5,
+    }
+
+
 @pytest.mark.asyncio
-async def test_phase_two_router_only_accepts_registered_read_tools(monkeypatch):
+async def test_phase_two_router_uses_no_llm_call(monkeypatch):
     from app.services import ai_agent, llm_client
 
-    async def fake_ask_json(**kwargs):
-        assert kwargs["schema"] is ai_agent._TOOL_CALL_SCHEMA
-        return {
-            "tool_calls": [
-                {"name": "get_customer_orders", "limit": 5},
-                {"name": "run_arbitrary_sql", "limit": 5},
-            ]
-        }
+    async def should_not_call(**kwargs):
+        raise AssertionError("tool router must not call Gemini")
 
-    monkeypatch.setattr(llm_client, "ask_json", fake_ask_json)
+    monkeypatch.setattr(llm_client, "ask_json", should_not_call)
+
     selected = await ai_agent._select_customer_tools(
         AsyncMock(), _customer(), "mera order kaha hai?"
     )
-
     assert selected == {"get_customer_orders": 5}
 
 
-@pytest.mark.asyncio
-async def test_phase_two_router_falls_back_to_all_read_tools_on_llm_failure(monkeypatch):
-    from app.services import ai_agent, llm_client
-    from app.services.llm_client import LLMError
+def test_smart_model_reserved_for_complex_customer_turns():
+    from app.services import ai_agent
 
-    async def failing_ask_json(**kwargs):
-        raise LLMError("router unavailable")
-
-    monkeypatch.setattr(llm_client, "ask_json", failing_ask_json)
-    selected = await ai_agent._select_customer_tools(
-        AsyncMock(), _customer(), "mera bill?"
-    )
-
-    assert selected == {name: 20 for name in ai_agent.CUSTOMER_READ_TOOLS}
-
-
-@pytest.mark.asyncio
-async def test_phase_two_router_clamps_tool_limits(monkeypatch):
-    from app.services import ai_agent, llm_client
-
-    async def fake_ask_json(**kwargs):
-        return {
-            "tool_calls": [
-                {"name": "get_customer_orders", "limit": 999},
-                {"name": "get_customer_bills", "limit": 0},
-            ]
-        }
-
-    monkeypatch.setattr(llm_client, "ask_json", fake_ask_json)
-    selected = await ai_agent._select_customer_tools(
-        AsyncMock(), _customer(), "orders and bill"
-    )
-
-    assert selected == {
-        "get_customer_orders": 20,
-        "get_customer_bills": 1,
-    }
+    assert not ai_agent._needs_smart_customer_reply("mera order kab milega?")
+    assert ai_agent._needs_smart_customer_reply("mera kapda damage hua hai, manager se baat karni hai")
+    assert ai_agent._needs_smart_customer_reply("x" * 501)
 
 
 @pytest.mark.asyncio
