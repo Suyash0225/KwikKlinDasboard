@@ -34,7 +34,7 @@ nano .env
 | `APP_BASE_URL` | `https://kwikklin.online` |
 | `RATE_LIMIT_PER_MIN` | jaisa hai |
 
-WhatsApp/Razorpay/Google/Anthropic keys laptop wali hi chalengi.
+WhatsApp/Razorpay/Google/Gemini keys laptop wali hi chalengi.
 
 ```bash
 # 5. DB schema + home dukaan + keys
