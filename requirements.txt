@@ -23,9 +23,6 @@ cryptography==46.0.6
 # --- Scheduler (daily staff check-ins, follow-ups — Phase 5) ---
 apscheduler==3.11.3
 
-# --- LLM (Phase 4 only; imported ONLY by app/services/llm_client.py) ---
-anthropic==0.120.2
-
 # --- Logging ---
 structlog==26.1.0
 

@@ -12,7 +12,6 @@ import hashlib
 import hmac
 import json
 
-import anthropic
 import httpx
 import pytest
 from sqlalchemy import text as sqltext
@@ -202,45 +201,17 @@ async def test_washer():
 
 @pytest.fixture(autouse=True)
 def _no_live_llm(monkeypatch):
-    """No test may reach a real LLM — block at every provider boundary.
-
-    The production provider is configurable (including OpenRouter), but the
-    regression suite must never depend on a developer's local .env or spend
-    a real API quota. Provider-specific tests patch their lower-level call.
-    """
-    # Keep the general suite deterministic even when the local .env selects
-    # OpenRouter. Individual provider tests can override these values.
-    monkeypatch.setattr(llm_module, "PROVIDER", "anthropic")
-    monkeypatch.setattr(llm_module, "MODEL_CHEAP", "claude-haiku-4-5")
-    monkeypatch.setattr(llm_module, "MODEL_SMART", "claude-sonnet-5")
+    """No test may reach the paid Gemini API — block at its HTTP boundary."""
+    monkeypatch.setattr(llm_module, "PROVIDER", "gemini")
+    monkeypatch.setattr(llm_module, "MODEL_CHEAP", "gemini-3.1-flash-lite")
+    monkeypatch.setattr(llm_module, "MODEL_SMART", "gemini-3.8-flash")
     llm_module._circuit_failures.clear()
     llm_module._circuit_open_until.clear()
 
-    async def _openrouter_down(*args, **kwargs):
-        raise httpx.ConnectError("live OpenRouter blocked in tests")
-
-    monkeypatch.setattr(llm_module, "_openrouter_generate", _openrouter_down)
-
     async def _gemini_down(model, payload):
-        raise httpx.ConnectError("live LLM blocked in tests")
+        raise httpx.ConnectError("live Gemini blocked in tests")
 
     monkeypatch.setattr(llm_module, "_gemini_post", _gemini_down)
-
-    async def _anthropic_down(**kwargs):
-        raise anthropic.APIConnectionError(
-            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-        )
-
-    # Claude ka client ab pehli baar istemaal par banta hai (lazy) — isliye
-    # hum client ki jagah BANANE WALE ko patch karte hain. Purana patch
-    # module-level `_client` par tha; wo hatte hi ye fixture khud phatne
-    # lagi thi aur tests LLM ke naam par kuch aur hi dikhane lage the.
-    class _DeadClient:
-        class messages:
-            create = staticmethod(_anthropic_down)
-
-    monkeypatch.setattr(llm_module, "_anthropic", lambda: _DeadClient)
-    monkeypatch.setattr(llm_module, "_anthropic_client", None, raising=False)
 
 
 @pytest.fixture

@@ -100,7 +100,7 @@ print("ADMIN_API_KEY=" + secrets.token_urlsafe(32))
 print("VENDOR_API_KEY=" + secrets.token_urlsafe(32))
 print("TOKEN_ENCRYPTION_KEY=" + Fernet.generate_key().decode())
 PY
-  ok ".env bana (WhatsApp/Anthropic keys dummy hain — baad mein bhar lena)"
+  ok ".env bana (WhatsApp/Gemini keys dummy hain — baad mein bhar lena)"
 else
   ok ".env maujood"
 fi

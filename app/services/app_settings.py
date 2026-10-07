@@ -18,7 +18,7 @@ from app.services.secrets import decrypt, encrypt
 
 log = structlog.get_logger()
 
-_SECRET_SETTINGS = {"openrouter_api_key"}
+_SECRET_SETTINGS = set()
 
 # Single source of defaults — also drives the Settings UI.
 DEFAULTS: dict[str, Any] = {
@@ -27,11 +27,10 @@ DEFAULTS: dict[str, Any] = {
     # paid-tier list rates used for an estimated cost; a free-tier project
     # can still show $0 actual provider spend outside this estimate.
     "llm_rates": {
-        "gemini-3.5-flash": {"in": 1.50, "out": 9.00},
-        "gemini-3.5-flash-lite": {"in": 0.30, "out": 2.50},
-        "claude-opus-5": {"in": 5.0, "out": 25.0},
-        "claude-sonnet-5": {"in": 3.0, "out": 15.0},
-        "claude-haiku-4-5": {"in": 1.0, "out": 5.0},
+        # Paid Gemini API standard-tier rates (USD per 1M tokens).
+        # Gemini 3.8 Flash introductory pricing is valid through 2026-12-31.
+        "gemini-3.8-flash": {"in": 0.75, "out": 3.75},
+        "gemini-3.1-flash-lite": {"in": 0.25, "out": 1.50},
     },
     # --- billing (vendor-global, not per-tenant) ---
     # past_due -> locked se pehle kitne din ka grace (dunning window)
@@ -49,16 +48,10 @@ DEFAULTS: dict[str, Any] = {
     # Razorpay Plan ids, auto-created+cached by billing._ensure_rzp_plan:
     # {"pro:monthly": "plan_...", ...}. Test/live keys alag ids banayenge.
     "rzp_plan_ids": {},
-    # Free-tier ceiling for the ACTIVE provider, requests per day.
-    # 0 = unknown/none, and the dashboard then shows usage without a bar.
+    # Paid Gemini has no app-side daily free-tier cap.
     "llm_daily_request_cap": 0,
     # What you're willing to spend per month on AI (USD). 0 = no budget set.
     "llm_monthly_budget_usd": 0.0,
-    # OpenRouter credential is entered by the shop owner from Settings.
-    # It is encrypted at rest and never returned to the browser.
-    "openrouter_api_key": "",
-    # env = keep deployment default; openrouter = use the owner-entered key.
-    "llm_provider": "env",
     # operations
     "standup_hour": 10,             # daily staff standup (Asia/Kolkata hour)
     # Automatic delivery promise: working days only; Sunday/holidays are skipped.

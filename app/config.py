@@ -73,18 +73,10 @@ class Settings(BaseSettings):
     # (their panel lets you add a custom header). Requests without it -> 403.
     DOTPE_WEBHOOK_TOKEN: str = ""
 
-    # --- LLM (Phase 4 AI agent) ---
-    # anthropic = Claude (sk-ant-... key) | gemini = Google (AIza... key).
-    # Only app/services/llm_client.py reads these.
-    LLM_PROVIDER: Literal["anthropic", "gemini", "openrouter"] = "openrouter"
-    # Provider used automatically when the primary provider is unavailable.
-    # "none" disables cross-provider failover.
-    LLM_FALLBACK_PROVIDER: Literal["none", "anthropic", "gemini", "openrouter"] = "anthropic"
-    LLM_SECONDARY_FALLBACK_PROVIDER: Literal["none", "anthropic", "gemini", "openrouter"] = "openrouter"
-    ANTHROPIC_API_KEY: str
+    # --- Paid Gemini API (Phase 4 AI agent) ---
+    # The application intentionally has one LLM provider: paid Gemini.
+    # Provider selection and cross-provider failover are not configurable.
     GEMINI_API_KEY: str = ""
-    OPENROUTER_API_KEY: str = ""
-    OPENROUTER_MODEL: str = "nvidia/nemotron-3.5-lightning:free"
 
     # --- People ---
     # Manager's WhatsApp number in E.164 form, e.g. +919876543210.
