@@ -8,7 +8,9 @@ import httpx
 import structlog
 
 from app.config import settings
+from app.models.tenant import Tenant
 from app.services import app_settings, google_business as gbp, llm_client
+from app.services.tenant_context import current_tenant_id, get_home_tenant_id
 
 log = structlog.get_logger()
 
@@ -74,8 +76,13 @@ def _topic(day: int) -> str:
     return topics[day % len(topics)]
 
 async def _generate_post(db, now_ist: datetime) -> dict:
-    cfg = await app_settings.get_many(db, "shop_name", "shop_address", "shop_contact_phone",
-                                       "turnaround_days", "sla_normal_days")
+    tenant_id = current_tenant_id.get() or await get_home_tenant_id()
+    tenant = await db.get(Tenant, tenant_id) if tenant_id else None
+    cfg = await app_settings.get_many(
+        db, "shop_address", "shop_contact_phone", "turnaround_days", "sla_normal_days"
+    )
+    if tenant and tenant.shop_name:
+        cfg = {"shop_name": tenant.shop_name, **cfg}
     facts = "\n".join(f"- {k}: {v}" for k, v in cfg.items() if v not in (None, ""))
     prompt = (
         f"FACTS:\n{facts or '- Kwik Klin is an online laundry service in Varanasi.'}\n\n"
