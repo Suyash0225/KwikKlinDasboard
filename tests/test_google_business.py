@@ -108,3 +108,62 @@ async def test_failed_sync_keeps_old_reviews(monkeypatch) -> None:
         async with async_session_factory() as db:
             await db.execute(sqltext("DELETE FROM settings_kv WHERE tenant_id = :t"), {"t": other})
             await db.commit()
+
+
+async def test_oauth_refresh_invalid_grant_is_actionable(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 400
+        text = '{"error":"invalid_grant","error_description":"Token has been expired or revoked."}'
+        headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {
+                "error": "invalid_grant",
+                "error_description": "Token has been expired or revoked.",
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(gbp.httpx, "AsyncClient", FakeClient)
+
+    with pytest.raises(gbp.GBPError, match="Reconnect Google"):
+        await gbp._access_token("expired-refresh-token")
+
+
+async def test_oauth_refresh_missing_access_token_is_rejected(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 200
+        text = "{}"
+        headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(gbp.httpx, "AsyncClient", FakeClient)
+
+    with pytest.raises(gbp.GBPError, match="no access token"):
+        await gbp._access_token("refresh-token")
