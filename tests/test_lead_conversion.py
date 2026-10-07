@@ -136,7 +136,9 @@ async def test_due_interested_lead_gets_conversion_nudge(monkeypatch) -> None:
             )
             await db.commit()
 
-        sent_count = await leads_service.run_lead_followups()
+        sent_count = await leads_service.run_lead_followups(
+            now=datetime.now(timezone.utc).replace(hour=10, minute=0, second=0, microsecond=0)
+        )
 
         assert sent_count == 1
         assert len(sent) == 1
