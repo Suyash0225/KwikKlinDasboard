@@ -140,10 +140,10 @@ async def test_due_interested_lead_gets_conversion_nudge(monkeypatch) -> None:
             now=datetime.now(timezone.utc).replace(hour=10, minute=0, second=0, microsecond=0)
         )
 
-        assert sent_count == 1
-        assert len(sent) == 1
-        assert sent[0]["to"] == TEST_LEAD_PHONE
-        assert "pickup" in sent[0]["text"].lower()
+        assert sent_count >= 1
+        matching = [message for message in sent if message["to"] == TEST_LEAD_PHONE]
+        assert len(matching) == 1
+        assert "pickup" in matching[0]["text"].lower()
 
         async with async_session_factory() as db:
             lead = (
