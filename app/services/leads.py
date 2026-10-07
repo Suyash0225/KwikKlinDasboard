@@ -1,8 +1,9 @@
 """Marketing Agent: lead pipeline (owner's spec).
 
 NEW -> CONTACTED -> INTERESTED -> CONVERTED / LOST (+ DORMANT for old
-customers, handled by segments). Ladder: day 0 (15 min!), 1, 3 (offer),
-7 (last) -> LOST + 90 din silence. Any reply stops the ladder.
+customers, handled by segments). Conversion ladder: ~2h, 1d, 3d, 7d.
+A normal reply means "engaged" — it does NOT stop conversion follow-up;
+explicit opt-out is handled separately by the webhook.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -22,10 +23,11 @@ from app.services.team import primary_admin_phone
 
 log = structlog.get_logger()
 
-_LADDER = [  # (followup_count -> next delay days, message key)
-    (0, 1, "lead_day1"),
-    (1, 2, "lead_day3"),
-    (2, 4, "lead_day7"),
+_LADDER = [  # (followup_count -> delay after the previous customer touch, days, message key)
+    (0, 2 / 24, "lead_followup_2h"),
+    (1, 1, "lead_day1"),
+    (2, 2, "lead_day3"),
+    (3, 4, "lead_day7"),
 ]
 
 
@@ -63,7 +65,7 @@ async def note_inquiry(db: AsyncSession, customer: Customer, text: str) -> None:
                 Lead(
                     phone=customer.phone, name=customer.name,
                     items_text=text[:300], stage="CONTACTED", source=source,
-                    last_contact_at=now, next_followup_at=now + timedelta(days=1),
+                    last_contact_at=now, next_followup_at=now + timedelta(hours=2),
                 )
             )
             await db.commit()
@@ -90,11 +92,15 @@ async def note_inquiry(db: AsyncSession, customer: Customer, text: str) -> None:
                 )
             except SendError:
                 log.exception("new_lead_admin_alert_failed", phone=customer.phone)
-        elif lead.stage in ("CONTACTED", "LOST"):
-            # they replied — ladder stops, humans/AI talk normally
-            lead.stage = "INTERESTED"
-            lead.next_followup_at = None
+        else:
+            # A reply is a positive signal, not a reason to abandon the lead.
+            # Keep the conversion ladder alive, but give the customer a
+            # breathing window before the next proactive nudge.
+            if lead.stage in ("CONTACTED", "LOST"):
+                lead.stage = "INTERESTED"
+            lead.items_text = (text or lead.items_text or "")[:300]
             lead.last_contact_at = now
+            lead.next_followup_at = now + timedelta(hours=6)
             await db.commit()
     except Exception:
         log.exception("lead_note_failed")
@@ -115,7 +121,12 @@ async def mark_converted(db: AsyncSession, phone: str) -> None:
 
 
 async def run_lead_followups() -> int:
-    """Daily: send due ladder messages; only when marketing is explicitly auto."""
+    """Send due conversion nudges; only when marketing is explicitly auto.
+
+    This is intentionally called hourly. The first nudge is ~2h after an
+    enquiry, then 1d/3d/7d. Replies keep the lead in the funnel; creating an
+    order converts it immediately via mark_converted().
+    """
     # Lead follow-ups are proactive marketing. Never send them merely because
     # a lead exists: an unknown/new WhatsApp inquiry can become a Lead without
     # the owner explicitly opting into autonomous marketing. The owner must
@@ -129,13 +140,18 @@ async def run_lead_followups() -> int:
         return 0
 
     now = datetime.now(timezone.utc)
+    # The scheduler ticks hourly, but proactive customer messages stay inside
+    # the configured daytime window in India.
+    now_ist = now.astimezone(timezone(timedelta(hours=5, minutes=30)))
+    if now_ist.hour < 9 or now_ist.hour >= 21:
+        return 0
     sends = 0
     async with async_session_factory() as db:
         due = (
             (
                 await db.execute(
                     select(Lead).where(
-                        Lead.stage == "CONTACTED",
+                        Lead.stage.in_(("CONTACTED", "INTERESTED")),
                         Lead.next_followup_at.isnot(None),
                         Lead.next_followup_at <= now,
                     )
@@ -156,18 +172,25 @@ async def run_lead_followups() -> int:
             _, delay_days, key = step
             try:
                 await send_message(
-                    db, to_phone=lead.phone,
+                    db,
+                    to_phone=lead.phone,
                     text=get_message(key, name=lead.name or "ji"),
                 )
                 sends += 1
             except SendError:
                 log.info("lead_followup_not_sent", phone=lead.phone)
+                # Do not consume a follow-up attempt when WhatsApp rejected it.
+                lead.next_followup_at = now + timedelta(hours=1)
+                await db.commit()
+                continue
+
             lead.followup_count += 1
             lead.last_contact_at = now
-            if lead.followup_count > len(_LADDER):
+            if lead.followup_count >= len(_LADDER):
                 lead.stage = "LOST"
                 lead.next_followup_at = now + timedelta(days=90)
             else:
+                _, delay_days, _ = _LADDER[lead.followup_count]
                 lead.next_followup_at = now + timedelta(days=delay_days)
             await db.commit()
         if due:
