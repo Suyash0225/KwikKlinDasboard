@@ -2824,15 +2824,19 @@ function taskDueISO(value) {
   return d.toISOString();
 }
 
-async function searchTaskCustomers(value) {
+async function searchTaskCustomers(value, {showRecent = false} = {}) {
   const q = (value || "").trim();
   const box = $("nt-cust-results");
   if (!box) return;
   clearTimeout(TASK_CUSTOMER_TIMER);
-  if (q.length < 2) { box.innerHTML = ""; return; }
+  if (!showRecent && q.length < 2) { box.innerHTML = ""; return; }
+  box.innerHTML = '<div class="muted" style="padding:8px">Loading customers…</div>';
   TASK_CUSTOMER_TIMER = setTimeout(async () => {
     try {
-      const rows = await api("/admin/api/tasks/customers?q=" + encodeURIComponent(q));
+      const url = q
+        ? "/admin/api/tasks/customers?q=" + encodeURIComponent(q)
+        : "/admin/api/tasks/customers";
+      const rows = await api(url);
       if (!rows.length) {
         box.innerHTML = '<button type="button" class="acitem muted" onclick="newTaskCustomerModal()">No customer found — + Add new</button>';
         return;
@@ -2844,7 +2848,7 @@ async function searchTaskCustomers(value) {
     } catch (err) {
       box.innerHTML = '<div class="muted" style="padding:8px">Could not search customers.</div>';
     }
-  }, 180);
+  }, showRecent ? 0 : 180);
 }
 
 async function loadTaskCustomerOrders(customerId) {
@@ -2937,6 +2941,7 @@ function newTaskModal() {
       <button class="btn" id="nt-go">Create & send task</button>
     </div>`);
   $("nt-customer").oninput = () => searchTaskCustomers($("nt-customer").value);
+  $("nt-customer").onfocus = () => searchTaskCustomers($("nt-customer").value, {showRecent: true});
   $("nt-order-select").onchange = () => { $("nt-order").value = $("nt-order-select").value; };
   $("nt-go").onclick = (e) => busy(e.target, async () => {
     const title = $("nt-title").value.trim();
