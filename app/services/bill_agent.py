@@ -1032,11 +1032,9 @@ async def _staff_named_bill_lookup(
         return None
 
     raw = " ".join(text.split())
-    if not re.search(r"\\b(?:bill|order)\\b.*\\b(?:bhej|send|dikha|dikh|detail)|\\b(?:bhej|send)\\b.*\\b(?:bill|order)\\b", raw, re.I):
+    if not re.search(r"\b(?:bill|order)\b.*\b(?:bhej|send|dikha|dikh|detail)|\b(?:bhej|send)\b.*\b(?:bill|order)\b", raw, re.I):
         return None
 
-    # Prefer an explicit order number if present; otherwise resolve the
-    # customer name from the request (e.g. "Sunita ka bill bhejo").
     order = None
     order_match = _ORDER_REF_RE_STAFF.search(raw)
     if order_match:
@@ -1047,11 +1045,16 @@ async def _staff_named_bill_lookup(
 
     if order is None:
         name_match = re.search(
-            r"\\b(?:ka|ke|ki)\\s+(.+?)\\s+\\b(?:bill|order)\\b", raw, re.I
+            r"\b(?:ka|ke|ki)\s+(.+?)\s+\b(?:bill|order)\b", raw, re.I
         )
         if name_match:
             customer_name = name_match.group(1).strip()
-            customer_name = re.sub(r"\\b(?:please|plz|bhejo|send|dikhao|dikhana)\\b", "", customer_name, flags=re.I).strip()
+            customer_name = re.sub(
+                r"\b(?:please|plz|bhejo|send|dikhao|dikhana)\b",
+                "",
+                customer_name,
+                flags=re.I,
+            ).strip()
             if customer_name:
                 customers = list((await db.execute(
                     select(Customer).where(
@@ -1075,10 +1078,10 @@ async def _staff_named_bill_lookup(
     customer_name = (customer.name or customer.phone) if customer else "Customer"
     _STAFF_REF_CONTEXT[sender_phone] = ("order", order.order_number, datetime.now(timezone.utc))
     return (
-        f"🧾 *{order.order_number}*\\n"
-        f"*Customer:* {customer_name}\\n"
-        f"*Items:* {items_summary(order)}\\n"
-        f"*Status:* {status_label(order.status)}\\n"
+        f"🧾 *{order.order_number}*\n"
+        f"*Customer:* {customer_name}\n"
+        f"*Items:* {items_summary(order)}\n"
+        f"*Status:* {status_label(order.status)}\n"
         f"*Expected delivery:* {order.expected_delivery.strftime('%d %b %Y') if order.expected_delivery else 'not set'}"
     )
 
