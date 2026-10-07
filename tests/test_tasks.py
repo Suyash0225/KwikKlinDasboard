@@ -382,7 +382,7 @@ async def test_task_status_menu_is_role_specific_and_updates_the_task(client, se
             "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
         )
 
-    phone = "+919999900088"
+    phone = f"+919999{uuid.uuid4().int % 1_000_000:06d}"
     async with async_session_factory() as db:
         from app.services.order_service import create_order
         order = await create_order(
@@ -429,15 +429,16 @@ async def test_task_status_menu_is_role_specific_and_updates_the_task(client, se
 async def test_delivery_task_uses_done_pending_menu(sent) -> None:
     """Pickup and delivery work use the same simple Done/Pending menu."""
     async with async_session_factory() as db:
+        delivery_phone = f"+919999{uuid.uuid4().int % 1_000_000:06d}"
         worker = Staff(
-            phone="+919999900087", name="Delivery Test", role=StaffRole.DELIVERY,
+            phone=delivery_phone, name="Delivery Test", role=StaffRole.DELIVERY,
             is_active=True, last_message_at=datetime.now(timezone.utc),
         )
         db.add(worker)
         await db.commit()
         sid = worker.id
         from app.models import Customer
-        customer = Customer(phone="+919999900095", name="Rahul ji", is_active=True)
+        customer = Customer(phone=f"+919999{uuid.uuid4().int % 1_000_000:06d}", name="Rahul ji", is_active=True)
         db.add(customer)
         await db.commit()
         task = await _mk(
@@ -445,7 +446,7 @@ async def test_delivery_task_uses_done_pending_menu(sent) -> None:
             customer=customer, kind="pickup"
         )
     try:
-        menu_messages = [c for c in sent if c.get("list_rows") and c.get("to") == "+919999900087"]
+        menu_messages = [c for c in sent if c.get("list_rows") and c.get("to") == delivery_phone]
         assert menu_messages
         rows = menu_messages[-1]["list_rows"]
         assert [row.id for row in rows] == [
@@ -455,7 +456,7 @@ async def test_delivery_task_uses_done_pending_menu(sent) -> None:
         async with async_session_factory() as db:
             await db.execute(delete(Task).where(Task.assigned_staff_id == sid))
             await db.execute(delete(Staff).where(Staff.id == sid))
-            await db.execute(delete(Customer).where(Customer.phone == "+919999900095"))
+            await db.execute(delete(Customer).where(Customer.id == customer.id))
             await db.commit()
 
 
@@ -710,7 +711,7 @@ async def test_waha_display_text_task_status_stays_deterministic(sent) -> None:
     """WAHA list replies without an id must not fall through to the LLM."""
     from app.services import bill_agent
 
-    phone = "+919999900099"
+    phone = f"+919999{uuid.uuid4().int % 1_000_000:06d}"
     async with async_session_factory() as db:
         staff = Staff(
             phone=phone,
@@ -722,11 +723,19 @@ async def test_waha_display_text_task_status_stays_deterministic(sent) -> None:
         db.add(staff)
         await db.commit()
         sid = staff.id
+        from app.models import Customer
+        customer = Customer(
+            phone=f"+919999{uuid.uuid4().int % 1_000_000:06d}",
+            name="Display Customer", is_active=True,
+        )
+        db.add(customer)
+        await db.commit()
         task = await _mk(
             db,
             sid,
             title="Pickup for Display Test",
             kind="pickup",
+            customer=customer,
             notify=False,
         )
         code = task.code
@@ -747,6 +756,7 @@ async def test_waha_display_text_task_status_stays_deterministic(sent) -> None:
         async with async_session_factory() as db:
             await db.execute(delete(Task).where(Task.code == code))
             await db.execute(delete(Staff).where(Staff.id == sid))
+            await db.execute(delete(Customer).where(Customer.id == customer.id))
             await db.commit()
 
 
@@ -793,7 +803,7 @@ async def test_operational_task_links_customer(worker) -> None:
 
     async with async_session_factory() as db:
         st = await db.get(Staff, worker)
-        customer = Customer(phone="+919999900094", name="Linked Customer", is_active=True)
+        customer = Customer(phone=f"+919999{uuid.uuid4().int % 1_000_000:06d}", name="Linked Customer", is_active=True)
         db.add(customer)
         await db.commit()
         task = await task_service.create_task(
