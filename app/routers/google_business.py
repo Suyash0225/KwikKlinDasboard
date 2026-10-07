@@ -30,13 +30,19 @@ async def status_for(db: AsyncSession) -> dict:
     """Current tenant ka Google haal — token kabhi nahi."""
     conn = await gbp.get_connection(db)
     data = dict(await app_settings.get(db, "gbp_reviews") or {})
+    last_error = conn.get("last_error", "") or data.get("error", "")
+    reauth_required = (
+        "refresh token expired or was revoked" in str(last_error).lower()
+        or "oauth refresh token" in str(last_error).lower()
+    )
     return {
         "configured": gbp.enabled(),
         "connected": bool(conn.get("refresh_token")),
+        "reauth_required": reauth_required,
         "location": conn.get("location", ""),
         "title": conn.get("title", ""),
         "choices": [] if conn.get("location") else conn.get("choices", []),
-        "last_error": conn.get("last_error", "") or data.get("error", ""),
+        "last_error": last_error,
         "rating": data.get("rating"),
         "count": data.get("count"),
         "stored": len(data.get("reviews") or []),
