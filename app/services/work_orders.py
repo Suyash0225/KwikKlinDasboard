@@ -9,7 +9,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Customer, Order, Staff
+from app.models import Customer, Order, Staff, StaffRole
 from app.services import app_settings
 from app.services.messages import get_message
 from app.services.urgent import KIND as URGENT_KIND
@@ -202,31 +202,40 @@ def items_summary(order: Order) -> str:
     return ", ".join(parts) or "items dashboard par"
 
 
-async def resolve_worker(db: AsyncSession, order: Order, role: str = "WASHER") -> Staff | None:
-    """Who this instruction belongs to.
+async def resolve_workers(db: AsyncSession, order: Order, role: str = "WASHER") -> list[Staff]:
+    """Resolve every operational recipient.
 
-    role="DELIVERY" -> the assigned delivery boy, else the shop's delivery
-    person. Pickup and delivery reminders used to land on the WASHER, so the
-    boy who actually goes out never heard them.
+    Assigned workers get the work order alone. Unassigned washing orders are
+    notified to all active washers so a two-washer shop does not silently
+    leave one person unaware. Broadcasts have no action buttons.
     """
     if role == "DELIVERY":
         if order.assigned_delivery_id:
             st = await db.get(Staff, order.assigned_delivery_id)
-            if st:
-                return st
+            return [st] if st else []
         from app.services import team
-
-        return await team.delivery_staff(db)
+        st = await team.delivery_staff(db)
+        return [st] if st else []
     if order.assigned_washer_id:
         st = await db.get(Staff, order.assigned_washer_id)
-        if st:
-            return st
+        return [st] if st else []
+    washers = list((await db.execute(
+        select(Staff).where(Staff.is_active, Staff.role == StaffRole.WASHER).order_by(Staff.name)
+    )).scalars().all())
+    if washers:
+        return washers
     default_phone = await app_settings.get(db, "default_washer_phone")
     if default_phone:
-        return (
-            await db.execute(select(Staff).where(Staff.phone == default_phone))
-        ).scalar_one_or_none()
-    return None
+        st = (await db.execute(select(Staff).where(Staff.phone == default_phone))).scalar_one_or_none()
+        if st:
+            return [st]
+    return []
+
+
+async def resolve_worker(db: AsyncSession, order: Order, role: str = "WASHER") -> Staff | None:
+    """Backward-compatible single-recipient resolver."""
+    workers = await resolve_workers(db, order, role)
+    return workers[0] if workers else None
 
 
 async def send_work_order(
@@ -237,8 +246,8 @@ async def send_work_order(
     Returns 'sent' | 'sent_template' | 'no_staff' | 'failed' — caller
     reports it honestly to the admin. Never raises.
     """
-    staff = await resolve_worker(db, order, role)
-    if staff is None:
+    staff_list = await resolve_workers(db, order, role)
+    if not staff_list:
         log.warning("work_order_no_staff", order_number=order.order_number)
         return "no_staff"
 
@@ -253,26 +262,31 @@ async def send_work_order(
         priority="🔴 URGENT" if order.priority == "urgent" else "normal",
         extra=extra or "-",
     )
-    try:
-        # Buttons ke saath — Ajit/Ravi ko likhna na pade. Free-form text
-        # ka wahi rasta hai, bas teen tap upar se.
-        await send_message(
-            db, to_phone=staff.phone, text=text,
-            buttons=await order_buttons(db, order.order_number),
-        )
-        return "sent"
-    except WindowClosedError:
+    broadcast = len(staff_list) > 1
+    sent_any = False
+    sent_template = False
+    for staff in staff_list:
         try:
-            await send_message(
-                db,
-                to_phone=staff.phone,
-                template_name="kk_staff_alert",
-                template_params=[" ".join(text.split())[:600]],
-            )
-            return "sent_template"
+            kwargs = {} if broadcast else {"buttons": await order_buttons(db, order.order_number)}
+            await send_message(db, to_phone=staff.phone, text=text, **kwargs)
+            sent_any = True
+        except WindowClosedError:
+            try:
+                await send_message(
+                    db,
+                    to_phone=staff.phone,
+                    template_name="kk_staff_alert",
+                    template_params=[" ".join(text.split())[:600]],
+                )
+                sent_any = True
+                sent_template = True
+            except SendError:
+                log.warning("work_order_not_sent", order_number=order.order_number, to=staff.phone)
         except SendError:
-            log.warning("work_order_not_sent", order_number=order.order_number, to=staff.phone)
-            return "failed"
-    except SendError:
-        log.warning("work_order_send_failed", order_number=order.order_number, to=staff.phone)
-        return "failed"
+            log.warning("work_order_send_failed", order_number=order.order_number, to=staff.phone)
+
+    if sent_template and sent_any:
+        return "sent_template"
+    if sent_any:
+        return "sent"
+    return "failed"
