@@ -47,7 +47,7 @@ async def test_gemini_call_is_recorded(monkeypatch) -> None:
         def json():
             return {
                 "candidates": [{"content": {"parts": [{"text": "hi"}]}}],
-                "usageMetadata": {"promptTokenCount": 321, "candidatesTokenCount": 47},
+                "usageMetadata": {"promptTokenCount": 321, "candidatesTokenCount": 47, "thoughtsTokenCount": 13},
             }
 
     async def fake_post(model, payload):
@@ -68,7 +68,8 @@ async def test_gemini_call_is_recorded(monkeypatch) -> None:
             await s.execute(select(LlmUsage).where(LlmUsage.model == "test-gemini"))
         ).scalars().all()
     assert len(rows) == 1
-    assert rows[0].input_tokens == 321 and rows[0].output_tokens == 47
+    assert rows[0].input_tokens == 321
+    assert rows[0].output_tokens == 60, "output + thinking tokens must be billed together"
     assert rows[0].purpose == "reply", "the caller's tag must land on the row"
     assert rows[0].customer_id is None and rows[0].order_id is None
 
