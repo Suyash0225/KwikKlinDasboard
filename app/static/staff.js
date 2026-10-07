@@ -1152,8 +1152,8 @@ async function shareBill(number, knownBillUrl = "") {
       <div class="card" style="word-break:break-all"><a href="${esc(knownBillUrl)}" target="_blank" rel="noopener">${esc(knownBillUrl)}</a></div>
       <pre class="sharetext">${esc(text)}</pre>
       <div class="btnrow">
-        <a class="btn go" href="${esc(waUrl("", text))}" data-no-phone="1">Copy link</a>
-        <button class="btn ghost" id="m-copy">Copy</button>
+        <a class="btn go" href="${esc(knownBillUrl)}" target="_blank" rel="noopener">Open payment page</a>
+        <button class="btn ghost" id="m-copy">Copy link</button>
       </div>
       <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
     $("m-copy").onclick = async () => {
