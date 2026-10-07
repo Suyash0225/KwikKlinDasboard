@@ -204,3 +204,35 @@ async def test_status_marks_reauth_required_for_expired_refresh_token() -> None:
         async with async_session_factory() as db:
             await db.execute(sqltext("DELETE FROM settings_kv WHERE tenant_id = :t"), {"t": other})
             await db.commit()
+
+
+async def test_gbp_daily_post_uses_tenant_shop_name(monkeypatch) -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app.models.tenant import Tenant
+    from app.services import gbp_auto_post
+
+    other = await _tenant("gbp-post-shop")
+    captured = {}
+
+    async def fake_ask_json(*, system, user_text, schema, model, max_tokens):
+        captured["prompt"] = user_text
+        return {"summary": "Daily laundry care tip", "topic_type": "STANDARD"}
+
+    monkeypatch.setattr(gbp_auto_post.llm_client, "ask_json", fake_ask_json)
+    try:
+        async with tenant_context.as_tenant(other):
+            async with async_session_factory() as db:
+                tenant = await db.get(Tenant, other)
+                tenant.shop_name = "Test Laundry Varanasi"
+                await db.commit()
+                await gbp_auto_post._generate_post(
+                    db, datetime(2026, 10, 7, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+                )
+
+        assert "- shop_name: Test Laundry Varanasi" in captured["prompt"]
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(sqltext("DELETE FROM settings_kv WHERE tenant_id = :t"), {"t": other})
+            await db.execute(sqltext("DELETE FROM tenants WHERE id = :t"), {"t": other})
+            await db.commit()
