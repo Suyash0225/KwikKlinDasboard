@@ -2945,14 +2945,22 @@ function newTaskModal() {
   $("nt-order-select").onchange = () => { $("nt-order").value = $("nt-order-select").value; };
   $("nt-go").onclick = (e) => busy(e.target, async () => {
     const title = $("nt-title").value.trim();
+    const kind = $("nt-kind").value;
+    const customerId = $("nt-customer-id").value || null;
+    const orderNumber = $("nt-order").value.trim() || null;
+    const needsCustomer = ["pickup", "wash", "dry", "iron", "delivery"].includes(kind);
     if (title.length < 2) { $("nt-err").textContent = "Instructions/task detail likhiye."; return; }
+    if (needsCustomer && !customerId && !orderNumber) {
+      $("nt-err").textContent = "Pickup/Washing/Ironing/Delivery task ke liye customer select kijiye.";
+      return;
+    }
     const due = $("nt-due").value ? taskDueISO($("nt-due").value) : null;
     const r = await api("/admin/api/tasks", { method: "POST", body: {
       title,
-      kind: $("nt-kind").value,
+      kind,
       staff: $("nt-staff").value || null,
-      order_number: $("nt-order").value.trim() || null,
-      customer_id: $("nt-customer-id").value || null,
+      order_number: orderNumber,
+      customer_id: customerId,
       due_at: due,
       urgent: $("nt-urgent").value === "true",
     }});
