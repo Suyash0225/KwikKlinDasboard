@@ -156,13 +156,28 @@ async def create_task(
     kind: str = "general",
     due_at: datetime | None = None,
 ) -> Task:
-    """Record the task and tell the assignee. Returns the saved Task."""
+    """Record the task and tell the assignee. Returns the saved Task.
+
+    Pickup/delivery tasks are always tied to a real order/customer. A job task
+    without that relationship cannot be safely followed up or completed.
+    Generic staff tasks may still exist without an order.
+    """
+    if kind in {"pickup", "wash", "dry", "iron", "delivery"} and order is None and customer is None:
+        raise ValueError(f"{kind} task requires a customer or order")
+    if order is not None and customer is not None and order.customer_id != customer.id:
+        raise ValueError("task customer does not match the selected order")
+
+    linked_customer_id = order.customer_id if order is not None else (
+        customer.id if customer is not None else None
+    )
     task = Task(
         code=await _next_code(db),
         title=title.strip(),
         assigned_staff_id=staff.id if staff else None,
         order_id=order.id if order else None,
-        customer_id=(customer.id if customer is not None else (order.customer_id if order else None)),
+        # For order-linked tasks, the order is the source of truth for the
+        # customer. Never allow a task to point at a different customer.
+        customer_id=linked_customer_id,
         urgent=urgent,
         created_by=created_by[:40],
         kind=kind,
@@ -871,8 +886,20 @@ async def _close_obsolete_job_task(db: AsyncSession, task: Task, order: Order | 
     delivery can be completed in the DB while an old task keeps getting
     reminders.
     """
-    if order is None or task.kind not in JOB_KINDS:
+    if task.kind not in JOB_KINDS:
         return False
+
+    # A pickup/delivery task without an order is stale/orphaned. It cannot be
+    # actioned safely because there is no customer or order lifecycle to
+    # advance. Close it instead of sending another generic reminder.
+    if order is None:
+        task.status = TASK_CANCELLED
+        task.completed_at = datetime.now(timezone.utc)
+        task.reply = task.reply or "closed: job task has no linked order/customer"
+        db.add(task)
+        await db.commit()
+        _announce(task, "cancelled", by="orphan_job_guard")
+        return True
 
     from app.models import OrderStatus
 
