@@ -18,7 +18,7 @@ from app.services.secrets import decrypt, encrypt
 
 log = structlog.get_logger()
 
-_SECRET_SETTINGS = {"openrouter_api_key"}
+_SECRET_SETTINGS = set()
 
 # Single source of defaults — also drives the Settings UI.
 DEFAULTS: dict[str, Any] = {
