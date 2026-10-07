@@ -1145,7 +1145,7 @@ async function shareBill(number, knownBillUrl = "") {
     // receipt/share endpoint is temporarily unavailable, never hide that
     // important link from the counter operator.
     if (!knownBillUrl) { toast(e.message, true); return; }
-    const text = `🧾 ${number} ka bill online dekhein aur payment karein:\\n${knownBillUrl}`;
+    const text = `🧾 ${number} ka bill online dekhein aur payment karein:\n${knownBillUrl}`;
     SHARE_TEXT = text;
     openModal(`<h3>Bill created ✅</h3>
       <p class="said">Payment link ready hai. Customer ko ye link bhej sakte hain.</p>
@@ -1166,7 +1166,7 @@ async function shareBill(number, knownBillUrl = "") {
   SHARE_TEXT = r.text;
   const directUrl = r.bill_url || knownBillUrl || "";
   if (directUrl && !String(r.text || "").includes(directUrl)) {
-    r.text = String(r.text || "") + `\\n\\n🧾 View bill & pay online:\\n${directUrl}`;
+    r.text = String(r.text || "") + `\n\n🧾 View bill & pay online:\n${directUrl}`;
     SHARE_TEXT = r.text;
   }
   openModal(`<h3>Send the bill</h3>
