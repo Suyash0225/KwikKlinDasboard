@@ -1136,11 +1136,39 @@ function waUrl(phone, text) {
 }
 let SHARE_TEXT = "";
 
-async function shareBill(number) {
+async function shareBill(number, knownBillUrl = "") {
   let r;
-  try { r = await api(`/orders/${encodeURIComponent(number)}/receipt`); }
-  catch (e) { toast(e.message, true); return; }
+  try {
+    r = await api(`/orders/${encodeURIComponent(number)}/receipt`);
+  } catch (e) {
+    // Bill creation already returns the signed payment URL. Even if the
+    // receipt/share endpoint is temporarily unavailable, never hide that
+    // important link from the counter operator.
+    if (!knownBillUrl) { toast(e.message, true); return; }
+    const text = `🧾 ${number} ka bill online dekhein aur payment karein:\n${knownBillUrl}`;
+    SHARE_TEXT = text;
+    openModal(`<h3>Bill created ✅</h3>
+      <p class="said">Payment link ready hai. Customer ko ye link bhej sakte hain.</p>
+      <div class="card" style="word-break:break-all"><a href="${esc(knownBillUrl)}" target="_blank" rel="noopener">${esc(knownBillUrl)}</a></div>
+      <pre class="sharetext">${esc(text)}</pre>
+      <div class="btnrow">
+        <a class="btn go" href="${esc(knownBillUrl)}" target="_blank" rel="noopener">Open payment page</a>
+        <button class="btn ghost" id="m-copy">Copy link</button>
+      </div>
+      <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
+    $("m-copy").onclick = async () => {
+      try { await navigator.clipboard.writeText(text); toast("Payment link copied"); }
+      catch (err) { toast("Copy nahi hua — link select karke copy karein", true); }
+    };
+    return;
+  }
+  if (knownBillUrl) r.bill_url = knownBillUrl || r.bill_url;
   SHARE_TEXT = r.text;
+  const directUrl = r.bill_url || knownBillUrl || "";
+  if (directUrl && !String(r.text || "").includes(directUrl)) {
+    r.text = String(r.text || "") + `\n\n🧾 View bill & pay online:\n${directUrl}`;
+    SHARE_TEXT = r.text;
+  }
   openModal(`<h3>Send the bill</h3>
     <p class="said">WhatsApp opens with the bill already written — just press send. To ${esc(r.name)}.</p>
     <pre class="sharetext">${esc(r.text)}</pre>
@@ -2095,7 +2123,7 @@ async function saveBill(btn) {
     loadToday();
     if (pickupCompleted) loadWork({ quiet: true });
     // Grahak saamne khada hai — bill turant bhej dein
-    shareBill(r.order_number);
+    shareBill(r.order_number, r.bill_url);
   });
 }
 

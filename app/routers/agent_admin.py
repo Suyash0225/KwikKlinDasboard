@@ -1369,21 +1369,33 @@ async def task_customer_search(
 ) -> list[dict]:
     """Search existing customers in the live tenant database."""
     term = q.strip()
-    if len(term) < 2:
-        return []
-    digits = re.sub(r"\D", "", term)
-    clauses = [Customer.name.ilike(f"%{term}%")]
-    if len(digits) >= 3:
-        clauses.append(Customer.phone.ilike(f"%{digits}%"))
-    from sqlalchemy import or_ as _or
-    rows = (
-        await db.execute(
-            select(Customer)
-            .where(Customer.is_active.is_(True), _or(*clauses))
-            .order_by(Customer.last_message_at.desc().nulls_last(), Customer.created_at.desc())
-            .limit(20)
-        )
-    ).scalars().all()
+    # New-task picker: blank search means "show recent customers"; typed
+    # search narrows by name/phone. This makes the field behave like a real
+    # dropdown instead of requiring the owner to guess that typing 2 chars
+    # is necessary.
+    if not term:
+        rows = (
+            await db.execute(
+                select(Customer)
+                .where(Customer.is_active.is_(True))
+                .order_by(Customer.last_message_at.desc().nulls_last(), Customer.created_at.desc())
+                .limit(20)
+            )
+        ).scalars().all()
+    else:
+        digits = re.sub(r"\D", "", term)
+        clauses = [Customer.name.ilike(f"%{term}%")]
+        if len(digits) >= 3:
+            clauses.append(Customer.phone.ilike(f"%{digits}%"))
+        from sqlalchemy import or_ as _or
+        rows = (
+            await db.execute(
+                select(Customer)
+                .where(Customer.is_active.is_(True), _or(*clauses))
+                .order_by(Customer.last_message_at.desc().nulls_last(), Customer.created_at.desc())
+                .limit(20)
+            )
+        ).scalars().all()
     return [{"id": str(c.id), "name": c.name or "Customer", "phone": c.phone, "address": c.address or ""} for c in rows]
 
 
