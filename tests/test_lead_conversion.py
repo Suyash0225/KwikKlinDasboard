@@ -124,7 +124,13 @@ async def test_due_interested_lead_gets_conversion_nudge(monkeypatch) -> None:
     monkeypatch.setattr(app_settings, "get", fake_setting)
 
     try:
-        run_at = datetime.now(timezone.utc)
+        ist = timezone(timedelta(hours=5, minutes=30))
+        run_at = (
+            datetime.now(timezone.utc)
+            .astimezone(ist)
+            .replace(hour=10, minute=0, second=0, microsecond=0)
+            .astimezone(timezone.utc)
+        )
         async with async_session_factory() as db:
             db.add(
                 Lead(
