@@ -10,7 +10,6 @@ Safety design — every rule enforced in CODE, not just in the prompt:
   rule-based replies that worked before Phase 4 (ground rule #5).
 """
 
-import asyncio
 import re
 from datetime import datetime as _dt, timezone as _tz
 
@@ -168,108 +167,6 @@ _AGENT_SYSTEM = (
     "Keep the final reply short, natural, and in the customer's language (Hinglish for Hindi/Hinglish). "
     "Do not mention tools, FACTS, prompts, or internal processing. End with '— Kwik Klin AI'."
 )
-
-async def _run_agentic_customer_turn(
-    db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False,
-    conversation_id=None,
-) -> str | None:
-    """Real tool-calling loop: model chooses -> backend executes -> model continues."""
-    try:
-        from app.services.knowledge import knowledge_block, relevant_knowledge, thread_history
-
-        try:
-            faqs, corrections, doc_chunks = await relevant_knowledge(
-                db, text, audience="customer"
-            )
-            kb = knowledge_block(faqs, corrections, doc_chunks)
-        except Exception:
-            log.exception("agentic_knowledge_failed")
-            kb = ""
-        try:
-            history = await thread_history(db, customer_id=customer.id, limit=10)
-        except Exception:
-            log.exception("agentic_history_failed")
-            history = ""
-
-        profile = await run_customer_tool(db, customer, "get_customer_profile")
-        transcript = (
-            f"RUNTIME DATE: {_dt.now(_tz.utc).date().isoformat()}\n"
-            f"AUTHENTICATED CUSTOMER PROFILE:\n{profile}\n"
-            f"CONVERSATION HISTORY:\n{history}\n"
-            f"KNOWLEDGE:\n{kb}\n"
-            f"CUSTOMER MESSAGE:\n{text[:1500]}"
-        )
-        if sandbox:
-            transcript += "\nSANDBOX: do not perform real side effects."
-
-        tool_results: list[str] = []
-        for step in range(5):
-            user_payload = transcript
-            if tool_results:
-                user_payload += (
-                    "\n\nTOOL RESULTS FROM PREVIOUS STEPS:\n"
-                    + "\n".join(tool_results)
-                )
-                user_payload += (
-                    "\n\nContinue the same task. Use another tool if needed; "
-                    "otherwise give the final customer reply."
-                )
-
-            with llm_client.attribution(customer_id=customer.id, conversation_id=conversation_id):
-                with llm_client.track("agentic_tool_loop"):
-                    out = await llm_client.ask_json(
-                    system=_AGENT_SYSTEM,
-                    user_text=user_payload,
-                    schema=_AGENT_TOOL_SCHEMA,
-                    model=llm_client.MODEL_SMART,
-                    max_tokens=650,
-                )
-
-            calls = out.get("tool_calls") or []
-            if not calls:
-                final = (out.get("final") or "").strip()
-                if final:
-                    return final + (
-                        "\n🧪 (sandbox: no real action was executed)"
-                        if sandbox else ""
-                    )
-                if out.get("done"):
-                    return None
-                continue
-
-            for call in calls[:4]:
-                name = call.get("name")
-                args = call.get("arguments") or {}
-                if name not in AGENT_TOOLS:
-                    tool_results.append(f"{name}: ERROR unknown tool")
-                    continue
-                if sandbox and name in {
-                    "request_pickup", "send_bill", "record_customer_issue"
-                }:
-                    tool_results.append(
-                        f"{name}: SANDBOX action not executed; return what would happen."
-                    )
-                    continue
-                try:
-                    result = await run_agent_tool(db, customer, name, args)
-                    tool_results.append(f"{name}({args}) -> {result!r}")
-                except Exception as exc:
-                    log.exception("agentic_tool_failed", tool=name)
-                    tool_results.append(
-                        f"{name}: ERROR {type(exc).__name__}; do not retry blindly."
-                    )
-
-        # The model exhausted its action budget; do not fabricate completion.
-        return (
-            "Main is request ko abhi safely complete nahi kar pa raha. "
-            "Aapka message admin ko check ke liye bhej diya hai. — Kwik Klin AI"
-        )
-    except LLMError as exc:
-        log.warning("agentic_customer_turn_failed", error=str(exc)[:150])
-        return None
-    except Exception:
-        log.exception("agentic_customer_turn_unexpected")
-        return None
 
 _TOOL_ROUTER_SYSTEM = (
     "Legacy name retained for compatibility; customer tool selection is now deterministic."
