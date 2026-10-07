@@ -748,7 +748,7 @@ async def test_job_task_requires_customer_order(worker) -> None:
     """Pickup/delivery work must always have a customer-linked order."""
     async with async_session_factory() as db:
         st = await db.get(Staff, worker)
-        with pytest.raises(ValueError, match="requires an order/customer"):
+        with pytest.raises(ValueError, match="requires a customer or order"):
             await task_service.create_task(
                 db, title="Pickup aur delivery", staff=st,
                 kind="pickup", notify=False,
@@ -779,3 +779,23 @@ async def test_orphan_job_task_is_closed_instead_of_reminded(worker, sent, awake
         async with async_session_factory() as db:
             await db.execute(delete(Task).where(Task.code == code))
             await db.commit()
+
+
+async def test_operational_task_links_customer(worker) -> None:
+    """Washing/ironing/etc. can use a customer directly when no order is needed."""
+    from app.models import Customer
+
+    async with async_session_factory() as db:
+        st = await db.get(Staff, worker)
+        customer = Customer(phone="+919999900094", name="Linked Customer", is_active=True)
+        db.add(customer)
+        await db.commit()
+        task = await task_service.create_task(
+            db, title="Wash Linked Customer ke kapde", staff=st,
+            customer=customer, kind="wash", notify=False,
+        )
+        assert task.customer_id == customer.id
+        assert task.order_id is None
+        await db.delete(task)
+        await db.delete(customer)
+        await db.commit()
