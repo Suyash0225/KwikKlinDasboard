@@ -742,3 +742,40 @@ async def test_waha_display_text_task_status_stays_deterministic(sent) -> None:
             await db.execute(delete(Task).where(Task.code == code))
             await db.execute(delete(Staff).where(Staff.id == sid))
             await db.commit()
+
+
+async def test_job_task_requires_customer_order(worker) -> None:
+    """Pickup/delivery work must always have a customer-linked order."""
+    async with async_session_factory() as db:
+        st = await db.get(Staff, worker)
+        with pytest.raises(ValueError, match="requires an order/customer"):
+            await task_service.create_task(
+                db, title="Pickup aur delivery", staff=st,
+                kind="pickup", notify=False,
+            )
+
+
+async def test_orphan_job_task_is_closed_instead_of_reminded(worker, sent, awake) -> None:
+    """Legacy orphan pickup/delivery tasks must not generate generic reminders."""
+    async with async_session_factory() as db:
+        task = await task_service.create_task(
+            db, title="Legacy orphan pickup", staff=await db.get(Staff, worker),
+            kind="general", notify=False,
+        )
+        task.kind = "pickup"
+        task.last_ping_at = datetime.now(timezone.utc) - timedelta(hours=3)
+        db.add(task)
+        await db.commit()
+        code = task.code
+
+    try:
+        sent.clear()
+        await task_service.run_task_followups()
+        async with async_session_factory() as db:
+            updated = await task_service.get_by_code(db, code)
+            assert updated.status == "CANCELLED"
+            assert updated.completed_at is not None
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.code == code))
+            await db.commit()
