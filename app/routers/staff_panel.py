@@ -1565,6 +1565,12 @@ async def create_bill(
         db, order.customer_id, exclude_order_id=order.id
     )
     this_due = round(float(total) - body.advance, 2)
+    # Bill banate hi signed web bill/payment link bhi return karo. Frontend
+    # ko dobara kisi admin-only receipt endpoint par depend nahi rehna chahiye.
+    # Isi link se customer live bill dekhta hai aur due amount ke liye UPI
+    # payment buttons milte hain.
+    from app.services import bill_link
+    bill_url = await bill_link.url_for(db, order)
     return {
         "order_number": order.order_number,
         "total": float(total),
@@ -1575,6 +1581,9 @@ async def create_bill(
         "previous_bills": prev_bills,
         "grand_total": round(this_due + prev_due, 2),
         "pickup_completed": pickup_task is not None,
+        "bill_url": bill_url,
+        "customer_name": name or "Customer",
+        "customer_phone": phone,
     }
 
 
