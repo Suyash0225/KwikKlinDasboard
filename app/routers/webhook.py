@@ -1147,6 +1147,10 @@ async def _handle_inbound_message(
         #      message ka handler poori baat dekh kar EK jawab dega.
         # Order-number wale deterministic jawab par ye lagoo NAHI hota —
         # wo specific sawaal ka specific jawab hai, hamesha jata hai.
+        # build_ai_reply may pause a thread as part of an escalation.
+        # The first complaint acknowledgement must still reach the customer;
+        # subsequent messages stay silent while the human takeover is active.
+        was_agent_paused = customer.agent_paused
         reply = None
         try:
             if ORDER_NUMBER_RE.search(spoken):
@@ -1167,7 +1171,13 @@ async def _handle_inbound_message(
         # If the owner switched the Service Agent OFF while it was thinking,
         # do not send the stale automated reply.
         if reply:
-            await _send_customer_agent_reply(db, customer, phone, reply)
+            await _send_customer_agent_reply(
+                db,
+                customer,
+                phone,
+                reply,
+                allow_paused_once=(not was_agent_paused and customer.agent_paused),
+            )
         # first-contact numbers with no orders -> lead pipeline (never raises)
         try:
             from app.services.leads import note_inquiry
@@ -1191,7 +1201,12 @@ async def _customer_agent_enabled(db: AsyncSession, customer: Customer) -> bool:
 
 
 async def _send_customer_agent_reply(
-    db: AsyncSession, customer: Customer, phone: str, reply: str
+    db: AsyncSession,
+    customer: Customer,
+    phone: str,
+    reply: str,
+    *,
+    allow_paused_once: bool = False,
 ) -> bool:
     """Final service-agent gate immediately before WhatsApp send.
 
@@ -1214,9 +1229,11 @@ async def _send_customer_agent_reply(
         # Final per-customer OFF switch. The owner can disable AI for this
         # customer from Inbox; this must win even if an LLM reply was already
         # being generated.
-        if customer.agent_paused:
+        if customer.agent_paused and not allow_paused_once:
             log.info("customer_agent_paused_before_send", phone=phone)
             return False
+        if customer.agent_paused and allow_paused_once:
+            log.info("customer_agent_pause_ack_allowed", phone=phone)
 
         # Final human-takeover race guard: the owner may have replied from
         # the phone while the LLM was thinking. Never send AI during the
