@@ -1015,6 +1015,74 @@ async def _unclaimed_orders(
     return out
 
 
+async def _staff_named_bill_lookup(
+    db: AsyncSession, *, sender_phone: str, sender_label: str, text: str
+) -> str | None:
+    """Handle staff requests like 'Sunita ka bill bhejo' without creating a task.
+
+    Staff get only operational bill/order facts. Financial fields and payment
+    links are deliberately excluded from this response.
+    """
+    if sender_label == "manager" or not text or text.startswith("["):
+        return None
+    staff = (
+        await db.execute(select(Staff).where(Staff.phone == sender_phone))
+    ).scalar_one_or_none()
+    if staff is None or not staff.is_active:
+        return None
+
+    raw = " ".join(text.split())
+    if not re.search(r"\\b(?:bill|order)\\b.*\\b(?:bhej|send|dikha|dikh|detail)|\\b(?:bhej|send)\\b.*\\b(?:bill|order)\\b", raw, re.I):
+        return None
+
+    # Prefer an explicit order number if present; otherwise resolve the
+    # customer name from the request (e.g. "Sunita ka bill bhejo").
+    order = None
+    order_match = _ORDER_REF_RE_STAFF.search(raw)
+    if order_match:
+        try:
+            order = await get_order(db, order_match.group(0).upper())
+        except OrderNotFoundError:
+            return f"❌ {order_match.group(0).upper()} ka koi bill/order nahi mila."
+
+    if order is None:
+        name_match = re.search(
+            r"\\b(?:ka|ke|ki)\\s+(.+?)\\s+\\b(?:bill|order)\\b", raw, re.I
+        )
+        if name_match:
+            customer_name = name_match.group(1).strip()
+            customer_name = re.sub(r"\\b(?:please|plz|bhejo|send|dikhao|dikhana)\\b", "", customer_name, flags=re.I).strip()
+            if customer_name:
+                customers = list((await db.execute(
+                    select(Customer).where(
+                        Customer.name.ilike(f"%{customer_name}%"), Customer.is_active
+                    ).limit(5)
+                )).scalars().all())
+                if len(customers) == 1:
+                    rows = list((await db.execute(
+                        select(Order).where(Order.customer_id == customers[0].id)
+                        .order_by(Order.created_at.desc()).limit(1)
+                    )).scalars().all())
+                    order = rows[0] if rows else None
+                elif len(customers) > 1:
+                    return "Customer ka naam thoda aur clear bata dijiye, multiple matches mile hain. 🙏"
+
+    if order is None:
+        return None
+
+    customer = await db.get(Customer, order.customer_id)
+    from app.services.work_orders import items_summary
+    customer_name = (customer.name or customer.phone) if customer else "Customer"
+    _STAFF_REF_CONTEXT[sender_phone] = ("order", order.order_number, datetime.now(timezone.utc))
+    return (
+        f"🧾 *{order.order_number}*\\n"
+        f"*Customer:* {customer_name}\\n"
+        f"*Items:* {items_summary(order)}\\n"
+        f"*Status:* {status_label(order.status)}\\n"
+        f"*Expected delivery:* {order.expected_delivery.strftime('%d %b %Y') if order.expected_delivery else 'not set'}"
+    )
+
+
 async def _staff_reference_lookup(
     db: AsyncSession, sender_phone: str, sender_label: str, text: str
 ) -> str | None:
@@ -1333,6 +1401,14 @@ async def handle_staff_message(
                 )
                 return f"⏳ *{task.code}* ka response *No* record kar diya. Manager ko bata diya."
         return None
+
+    # A staff request such as "Sunita ka bill bhejo" is a bill lookup,
+    # not a new task/relay command. Resolve it before task-context handling.
+    named_bill = await _staff_named_bill_lookup(
+        db, sender_phone=sender_phone, sender_label=sender_label, text=text or ""
+    )
+    if named_bill is not None:
+        return named_bill
 
     # Task ke buttons + unka follow-up — dono deterministic, zero LLM.
     btn_reply = await _handle_task_button(db, sender_phone, sender_label, text or "")
