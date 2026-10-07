@@ -97,6 +97,65 @@ async def _handle_payment_action(
     db: AsyncSession, customer: Customer, phone: str, order_number: str, action: str
 ) -> None:
     """Simple customer payment buttons; never mark a payment paid on a tap."""
+    # Customer-level payment reminder action: the reminder can cover
+    # multiple outstanding bills, so never guess a single order. Open the
+    # consolidated customer statement/payment page instead.
+    if order_number == "customer":
+        from app.services import bill_link
+
+        outstanding = (
+            await db.execute(
+                select(Order).where(
+                    Order.customer_id == customer.id,
+                    Order.status != OrderStatus.CANCELLED,
+                    Order.total_amount.isnot(None),
+                    Order.total_amount > Order.amount_paid,
+                ).order_by(Order.created_at)
+            )
+        ).scalars().all()
+        if not outstanding:
+            await send_message(
+                db,
+                to_phone=phone,
+                text="✅ Aapka koi outstanding bill nahi mila. Dhanyawad!",
+            )
+            return
+
+        if action == "pay":
+            from app.services import tenant_context
+
+            tid = tenant_context.current_tenant_id.get() or tenant_context.cached_home_tenant_id()
+            link = await bill_link.customer_url_for(db, tid, customer.id) if tid is not None else ""
+            if not link:
+                await send_message(
+                    db,
+                    to_phone=phone,
+                    text="⚠️ Payment link abhi available nahi hai. Kripya thodi der baad try karein.",
+                )
+                return
+            await send_message(
+                db,
+                to_phone=phone,
+                text=f"💰 Apne outstanding bills dekhkar payment karne ke liye yahan tap karein:\n{link}",
+            )
+            return
+
+        if action == "paid":
+            await send_message(
+                db,
+                to_phone=phone,
+                text="👍 Theek hai, aapne payment kar diya hai. Hum outstanding payment verify karke update kar denge. Dhanyawad! 🙏",
+            )
+            try:
+                await send_message(
+                    db,
+                    to_phone=manager_phone(),
+                    text=f"💰 Customer {customer.name or phone} ne outstanding payment ke liye 'Already Paid' dabaya hai. Payment verify karein.",
+                )
+            except SendError:
+                log.exception("customer_payment_paid_alert_failed", phone=phone)
+            return
+
     order = (
         await db.execute(
             select(Order).where(
