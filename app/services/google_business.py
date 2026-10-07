@@ -64,7 +64,9 @@ def start_url(state: str, base: str) -> str:
         # baar connect karne par Google use dobara nahi deta
         "access_type": "offline",
         "prompt": "consent select_account",
-        # Keep GBP OAuth limited to its own Business Profile permission.\n        # Do not inherit previously granted Google project scopes.\n        "include_granted_scopes": "false",
+        # Keep GBP OAuth limited to its own Business Profile permission.
+        # Do not inherit previously granted Google project scopes.
+        "include_granted_scopes": "false",
     })
 
 
