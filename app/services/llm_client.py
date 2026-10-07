@@ -482,6 +482,16 @@ async def _gemini_generate(
         raise LLMError("gemini output truncated at maxOutputTokens before JSON completed")
 
     usage = data.get("usageMetadata", {})
+    input_tokens = int(usage.get("promptTokenCount") or 0)
+    output_tokens = int(usage.get("candidatesTokenCount") or 0)
+    thinking_tokens = int(usage.get("thoughtsTokenCount") or 0)
+
+    # Gemini charges thinking models for visible output + thinking tokens.
+    # Keep the DB's output_tokens field billing-compatible so the dashboard
+    # cost calculation matches Google's paid-tier pricing. The API exposes
+    # these components separately in usageMetadata.
+    billable_output_tokens = output_tokens + thinking_tokens
+
     latency_ms = int((time.monotonic() - started) * 1000)
     log.info(
         "llm_call",
@@ -489,16 +499,17 @@ async def _gemini_generate(
         model=model,
         kind="json" if schema is not None else "text",
         latency_ms=latency_ms,
-        input_tokens=usage.get("promptTokenCount"),
-        output_tokens=usage.get("candidatesTokenCount"),
-        thinking_tokens=usage.get("thoughtsTokenCount"),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        thinking_tokens=thinking_tokens,
+        billable_output_tokens=billable_output_tokens,
     )
     # guarded at the CALL SITE too: the reply must survive even a bug inside
     # the recorder itself, not just a failed DB write
     try:
         await _record_usage(
-            "gemini", model, usage.get("promptTokenCount") or 0,
-            usage.get("candidatesTokenCount") or 0, latency_ms, True,
+            "gemini", model, input_tokens,
+            billable_output_tokens, latency_ms, True,
         )
     except Exception:
         log.exception("llm_usage_record_crashed", model=model)
