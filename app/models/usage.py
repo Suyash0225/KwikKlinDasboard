@@ -25,7 +25,7 @@ class LlmUsage(Base, TenantScoped):
     at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
-    provider: Mapped[str] = mapped_column(String(20), index=True)  # gemini | anthropic
+    provider: Mapped[str] = mapped_column(String(20), index=True)  # gemini
     model: Mapped[str] = mapped_column(String(60), index=True)
     # what the call was for: reply | extract | vision | query | social ...
     purpose: Mapped[str] = mapped_column(String(24), default="other", index=True)
