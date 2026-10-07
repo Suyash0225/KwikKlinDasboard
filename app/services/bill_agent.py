@@ -321,6 +321,7 @@ _EXTRACT_SYSTEM = (
     "customer/grahak/buyer always means CUSTOMER; named staff means STAFF; manager/boss/malik means MANAGER. "
     "If ambiguous, use UNKNOWN. NEVER copy the sender's imperative into relay_message. "
     "Rewrite the intended message for the recipient; never include pucho/bolo/bata do in relay_message. "
+    "Example: Ajit se pucho Rahul ka pickup hua? -> Kya aapne Rahul ka pickup kar liya?. "
     "set_priority/assign_staff/add_note/record_payment: extract the named order/customer/staff, priority/note/payment details. "
     "standup_reply: done_refs are finished positions/orders; pending_refs are explicitly pending; problem is any issue. "
     "If CURRENT DRAFT is supplied, return action=new_bill with the FULL corrected draft and preserve unchanged fields. "
