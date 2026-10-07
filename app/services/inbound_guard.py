@@ -80,6 +80,20 @@ Rules:
 - Keep the reason short and factual.
 """
 
+# Only invoke the paid classifier when the message has strong non-customer
+# signals. Ordinary customer messages should not pay for a second LLM call
+# before the customer reply composer runs.
+_SUSPICIOUS_INBOUND_RE = re.compile(
+    r"(?:https?://|www\\.|\\b(?:seo|digital marketing|website development|software development|bulk sms|bulk whatsapp|advertis(?:e|ing)|recruitment|job offer|agency|marketing services|lead generation|partnership|vendor|supplier|reseller)\\b)",
+    re.IGNORECASE,
+)
+
+
+def _needs_inbound_classifier(text: str) -> bool:
+    message = " ".join((text or "").split())
+    return bool(message and _SUSPICIOUS_INBOUND_RE.search(message))
+
+
 async def classify_inbound_message(text: str) -> dict[str, Any]:
     """Return a conservative non-lead classification.
 
@@ -92,6 +106,17 @@ async def classify_inbound_message(text: str) -> dict[str, Any]:
             "classification": "CUSTOMER_LEAD",
             "confidence": 0.0,
             "reason": "empty message",
+        }
+
+    # Most inbound messages are ordinary customer conversations. Let the
+    # customer agent handle those directly instead of spending an extra
+    # Gemini request on a classifier. Suspicious messages still get the
+    # conservative LLM classification below.
+    if not _needs_inbound_classifier(message):
+        return {
+            "classification": "CUSTOMER_LEAD",
+            "confidence": 0.0,
+            "reason": "no suspicious non-lead signals",
         }
 
     try:
