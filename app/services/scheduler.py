@@ -304,12 +304,12 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
             await run_hot_lead_digest()
     except Exception:
         log.exception("hot_digest_failed")
-    # 10:00 daily: lead follow-up ladder; 1st of month: marketing report
+    # Lead conversion ladder: checked hourly so the first ~2h nudge is
+    # actually timely. leads.py enforces quiet hours and marketing autonomy.
     try:
-        if now_ist.hour == 10:
-            from app.services.leads import run_lead_followups
+        from app.services.leads import run_lead_followups
 
-            await run_lead_followups()
+        await run_lead_followups()
         if now_ist.day == 1 and now_ist.hour == 10 and await _claim(
             f"mktreport:{now_ist.strftime('%Y-%m')}"
         ):
