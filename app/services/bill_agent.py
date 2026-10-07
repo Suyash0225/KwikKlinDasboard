@@ -1169,9 +1169,8 @@ async def _staff_reference_lookup(
             return (
                 f"🧾 *{task.code}*\n"
                 f"*Bill:* {order.order_number}\n"
-                f"*Amount:* ₹{order.total_amount or 0:.0f}\n"
-                f"*Paid:* ₹{order.amount_paid or 0:.0f}\n"
-                f"*Due:* ₹{due:.0f}\n"
+                f"*Customer:* {customer_name}\n"
+                f"*Items:* {items}\n"
                 f"*Status:* {status_label(order.status)}"
             )
         return (
@@ -1180,7 +1179,6 @@ async def _staff_reference_lookup(
             f"*Address:* {address or 'save nahi hai'}\n"
             f"*Bill:* {order.order_number}\n"
             f"*Items:* {items}\n"
-            f"*Amount:* ₹{order.total_amount or 0:.0f} | *Due:* ₹{due:.0f}\n"
             f"*Order Status:* {status_label(order.status)}\n"
             f"*Task:* {task.status}"
         )
@@ -1216,7 +1214,6 @@ async def _staff_reference_lookup(
         f"*Customer:* {customer_name}\n"
         f"*Address:* {address or 'save nahi hai'}\n"
         f"*Items:* {items}\n"
-        f"*Amount:* ₹{order.total_amount or 0:.0f} | *Paid:* ₹{order.amount_paid or 0:.0f} | *Due:* ₹{due:.0f}\n"
         f"*Status:* {status_label(order.status)}"
     )
 
