@@ -162,8 +162,10 @@ async def create_task(
     without that relationship cannot be safely followed up or completed.
     Generic staff tasks may still exist without an order.
     """
-    if kind in JOB_KINDS and order is None:
-        raise ValueError(f"{kind} task requires an order/customer")
+    if kind in {"pickup", "wash", "dry", "iron", "delivery"} and order is None and customer is None:
+        raise ValueError(f"{kind} task requires a customer or order")
+    if order is not None and customer is not None and order.customer_id != customer.id:
+        raise ValueError("task customer does not match the selected order")
 
     linked_customer_id = order.customer_id if order is not None else (
         customer.id if customer is not None else None
