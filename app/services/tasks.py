@@ -98,7 +98,13 @@ async def _next_code(db: AsyncSession) -> str:
     from sqlalchemy import text as _text
 
     await db.execute(_text(f"SELECT pg_advisory_xact_lock({_TASK_CODE_LOCK_KEY})"))
-    n = (await db.execute(select(func.count()).select_from(Task))).scalar_one()
+    rows = (await db.execute(select(Task.code))).scalars().all()
+    used_numbers = {
+        int(code[2:])
+        for code in rows
+        if isinstance(code, str) and code.startswith("T-") and code[2:].isdigit()
+    }
+    n = max(used_numbers, default=0)
     for candidate in range(n + 1, n + 50):
         code = f"T-{candidate}"
         clash = (
@@ -822,8 +828,13 @@ async def get_by_code(db: AsyncSession, code: str) -> Task | None:
     if not code.startswith("T-"):
         code = f"T-{code.lstrip('T-')}"
     return (
-        await db.execute(select(Task).where(Task.code == code))
-    ).scalar_one_or_none()
+        await db.execute(
+            select(Task)
+            .where(Task.code == code)
+            .order_by(Task.created_at.desc(), Task.id.desc())
+            .limit(1)
+        )
+    ).scalars().first()
 
 
 async def open_tasks_for_staff(db: AsyncSession, staff_id) -> list[Task]:
@@ -893,6 +904,11 @@ async def _close_obsolete_job_task(db: AsyncSession, task: Task, order: Order | 
     # actioned safely because there is no customer or order lifecycle to
     # advance. Close it instead of sending another generic reminder.
     if order is None:
+        # A customer-only operational task is valid: it is still linked to
+        # the customer and can be followed up normally. Only a task with
+        # neither an order nor a customer is a true legacy orphan.
+        if task.customer_id is not None:
+            return False
         task.status = TASK_CANCELLED
         task.completed_at = datetime.now(timezone.utc)
         task.reply = task.reply or "closed: job task has no linked order/customer"
