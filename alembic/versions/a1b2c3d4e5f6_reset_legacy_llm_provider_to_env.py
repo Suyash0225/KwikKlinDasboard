@@ -1,12 +1,7 @@
-"""Reset legacy OpenRouter provider overrides to the deployment default.
+"""Remove the legacy runtime LLM provider override.
 
-Older deployments may have an explicit llm_provider=openrouter row in
-settings_kv. That row overrides LLM_PROVIDER from .env, which makes changing
-the deployment provider ineffective.
-
-Only the legacy OpenRouter override is removed. Explicit non-OpenRouter
-choices are preserved. With the row removed, app_settings falls back to
-DEFAULTS["llm_provider"] == "env", so the deployment's .env provider wins.
+The application now uses paid Gemini only, so old provider-selection rows
+must not survive the migration and override the deployment architecture.
 """
 
 from alembic import op
@@ -23,12 +18,10 @@ def upgrade() -> None:
         """
         DELETE FROM settings_kv
         WHERE key = 'llm_provider'
-          AND value->>'v' = 'openrouter'
         """
     )
 
 
 def downgrade() -> None:
-    # Do not recreate an explicit OpenRouter override; the deployment default
-    # should remain authoritative after downgrade.
+    # Do not recreate the removed provider override.
     pass
