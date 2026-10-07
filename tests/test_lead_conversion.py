@@ -7,6 +7,7 @@ These tests never call real WhatsApp. They verify:
 """
 
 from datetime import datetime, timedelta, timezone
+import uuid
 
 from sqlalchemy import delete, select
 
@@ -15,7 +16,7 @@ from app.models import Customer, Lead
 from app.services import app_settings, leads as leads_service
 
 
-TEST_LEAD_PHONE = "+919999900012"
+TEST_LEAD_PHONE = f"+919999{uuid.uuid4().int % 1_000_000:06d}"
 
 
 async def _cleanup_lead() -> None:
