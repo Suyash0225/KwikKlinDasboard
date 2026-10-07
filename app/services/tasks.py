@@ -862,6 +862,57 @@ def _task_ping_gap_hours(task: Task, order: Order | None, now_ist: datetime) -> 
     return URGENT_PING_AFTER_HOURS if task.urgent else PING_AFTER_HOURS
 
 
+async def _close_obsolete_job_task(db: AsyncSession, task: Task, order: Order | None) -> bool:
+    """Stop reminders for job tasks whose order has already moved past them.
+
+    A stale OPEN task can survive when the order status is advanced by another
+    path (dashboard, agent, or a duplicate staff action). The follow-up worker
+    must trust the order lifecycle as well as the task row, otherwise a
+    delivery can be completed in the DB while an old task keeps getting
+    reminders.
+    """
+    if order is None or task.kind not in JOB_KINDS:
+        return False
+
+    from app.models import OrderStatus
+
+    if order.status in (OrderStatus.CANCELLED, OrderStatus.ON_HOLD):
+        task.status = TASK_CANCELLED
+        task.completed_at = datetime.now(timezone.utc)
+        db.add(task)
+        await db.commit()
+        _announce(task, "cancelled", by="order_status_guard")
+        return True
+
+    if task.kind == "pickup" and order.status in {
+        OrderStatus.PICKED_UP,
+        OrderStatus.IN_WASH,
+        OrderStatus.IN_DRY,
+        OrderStatus.IN_IRON,
+        OrderStatus.READY,
+        OrderStatus.OUT_FOR_DELIVERY,
+        OrderStatus.DELIVERED,
+    }:
+        task.status = TASK_DONE
+        task.completed_at = datetime.now(timezone.utc)
+        task.reply = task.reply or "closed by order lifecycle"
+        db.add(task)
+        await db.commit()
+        _announce(task, "done", by="order_status_guard")
+        return True
+
+    if task.kind == "delivery" and order.status is OrderStatus.DELIVERED:
+        task.status = TASK_DONE
+        task.completed_at = datetime.now(timezone.utc)
+        task.reply = task.reply or "delivery completed via order lifecycle"
+        db.add(task)
+        await db.commit()
+        _announce(task, "done", by="order_status_guard")
+        return True
+
+    return False
+
+
 async def run_task_followups() -> int:
     """Scheduler entry: nudge assignees who owe an answer, escalate the
     stubborn ones to the manager. Returns how many messages went out."""
@@ -889,6 +940,8 @@ async def run_task_followups() -> int:
             if staff is None or not staff.is_active:
                 continue
             order = await db.get(Order, task.order_id) if task.order_id else None
+            if await _close_obsolete_job_task(db, task, order):
+                continue
             # ping_count is intentionally a DAILY follow-up count.
             # We never send more than three reminders to one staff member for
             # one open task in a calendar day. At the first follow-up of a new

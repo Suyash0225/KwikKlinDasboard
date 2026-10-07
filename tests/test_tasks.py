@@ -15,7 +15,7 @@ import app.services.tasks as task_service
 from app.services import team
 from app.config import settings
 from app.database import async_session_factory
-from app.models import TASK_DONE, TASK_OPEN, Conversation, Staff, StaffRole, Task
+from app.models import TASK_DONE, TASK_OPEN, Conversation, OrderStatus, Staff, StaffRole, Task
 
 H = {"X-API-Key": settings.ADMIN_API_KEY}
 TASK_STAFF_PHONE = "+919999900085"
@@ -236,6 +236,91 @@ async def test_task_followups_max_three_per_day(worker, sent, awake, monkeypatch
     assert not [c for c in sent if c["to"] == TASK_STAFF_PHONE], (
         "fourth reminder must not be sent on the same day"
     )
+
+
+async def test_stale_open_delivery_task_is_closed_when_order_is_delivered(sent, awake) -> None:
+    """A completed delivery must never keep receiving scheduler reminders."""
+    from app.services.order_service import create_order
+
+    phone = "+919999900090"
+    async with async_session_factory() as db:
+        staff = Staff(
+            phone=phone, name="Delivery Guard", role=StaffRole.DELIVERY,
+            is_active=True, last_message_at=datetime.now(timezone.utc),
+        )
+        db.add(staff)
+        await db.commit()
+        order = await create_order(
+            db, customer_phone="+919999900091", customer_name="Delivered Customer",
+            items=[{"type": "Shirt", "qty": 1}], created_by="test",
+        )
+        order.status = OrderStatus.DELIVERED
+        task = Task(
+            code=await task_service._next_code(db),
+            title="Delivered Customer ko delivery karni hai",
+            assigned_staff_id=staff.id, order_id=order.id, kind="delivery",
+            created_by="test",
+            last_ping_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        db.add(task)
+        await db.commit()
+        code = task.code
+
+    try:
+        sent.clear()
+        await task_service.run_task_followups()
+        async with async_session_factory() as db:
+            updated = await task_service.get_by_code(db, code)
+            assert updated.status == TASK_DONE
+            assert updated.completed_at is not None
+        assert not any(code in (m.get("text") or "") and "reminder" in (m.get("text") or "").lower() for m in sent)
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.code == code))
+            await db.execute(delete(Staff).where(Staff.id == staff.id))
+            await db.commit()
+
+
+async def test_stale_open_pickup_task_is_closed_after_pickup(sent, awake) -> None:
+    """Once pickup is recorded, an old pickup task cannot be chased again."""
+    from app.services.order_service import create_order
+
+    phone = "+919999900092"
+    async with async_session_factory() as db:
+        staff = Staff(
+            phone=phone, name="Pickup Guard", role=StaffRole.DELIVERY,
+            is_active=True, last_message_at=datetime.now(timezone.utc),
+        )
+        db.add(staff)
+        await db.commit()
+        order = await create_order(
+            db, customer_phone="+919999900093", customer_name="Picked Customer",
+            items=[{"type": "Shirt", "qty": 1}], created_by="test",
+        )
+        order.status = OrderStatus.PICKED_UP
+        task = Task(
+            code=await task_service._next_code(db),
+            title="Picked Customer se pickup karna hai",
+            assigned_staff_id=staff.id, order_id=order.id, kind="pickup",
+            created_by="test",
+            last_ping_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        db.add(task)
+        await db.commit()
+        code = task.code
+
+    try:
+        sent.clear()
+        await task_service.run_task_followups()
+        async with async_session_factory() as db:
+            updated = await task_service.get_by_code(db, code)
+            assert updated.status == TASK_DONE
+        assert not any(code in (m.get("text") or "") and "reminder" in (m.get("text") or "").lower() for m in sent)
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.code == code))
+            await db.execute(delete(Staff).where(Staff.id == staff.id))
+            await db.commit()
 
 
 async def test_done_tasks_are_left_alone(worker, sent, awake) -> None:
