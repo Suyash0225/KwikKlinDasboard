@@ -29,6 +29,16 @@ def test_parse_review_maps_stars_anonymous_translation_and_reply() -> None:
     assert r["reply"] == "Thank you!"
 
 
+def test_gbp_oauth_does_not_inherit_other_project_scopes() -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    url = gbp.start_url("state-123", "https://kwikklin.online")
+    params = parse_qs(urlparse(url).query)
+    assert params["scope"] == [gbp.SCOPE]
+    assert params["include_granted_scopes"] == ["false"]
+
+
+
 def test_render_block_escapes_review_text_and_counts_stars() -> None:
     data = {
         "rating": 4.5, "count": 2,
