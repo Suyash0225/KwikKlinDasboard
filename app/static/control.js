@@ -1152,10 +1152,12 @@ async function tabIntegrations(box, slug) {
     return;
   }
   if (gb.last_error) gsec.appendChild(el("p", "muted", `⚠️ ${gb.last_error}`));
-  if (!gb.connected) {
+  if (!gb.connected || gb.reauth_required) {
     gsec.appendChild(el("p", "muted",
-      "Sign in with the Google account that manages this client's listing (do it on the setup call)."));
-    const a = el("a", "btn-primary", "Connect Google");
+      gb.reauth_required
+        ? "Google authorization needs to be renewed. Reconnect using the account that manages this client's listing."
+        : "Sign in with the Google account that manages this client's listing (do it on the setup call)."));
+    const a = el("a", "btn-primary", gb.reauth_required ? "Reconnect Google" : "Connect Google");
     a.href = `/control/api/tenants/${encodeURIComponent(slug)}/google-business/connect`;
     gsec.appendChild(a);
     return;
