@@ -64,7 +64,7 @@ def start_url(state: str, base: str) -> str:
         # baar connect karne par Google use dobara nahi deta
         "access_type": "offline",
         "prompt": "consent select_account",
-        # GBP must not inherit scopes previously granted to the broader Google\n        # project (for example GA4 analytics.readonly). Google documents that\n        # include_granted_scopes can pull those scopes into the new grant and\n        # trigger an unverified-app warning when any inherited scope is not\n        # approved. GBP only needs business.manage, so keep this grant scoped.\n        "include_granted_scopes": "false",
+        # Keep GBP OAuth limited to its own Business Profile permission.\n        # Do not inherit previously granted Google project scopes.\n        "include_granted_scopes": "false",
     })
 
 
