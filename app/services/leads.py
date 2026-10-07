@@ -120,7 +120,7 @@ async def mark_converted(db: AsyncSession, phone: str) -> None:
         log.exception("lead_convert_failed")
 
 
-async def run_lead_followups() -> int:
+async def run_lead_followups(now: datetime | None = None) -> int:
     """Send due conversion nudges; only when marketing is explicitly auto.
 
     This is intentionally called hourly. The first nudge is ~2h after an
@@ -139,7 +139,7 @@ async def run_lead_followups() -> int:
         log.info("lead_followups_skipped_not_auto", autonomy=autonomy)
         return 0
 
-    now = datetime.now(timezone.utc)
+    now = now or datetime.now(timezone.utc)
     # The scheduler ticks hourly, but proactive customer messages stay inside
     # the configured daytime window in India.
     now_ist = now.astimezone(timezone(timedelta(hours=5, minutes=30)))
