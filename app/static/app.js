@@ -600,11 +600,27 @@ async function loadGrowthAnalytics() {
   const box = $("growth-analytics-body");
   if (!box) return;
   try {
-    const [d, ga4] = await Promise.all([
+    const [d, ga4, leadAttribution] = await Promise.all([
       api("/admin/api/growth-analytics"),
       api("/admin/api/ga4/status"),
+      api("/admin/api/leads/attribution").catch(() => null),
     ]);
     const w = d.website || {}, g = d.gmb || {}, m = d.campaign || {};
+    const attributionItems = (leadAttribution?.items || []).slice(0, 8);
+    const attributionRows = attributionItems.map((item) => {
+      const collected = Number(item.collected_revenue || 0).toLocaleString("en-IN", {
+        style: "currency", currency: "INR", maximumFractionDigits: 0,
+      });
+      return `<div style="display:grid;grid-template-columns:minmax(90px,1fr) minmax(90px,1fr) auto auto;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);align-items:center">
+        <span>${esc(item.source || "unattributed")}</span><span class="muted">${esc(item.campaign || "—")}</span>
+        <span>${Number(item.confirmed_orders || 0)} orders</span><b>${collected}</b>
+      </div>`;
+    }).join("");
+    const attributionCard = leadAttribution ? `<div style="margin-top:10px;padding:10px;border:1px solid var(--border);border-radius:10px">
+      <b>🎯 Lead → confirmed orders</b>
+      <small class="muted" style="display:block;margin-top:4px">Collected revenue uses payments recorded on orders. Clicks are not counted as orders; legacy orders without attribution stay unattributed.</small>
+      ${attributionRows || '<div class="muted" style="padding:10px 0">No confirmed orders attributed yet.</div>'}
+    </div>` : "";
     let wStatus;
     if (w.configured) {
       wStatus = `🟢 <b>${w.active_users || 0}</b> active now · ${w.views || 0} views · ${w.events || 0} events
@@ -638,7 +654,8 @@ async function loadGrowthAnalytics() {
       </div>
       <div style="margin-top:10px;padding:10px;background:var(--n50);border-radius:10px">
         <b>📣 Campaigns</b> · ${m.messages_sent_this_month || 0} messages sent this month
-      </div>`;
+      </div>
+      ${attributionCard}`;
   } catch (e) {
     box.innerHTML = `<span class="muted">Growth analytics unavailable: ${esc(e.message)}</span>`;
   }

@@ -50,6 +50,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check website and admin JavaScript syntax
+        run: |
+          node --check app/site/assets/js/site.js
+          node --check app/static/app.js
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
