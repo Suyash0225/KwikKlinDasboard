@@ -91,6 +91,7 @@ DEFAULTS: dict[str, Any] = {
     "agent_trouble_words": [],
     # agent behaviour (AI Training)
     "agent_enabled": True,            # global kill switch
+    "staff_agent_switches": {},       # staff UUID -> whether the agent may assign/message them
     # Complaint/bura-rating par bot us thread par chup ho jaata hai (insaan
     # sambhale). Itne ghante baad wo khud resume kar leta hai — warna
     # customer ka agla normal sawal bhi hamesha ke liye anjaana reh jaata.
