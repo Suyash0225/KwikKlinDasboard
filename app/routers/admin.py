@@ -761,7 +761,9 @@ async def customer_edit(
     cust = await _customer_by_phone(db, phone)
     from app.services import app_settings
     if body.agent_enabled is not None:
-        await app_settings.set_value(db, f"staff_agent_enabled_{staff.id}", body.agent_enabled)
+        switches = await app_settings.get(db, "staff_agent_switches")
+        switches[str(staff.id)] = body.agent_enabled
+        await app_settings.set_value(db, "staff_agent_switches", switches)
     if body.name is not None:
         cust.name = body.name.strip() or None
     if body.address is not None:
@@ -1309,6 +1311,7 @@ async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
 
     default_washer = await app_settings.get(db, "default_washer_phone")
     default_delivery = await app_settings.get(db, "default_delivery_phone")
+    agent_switches = await app_settings.get(db, "staff_agent_switches")
     # Jo number customer list mein bhi hai — uske message staff ke maane
     # jate hain, customer ka AI jawab band. Ye sirf save ke waqt batana
     # kaafi nahi; list mein hamesha dikhna chahiye.
@@ -1327,7 +1330,7 @@ async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
             {
                 "id": str(s.id), "name": s.name, "phone": s.phone,
                 "role": s.role.name, "is_active": s.is_active,
-                "agent_enabled": bool(await app_settings.get(db, f"staff_agent_enabled_{s.id}", True)),
+                "agent_enabled": bool(agent_switches.get(str(s.id), True)),
                 # the UI needs these to explain WHY delete is blocked
                 "active_orders": await _active_order_count(db, s.id),
                 "is_default": s.phone in (default_washer, default_delivery),
