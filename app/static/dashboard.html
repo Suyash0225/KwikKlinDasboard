@@ -204,6 +204,11 @@
           <b>Totals</b>
           <div class="sumrow" style="margin-top:8px"><span>Subtotal</span><span class="money" id="nb-sub">₹0</span></div>
           <div class="sumrow" id="nb-urg-sum" hidden><span>⚡ Urgent charge</span><span class="money" id="nb-urg-sumamt">₹0</span></div>
+          <div class="sumrow" style="align-items:flex-start">
+            <span><b>Additional charges</b><small class="muted" style="display:block">Pickup, delivery, packing, previous due, custom</small></span>
+            <button type="button" class="btn ghost sm" onclick="nbAddCharge()">+ Add</button>
+          </div>
+          <div id="nb-charges"></div>
           <!-- Most bills need none of these. On a phone they stay folded;
                desktop opens them (initNewBill). -->
           <details class="nb-more" id="nb-more">

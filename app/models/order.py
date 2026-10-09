@@ -113,6 +113,14 @@ class Order(Base, TenantScoped):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    def billing_adjustments(self) -> list[dict]:
+        return [i for i in (self.items or []) if isinstance(i, dict) and i.get("kind") in {"extra_charge", "due_charge"}]
+
+    def recalculate_total_from_adjustments(self, delta: Decimal) -> None:
+        if self.total_amount is not None:
+            self.total_amount = (self.total_amount + delta).quantize(Decimal("0.01"))
+        self.recalculate_payment_status()
+
     def recalculate_payment_status(self) -> None:
         """Re-derive payment_status from the money columns.
 

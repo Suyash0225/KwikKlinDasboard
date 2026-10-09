@@ -66,6 +66,11 @@ TOOL_SPECS = [
         "args": "period (today|week|month)",
     },
     {
+        "name": "billing_adjustment",
+        "when": "owner wants to add/remove an extra charge or additional due on a bill",
+        "args": "add: order | label | amount | kind; remove: remove | order | adjustment_id",
+    },
+    {
         "name": "ping_staff",
         "when": "owner asks to message/remind/ask a staff member (haan ping karo, pucho, bol do)",
         "args": "name + message (message ko seedhe unse baat karte hue likho)",
@@ -107,7 +112,7 @@ TOOL_SPECS = [
 # Tools that CHANGE data. The assistant may only claim something is done if
 # one of these actually ran — see bill_agent's unbacked-claim check.
 WRITE_TOOLS = {
-    "add_expense", "add_customer", "set_shop_info", "assign_task", "ping_staff",
+    "add_expense", "add_customer", "set_shop_info", "assign_task", "ping_staff", "billing_adjustment",
 }
 
 
@@ -175,6 +180,11 @@ async def _order_detail(db: AsyncSession, args: str) -> str:
     ]
     if o.notes:
         lines.append(f"Internal note: {o.notes[:200]}")
+    adjustments = o.billing_adjustments()
+    if adjustments:
+        lines.append("Billing adjustments:")
+        for a in adjustments:
+            lines.append(f"  {a.get('adjustment_id')} | {a.get('kind')} | {a.get('type')} | ₹{a.get('amount', 0)}")
 
     hist = (
         (
@@ -451,6 +461,43 @@ def _money_fmt(v) -> str:
 # action tool
 # --------------------------------------------------------------------------
 
+
+
+async def _billing_adjustment(db: AsyncSession, args: str) -> str:
+    """Add or remove an adjustment. Add: order | label | amount | kind. Remove: remove | order | adjustment_id."""
+    import re as _re
+    from app.services.order_service import add_billing_adjustment, get_order, remove_billing_adjustment
+
+    parts = [p.strip() for p in (args or "").split("|")]
+    if parts and parts[0].lower() == "remove":
+        if len(parts) < 3:
+            return "Remove format: remove | KK-... | adjustment_id"
+        try:
+            order = await get_order(db, parts[1])
+            await remove_billing_adjustment(db, order, adjustment_id=parts[2], changed_by="AI")
+        except Exception as exc:
+            return f"Charge remove nahi hua: {str(exc)[:120]}"
+        return f"Billing adjustment hata diya: {order.order_number}. Naya total ₹{order.total_amount or 0:.2f}; due automatically recalculate hua."
+    if len(parts) < 3:
+        return "Format: KK-... | Pickup charge | 50 | extra_charge"
+    number, label, raw_amount = parts[:3]
+    kind = (parts[3] if len(parts) >= 4 and parts[3] else "extra_charge").strip().lower()
+    if kind not in {"extra_charge", "due_charge"}:
+        return "Kind sirf extra_charge ya due_charge ho sakta hai."
+    raw_amount = _re.sub(r"(?i)\b(rs\.?|inr|rupees?)\b|[₹,]", "", raw_amount).strip()
+    try:
+        amount = Decimal(raw_amount)
+    except Exception:
+        return "Amount valid nahi hai. Example: 50."
+    if amount <= 0:
+        return "Amount 0 se zyada hona chahiye."
+    try:
+        order = await get_order(db, number)
+        await add_billing_adjustment(db, order, label=label, amount=amount, kind=kind, changed_by="AI")
+    except Exception as exc:
+        return f"Charge nahi laga: {str(exc)[:120]}"
+    word = "extra charge" if kind == "extra_charge" else "additional due"
+    return f"{word} laga diya: {order.order_number} — {label} ₹{amount:.2f}. Naya total ₹{order.total_amount or 0:.2f}; baaki payment system se automatically niklega."
 
 async def _ping_staff(db: AsyncSession, args: str) -> str:
     """Send a message to a staff member. args: 'Name | message'."""
@@ -996,4 +1043,5 @@ _TOOLS = {
     "staff_chat": _staff_chat,
     "money": _money_report,
     "ping_staff": _ping_staff,
+    "billing_adjustment": _billing_adjustment,
 }
