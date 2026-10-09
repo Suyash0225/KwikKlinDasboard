@@ -782,7 +782,7 @@ function renderOrders() {
         <td>${fmtDate(o.expected_delivery)}</td>
         <td><div class="act">
           ${nextStepBtn(o)}
-          ${o.status !== "DELIVERED" ? `<button class="btn sm ghost status-change-btn" title="Change status" aria-label="Change status" onclick="statusModal('${o.order_number}','${o.status}')">↕ Change status</button>` : ""}
+          ${!["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn sm ghost status-change-btn" title="Change status" aria-label="Change status" onclick="statusModal('${o.order_number}','${o.status}')">↕ Change status</button>` : ""}
           <button class="btn sm ghost" title="Collect payment" aria-label="Collect payment" onclick="paymentModal('${o.order_number}')">₹</button>
           <button class="btn sm ghost" title="More actions" aria-label="More actions" onclick="orderMenu('${o.order_number}')">⋯</button>
         </div></td>
