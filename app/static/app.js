@@ -4287,6 +4287,7 @@ function renderStaff() {
           <span class="ph">${fmtPhone(s.phone)}</span>
           <span class="badge role">${ROLE_LABEL[s.role] || esc(s.role)}</span>
           <span class="statuspill ${s.is_active ? "on" : "off"}">${s.is_active ? "Active" : "Inactive"}</span>
+          <span class="statuspill ${s.agent_enabled ? "on" : "off"}">Agent ${s.agent_enabled ? "ON" : "OFF"}</span>
           ${s.is_default ? `<span class="badge">Default</span>` : ""}
           ${s.also_customer ? `<span class="badge warn" title="Yeh number customer list mein bhi hai. Is number se aane wale message STAFF ke maane jayenge — customer wala AI jawab nahi milega.">Customer bhi</span>` : ""}
           ${s.active_orders ? `<span class="badge">${s.active_orders} active order${s.active_orders > 1 ? "s" : ""}</span>` : ""}
@@ -4296,6 +4297,7 @@ function renderStaff() {
         <button class="btn sm ghost" onclick="panelAccess('${s.id}')">${
           s.has_login ? "🔑 New password" : "🔑 Panel login"}</button>
         <button class="btn sm ghost" onclick="editStaffModal('${s.id}')">Edit</button>
+        <button class="btn sm ghost" onclick="updStaff('${s.id}', {agent_enabled: ${!s.agent_enabled}})">Agent ${s.agent_enabled ? "OFF" : "ON"}</button>
         ${s.is_active
           ? `<button class="btn sm ghost" onclick="deactivateStaff('${s.id}')">Deactivate</button>`
           : `<button class="btn sm ghost" onclick="updStaff('${s.id}', {is_active: true})">Reactivate</button>`}
