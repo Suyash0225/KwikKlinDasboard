@@ -32,7 +32,7 @@ log = structlog.get_logger()
 
 
 _SIMPLE_GREETING_RE = re.compile(
-    r"^\s*(?:hi|hii|hiii|hello|hey|heyy|hy|namaste|namaskar)\s*[!.?,]*\s*$",
+    r"^\s*(?:hi|hii|hiii|hello|hey|heyy|hy|namaste|namaskar)\s*[!.?,🙏🙂👋😊]*\s*$",
     re.I,
 )
 
