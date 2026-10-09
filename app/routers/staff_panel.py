@@ -321,12 +321,14 @@ async def change_own_password(
 
 
 def _shared_task_clause(p: StaffPrincipal):
+    """Managers see the shop queue; others see only work assigned to them.
+
+    Filtering by task kind alone leaks colleagues' work and can let one
+    worker act on a task assigned to someone else. Authorization must be
+    tied to the authenticated staff ID for every non-manager role.
+    """
     if p.is_manager:
         return None
-    if p.staff.role is StaffRole.DELIVERY:
-        return Task.kind.in_(("pickup", "delivery"))
-    if p.staff.role in (StaffRole.WASHER, StaffRole.SUPERVISOR):
-        return Task.kind.notin_(("pickup", "delivery"))
     return Task.assigned_staff_id == p.staff.id
 
 
