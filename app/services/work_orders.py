@@ -219,9 +219,8 @@ async def resolve_workers(db: AsyncSession, order: Order, role: str = "WASHER") 
     from app.services import ops_agent
 
     assigned = await db.get(Staff, order.assigned_washer_id) if order.assigned_washer_id else None
-    if assigned is not None and assigned.is_active and await app_settings.get(
-        db, f"staff_agent_enabled_{assigned.id}", True
-    ):
+    switches = await app_settings.get(db, "staff_agent_switches")
+    if assigned is not None and assigned.is_active and switches.get(str(assigned.id), True):
         return [assigned]
     selected = await ops_agent.pick_staff(db, "WASHER", None)
     if selected is None:
@@ -230,7 +229,7 @@ async def resolve_workers(db: AsyncSession, order: Order, role: str = "WASHER") 
             candidate = (await db.execute(select(Staff).where(
                 Staff.phone == default_phone, Staff.is_active.is_(True), Staff.role == StaffRole.WASHER
             ))).scalar_one_or_none()
-            if candidate and await app_settings.get(db, f"staff_agent_enabled_{candidate.id}", True):
+            if candidate and switches.get(str(candidate.id), True):
                 selected = candidate
     return [selected] if selected else []
 
