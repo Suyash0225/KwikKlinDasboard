@@ -14,7 +14,7 @@ async def test_llm_timeout_is_bounded_and_translated(monkeypatch) -> None:
     monkeypatch.setattr(llm_client, "_provider_failed", lambda provider: None)
     monkeypatch.setattr(llm_client, "_provider_succeeded", lambda provider: None)
 
-    async def no_quota_issue():
+    async def no_quota_issue(**kwargs):
         return None
 
     monkeypatch.setattr("app.services.quota.check_ai_quota", no_quota_issue)
