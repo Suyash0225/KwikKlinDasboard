@@ -426,6 +426,82 @@ async def test_task_status_menu_is_role_specific_and_updates_the_task(client, se
     await purge_phones(phone)
 
 
+async def test_delivery_done_requires_two_confirmations(worker, sent) -> None:
+    """First Done means out for delivery; only a second Done confirms delivery."""
+    from app.models import Customer
+    from app.services.order_service import create_order
+    from tests.conftest import purge_phones
+
+    phone = f"+919999{uuid.uuid4().int % 1_000_000:06d}"
+    async with async_session_factory() as db:
+        delivery_staff = Staff(
+            phone=f"+919998{uuid.uuid4().int % 1_000_000:06d}",
+            name="Delivery Flow Test",
+            role=StaffRole.DELIVERY,
+            is_active=True,
+            last_message_at=datetime.now(timezone.utc),
+        )
+        db.add(delivery_staff)
+        await db.commit()
+        staff_id = delivery_staff.id
+        order = await create_order(
+            db,
+            customer_phone=phone,
+            customer_name="Delivery Flow Customer",
+            created_by="test",
+            items=[{"type": "Shirt", "qty": 1}],
+        )
+        # Start at the exact stage where the delivery task is actionable.
+        order.status = OrderStatus.READY
+        db.add(order)
+        await db.commit()
+        task = await _mk(
+            db, staff_id, title="Deliver test order",
+            order=order, kind="delivery", notify=False,
+        )
+        code, order_id = task.code, order.id
+
+    try:
+        sent.clear()
+        async with async_session_factory() as db:
+            reply = await bill_agent.handle_staff_message(
+                db, sender_phone=delivery_staff.phone, sender_label="Delivery Flow Test",
+                text=f"[button:task:{code}:done] Done",
+            )
+        assert "out for delivery" in (reply or "").lower()
+
+        async with async_session_factory() as db:
+            current_order = await db.get(type(order), order_id)
+            current_task = await task_service.get_by_code(db, code)
+            assert current_order.status is OrderStatus.OUT_FOR_DELIVERY
+            assert current_task.status == TASK_OPEN, "task must remain open until hand-off"
+        customer_messages = [m.get("text", "").lower() for m in sent if m.get("to") == phone]
+        assert any("out for delivery" in m for m in customer_messages)
+        assert not any("has been delivered" in m or "order delivered" in m for m in customer_messages)
+
+        sent.clear()
+        async with async_session_factory() as db:
+            reply = await bill_agent.handle_staff_message(
+                db, sender_phone=delivery_staff.phone, sender_label="Delivery Flow Test",
+                text=f"[button:task:{code}:done] Done",
+            )
+        assert "customer updated" in (reply or "").lower() or "delivered" in (reply or "").lower()
+
+        async with async_session_factory() as db:
+            current_order = await db.get(type(order), order_id)
+            current_task = await task_service.get_by_code(db, code)
+            assert current_order.status is OrderStatus.DELIVERED
+            assert current_task.status == TASK_DONE
+        customer_messages = [m.get("text", "").lower() for m in sent if m.get("to") == phone]
+        assert any("delivered" in m for m in customer_messages)
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.code == code))
+            await db.execute(delete(Staff).where(Staff.id == staff_id))
+            await db.commit()
+        await purge_phones(phone)
+
+
 async def test_delivery_task_uses_done_pending_menu(sent) -> None:
     """Pickup and delivery work use the same simple Done/Pending menu."""
     async with async_session_factory() as db:
