@@ -140,7 +140,19 @@ async def two_shops():
                 )
             await db.execute(sqltext("DELETE FROM staff WHERE phone = :p"), {"p": phone})
         await db.commit()
-    await purge_phones(CUST_A, CUST_B)
+    # Tests can create customers with phones beyond CUST_A/CUST_B. Purge
+    # every customer belonging to these disposable tenants before deleting
+    # the tenant rows, otherwise the next test fails on the tenant FK.
+    async with async_session_factory() as db:
+        tenant_customer_phones = (
+            await db.execute(
+                sqltext(
+                    "SELECT phone FROM customers WHERE tenant_id IN "
+                    "(SELECT id FROM tenants WHERE slug IN ('panel-a','panel-b'))"
+                )
+            )
+        ).scalars().all()
+    await purge_phones(CUST_A, CUST_B, *tenant_customer_phones)
     async with async_session_factory() as db:
         await db.execute(sqltext("DELETE FROM tenants WHERE slug IN ('panel-a','panel-b')"))
         await db.commit()
