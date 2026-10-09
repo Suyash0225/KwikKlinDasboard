@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import structlog
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 
 from app.services import plans, tenant_context
 from app.utils.dates import IST
@@ -142,7 +142,7 @@ async def check_ai_quota(
     max_output_tokens: int = 0, image: bool = False,
     reserve_budget: bool = False,
 ):
-    """Check per-tenant quotas; optionally atomically reserve estimated spend."""
+    """Check quotas; optionally reserve estimated spend atomically for one in-flight call."""
     from datetime import timedelta
     from app.database import async_session_factory
     from app.models import LlmBudgetReservation, LlmUsage
@@ -156,12 +156,10 @@ async def check_ai_quota(
             return None
 
         monthly_budget = Decimal(str(await app_settings.get(db, "llm_monthly_budget_usd") or 0))
-        rates = {}
         reserve = Decimal("0")
         if monthly_budget > 0:
-            # Transaction-level lock protects the spend + reservation check.
-            # It is released at commit; no DB connection is held during the
-            # external provider request.
+            # A short transaction lock serializes only the accounting check;
+            # the provider request itself holds no DB connection.
             lock_key = f"kwikklin-ai-budget:{tid}"
             await db.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
@@ -195,9 +193,6 @@ async def check_ai_quota(
                     )
                 )
             ).scalar_one()
-            # Use a conservative estimate before provider I/O. The image
-            # allowance covers the typical single-image request; exact billed
-            # tokens are reconciled from LlmUsage after the response.
             estimated_input_tokens = (len(input_text) + 3) // 4 + (1000 if image else 0)
             reserve = estimated_cost_usd(
                 model or "", estimated_input_tokens, max(0, max_output_tokens), rates
@@ -217,8 +212,8 @@ async def check_ai_quota(
                     plan_name,
                 )
 
-        # Check call limits only after budget validation, so an exhausted
-        # money budget never consumes an AI usage credit.
+        # Check call limits after the money check so an exhausted budget never
+        # consumes a prepaid AI credit.
         call_limit = limits["ai_usage_limit"]
         used = 0
         if call_limit is not None:
@@ -256,7 +251,7 @@ async def ai_quota_guard(
     *, model: str | None = None, input_text: str = "",
     max_output_tokens: int = 0, image: bool = False,
 ):
-    """Reserve budget atomically, then release it after provider usage is recorded."""
+    """Reserve estimated spend atomically and release it after usage is recorded."""
     from app.database import async_session_factory
     from app.models import LlmBudgetReservation
 
