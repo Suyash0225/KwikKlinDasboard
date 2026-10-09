@@ -592,6 +592,12 @@ def test_repeat_order_segment_is_paid_up_and_waits_15_days() -> None:
     assert "active_regular" not in debtor_segments
     assert "outstanding_dues" in debtor_segments
 
+    # A debtor who is 90 days overdue must not receive the lapsed discount segment.
+    older_debtor = {**base, "last_order_at": now - timedelta(days=90), "outstanding": Decimal("250")}
+    older_segments = _classify(older_debtor, now, Decimal("500"))
+    assert "lapsed" not in older_segments
+    assert "outstanding_dues" in older_segments
+
     too_soon = {**base, "last_order_at": now - timedelta(days=7)}
     assert "active_regular" not in _classify(too_soon, now, Decimal("500"))
 
