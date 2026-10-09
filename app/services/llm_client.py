@@ -216,11 +216,6 @@ async def _generate_with_fallback(
     """Use only paid Gemini; retry the same deployment's cheaper tier once."""
     from app.services.quota import QuotaExceeded, check_ai_quota
 
-    try:
-        await check_ai_quota()
-    except QuotaExceeded as exc:
-        raise LLMAuthError(str(exc)) from exc
-
     if _provider_is_open(PROVIDER):
         raise LLMUnavailable("gemini circuit open")
 
@@ -228,6 +223,16 @@ async def _generate_with_fallback(
     candidates = [model] if model in (cheap, smart) else [smart]
     if candidates[0] != cheap:
         candidates.append(cheap)
+
+    try:
+        await check_ai_quota(
+            model=candidates[0],
+            input_text=system + "\n" + user_text,
+            max_output_tokens=max(max_tokens, 512),
+            image=image is not None,
+        )
+    except QuotaExceeded as exc:
+        raise LLMAuthError(str(exc)) from exc
 
     # One deadline covers retries AND model fallback. Previously every retry
     # and each model tier received a fresh 75–90 second timeout, so a single
