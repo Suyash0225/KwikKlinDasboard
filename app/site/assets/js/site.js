@@ -8,6 +8,16 @@ const WA_NUMBER = "919696856069";
 const SITE_DATA = JSON.parse(document.getElementById("site-data").textContent || "{}");
 const POPULAR = SITE_DATA.popular || [];
 const wa = (text) => "https://wa.me/" + WA_NUMBER + "?text=" + encodeURIComponent(text);
+const attributionText = () => {
+  const params = new URLSearchParams(window.location.search);
+  const allowed = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"];
+  const values = allowed.map((key) => [key, (params.get(key) || "").trim().slice(0, 100)])
+    .filter((pair) => pair[1]);
+  return ["Lead source: website", ...values.map(([key, value]) => key + ": " + value)].join("\n");
+};
+const trackLeadEvent = (name, params = {}) => {
+  if (typeof window.gtag === "function") window.gtag("event", name, params);
+};
 const WA_TEXT = {
   hello: "Hello Kwik Klin, I have a question.",
   pickup: "Hello Kwik Klin, I would like to book a pickup.",
@@ -16,8 +26,9 @@ const WA_TEXT = {
   crm: "Hello Kwik Klin, I run a laundry and would like a demo of the CRM.",
 };
 document.querySelectorAll("[data-wa]").forEach((a) => {
-  a.href = wa(WA_TEXT[a.dataset.wa]);
+  a.href = wa(WA_TEXT[a.dataset.wa] + "\n" + attributionText());
   a.target = "_blank"; a.rel = "noopener";
+  a.addEventListener("click", () => trackLeadEvent("whatsapp_click", {cta_type: a.dataset.wa || "unknown"}));
 });
 document.getElementById("yr").textContent = new Date().getFullYear();
 
@@ -65,7 +76,9 @@ document.getElementById("book").addEventListener("submit", (e) => {
   err.textContent = "";
   const msg = "Hello Kwik Klin, I would like to book a pickup.\n" +
     "Name: " + v("b-name") + "\nMobile: " + phone + "\nLocality: " + v("b-area") + ", Varanasi" +
-    "\nService: " + v("b-service") + "\nPreferred pickup: " + v("b-when");
+    "\nService: " + v("b-service") + "\nPreferred pickup: " + v("b-when") + "\n" + attributionText();
+  trackLeadEvent("generate_lead", {lead_source: "website", service_type: v("b-service")});
+  trackLeadEvent("whatsapp_click", {cta_type: "booking_form"});
   window.open(wa(msg), "_blank", "noopener");
 });
 
