@@ -17,11 +17,7 @@ PHONE_2 = "+919999900098"
 
 
 async def _seed_order(db, phone: str, name: str, item_type: str) -> Order:
-    """Seed an order directly because the live DB has a legacy NOT NULL bill_code.
-
-    The application Order model no longer owns bill_code, so this test-only
-    insert supplies the legacy DB column without changing production code.
-    """
+    """Seed an order using only columns owned by the current application schema."""
     tenant_id = await tenant_context.get_home_tenant_id()
     customer = Customer(
         phone=phone,
@@ -33,19 +29,17 @@ async def _seed_order(db, phone: str, name: str, item_type: str) -> Order:
 
     order_id = uuid.uuid4()
     order_number = f"KK-TEST-{uuid.uuid4().hex[:10].upper()}"
-    bill_code = f"TEST-{uuid.uuid4().hex[:12].upper()}"
-
     await db.execute(
         sqltext(
             """
             INSERT INTO orders (
                 id, order_number, customer_id, status, items,
-                amount_paid, payment_status, priority, bill_code, tenant_id
+                amount_paid, payment_status, priority, tenant_id
             )
             VALUES (
                 :id, :order_number, :customer_id, 'RECEIVED',
                 CAST(:items AS jsonb), :amount_paid, 'UNPAID',
-                'normal', :bill_code, :tenant_id
+                'normal', :tenant_id
             )
             """
         ),
@@ -55,7 +49,6 @@ async def _seed_order(db, phone: str, name: str, item_type: str) -> Order:
             "customer_id": str(customer.id),
             "items": f'[{{"type":"{item_type}","qty":1}}]',
             "amount_paid": Decimal("0"),
-            "bill_code": bill_code,
             "tenant_id": str(tenant_id),
         },
     )
