@@ -470,11 +470,12 @@ async def _my_task(db: AsyncSession, p: StaffPrincipal, code: str) -> Task:
     ).scalar_one_or_none()
     if t is None:
         raise HTTPException(status_code=404, detail=f"{code} not found")
-    if not p.is_manager:
-        from app.services import tasks as task_service
-        if not await task_service.staff_can_access_task(db, t, p.staff):
-            log.info("staff_task_forbidden", staff=p.staff.name, code=code)
-            raise HTTPException(status_code=403, detail="This job is not in your shared team queue")
+    # Task cards and task actions must use the same authorization rule.
+    # Team-kind membership is not sufficient: only the assignee (or a manager)
+    # may open or mutate this task through the staff panel.
+    if not p.is_manager and t.assigned_staff_id != p.staff.id:
+        log.info("staff_task_forbidden", staff=p.staff.name, code=code)
+        raise HTTPException(status_code=403, detail="This task is assigned to another staff member")
     return t
 
 
