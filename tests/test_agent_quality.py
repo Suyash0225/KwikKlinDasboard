@@ -22,7 +22,7 @@ STAFF_NAME = "Qatestwala"
 
 
 def test_low_signal_staff_messages_are_classified_without_llm() -> None:
-    for text in ("ok", "Okay!", "thanks", "Thank you 🙏", "hello", "theek hai", "acha"):
+    for text in ("ok", "Okay!", "thanks", "Thank you 🙏", "hello", "welcome!", "Good morning", "theek hai", "acha"):
         assert bill_agent._LOW_SIGNAL_STAFF_RE.fullmatch(text), text
     for text in ("done T-14", "pickup done", "2 baje", "order KK-20261009-01 ready"):
         assert not bill_agent._LOW_SIGNAL_STAFF_RE.fullmatch(text), text
