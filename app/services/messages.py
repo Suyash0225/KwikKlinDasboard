@@ -319,8 +319,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Hello {name} 🙏\nThank you for trusting {shop} with your clothes! We hope you loved order {order_number} ✨\nNext time just WhatsApp us — we will pick up from your home 🧺\n— {shop}",
     },
     "review_request": {
-        "hi": "Namaste {name} 🙏\nUmmeed hai {shop} ki seva aapko achhi lagi. Agar haan, to Google par bas 1 minute ka review dekar hamari madad kijiye ⭐⭐⭐⭐⭐\n👉 {review_link}\nAapka ek review hamare liye bahut keemti hai. Dhanyawad!\n— {shop}",
-        "en": "Hello {name} 🙏\nWe hope you liked {shop}'s service. If you did, please help us with a 1-minute Google review ⭐⭐⭐⭐⭐\n👉 {review_link}\nYour review means a lot to us. Thank you!\n— {shop}",
+        "hi": "Namaste {name} 🙏\nAgar aap chahein, apna imaandaar feedback Google par share kar sakte hain. Har tarah ka feedback hamare liye madadgar hai.\n👉 {review_link}\nDhanyawad!\n— {shop}",
+        "en": "Hello {name} 🙏\nIf you wish, you can share your honest feedback on Google. All feedback helps us improve.\n👉 {review_link}\nThank you!\n— {shop}",
     },
     "payment_reminder_firm": {
         "hi": "Namaste, aapke order {order_number} ka ₹{amount} kaafi dino se baaki hai. Kripya jald bhugtaan karein — cash/UPI dono chalega. Dhanyawad 🙏 — {shop}",
