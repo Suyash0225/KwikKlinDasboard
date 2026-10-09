@@ -210,12 +210,13 @@ async def resolve_workers(db: AsyncSession, order: Order, role: str = "WASHER") 
     the least-loaded eligible worker. Never broadcast the same job to all washers.
     """
     if role == "DELIVERY":
-        if order.assigned_delivery_id:
-            st = await db.get(Staff, order.assigned_delivery_id)
-            return [st] if st else []
-        from app.services import team
-        st = await team.delivery_staff(db)
-        return [st] if st else []
+        from app.services import ops_agent
+        switches = await app_settings.get(db, "staff_agent_switches")
+        assigned = await db.get(Staff, order.assigned_delivery_id) if order.assigned_delivery_id else None
+        if assigned is not None and assigned.is_active and switches.get(str(assigned.id), True):
+            return [assigned]
+        selected = await ops_agent.pick_staff(db, "DELIVERY", None)
+        return [selected] if selected else []
     from app.services import ops_agent
 
     assigned = await db.get(Staff, order.assigned_washer_id) if order.assigned_washer_id else None
