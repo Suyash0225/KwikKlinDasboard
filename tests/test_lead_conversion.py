@@ -168,7 +168,7 @@ def test_website_source_marker_is_detected_without_personal_data() -> None:
     """Website attribution marker survives WhatsApp prefill into the lead source."""
     from app.services.leads import _source_from_message
 
-    assert _source_from_message("Hello Kwik Klin\\nLead source: website") == "website"
-    assert _source_from_message("Hello Kwik Klin\\nLead source: website\\nutm_source: google") == "google"
+    assert _source_from_message("Hello Kwik Klin\nLead source: website") == "website"
+    assert _source_from_message("Hello Kwik Klin\nLead source: website\nutm_source: google") == "google"
     assert _source_from_message("Hello Kwik Klin, I have a question.") == "whatsapp"
     assert _source_from_message("GOOGLE pickup request") == "google"
