@@ -145,6 +145,18 @@ async def test_opted_out_is_untouchable(sent) -> None:
     assert await _nudges() == []
 
 
+async def test_marketing_opt_out_is_untouchable(sent) -> None:
+    await _talking_customer(7)
+    async with async_session_factory() as s:
+        cust = (
+            await s.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one()
+        cust.marketing_opt_out = True
+        await s.commit()
+    await engage.run_conversation_followups()
+    assert await _nudges() == []
+
+
 async def test_owner_takeover_silences_the_agent(sent) -> None:
     """He is answering this thread himself — the bot must not talk over him."""
     await _talking_customer(7)
