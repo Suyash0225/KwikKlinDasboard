@@ -7,6 +7,7 @@ explicit opt-out is handled separately by the webhook.
 """
 
 from datetime import datetime, timedelta, timezone
+import re
 
 import structlog
 from sqlalchemy import select
@@ -22,6 +23,22 @@ from app.services.tenant_context import manager_phone
 from app.services.team import primary_admin_phone
 
 log = structlog.get_logger()
+
+
+def _source_from_message(text: str | None) -> str:
+    """Extract a bounded source label from a website WhatsApp prefill or legacy QR tag."""
+    body = text or ""
+    if re.search(r"(?im)^Lead source:\\s*website\\s*$", body):
+        utm = re.search(r"(?im)^utm_source:\\s*([^\\r\\n]{1,100})", body)
+        if utm and utm.group(1).strip().lower() == "google":
+            return "google"
+        return "website"
+    first = " ".join(body.strip().split()[:2]).upper()
+    for tag, source in (("POSTER", "poster"), ("GOOGLE", "google"),
+                        ("BILL", "bill"), ("REFER", "referral"), ("NAMASTE", "qr")):
+        if tag in first:
+            return source
+    return "whatsapp"
 
 _LADDER = [  # (followup_count -> delay after the previous customer touch, days, message key)
     (0, 2 / 24, "lead_followup_2h"),
@@ -49,17 +66,7 @@ async def note_inquiry(db: AsyncSession, customer: Customer, text: str) -> None:
             await db.execute(select(Lead).where(Lead.phone == customer.phone))
         ).scalar_one_or_none()
         now = datetime.now(timezone.utc)
-        # source attribution: wa.me prefill codes (poster/google/bill/refer)
-        first = (text or "").strip().split()[:2]
-        code = " ".join(first).upper()
-        source = "whatsapp"
-        for tag, src in (
-            ("POSTER", "poster"), ("GOOGLE", "google"),
-            ("BILL", "bill"), ("REFER", "referral"), ("NAMASTE", "qr"),
-        ):
-            if tag in code:
-                source = src
-                break
+        source = _source_from_message(text)
         if lead is None:
             db.add(
                 Lead(
