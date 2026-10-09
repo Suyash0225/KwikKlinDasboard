@@ -122,7 +122,7 @@ async def test_payment_reminders_polite_then_firm(sched_sent, sent) -> None:
     assert any("udhaar" in (c["text"] or "").lower() for c in admin_msgs)
 
 
-async def test_segments_classify_lapsed_and_dues(sent) -> None:
+async def test_segments_with_outstanding_due_are_not_lapsed(sent) -> None:
     order = await _seed_order(total_amount=Decimal("300"))
     async with async_session_factory() as s:
         row = (
@@ -134,7 +134,8 @@ async def test_segments_classify_lapsed_and_dues(sent) -> None:
         segs = await compute_segments(db)
     lapsed_phones = {m["phone"] for m in segs["lapsed"]}
     dues_phones = {m["phone"] for m in segs["outstanding_dues"]}
-    assert PHONE in lapsed_phones and PHONE in dues_phones
+    assert PHONE not in lapsed_phones
+    assert PHONE in dues_phones
 
 
 async def test_eligibility_blocks_opted_out(sent) -> None:
@@ -166,6 +167,8 @@ async def test_campaign_queue_send_and_track(sched_sent, sent, monkeypatch) -> N
         # (check_marketing_eligible) rightly skips anyone mid-order
         row.status = OrderStatus.DELIVERED
         row.actual_delivery = datetime.now(timezone.utc) - timedelta(days=74)
+        # A win-back discount is for a paid-up lapsed customer, never a debtor.
+        row.amount_paid = row.total_amount
         await s.commit()
 
     async with async_session_factory() as db:
