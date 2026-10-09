@@ -108,6 +108,8 @@ async def pick_staff(db: AsyncSession, role: str, order: Order | None = None) ->
     staff = (
         await db.execute(select(Staff).where(Staff.is_active.is_(True), Staff.role.in_(roles)))
     ).scalars().all()
+    switches = await app_settings.get(db, "staff_agent_switches")
+    staff = [candidate for candidate in staff if switches.get(str(candidate.id), True)]
     if not staff:
         return None
     try:

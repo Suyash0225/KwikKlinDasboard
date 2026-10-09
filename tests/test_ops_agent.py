@@ -283,3 +283,21 @@ async def test_dashboard_and_order_detail_carry_tracking_and_bill_time(client, s
         tracked = await turnaround.track_many(db, [await db.get(Order, o.id)])
     t = tracked[o.id]
     assert t["stage"] == "RECEIVED" and t["bill_seconds"] == 75 and len(t["milestones"]) == 1
+
+
+async def test_agent_off_washer_is_skipped_and_unassigned_order_has_one_recipient(shop) -> None:
+    """Agent OFF keeps panel access but excludes a washer from assignment/notifications."""
+    o = await _order()
+    async with async_session_factory() as db:
+        switches = await app_settings.get(db, "staff_agent_switches")
+        switches[str(shop["w1"])] = False
+        switches[str(shop["w2"])] = True
+        await app_settings.set_value(db, "staff_agent_switches", switches)
+        order = await db.get(Order, o.id)
+        # Force the legacy/unassigned path to make sure it no longer broadcasts.
+        order.assigned_washer_id = None
+        await db.commit()
+        from app.services.work_orders import resolve_workers
+        recipients = await resolve_workers(db, order, "WASHER")
+        assert [worker.id for worker in recipients] == [shop["w2"]]
+        assert (await db.get(Staff, shop["w1"])).is_active is True

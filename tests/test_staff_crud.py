@@ -380,3 +380,34 @@ async def test_a_senior_washerman_can_be_a_manager_too(client) -> None:
     from app.services.staff_auth import MANAGER_ROLES
 
     assert StaffRole.SUPERVISOR in MANAGER_ROLES
+
+
+async def test_agent_toggle_is_independent_of_staff_active_state(client) -> None:
+    """Agent notifications can be paused without disabling the staff account."""
+    sid = await _create(client, CRUD_PHONE_10, "Agent Switch")
+    try:
+        r = await client.put(
+            f"/admin/api/staff/{sid}", headers=H, json={"agent_enabled": False}
+        )
+        assert r.status_code == 200, r.text
+        row = next(
+            x for x in (await client.get("/admin/api/staff", headers=H)).json()
+            if x["id"] == sid
+        )
+        assert row["agent_enabled"] is False
+        assert row["is_active"] is True, "agent OFF must not revoke staff-panel access"
+
+        r = await client.put(
+            f"/admin/api/staff/{sid}", headers=H, json={"agent_enabled": True}
+        )
+        assert r.status_code == 200, r.text
+        row = next(
+            x for x in (await client.get("/admin/api/staff", headers=H)).json()
+            if x["id"] == sid
+        )
+        assert row["agent_enabled"] is True
+    finally:
+        async with async_session_factory() as db:
+            switches = await app_settings.get(db, "staff_agent_switches")
+            switches.pop(sid, None)
+            await app_settings.set_value(db, "staff_agent_switches", switches)
