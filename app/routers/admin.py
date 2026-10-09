@@ -759,11 +759,6 @@ async def customer_edit(
 ) -> dict:
     """Fix a customer's name, number or address."""
     cust = await _customer_by_phone(db, phone)
-    from app.services import app_settings
-    if body.agent_enabled is not None:
-        switches = await app_settings.get(db, "staff_agent_switches")
-        switches[str(staff.id)] = body.agent_enabled
-        await app_settings.set_value(db, "staff_agent_switches", switches)
     if body.name is not None:
         cust.name = body.name.strip() or None
     if body.address is not None:
@@ -1139,7 +1134,6 @@ class RateIn(BaseModel):
 class RateUpdateIn(BaseModel):
     rate: Decimal | None = Field(default=None, gt=0)
     is_active: bool | None = None
-    agent_enabled: bool | None = None
 
 
 @router.get("/api/rates", dependencies=[Depends(require_admin_key)])
@@ -1238,6 +1232,7 @@ class StaffUpdateIn(BaseModel):
     phone: str | None = Field(default=None, min_length=6, max_length=20)
     role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY|SUPERVISOR|MANAGER|ADMIN)$")
     is_active: bool | None = None
+    agent_enabled: bool | None = None
 
 
 async def _active_order_count(db: AsyncSession, staff_id: uuid_module.UUID) -> int:
@@ -1372,6 +1367,11 @@ async def staff_update(staff_id: str, body: StaffUpdateIn, db: AsyncSession = De
     staff = await db.get(Staff, sid)
     if staff is None:
         raise HTTPException(status_code=404, detail="staff not found")
+    if body.agent_enabled is not None:
+        from app.services import app_settings
+        switches = await app_settings.get(db, "staff_agent_switches")
+        switches[str(staff.id)] = body.agent_enabled
+        await app_settings.set_value(db, "staff_agent_switches", switches)
     if body.name is not None:
         name = body.name.strip()
         if len(name) < 2:
