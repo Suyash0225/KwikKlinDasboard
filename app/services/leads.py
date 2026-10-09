@@ -28,8 +28,8 @@ log = structlog.get_logger()
 def _source_from_message(text: str | None) -> str:
     """Extract a bounded source label from a website WhatsApp prefill or legacy QR tag."""
     body = text or ""
-    if re.search(r"(?im)^Lead source:\\s*website\\s*$", body):
-        utm = re.search(r"(?im)^utm_source:\\s*([^\\r\\n]{1,100})", body)
+    if re.search(r"(?im)^Lead source:\s*website\s*$", body):
+        utm = re.search(r"(?im)^utm_source:\s*([^\r\n]{1,100})", body)
         if utm and utm.group(1).strip().lower() == "google":
             return "google"
         return "website"
