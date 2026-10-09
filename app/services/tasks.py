@@ -713,9 +713,41 @@ async def confirm_pickup(db: AsyncSession, task: Task, *, done: bool, by: str) -
         )
         return "Theek hai, ho jaye to batana. Main thodi der baad phir poochh lunga."
 
+    # A delivery task has two distinct customer-visible milestones. The first
+    # Done tap means the parcel has LEFT the shop; keep the task open so the
+    # delivery worker can confirm the actual hand-off with a second Done tap.
+    # Never let one tap cascade READY -> OUT_FOR_DELIVERY -> DELIVERED.
+    if task.kind == "delivery" and order is not None:
+        from app.services import order_service
+
+        if order.status is OrderStatus.READY:
+            try:
+                await order_service.update_status(
+                    db, order, OrderStatus.OUT_FOR_DELIVERY, changed_by=f"staff:{by}"
+                )
+            except Exception:
+                log.exception("job_out_for_delivery_status_move_failed", code=task.code)
+                return "Delivery status update nahi ho paya. Please manager ko batayein."
+            task.last_ping_at = datetime.now(timezone.utc)
+            db.add(task)
+            await db.commit()
+            await team.notify_admins(
+                db,
+                f"🚚 {by} ne {order.order_number} ko out for delivery mark kiya "
+                f"({task.code}). Delivery complete hone par dobara Done karein.",
+            )
+            return "🚚 Order out for delivery mark ho gaya. Customer ko update bhej diya hai. Delivery complete hone ke baad is task par Done dobara dabayein."
+
+        if order.status is not OrderStatus.OUT_FOR_DELIVERY:
+            return (
+                f"⚠️ {order.order_number} abhi {order.status.name} hai. "
+                "Delivery task sirf READY ya OUT_FOR_DELIVERY order par complete ho sakta hai."
+            )
+
     completed = await complete_task(db, task, reply=f"{cfg['word']} ho gaya", by=by)
     if not getattr(completed, "_completion_won", False):
         return f"ℹ️ *{task.code}* already complete ho chuka hai. Pehla valid update accept hua tha."
+
     if order is not None:
         try:
             from app.services import order_service
@@ -729,15 +761,10 @@ async def confirm_pickup(db: AsyncSession, task: Task, *, done: bool, by: str) -
                     await order_service.update_status(
                         db, order, OrderStatus.PICKED_UP, changed_by=f"staff:{by}"
                     )
-            else:
-                if order.status is OrderStatus.READY:
-                    await order_service.update_status(
-                        db, order, OrderStatus.OUT_FOR_DELIVERY, changed_by=f"staff:{by}"
-                    )
-                if order.status is OrderStatus.OUT_FOR_DELIVERY:
-                    await order_service.update_status(
-                        db, order, OrderStatus.DELIVERED, changed_by=f"staff:{by}"
-                    )
+            elif task.kind == "delivery" and order.status is OrderStatus.OUT_FOR_DELIVERY:
+                await order_service.update_status(
+                    db, order, OrderStatus.DELIVERED, changed_by=f"staff:{by}"
+                )
         except Exception:
             log.exception("job_done_status_move_failed", code=task.code)
     await team.notify_admins(
