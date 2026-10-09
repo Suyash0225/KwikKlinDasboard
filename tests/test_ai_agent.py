@@ -335,3 +335,22 @@ async def test_escalation_alert_failure_is_swallowed(monkeypatch) -> None:
         )
     assert esc is not None
     assert len(await _escalations_for(cust.id)) == 1
+
+
+def test_simple_greetings_are_recognized_without_matching_literal_backslashes() -> None:
+    for text in ("Hi", "  hello! ", "HY", "Namaste", "hey??"):
+        assert agent_module._is_simple_greeting(text), text
+    for text in ("", "hi there", "hello, what is the rate?", r"\s", "hiii can you pick up"):
+        assert not agent_module._is_simple_greeting(text), text
+
+
+async def test_simple_greeting_does_not_call_llm(monkeypatch) -> None:
+    async def unexpected_llm(**kwargs):
+        raise AssertionError("simple greeting must not call the LLM")
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", unexpected_llm)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        reply = await build_ai_reply(db, cust, "  Hello!! ")
+
+    assert reply and "Welcome to Kwik Klin" in reply
