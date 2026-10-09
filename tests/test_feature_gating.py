@@ -66,7 +66,7 @@ def test_plan_config_sanity() -> None:
 async def test_basic_plan_locks_premium_features(client, _restore_plan) -> None:
     await _set_home_plan("starter")
     for path in ("/admin/api/campaigns", "/admin/api/reports/summary",
-                 "/admin/api/leads", "/admin/api/usage", "/admin/api/segments"):
+                 "/admin/api/leads", "/admin/api/leads/attribution", "/admin/api/usage", "/admin/api/segments"):
         r = await client.get(path, headers=AUTH)
         assert r.status_code == 402, f"{path}: {r.status_code}"
         assert "Upgrade" in r.json()["detail"], path
@@ -78,7 +78,7 @@ async def test_basic_plan_locks_premium_features(client, _restore_plan) -> None:
 async def test_business_plan_opens_everything(client, _restore_plan) -> None:
     await _set_home_plan("growth")
     for path in ("/admin/api/campaigns", "/admin/api/reports/summary",
-                 "/admin/api/leads", "/admin/api/usage"):
+                 "/admin/api/leads", "/admin/api/leads/attribution", "/admin/api/usage"):
         r = await client.get(path, headers=AUTH)
         assert r.status_code == 200, f"{path}: {r.status_code} {r.text[:100]}"
 
