@@ -1,0 +1,65 @@
+name: Python tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: kwikklin_test
+          POSTGRES_USER: kwikklin
+          POSTGRES_PASSWORD: kwikklin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kwikklin -d kwikklin_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://kwikklin:kwikklin@localhost:5432/kwikklin_test
+      APP_DATABASE_URL: postgresql+asyncpg://kwikklin:kwikklin@localhost:5432/kwikklin_test
+      MANAGER_PHONE: "+919999000000"
+      ADMIN_API_KEY: ci-only-not-a-secret
+      SHOP_NAME: "Kwik Klin CI"
+      ENVIRONMENT: development
+      WHATSAPP_PROVIDER: waha
+      WAHA_BASE_URL: http://127.0.0.1:3000
+      WHATSAPP_APP_SECRET: ci-test-app-secret
+      WHATSAPP_PHONE_NUMBER_ID: ci-test-phone-id
+      GEMINI_API_KEY: ""
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Apply database migrations
+        run: alembic upgrade heads
+
+      - name: Run test suite
+        run: pytest -q
