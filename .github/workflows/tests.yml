@@ -16,7 +16,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_DB: kwikklin_test
           POSTGRES_USER: kwikklin
@@ -37,7 +37,7 @@ jobs:
       MANAGER_PHONE: "+919999000000"
       ADMIN_API_KEY: ci-only-not-a-secret
       VENDOR_API_KEY: ci-only-vendor-key
-      TOKEN_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+      TOKEN_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
       SHOP_NAME: "Kwik Klin CI"
       ENVIRONMENT: development
       WHATSAPP_PROVIDER: waha
@@ -77,7 +77,7 @@ jobs:
           add_if_present() {
             file="$1"
             test_name="$2"
-            if [[ -f "$file" ]] && grep -Eq "^(async )?def ${test_name}\(" "$file"; then
+            if [[ -f "$file" ]] && grep -Eq "^(async )?def ${test_name}\\(" "$file"; then
               focused+=("${file}::${test_name}")
             fi
           }
@@ -87,6 +87,8 @@ jobs:
           add_if_present tests/test_agent_quality.py test_low_signal_staff_messages_are_classified_without_llm
           add_if_present tests/test_scheduler_marketing.py test_repeat_order_segment_is_paid_up_and_waits_15_days
           add_if_present tests/test_llm_client_timeout.py test_llm_timeout_is_bounded_and_translated
+          add_if_present tests/test_staff_panel.py test_a_worker_sees_only_his_own_work
+          add_if_present tests/test_staff_panel.py test_manager_status_update_uses_customer_notifications_only_at_delivery_milestones
           add_if_present tests/test_rls_billing.py test_a_shop_sees_only_its_own_invoices
           add_if_present tests/test_rls_billing.py test_a_shop_cannot_write_another_shops_invoice
 

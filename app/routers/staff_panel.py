@@ -321,12 +321,14 @@ async def change_own_password(
 
 
 def _shared_task_clause(p: StaffPrincipal):
+    """Managers see the shop queue; others see only work assigned to them.
+
+    Filtering by task kind alone leaks colleagues' work and can let one
+    worker act on a task assigned to someone else. Authorization must be
+    tied to the authenticated staff ID for every non-manager role.
+    """
     if p.is_manager:
         return None
-    if p.staff.role is StaffRole.DELIVERY:
-        return Task.kind.in_(("pickup", "delivery"))
-    if p.staff.role in (StaffRole.WASHER, StaffRole.SUPERVISOR):
-        return Task.kind.notin_(("pickup", "delivery"))
     return Task.assigned_staff_id == p.staff.id
 
 
@@ -468,11 +470,12 @@ async def _my_task(db: AsyncSession, p: StaffPrincipal, code: str) -> Task:
     ).scalar_one_or_none()
     if t is None:
         raise HTTPException(status_code=404, detail=f"{code} not found")
-    if not p.is_manager:
-        from app.services import tasks as task_service
-        if not await task_service.staff_can_access_task(db, t, p.staff):
-            log.info("staff_task_forbidden", staff=p.staff.name, code=code)
-            raise HTTPException(status_code=403, detail="This job is not in your shared team queue")
+    # Task cards and task actions must use the same authorization rule.
+    # Team-kind membership is not sufficient: only the assignee (or a manager)
+    # may open or mutate this task through the staff panel.
+    if not p.is_manager and t.assigned_staff_id != p.staff.id:
+        log.info("staff_task_forbidden", staff=p.staff.name, code=code)
+        raise HTTPException(status_code=403, detail="This task is assigned to another staff member")
     return t
 
 

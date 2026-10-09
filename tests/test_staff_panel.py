@@ -13,7 +13,7 @@ from sqlalchemy import text as sqltext
 from app.database import async_session_factory
 from app.models import Staff, StaffRole, Task
 from app.models.tenant import Tenant
-from app.services import staff_auth
+from app.services import staff_auth, tenant_context
 from app.services.order_service import create_order
 from tests.conftest import purge_phones
 
@@ -57,6 +57,14 @@ async def _purge_staff(*phones: str) -> None:
             await db.execute(
                 sqltext(
                     "DELETE FROM staff_sessions WHERE staff_id IN"
+                    " (SELECT id FROM staff WHERE phone = :p)"
+                ),
+                {"p": phone},
+            )
+            # Conversations keep an FK to staff independently of customer history.
+            await db.execute(
+                sqltext(
+                    "DELETE FROM conversations WHERE staff_id IN"
                     " (SELECT id FROM staff WHERE phone = :p)"
                 ),
                 {"p": phone},
@@ -112,11 +120,20 @@ async def two_shops():
         "b_wash": await _staff(b, B_PHONE, "Bwash", StaffRole.WASHER),
     }
     yield ids
+    # Cleanup must run in trusted system context even if a test leaves a tenant ContextVar set.
+    tenant_context.current_tenant_id.set(None)
     async with async_session_factory() as db:
         for phone in (A_PHONE, A_MGR_PHONE, A_DEL_PHONE, B_PHONE):
             await db.execute(
                 sqltext(
                     "DELETE FROM staff_sessions WHERE staff_id IN"
+                    " (SELECT id FROM staff WHERE phone = :p)"
+                ),
+                {"p": phone},
+            )
+            await db.execute(
+                sqltext(
+                    "DELETE FROM conversations WHERE staff_id IN"
                     " (SELECT id FROM staff WHERE phone = :p)"
                 ),
                 {"p": phone},
@@ -140,7 +157,19 @@ async def two_shops():
                 )
             await db.execute(sqltext("DELETE FROM staff WHERE phone = :p"), {"p": phone})
         await db.commit()
-    await purge_phones(CUST_A, CUST_B)
+    # Tests can create customers with phones beyond CUST_A/CUST_B. Purge
+    # every customer belonging to these disposable tenants before deleting
+    # the tenant rows, otherwise the next test fails on the tenant FK.
+    async with async_session_factory() as db:
+        tenant_customer_phones = (
+            await db.execute(
+                sqltext(
+                    "SELECT phone FROM customers WHERE tenant_id IN "
+                    "(SELECT id FROM tenants WHERE slug IN ('panel-a','panel-b'))"
+                )
+            )
+        ).scalars().all()
+    await purge_phones(CUST_A, CUST_B, *tenant_customer_phones)
     async with async_session_factory() as db:
         await db.execute(sqltext("DELETE FROM tenants WHERE slug IN ('panel-a','panel-b')"))
         await db.commit()
