@@ -46,7 +46,7 @@ Status: Phases 1–5 have implementation PRs merged, including lead/revenue attr
 ## Phase 5 — Google Business Profile and campaign safety
 - [x] Add mocked tests for Google Business post retry and duplicate prevention.\n- [ ] Verify token refresh, location selection, and publication status with the actual GBP account/credentials.
 - [x] Keep post publishing and campaign delivery behind existing approval controls.
-- [ ] Use neutral, policy-compliant review requests; do not incentivize reviews or selectively solicit only positive reviews.
+- [x] Use neutral, non-incentivized review requests for good, mid, and bad ratings; regression tests ensure review links are not gated on positive feedback.
 - [x] Add mocked publish retry/duplicate-prevention tests.\n- [ ] Add live credential reconnect and attribution verification.
 
 ## Phase 6 — Release validation
