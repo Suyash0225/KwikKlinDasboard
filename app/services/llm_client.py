@@ -81,15 +81,15 @@ async def _with_retry(call, *, provider: str, model: str):
             # Invalid key / exhausted app quota is not transient.
             raise
         except LLMRateLimited as exc:
-            if attempt == _MAX_ATTEMPTS:
-                raise
-            delay = _BACKOFF_BASE * (2 ** (attempt - 1)) * (0.5 + random.random())
+            # A 429 means this model's quota bucket is exhausted. Retrying
+            # the same model just burns latency; let the caller fall back to
+            # the cheaper model immediately.
             log.warning(
-                "llm_rate_limited_retry",
+                "llm_rate_limited_fallback",
                 provider=provider, model=model, attempt=attempt,
-                error=str(exc)[:200], sleep_ms=int(delay * 1000),
+                error=str(exc)[:200],
             )
-            await asyncio.sleep(delay)
+            raise
         except LLMUnavailable as exc:
             if attempt == _MAX_ATTEMPTS:
                 raise
