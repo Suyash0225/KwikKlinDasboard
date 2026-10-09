@@ -594,3 +594,12 @@ def test_repeat_order_segment_is_paid_up_and_waits_15_days() -> None:
 
     too_soon = {**base, "last_order_at": now - timedelta(days=7)}
     assert "active_regular" not in _classify(too_soon, now, Decimal("500"))
+
+    overdue_at_risk = {
+        **base,
+        "last_order_at": now - timedelta(days=45),
+        "outstanding": Decimal("250"),
+    }
+    overdue_segments = _classify(overdue_at_risk, now, Decimal("500"))
+    assert "at_risk" not in overdue_segments
+    assert "outstanding_dues" in overdue_segments
