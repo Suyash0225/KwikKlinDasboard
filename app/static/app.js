@@ -782,7 +782,7 @@ function renderOrders() {
         <td>${fmtDate(o.expected_delivery)}</td>
         <td><div class="act">
           ${nextStepBtn(o)}
-          ${o.status !== "DELIVERED" ? `<button class="btn sm ghost" title="All statuses" aria-label="All statuses" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>` : ""}
+          ${!["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn sm ghost status-change-btn" title="Change status" aria-label="Change status" onclick="statusModal('${o.order_number}','${o.status}')">↕ Change status</button>` : ""}
           <button class="btn sm ghost" title="Collect payment" aria-label="Collect payment" onclick="paymentModal('${o.order_number}')">₹</button>
           <button class="btn sm ghost" title="More actions" aria-label="More actions" onclick="orderMenu('${o.order_number}')">⋯</button>
         </div></td>
@@ -798,8 +798,8 @@ function renderOrders() {
         <div class="kv"><span>Paid ${money(o.amount_paid)} of ${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
         <div class="kv"><span>Delivery</span><span>${fmtDate(o.expected_delivery)}${isOverdue(o) ? " ⚠️" : ""}</span></div>
         <div class="act">
-          ${nextStepBtn(o) || (o.status !== "DELIVERED" ? `<button class="btn sm" onclick="statusModal('${o.order_number}','${o.status}')">Status</button>` : "")}
-          ${o.status !== "DELIVERED" ? `<button class="btn sm ghost" onclick="statusModal('${o.order_number}','${o.status}')">🔄</button>` : ""}
+          ${nextStepBtn(o)}
+          ${!["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn sm ghost status-change-btn" onclick="statusModal('${o.order_number}','${o.status}')">↕ Change status</button>` : ""}
           <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">₹</button>
           <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
           <button class="btn sm ghost" onclick="jumpChat('${o.phone}')">Chat</button>
@@ -931,7 +931,8 @@ const NEXT_STEP = {
   ON_HOLD: ["IN_WASH", "▶ Resume"],
 };
 const STEP_LABEL = {
-  PICKED_UP: "🛵 Picked up", IN_WASH: "🧼 Washing", IN_DRY: "💨 Drying", IN_IRON: "🔥 Ironing",
+  RECEIVED: "📥 Received", PICKUP_ASSIGNED: "📦 Pickup assigned", PICKED_UP: "🛵 Picked up",
+  IN_WASH: "🧼 Washing", IN_DRY: "💨 Drying", IN_IRON: "🔥 Ironing",
   READY: "✨ Ready", OUT_FOR_DELIVERY: "🚚 Out for delivery", DELIVERED: "✅ Delivered",
   ON_HOLD: "⏸ On hold", CANCELLED: "🚫 Cancel order",
 };
@@ -940,34 +941,63 @@ function nextStepBtn(o, cls = "btn sm") {
   return n ? `<button class="${cls}" onclick="setStatus('${o.order_number}','${o.status}','${n[0]}')">${n[1]}</button>` : "";
 }
 async function setStatus(number, current, next) {
-  // Delivered = kapde grahak ko — sab ya kuch (12 mein se 8). Seedha status
-  // nahi badalte; popup mein kapde chune jaate hain, baaki pending rehte hain.
+  // Delivery means the clothes actually changed hands: choose quantities first.
   if (next === "DELIVERED" && ["READY", "OUT_FOR_DELIVERY"].includes(current)) {
     closeModal(); return dashDeliverModal(number);
   }
   if (next === "CANCELLED" && !confirm(`Cancel order ${number}? The customer's open work stops.`)) return;
   try {
-    await api(`/orders/${number}/status`, { method: "POST", body: { status: next, changed_by: "dashboard" } });
-  } catch (e) { toast(e.message, true); return; }
+    await api(`/orders/${encodeURIComponent(number)}/status`, { method: "POST", body: { status: next, changed_by: "dashboard" } });
+  } catch (e) {
+    toast(e.message, true);
+    // A stale page may show an old status; reconcile it after a rejected move.
+    loadDashboard();
+    if (typeof loadBills === "function" && $("bills-list")) loadBills();
+    return;
+  }
   closeModal(); toast(`${number} → ${statusName(next)}`); loadDashboard();
   if (typeof loadBills === "function" && $("bills-list")) loadBills();
 }
-function statusModal(number, current) {
-  const flow = ["PICKED_UP", "IN_WASH", "IN_DRY", "IN_IRON", "READY", "OUT_FOR_DELIVERY", "DELIVERED"];
-  const seq = ["PICKUP_ASSIGNED", "RECEIVED", ...flow];
-  const i = seq.indexOf(current);
-  const nexts = flow.filter((st) => seq.indexOf(st) > i);
-  const n = NEXT_STEP[current];
-  openModal(`<h3>${number}</h3>
-    <p class="muted">Now: <b>${statusName(current)}</b>. Customer is told automatically on Ready / Out for delivery / Delivered.</p>
-    <div class="frm steplist" style="margin-top:10px">
-      ${nexts.map((st) => `<button class="btn ${n && n[0] === st ? "" : "ghost"}" onclick="setStatus('${number}','${current}','${st}')">${STEP_LABEL[st]}</button>`).join("")}
+function statusModal(number, current, showAll = false) {
+  const terminal = ["DELIVERED", "CANCELLED"].includes(current);
+  if (terminal) {
+    toast(`${statusName(current)} orders cannot be changed.`, true);
+    return;
+  }
+
+  // Keep this in the same order as order_service._SEQUENCE on the server.
+  const sequence = ["RECEIVED", "PICKUP_ASSIGNED", "PICKED_UP", "IN_WASH", "IN_DRY", "IN_IRON", "READY", "OUT_FOR_DELIVERY", "DELIVERED"];
+  const index = sequence.indexOf(current);
+  const nexts = current === "ON_HOLD"
+    ? sequence
+    : sequence.filter((st) => index >= 0 && sequence.indexOf(st) > index);
+  const next = NEXT_STEP[current];
+  const alternatives = nexts.filter((st) => !next || st !== next[0]);
+  const primaryLabel = current === "ON_HOLD" ? "▶ Resume" : (next && next[1]);
+
+  openModal(`<div class="status-modal">
+    <div class="status-modal-current">
+      <span class="status-modal-eyebrow">CURRENT STATUS</span>
+      <span class="pill ${current}">${statusName(current)}</span>
     </div>
-    <div class="btnrow" style="margin-top:12px">
-      ${current !== "ON_HOLD" ? `<button class="btn ghost sm" onclick="setStatus('${number}','${current}','ON_HOLD')">${STEP_LABEL.ON_HOLD}</button>` : ""}
-      <button class="btn ghost sm danger-ic" onclick="setStatus('${number}','${current}','CANCELLED')">${STEP_LABEL.CANCELLED}</button>
-      <button class="btn ghost sm" onclick="closeModal()">Close</button>
-    </div>`);
+    <h3>${esc(number)}</h3>
+    <p class="muted">Choose the next step. Customer updates are sent automatically for relevant stages.</p>
+    ${next ? `<div class="status-modal-next">
+      <span>Recommended next step</span>
+      <button class="btn status-primary" onclick="setStatus('${number}','${current}','${next[0]}')">${primaryLabel}</button>
+    </div>` : ""}
+    <button class="btn ghost status-modal-toggle" onclick="statusModal('${number}','${current}',${showAll ? "false" : "true"})">
+      ${showAll ? "Hide other statuses" : "↕ Choose another status"}
+    </button>
+    ${showAll ? `<div class="status-options">
+      ${alternatives.map((st) => `<button class="btn ghost status-option" onclick="setStatus('${number}','${current}','${st}')">${STEP_LABEL[st]}</button>`).join("")}
+    </div>` : ""}
+    <div class="status-modal-danger">
+      ${current !== "ON_HOLD" ? `<button class="btn ghost" onclick="setStatus('${number}','${current}','ON_HOLD')">${STEP_LABEL.ON_HOLD}</button>` : ""}
+      <button class="btn ghost danger-ic" onclick="setStatus('${number}','${current}','CANCELLED')">${STEP_LABEL.CANCELLED}</button>
+      <button class="btn ghost" onclick="closeModal()">Close</button>
+    </div>
+  </div>`);
 }
 
 /* ---- delivery: sab ya kuch kapde (BUG_008) — staff panel jaisa hi ---- */
@@ -2028,6 +2058,7 @@ function billRowHtml(o, kind) {
     <td class="money">${o.total_amount ? money(o.total_amount) : "—"}${due > 0 ? `<div class="muted">due ${money(due)}</div>` : ""}</td>
     <td><div class="pillrow"><span class="pill ${o.status}">${statusName(o.status)}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div></td>
     <td><div class="act">
+      ${!["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn sm ghost status-change-btn" title="Change status" aria-label="Change status" onclick="statusModal('${o.order_number}','${o.status}')">↕ Status</button>` : ""}
       <button class="btn sm ghost" title="Details" aria-label="Details" onclick="orderDetail('${o.order_number}')">👁</button>
       <button class="btn sm ghost" title="Collect payment" aria-label="Collect payment" onclick="paymentModal('${o.order_number}')">₹</button>
       <button class="btn sm ghost" title="More actions" aria-label="More actions" onclick="billMenu('${o.order_number}')">⋯</button>
@@ -2036,7 +2067,9 @@ function billRowHtml(o, kind) {
     <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${statusName(o.status)}</span></div>
     <div class="kv"><span>${esc(displayName(o.customer_name, o.customer_phone))}</span><span>${fmtDate(o.created_at)}</span></div>
     <div class="kv"><span>${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
-    <div class="act"><button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
+    <div class="act">
+    ${!["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn sm ghost status-change-btn" onclick="statusModal('${o.order_number}','${o.status}')">↕ Change status</button>` : ""}
+    <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
     <button class="btn sm ghost" onclick="printReceiptFromOrder('${o.order_number}')">Print</button>
     <button class="btn sm ghost" onclick="shareBillFromOrder('${o.order_number}')">Share</button>
     <button class="btn sm ghost" onclick="messageMenu('${o.order_number}')">💬 Message</button>
