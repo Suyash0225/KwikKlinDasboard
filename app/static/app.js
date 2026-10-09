@@ -147,7 +147,14 @@ function openModal(html) {
   const first = $("modal-body").querySelector("input, select, textarea, button");
   if (first) first.focus();
 }
-function closeModal() { $("modal-ov").classList.remove("open"); }
+function closeModal() {
+  $("modal-ov").classList.remove("open");
+  // Explicit Close/Escape must not leave a stale modal entry in browser history.
+  // Otherwise the next mobile back-swipe can navigate the dashboard instead.
+  if (history.state && history.state.kk === "modal") {
+    history.replaceState({ kk: "nav" }, "", location.href);
+  }
+}
 let EXITING = false;
 function askExit() {
   history.pushState({ kk: "nav" }, "", location.href);
