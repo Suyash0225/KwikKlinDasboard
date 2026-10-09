@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy import delete, select
 
 from app.database import async_session_factory
-from app.models import Customer, Lead
+from app.models import Customer, Lead, Order, OrderStatus
 from app.services import app_settings, leads as leads_service
 
 
@@ -162,6 +162,42 @@ async def test_due_interested_lead_gets_conversion_nudge(monkeypatch) -> None:
     finally:
         await _cleanup_lead()
 
+
+
+async def test_utm_campaign_is_preserved_on_first_order_conversion(monkeypatch) -> None:
+    try:
+        async with async_session_factory() as db:
+            customer = Customer(phone=TEST_LEAD_PHONE, name="Attribution Test")
+            db.add(customer)
+            await db.flush()
+            lead = Lead(
+                phone=TEST_LEAD_PHONE,
+                name="Attribution Test",
+                source="google",
+                source_medium="organic",
+                source_campaign="winter-laundry",
+                stage="CONTACTED",
+            )
+            db.add(lead)
+            order = Order(
+                order_number=f"KK-ATTR-{uuid.uuid4().hex[:8]}",
+                customer_id=customer.id,
+                status=OrderStatus.RECEIVED,
+                items=[{"type": "shirt", "qty": 1}],
+                total_amount=100,
+                amount_paid=40,
+            )
+            db.add(order)
+            await db.commit()
+
+            await leads_service.mark_converted(db, TEST_LEAD_PHONE)
+            await db.refresh(order)
+            await db.refresh(lead)
+            assert lead.stage == "CONVERTED"
+            assert order.acquisition_source == "google"
+            assert order.acquisition_campaign == "winter-laundry"
+    finally:
+        await _cleanup_lead()
 
 
 def test_website_source_marker_is_detected_without_personal_data() -> None:
