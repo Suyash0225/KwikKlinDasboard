@@ -274,7 +274,7 @@ async def test_transcription_falls_back_to_the_cheap_model(monkeypatch) -> None:
 
     tried: list[str] = []
 
-    async def fake_generate(system, user_text, model, max_tokens, schema=None, image=None):
+    async def fake_generate(system, user_text, model, max_tokens, schema=None, image=None, provider=llm.PROVIDER):
         tried.append(model)
         if model == llm.MODEL_SMART:
             raise llm.LLMUnavailable("429 rate limited")
