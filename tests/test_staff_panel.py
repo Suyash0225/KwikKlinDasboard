@@ -133,6 +133,13 @@ async def two_shops():
             )
             await db.execute(
                 sqltext(
+                    "DELETE FROM conversations WHERE staff_id IN"
+                    " (SELECT id FROM staff WHERE phone = :p)"
+                ),
+                {"p": phone},
+            )
+            await db.execute(
+                sqltext(
                     "UPDATE tasks SET assigned_staff_id = NULL WHERE assigned_staff_id IN"
                     " (SELECT id FROM staff WHERE phone = :p)"
                 ),
