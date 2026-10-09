@@ -17,6 +17,7 @@ from app.database import async_session_factory
 from app.models import Campaign, CampaignRecipient, Coupon, Customer, Order, OrderStatus
 from app.services import app_settings
 from app.services.marketing import (
+    _classify,
     compute_segments,
     eligible,
     queue_campaign,
@@ -573,3 +574,23 @@ async def test_selected_campaign_creation_persists_valid_customer_ids(sent) -> N
     finally:
         from tests.conftest import purge_phones
         await purge_phones(SELECTED_PHONE_A)
+
+
+def test_repeat_order_segment_is_paid_up_and_waits_15_days() -> None:
+    now = datetime.now(timezone.utc)
+    base = {
+        "last_order_at": now - timedelta(days=20),
+        "first_order_at": now - timedelta(days=120),
+        "order_count": 3,
+        "lifetime_paid": Decimal("900"),
+        "outstanding": Decimal("0"),
+    }
+    assert "active_regular" in _classify(base, now, Decimal("500"))
+
+    debtor = {**base, "outstanding": Decimal("250")}
+    debtor_segments = _classify(debtor, now, Decimal("500"))
+    assert "active_regular" not in debtor_segments
+    assert "outstanding_dues" in debtor_segments
+
+    too_soon = {**base, "last_order_at": now - timedelta(days=7)}
+    assert "active_regular" not in _classify(too_soon, now, Decimal("500"))
