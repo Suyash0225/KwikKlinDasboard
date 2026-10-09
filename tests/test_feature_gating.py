@@ -128,6 +128,15 @@ async def test_ai_quota_enforced(_restore_plan) -> None:
     await quota.check_ai_quota()
 
 
+def test_estimated_cost_uses_dashboard_rate_card() -> None:
+    from decimal import Decimal
+    from app.services.quota import estimated_cost_usd
+
+    rates = {"gemini-3.1-flash-lite": {"in": 0.25, "out": 1.50}}
+    assert estimated_cost_usd("gemini-3.1-flash-lite", 1_000_000, 1_000_000, rates) == Decimal("1.75")
+    assert estimated_cost_usd("unknown-model", 1_000_000, 1_000_000, rates) == Decimal("1.75")
+
+
 async def test_wa_quota_enforced(monkeypatch, _restore_plan) -> None:
     from app.services import whatsapp
 
