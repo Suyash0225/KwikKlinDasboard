@@ -14,11 +14,12 @@ hai (agent ka degrade path already handle karta hai); WhatsApp path SendError
 drop nahi. Counting tenant-scoped hai (tenant_context ka effective tenant).
 """
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.services import plans, tenant_context
 from app.utils.dates import IST
@@ -221,6 +222,52 @@ async def check_ai_quota(
                 round(float(monthly_budget), 4),
                 plan_name,
             )
+
+
+@asynccontextmanager
+async def ai_quota_guard(
+    *, model: str | None = None, input_text: str = "",
+    max_output_tokens: int = 0, image: bool = False,
+):
+    """Serialize budgeted LLM calls per tenant until token usage is recorded.
+
+    PostgreSQL session-level advisory locks are held across provider I/O.
+    Usage recording commits in its own session before this lock is released,
+    so a concurrent request rechecks the updated monthly spend instead of
+    spending against the same stale total.
+    """
+    from app.database import async_session_factory
+    from app.services import app_settings
+
+    async with async_session_factory() as lock_db:
+        tid, _, _ = await _tenant_and_limits(lock_db)
+        budget = Decimal(str(await app_settings.get(lock_db, "llm_monthly_budget_usd") or 0))
+        if tid is None or budget <= 0:
+            await check_ai_quota(
+                model=model, input_text=input_text,
+                max_output_tokens=max_output_tokens, image=image,
+            )
+            yield
+            return
+
+        lock_key = f"kwikklin-ai-budget:{tid}"
+        await lock_db.execute(
+            text("SELECT pg_advisory_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": lock_key},
+        )
+        await lock_db.commit()
+        try:
+            await check_ai_quota(
+                model=model, input_text=input_text,
+                max_output_tokens=max_output_tokens, image=image,
+            )
+            yield
+        finally:
+            await lock_db.execute(
+                text("SELECT pg_advisory_unlock(hashtextextended(:lock_key, 0))"),
+                {"lock_key": lock_key},
+            )
+            await lock_db.commit()
 
 
 async def check_wa_quota(db) -> None:
