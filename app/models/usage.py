@@ -8,8 +8,9 @@ the owner can put in his own numbers without a migration.
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,3 +51,20 @@ class LlmUsage(Base, TenantScoped):
 
     def __repr__(self) -> str:
         return f"<LlmUsage {self.model} in={self.input_tokens} out={self.output_tokens}>"
+
+
+
+class LlmBudgetReservation(Base, TenantScoped):
+    """Short-lived per-tenant reservation for an in-flight budgeted LLM call."""
+
+    __tablename__ = "llm_budget_reservations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    amount_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False)
+    model: Mapped[str] = mapped_column(String(60), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)

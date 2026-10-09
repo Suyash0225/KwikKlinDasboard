@@ -60,7 +60,7 @@ from app.models.tenant import (
     Tenant,
     User,
 )
-from app.models.usage import LlmUsage
+from app.models.usage import LlmBudgetReservation, LlmUsage
 
 __all__ = [
     "AuditLog",
@@ -82,6 +82,7 @@ __all__ = [
     "FaqEntry",
     "Lead",
     "LlmUsage",
+    "LlmBudgetReservation",
     "OpenQuestion",
     "Order",
     "OrderStatus",

@@ -214,7 +214,7 @@ async def _generate_with_fallback(
     image: tuple[str, bytes] | None = None,
 ) -> str:
     """Use only paid Gemini; retry the same deployment's cheaper tier once."""
-    from app.services.quota import QuotaExceeded, check_ai_quota
+    from app.services.quota import QuotaExceeded, ai_quota_guard
 
     if _provider_is_open(PROVIDER):
         raise LLMUnavailable("gemini circuit open")
@@ -224,61 +224,60 @@ async def _generate_with_fallback(
     if candidates[0] != cheap:
         candidates.append(cheap)
 
+    # One deadline covers retries AND model fallback. The per-tenant budget
+    # lock remains held until _record_usage commits, preventing concurrent
+    # calls from passing the same spend pre-check at once.
     try:
-        await check_ai_quota(
+        async with ai_quota_guard(
             model=candidates[0],
             input_text=system + "\n" + user_text,
             max_output_tokens=max(max_tokens, 512),
             image=image is not None,
-        )
+        ):
+            # Quota DB work and waiting for another in-flight budgeted request
+            # are outside the provider deadline; start it after the guard opens.
+            budget = IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
+            deadline = time.monotonic() + budget
+            last_exc: LLMUnavailable | None = None
+            for candidate in candidates:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    async with asyncio.timeout(remaining):
+                        result = await _with_retry(
+                            lambda: _generate(
+                                system, user_text, candidate, max_tokens, schema, image, PROVIDER
+                            ),
+                            provider=PROVIDER,
+                            model=candidate,
+                        )
+                    _provider_succeeded(PROVIDER)
+                    return result
+                except LLMAuthError as exc:
+                    last_exc = exc
+                    log.warning(
+                        "llm_provider_auth_failed", provider=PROVIDER,
+                        model=candidate, error=str(exc)[:200],
+                    )
+                    break
+                except TimeoutError:
+                    last_exc = LLMUnavailable(f"LLM request timed out after {budget:g}s")
+                    log.warning(
+                        "llm_request_timeout", provider=PROVIDER,
+                        model=candidate, timeout_seconds=budget,
+                    )
+                    break
+                except LLMError as exc:
+                    last_exc = exc
+                    log.warning(
+                        "llm_model_error", provider=PROVIDER,
+                        model=candidate, error=str(exc)[:200],
+                    )
+            _provider_failed(PROVIDER)
+            raise last_exc or LLMUnavailable("gemini unavailable")
     except QuotaExceeded as exc:
         raise LLMAuthError(str(exc)) from exc
-
-    # One deadline covers retries AND model fallback. Previously every retry
-    # and each model tier received a fresh 75–90 second timeout, so a single
-    # inbound message could wait several minutes. Images get a longer budget.
-    budget = IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
-    deadline = time.monotonic() + budget
-    last_exc: LLMUnavailable | None = None
-    for candidate in candidates:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        try:
-            async with asyncio.timeout(remaining):
-                result = await _with_retry(
-                    lambda: _generate(
-                        system, user_text, candidate, max_tokens, schema, image, PROVIDER
-                    ),
-                    provider=PROVIDER,
-                    model=candidate,
-                )
-            _provider_succeeded(PROVIDER)
-            return result
-        except LLMAuthError as exc:
-            last_exc = exc
-            log.warning(
-                "llm_provider_auth_failed", provider=PROVIDER,
-                model=candidate, error=str(exc)[:200],
-            )
-            break
-        except TimeoutError:
-            last_exc = LLMUnavailable(f"LLM request timed out after {budget:g}s")
-            log.warning(
-                "llm_request_timeout", provider=PROVIDER,
-                model=candidate, timeout_seconds=budget,
-            )
-            # The shared deadline is exhausted; another model call cannot fit.
-            break
-        except LLMError as exc:
-            last_exc = exc
-            log.warning(
-                "llm_model_error", provider=PROVIDER,
-                model=candidate, error=str(exc)[:200],
-            )
-
-    _provider_failed(PROVIDER)
-    raise last_exc or LLMUnavailable("gemini unavailable")
 
 
 def _parse_json(text: str, model: str) -> dict:
