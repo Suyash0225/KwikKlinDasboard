@@ -36,6 +36,8 @@ class Lead(Base, TenantScoped):
     phone: Mapped[str] = mapped_column(String(20), index=True)
     name: Mapped[str | None] = mapped_column(String(120))
     source: Mapped[str] = mapped_column(String(40), default="whatsapp")
+    source_medium: Mapped[str | None] = mapped_column(String(100))
+    source_campaign: Mapped[str | None] = mapped_column(String(100))
     area: Mapped[str | None] = mapped_column(String(120))
     items_text: Mapped[str | None] = mapped_column(String(300))
     stage: Mapped[str] = mapped_column(
