@@ -2058,6 +2058,7 @@ function billRowHtml(o, kind) {
     <td class="money">${o.total_amount ? money(o.total_amount) : "—"}${due > 0 ? `<div class="muted">due ${money(due)}</div>` : ""}</td>
     <td><div class="pillrow"><span class="pill ${o.status}">${statusName(o.status)}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div></td>
     <td><div class="act">
+      ${!["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn sm ghost status-change-btn" title="Change status" aria-label="Change status" onclick="statusModal('${o.order_number}','${o.status}')">↕ Status</button>` : ""}
       <button class="btn sm ghost" title="Details" aria-label="Details" onclick="orderDetail('${o.order_number}')">👁</button>
       <button class="btn sm ghost" title="Collect payment" aria-label="Collect payment" onclick="paymentModal('${o.order_number}')">₹</button>
       <button class="btn sm ghost" title="More actions" aria-label="More actions" onclick="billMenu('${o.order_number}')">⋯</button>
@@ -2066,7 +2067,9 @@ function billRowHtml(o, kind) {
     <div class="r1"><b>${o.order_number}</b><span class="pill ${o.status}">${statusName(o.status)}</span></div>
     <div class="kv"><span>${esc(displayName(o.customer_name, o.customer_phone))}</span><span>${fmtDate(o.created_at)}</span></div>
     <div class="kv"><span>${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
-    <div class="act"><button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
+    <div class="act">
+    ${!["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn sm ghost status-change-btn" onclick="statusModal('${o.order_number}','${o.status}')">↕ Change status</button>` : ""}
+    <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
     <button class="btn sm ghost" onclick="printReceiptFromOrder('${o.order_number}')">Print</button>
     <button class="btn sm ghost" onclick="shareBillFromOrder('${o.order_number}')">Share</button>
     <button class="btn sm ghost" onclick="messageMenu('${o.order_number}')">💬 Message</button>
