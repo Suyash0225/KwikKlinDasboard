@@ -150,18 +150,46 @@ async def check_ai_quota(
         if tid is None:
             return
 
+        # Check the monetary budget first so a rejected request never burns
+        # an AI usage credit as a side effect.
+        monthly_budget = Decimal(str(await app_settings.get(db, "llm_monthly_budget_usd") or 0))
+        if monthly_budget > 0:
+            rates = await app_settings.get(db, "llm_rates") or {}
+            usage_rows = (
+                await db.execute(
+                    select(LlmUsage.model, LlmUsage.input_tokens, LlmUsage.output_tokens)
+                    .where(LlmUsage.at >= _month_start(), LlmUsage.tenant_id == tid)
+                )
+            ).all()
+            spent = sum(
+                (estimated_cost_usd(row.model, row.input_tokens, row.output_tokens, rates)
+                 for row in usage_rows),
+                start=Decimal("0"),
+            )
+            # Reserve a conservative upper bound for this request before provider
+            # I/O. Image input gets an additional allowance. Zero disables the cap.
+            estimated_input_tokens = (len(input_text) + 3) // 4 + (1000 if image else 0)
+            reserve = estimated_cost_usd(
+                model or "", estimated_input_tokens, max(0, max_output_tokens), rates
+            )
+            if spent + reserve > monthly_budget:
+                log.warning(
+                    "ai_monthly_budget_exceeded", spent_usd=round(float(spent), 6),
+                    reserve_usd=round(float(reserve), 6), budget_usd=float(monthly_budget),
+                )
+                raise QuotaExceeded(
+                    "AI monthly budget USD",
+                    round(float(spent), 4),
+                    round(float(monthly_budget), 4),
+                    plan_name,
+                )
+
         call_limit = limits["ai_usage_limit"]
         if call_limit is not None:
             used = await ai_calls_this_month(db, tid)
             if used >= call_limit and not await _spend_credit(db, tid, "ai"):
                 log.warning("ai_quota_exceeded", used=used, limit=call_limit)
                 raise QuotaExceeded("AI usage", used, call_limit, plan_name)
-
-        monthly_budget = Decimal(str(await app_settings.get(db, "llm_monthly_budget_usd") or 0))
-        if monthly_budget <= 0:
-            return
-
-        rates = await app_settings.get(db, "llm_rates") or {}
         usage_rows = (
             await db.execute(
                 select(LlmUsage.model, LlmUsage.input_tokens, LlmUsage.output_tokens)
