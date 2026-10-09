@@ -32,6 +32,11 @@ log = structlog.get_logger()
 # reward for not paying) and our best customers (who were about to pay
 # full price anyway). Discount only where it buys back a lost customer.
 _PLAYBOOK: dict[str, tuple[float, str, str]] = {
+    "active_regular": (
+        0.75,
+        "regular customer ko 15–30 din baad agla laundry pickup book karne ki friendly yaad-dihani",
+        "Repeat-order reminder — no discount; invite the customer to schedule their next pickup",
+    ),
     "lapsed": (
         1.00,
         "60+ din se koi order nahi — win-back offer se wapas laao",
