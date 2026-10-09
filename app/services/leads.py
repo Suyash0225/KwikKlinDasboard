@@ -216,6 +216,7 @@ async def run_lead_followups(now: datetime | None = None) -> int:
                 lead.stage = "LOST"
                 await db.commit()
                 continue
+            await db.refresh(customer)
             if customer.agent_paused:
                 # Respect human takeover; scheduler will retry after the pause
                 # expires without consuming a follow-up attempt.
