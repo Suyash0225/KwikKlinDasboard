@@ -87,6 +87,8 @@ jobs:
           add_if_present tests/test_agent_quality.py test_low_signal_staff_messages_are_classified_without_llm
           add_if_present tests/test_scheduler_marketing.py test_repeat_order_segment_is_paid_up_and_waits_15_days
           add_if_present tests/test_llm_client_timeout.py test_llm_timeout_is_bounded_and_translated
+          add_if_present tests/test_rls_billing.py test_a_shop_sees_only_its_own_invoices
+          add_if_present tests/test_rls_billing.py test_a_shop_cannot_write_another_shops_invoice
 
           if (( ${#focused[@]} )); then
             pytest -q "${focused[@]}"
