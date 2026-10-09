@@ -232,5 +232,6 @@ def test_website_source_marker_is_detected_without_personal_data() -> None:
 
     assert _source_from_message("Hello Kwik Klin\nLead source: website") == "website"
     assert _source_from_message("Hello Kwik Klin\nLead source: website\nutm_source: google") == "google"
+    assert _source_from_message("Hello Kwik Klin\nLead source: website\nutm_source: Instagram Ads") == "instagramads"
     assert _source_from_message("Hello Kwik Klin, I have a question.") == "whatsapp"
     assert _source_from_message("GOOGLE pickup request") == "google"
