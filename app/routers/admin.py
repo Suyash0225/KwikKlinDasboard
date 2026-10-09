@@ -759,6 +759,9 @@ async def customer_edit(
 ) -> dict:
     """Fix a customer's name, number or address."""
     cust = await _customer_by_phone(db, phone)
+    from app.services import app_settings
+    if body.agent_enabled is not None:
+        await app_settings.set_value(db, f"staff_agent_enabled_{staff.id}", body.agent_enabled)
     if body.name is not None:
         cust.name = body.name.strip() or None
     if body.address is not None:
@@ -1134,6 +1137,7 @@ class RateIn(BaseModel):
 class RateUpdateIn(BaseModel):
     rate: Decimal | None = Field(default=None, gt=0)
     is_active: bool | None = None
+    agent_enabled: bool | None = None
 
 
 @router.get("/api/rates", dependencies=[Depends(require_admin_key)])
@@ -1323,6 +1327,7 @@ async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
             {
                 "id": str(s.id), "name": s.name, "phone": s.phone,
                 "role": s.role.name, "is_active": s.is_active,
+                "agent_enabled": bool(await app_settings.get(db, f"staff_agent_enabled_{s.id}", True)),
                 # the UI needs these to explain WHY delete is blocked
                 "active_orders": await _active_order_count(db, s.id),
                 "is_default": s.phone in (default_washer, default_delivery),
