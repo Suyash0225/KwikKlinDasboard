@@ -140,21 +140,40 @@ def estimated_cost_usd(model: str, input_tokens: int, output_tokens: int, rates:
 async def check_ai_quota(
     *, model: str | None = None, input_text: str = "",
     max_output_tokens: int = 0, image: bool = False,
-) -> None:
-    """Enforce per-tenant call limits and configured monthly USD budget before provider I/O."""
+    reserve_budget: bool = False,
+):
+    """Check per-tenant quotas; optionally atomically reserve estimated spend."""
+    from datetime import timedelta
     from app.database import async_session_factory
-    from app.models import LlmUsage
+    from app.models import LlmBudgetReservation, LlmUsage
+    from app.models.tenant import Tenant
     from app.services import app_settings
 
+    reservation_id = None
     async with async_session_factory() as db:
         tid, limits, plan_name = await _tenant_and_limits(db)
         if tid is None:
-            return
+            return None
 
-        # Check the monetary budget first so a rejected request never burns
-        # an AI usage credit as a side effect.
         monthly_budget = Decimal(str(await app_settings.get(db, "llm_monthly_budget_usd") or 0))
+        rates = {}
+        reserve = Decimal("0")
         if monthly_budget > 0:
+            # Transaction-level lock protects the spend + reservation check.
+            # It is released at commit; no DB connection is held during the
+            # external provider request.
+            lock_key = f"kwikklin-ai-budget:{tid}"
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                {"lock_key": lock_key},
+            )
+            now = datetime.now(timezone.utc)
+            await db.execute(
+                delete(LlmBudgetReservation).where(
+                    LlmBudgetReservation.tenant_id == tid,
+                    LlmBudgetReservation.expires_at <= now,
+                )
+            )
             rates = await app_settings.get(db, "llm_rates") or {}
             usage_rows = (
                 await db.execute(
@@ -167,61 +186,69 @@ async def check_ai_quota(
                  for row in usage_rows),
                 start=Decimal("0"),
             )
-            # Reserve a conservative upper bound for this request before provider
-            # I/O. Image input gets an additional allowance. Zero disables the cap.
+            reserved = (
+                await db.execute(
+                    select(func.coalesce(func.sum(LlmBudgetReservation.amount_usd), 0))
+                    .where(
+                        LlmBudgetReservation.tenant_id == tid,
+                        LlmBudgetReservation.expires_at > now,
+                    )
+                )
+            ).scalar_one()
+            # Use a conservative estimate before provider I/O. The image
+            # allowance covers the typical single-image request; exact billed
+            # tokens are reconciled from LlmUsage after the response.
             estimated_input_tokens = (len(input_text) + 3) // 4 + (1000 if image else 0)
             reserve = estimated_cost_usd(
                 model or "", estimated_input_tokens, max(0, max_output_tokens), rates
             )
-            if spent + reserve > monthly_budget:
+            if spent + Decimal(str(reserved or 0)) + reserve > monthly_budget:
                 log.warning(
-                    "ai_monthly_budget_exceeded", spent_usd=round(float(spent), 6),
-                    reserve_usd=round(float(reserve), 6), budget_usd=float(monthly_budget),
+                    "ai_monthly_budget_exceeded",
+                    spent_usd=round(float(spent), 6),
+                    reserved_usd=round(float(reserved or 0), 6),
+                    reserve_usd=round(float(reserve), 6),
+                    budget_usd=float(monthly_budget),
                 )
                 raise QuotaExceeded(
                     "AI monthly budget USD",
-                    round(float(spent), 4),
+                    round(float(spent + Decimal(str(reserved or 0))), 4),
                     round(float(monthly_budget), 4),
                     plan_name,
                 )
 
+        # Check call limits only after budget validation, so an exhausted
+        # money budget never consumes an AI usage credit.
         call_limit = limits["ai_usage_limit"]
+        used = 0
         if call_limit is not None:
             used = await ai_calls_this_month(db, tid)
-            if used >= call_limit and not await _spend_credit(db, tid, "ai"):
-                log.warning("ai_quota_exceeded", used=used, limit=call_limit)
-                raise QuotaExceeded("AI usage", used, call_limit, plan_name)
-        usage_rows = (
-            await db.execute(
-                select(LlmUsage.model, LlmUsage.input_tokens, LlmUsage.output_tokens)
-                .where(LlmUsage.at >= _month_start(), LlmUsage.tenant_id == tid)
-            )
-        ).all()
-        spent = sum(
-            (estimated_cost_usd(row.model, row.input_tokens, row.output_tokens, rates)
-             for row in usage_rows),
-            start=Decimal("0"),
-        )
+            if used >= call_limit:
+                tenant = await db.get(Tenant, tid)
+                if not tenant or int(tenant.ai_credits or 0) <= 0:
+                    log.warning("ai_quota_exceeded", used=used, limit=call_limit)
+                    raise QuotaExceeded("AI usage", used, call_limit, plan_name)
 
-        # Reserve a conservative upper bound for this request before calling
-        # the provider. Image input gets an additional allowance. The setting
-        # is opt-in (0 disables it); the dashboard rate card is the source of
-        # truth, so pricing changes do not require a migration.
-        estimated_input_tokens = (len(input_text) + 3) // 4 + (1000 if image else 0)
-        reserve = estimated_cost_usd(
-            model or "", estimated_input_tokens, max(0, max_output_tokens), rates
-        )
-        if spent + reserve > monthly_budget:
-            log.warning(
-                "ai_monthly_budget_exceeded", spent_usd=round(float(spent), 6),
-                reserve_usd=round(float(reserve), 6), budget_usd=float(monthly_budget),
+        if reserve_budget and monthly_budget > 0:
+            reservation = LlmBudgetReservation(
+                amount_usd=reserve,
+                model=model or "unknown",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
             )
-            raise QuotaExceeded(
-                "AI monthly budget USD",
-                round(float(spent), 4),
-                round(float(monthly_budget), 4),
-                plan_name,
-            )
+            db.add(reservation)
+            await db.commit()
+            reservation_id = reservation.id
+
+        if call_limit is not None and used >= call_limit:
+            if not await _spend_credit(db, tid, "ai"):
+                if reservation_id is not None:
+                    await db.execute(
+                        delete(LlmBudgetReservation).where(LlmBudgetReservation.id == reservation_id)
+                    )
+                    await db.commit()
+                raise QuotaExceeded("AI usage", used, call_limit, plan_name)
+
+    return reservation_id
 
 
 @asynccontextmanager
@@ -229,45 +256,23 @@ async def ai_quota_guard(
     *, model: str | None = None, input_text: str = "",
     max_output_tokens: int = 0, image: bool = False,
 ):
-    """Serialize budgeted LLM calls per tenant until token usage is recorded.
-
-    PostgreSQL session-level advisory locks are held across provider I/O.
-    Usage recording commits in its own session before this lock is released,
-    so a concurrent request rechecks the updated monthly spend instead of
-    spending against the same stale total.
-    """
+    """Reserve budget atomically, then release it after provider usage is recorded."""
     from app.database import async_session_factory
-    from app.services import app_settings
+    from app.models import LlmBudgetReservation
 
-    async with async_session_factory() as lock_db:
-        tid, _, _ = await _tenant_and_limits(lock_db)
-        budget = Decimal(str(await app_settings.get(lock_db, "llm_monthly_budget_usd") or 0))
-        if tid is None or budget <= 0:
-            await check_ai_quota(
-                model=model, input_text=input_text,
-                max_output_tokens=max_output_tokens, image=image,
-            )
-            yield
-            return
-
-        lock_key = f"kwikklin-ai-budget:{tid}"
-        await lock_db.execute(
-            text("SELECT pg_advisory_lock(hashtextextended(:lock_key, 0))"),
-            {"lock_key": lock_key},
-        )
-        await lock_db.commit()
-        try:
-            await check_ai_quota(
-                model=model, input_text=input_text,
-                max_output_tokens=max_output_tokens, image=image,
-            )
-            yield
-        finally:
-            await lock_db.execute(
-                text("SELECT pg_advisory_unlock(hashtextextended(:lock_key, 0))"),
-                {"lock_key": lock_key},
-            )
-            await lock_db.commit()
+    reservation_id = await check_ai_quota(
+        model=model, input_text=input_text, max_output_tokens=max_output_tokens,
+        image=image, reserve_budget=True,
+    )
+    try:
+        yield
+    finally:
+        if reservation_id is not None:
+            async with async_session_factory() as db:
+                await db.execute(
+                    delete(LlmBudgetReservation).where(LlmBudgetReservation.id == reservation_id)
+                )
+                await db.commit()
 
 
 async def check_wa_quota(db) -> None:
