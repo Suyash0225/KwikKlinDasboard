@@ -17,6 +17,7 @@ from app.database import async_session_factory
 from app.models import Campaign, CampaignRecipient, Coupon, Customer, Order, OrderStatus
 from app.services import app_settings
 from app.services.marketing import (
+    _classify,
     compute_segments,
     eligible,
     queue_campaign,
@@ -122,7 +123,7 @@ async def test_payment_reminders_polite_then_firm(sched_sent, sent) -> None:
     assert any("udhaar" in (c["text"] or "").lower() for c in admin_msgs)
 
 
-async def test_segments_classify_lapsed_and_dues(sent) -> None:
+async def test_segments_with_outstanding_due_are_not_lapsed(sent) -> None:
     order = await _seed_order(total_amount=Decimal("300"))
     async with async_session_factory() as s:
         row = (
@@ -134,7 +135,8 @@ async def test_segments_classify_lapsed_and_dues(sent) -> None:
         segs = await compute_segments(db)
     lapsed_phones = {m["phone"] for m in segs["lapsed"]}
     dues_phones = {m["phone"] for m in segs["outstanding_dues"]}
-    assert PHONE in lapsed_phones and PHONE in dues_phones
+    assert PHONE not in lapsed_phones
+    assert PHONE in dues_phones
 
 
 async def test_eligibility_blocks_opted_out(sent) -> None:
@@ -166,6 +168,8 @@ async def test_campaign_queue_send_and_track(sched_sent, sent, monkeypatch) -> N
         # (check_marketing_eligible) rightly skips anyone mid-order
         row.status = OrderStatus.DELIVERED
         row.actual_delivery = datetime.now(timezone.utc) - timedelta(days=74)
+        # A win-back discount is for a paid-up lapsed customer, never a debtor.
+        row.amount_paid = row.total_amount
         await s.commit()
 
     async with async_session_factory() as db:
@@ -570,3 +574,38 @@ async def test_selected_campaign_creation_persists_valid_customer_ids(sent) -> N
     finally:
         from tests.conftest import purge_phones
         await purge_phones(SELECTED_PHONE_A)
+
+
+def test_repeat_order_segment_is_paid_up_and_waits_15_days() -> None:
+    now = datetime.now(timezone.utc)
+    base = {
+        "last_order_at": now - timedelta(days=20),
+        "first_order_at": now - timedelta(days=120),
+        "order_count": 3,
+        "lifetime_paid": Decimal("900"),
+        "outstanding": Decimal("0"),
+    }
+    assert "active_regular" in _classify(base, now, Decimal("500"))
+
+    debtor = {**base, "outstanding": Decimal("250")}
+    debtor_segments = _classify(debtor, now, Decimal("500"))
+    assert "active_regular" not in debtor_segments
+    assert "outstanding_dues" in debtor_segments
+
+    # A debtor who is 90 days overdue must not receive the lapsed discount segment.
+    older_debtor = {**base, "last_order_at": now - timedelta(days=90), "outstanding": Decimal("250")}
+    older_segments = _classify(older_debtor, now, Decimal("500"))
+    assert "lapsed" not in older_segments
+    assert "outstanding_dues" in older_segments
+
+    too_soon = {**base, "last_order_at": now - timedelta(days=7)}
+    assert "active_regular" not in _classify(too_soon, now, Decimal("500"))
+
+    overdue_at_risk = {
+        **base,
+        "last_order_at": now - timedelta(days=45),
+        "outstanding": Decimal("250"),
+    }
+    overdue_segments = _classify(overdue_at_risk, now, Decimal("500"))
+    assert "at_risk" not in overdue_segments
+    assert "outstanding_dues" in overdue_segments

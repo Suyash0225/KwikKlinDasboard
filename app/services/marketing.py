@@ -73,17 +73,22 @@ def _classify(stat: dict, now: datetime, high_value_cutoff: Decimal) -> set[str]
     age_days = (now - last).days if last else 9999
     if first and (now - first).days <= 30:
         segs.add("new")
-    if stat["order_count"] >= 2 and age_days <= 60:
+    has_outstanding = Decimal(stat["outstanding"]) > 0
+    # Repeat-order reminders are for paid-up regulars, 15–30 days after the
+    # last order. This avoids nudging too early or promoting new orders to debtors.
+    if stat["order_count"] >= 2 and 14 < age_days <= 30 and not has_outstanding:
         segs.add("active_regular")
-    if stat["order_count"] >= 2 and 30 < age_days <= 60:
+    # Do not reward unpaid bills with a win-back discount. Debtors belong in
+    # the no-discount outstanding-dues segment until their balance is cleared.
+    if stat["order_count"] >= 2 and 30 < age_days <= 60 and not has_outstanding:
         segs.add("at_risk")
-    if 60 < age_days <= 120:
+    if 60 < age_days <= 120 and not has_outstanding:
         segs.add("lapsed")
     if age_days > 120:
         segs.add("lost")
     if high_value_cutoff > 0 and Decimal(stat["lifetime_paid"]) >= high_value_cutoff:
         segs.add("high_value")
-    if Decimal(stat["outstanding"]) > 0:
+    if has_outstanding:
         segs.add("outstanding_dues")
     return segs
 
