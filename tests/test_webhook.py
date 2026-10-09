@@ -364,6 +364,45 @@ async def test_start_reenables_customer_after_stop(client, sent) -> None:
         assert customer.marketing_opt_out is False
 
 
+async def test_human_takeover_grace_window_suppresses_agent_reply(monkeypatch) -> None:
+    from datetime import datetime, timedelta, timezone
+    import uuid
+    from app.database import async_session_factory
+    from app.models import Conversation, Customer, Direction
+    from app.routers.webhook import _human_handoff_waiting
+    from app.services import app_settings
+
+    async def grace_setting(db, key):
+        assert key == "human_handoff_grace_minutes"
+        return 15
+
+    monkeypatch.setattr(app_settings, "get", grace_setting)
+    phone = f"+91998{uuid.uuid4().int % 10**7:07d}"
+    async with async_session_factory() as db:
+        customer = Customer(phone=phone, name="Human Takeover Test")
+        db.add(customer)
+        await db.flush()
+        human_message = Conversation(
+            customer_id=customer.id,
+            direction=Direction.OUTBOUND,
+            message_text="Main aapki madad karta hoon.",
+            sent_by="human",
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+        )
+        inbound = Conversation(
+            customer_id=customer.id,
+            direction=Direction.INBOUND,
+            message_text="order ka status?",
+            wa_message_id=f"wamid.TEST-human-takeover-{uuid.uuid4().hex}",
+        )
+        db.add_all([human_message, inbound])
+        await db.flush()
+        assert await _human_handoff_waiting(db, customer, inbound) is True
+        human_message.created_at = datetime.now(timezone.utc) - timedelta(minutes=16)
+        await db.flush()
+        assert await _human_handoff_waiting(db, customer, inbound) is False
+
+
 # --- statuses ---
 
 async def test_status_receipt_moves_the_ticks_forward_only(client, sent) -> None:
