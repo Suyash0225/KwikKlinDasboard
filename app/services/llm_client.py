@@ -227,9 +227,6 @@ async def _generate_with_fallback(
     # One deadline covers retries AND model fallback. The per-tenant budget
     # lock remains held until _record_usage commits, preventing concurrent
     # calls from passing the same spend pre-check at once.
-    budget = IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
-    deadline = time.monotonic() + budget
-    last_exc: LLMUnavailable | None = None
     try:
         async with ai_quota_guard(
             model=candidates[0],
@@ -237,6 +234,11 @@ async def _generate_with_fallback(
             max_output_tokens=max(max_tokens, 512),
             image=image is not None,
         ):
+            # Quota DB work and waiting for another in-flight budgeted request
+            # are outside the provider deadline; start it after the guard opens.
+            budget = IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
+            deadline = time.monotonic() + budget
+            last_exc: LLMUnavailable | None = None
             for candidate in candidates:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
