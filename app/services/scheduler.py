@@ -58,9 +58,9 @@ def start() -> None:
             "max_instances": 1,
         },
     )
-    # Standup hour is read from settings at FIRE time inside the job would be
-    # ideal, but cron needs a static hour — so we check inside and run the
-    # trigger hourly, firing only when the configured hour matches.
+    # Operational summaries are sent at 10:00 and 18:00 IST. Routine
+    # reminder pings are consolidated into these summaries; assignment and
+    # urgent alerts remain event-driven.
     _scheduler.add_job(_hourly_tick, CronTrigger(minute=0, timezone=IST), id="hourly")
     _scheduler.add_job(_expense_closing_tick, CronTrigger(hour="20-21", minute=30, timezone=IST), id="staff-expense-closing")
     # Customer human-handoff timer: once a minute, let AI take over a
@@ -284,9 +284,7 @@ async def _hourly_tick() -> None:
 async def _hourly_for_tenant(now_ist: datetime) -> None:
     """Ek dukaan ka ghante ka kaam — context set hai, sab scoped hai."""
     try:
-        async with async_session_factory() as db:
-            standup_hour = int(await app_settings.get(db, "standup_hour"))
-        if now_ist.hour == standup_hour:
+        if now_ist.hour == 10:
             await run_standup()
     except Exception:
         log.exception("standup_job_failed")
@@ -335,22 +333,10 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
                         await _unclaim(f"mktreport:{now_ist.strftime('%Y-%m')}")
     except Exception:
         log.exception("lead_jobs_failed")
-    # Fixed staff follow-up windows: 10:00, 15:00, 18:00 IST only.
-    # No stale-order follow-up ping is sent at the other hourly ticks.
-    try:
-        if now_ist.hour in (10, 15, 18):
-            await run_follow_up_pings()
-    except Exception:
-        log.exception("follow_up_pings_failed")
-    # Staff task follow-ups: only 3 fixed windows per day.
-    # 10:00 AM, 3:00 PM and 6:00 PM IST — never on the other hourly ticks.
-    try:
-        if now_ist.hour in (10, 15, 18):
-            from app.services.tasks import run_task_followups
-
-            await run_task_followups()
-    except Exception:
-        log.exception("task_followups_failed")
+    # Do not send separate stale-order/task reminder messages. Staff have
+    # been asked to track work in the web app; the 10:00/18:00 summaries
+    # already list their pending work. New assignments and urgent alerts
+    # remain immediate. This avoids duplicate/confusing WhatsApp pings.
     # Deterministic SLA: promised delivery ke urgent window me aate hi
     # order + existing tasks ko URGENT karo. No LLM/token.
     try:
@@ -389,17 +375,15 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
         await run_conversation_followups()
     except Exception:
         log.exception("conversation_followups_failed")
-    # 18:00 evening washer status round; 21:00 owner summary
+    # 18:00 evening staff + manager operational summary.
     try:
         if now_ist.hour == 18:
             await run_standup(force=True, key_prefix="standup-eve")
     except Exception:
         log.exception("evening_standup_failed")
-    try:
-        if now_ist.hour == 21:
-            await run_daily_summary()
-    except Exception:
-        log.exception("daily_summary_failed")
+    # The separate 21:00 owner summary is disabled: the 18:00 manager
+    # briefing is the consolidated evening report. Expense reminders at
+    # 20:30 and 21:30 are scheduled independently and remain unchanged.
     # daily social poster (Instagram + owner's GMB pack)
     try:
         async with async_session_factory() as db:
