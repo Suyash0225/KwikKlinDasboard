@@ -341,6 +341,30 @@ async def send_campaign(campaign_id) -> None:
                     await db.commit()
                     log.warning("campaign_budget_hit", campaign=str(campaign_id))
                     continue
+                # Queueing is not a consent lock. Re-read the customer and run
+                # the full compliance gate immediately before each outbound send.
+                # This catches opt-outs, complaints, and frequency-cap changes
+                # that happened after the campaign was queued.
+                await db.refresh(cust)
+                still_eligible, skip_reason = await eligible(db, cust.id)
+                if still_eligible:
+                    # Re-run the broader segment gate too: active orders and
+                    # rating-based exclusions can change after queue creation.
+                    from app.services.leads import check_marketing_eligible_bulk
+                    verdicts = await check_marketing_eligible_bulk(db, [cust.id])
+                    still_eligible, skip_reason = verdicts.get(
+                        cust.id, (False, "not_eligible")
+                    )
+                if not still_eligible:
+                    rec.status = "skipped"
+                    rec.detail = skip_reason[:200] or "not_eligible"
+                    await db.commit()
+                    log.info(
+                        "campaign_recipient_skipped_before_send",
+                        campaign=str(campaign.id),
+                        reason=rec.detail,
+                    )
+                    continue
                 text = campaign.message_text.replace("{name}", cust.name or "ji")
                 try:
                     # One campaign = one approved creative. Send the same

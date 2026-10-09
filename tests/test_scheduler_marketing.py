@@ -206,6 +206,54 @@ async def test_campaign_queue_send_and_track(sched_sent, sent, monkeypatch) -> N
         assert rec.status == "read"
 
 
+async def test_queued_campaign_skips_customer_who_opts_out_before_send(
+    sched_sent, sent, monkeypatch
+) -> None:
+    import asyncio as aio
+
+    real_sleep = aio.sleep
+    monkeypatch.setattr(marketing_module.asyncio, "sleep", lambda s: real_sleep(0))
+    order = await _seed_order(total_amount=Decimal("300"))
+    async with async_session_factory() as s:
+        row = (
+            await s.execute(select(Order).where(Order.order_number == order.order_number))
+        ).scalar_one()
+        row.created_at = datetime.now(timezone.utc) - timedelta(days=75)
+        row.status = OrderStatus.DELIVERED
+        row.actual_delivery = datetime.now(timezone.utc) - timedelta(days=74)
+        row.amount_paid = row.total_amount
+        await s.commit()
+
+    async with async_session_factory() as db:
+        campaign = Campaign(
+            name="test-optout-before-send", segment="lapsed",
+            message_text="Namaste {name}", status="approved", created_by="test",
+        )
+        db.add(campaign)
+        await db.commit()
+        queued = await queue_campaign(db, campaign)
+        cid = campaign.id
+        cust = (
+            await db.execute(select(Customer).where(Customer.phone == PHONE))
+        ).scalar_one()
+        assert queued >= 1
+        cust.marketing_opt_out = True
+        await db.commit()
+
+    await send_campaign(cid)
+    assert not [c for c in sched_sent if c["to"] == PHONE]
+    async with async_session_factory() as s:
+        rec = (
+            await s.execute(
+                select(CampaignRecipient)
+                .join(Customer, Customer.id == CampaignRecipient.customer_id)
+                .where(CampaignRecipient.campaign_id == cid, Customer.phone == PHONE)
+            )
+        ).scalar_one()
+        assert rec.status == "skipped"
+        assert rec.detail == "opted_out"
+
+
 async def test_coupon_validate_and_redeem(sent) -> None:
     order = await _seed_order(total_amount=Decimal("400"))
     async with async_session_factory() as db:
