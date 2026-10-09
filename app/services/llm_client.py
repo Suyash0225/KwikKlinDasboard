@@ -55,8 +55,8 @@ def _provider_models(provider: str) -> tuple[str, str]:
 # A customer is staring at WhatsApp. The SDK's own default is ten MINUTES —
 # by then the person has phoned the shop, and our reply arrives as noise.
 # Better to give up fast and let the rule-based fallback answer.
-TIMEOUT_SECONDS = 75.0
-IMAGE_TIMEOUT_SECONDS = 90.0
+TIMEOUT_SECONDS = 20.0
+IMAGE_TIMEOUT_SECONDS = 45.0
 
 # Transient failures (429 / 5xx) get retried here with exponential backoff
 # and jitter. Jitter matters on the free tier: without it, every message
@@ -229,12 +229,18 @@ async def _generate_with_fallback(
     if candidates[0] != cheap:
         candidates.append(cheap)
 
+    # One deadline covers retries AND model fallback. Previously every retry
+    # and each model tier received a fresh 75–90 second timeout, so a single
+    # inbound message could wait several minutes. Images get a longer budget.
+    budget = IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
+    deadline = time.monotonic() + budget
     last_exc: LLMUnavailable | None = None
     for candidate in candidates:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            async with asyncio.timeout(
-                IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
-            ):
+            async with asyncio.timeout(remaining):
                 result = await _with_retry(
                     lambda: _generate(
                         system, user_text, candidate, max_tokens, schema, image, PROVIDER
@@ -250,6 +256,14 @@ async def _generate_with_fallback(
                 "llm_provider_auth_failed", provider=PROVIDER,
                 model=candidate, error=str(exc)[:200],
             )
+            break
+        except TimeoutError:
+            last_exc = LLMUnavailable(f"LLM request timed out after {budget:g}s")
+            log.warning(
+                "llm_request_timeout", provider=PROVIDER,
+                model=candidate, timeout_seconds=budget,
+            )
+            # The shared deadline is exhausted; another model call cannot fit.
             break
         except LLMError as exc:
             last_exc = exc
