@@ -1,6 +1,7 @@
 """LLM deadline tests: timeouts must degrade to the normal fallback path."""
 
 import asyncio
+import time
 
 import pytest
 
@@ -23,9 +24,11 @@ async def test_llm_timeout_is_bounded_and_translated(monkeypatch) -> None:
         return "too late"
 
     monkeypatch.setattr(llm_client, "_generate", slow_generate)
+    started = time.monotonic()
     with pytest.raises(llm_client.LLMUnavailable, match="timed out"):
         await llm_client.ask(
             system="test",
             user_text="test",
             model=llm_client.MODEL_SMART,
         )
+    assert time.monotonic() - started < 0.5
