@@ -343,6 +343,16 @@ _TASK_BTN_RE = re.compile(
 _WORK_PICK_RE = re.compile(r"^\s*\[button:pick:(o|t):([^\]:]+)\]", re.I)
 _ORDER_BTN_RE = re.compile(r"^\s*\[button:ord:(KK-\S+?):(done|later|problem)\]", re.I)
 
+# These acknowledgements do not contain a task update or business command.
+# Handle them before the contextual task classifier and generic extractor so
+# casual staff chat does not consume one or two model calls.
+_LOW_SIGNAL_STAFF_RE = re.compile(
+    r"^\s*(?:ok(?:ay)?|thanks?|thank\s+you|thx|welcome|good\s+morning|"
+    r"good\s+evening|good\s+night|hi|hello|hey|namaste|theek\s+hai|"
+    r"thik\s+hai|achha|acha)\s*[!.?,🙏🙂👍]*\s*$",
+    re.I,
+)
+
 
 async def _handle_task_menu_display_text(
     db: AsyncSession, sender_phone: str, sender_label: str, text: str
@@ -1441,6 +1451,13 @@ async def handle_staff_message(
     worklist = await _staff_worklist(db, sender_phone, sender_label, text or "")
     if worklist is not None:
         return worklist
+
+    # Short acknowledgements and greetings are not task progress. Reply
+    # deterministically and avoid invoking both task classification and the
+    # generic command extractor for casual chat. Pending confirmations and
+    # explicit task/button commands have already been handled above.
+    if sender_label != "manager" and not pending and _LOW_SIGNAL_STAFF_RE.fullmatch(text or ""):
+        return "Ji, theek hai. Kaam ka update ho to task button ya task code bhej dein."
 
     # Natural-language reply to the latest assigned task — task context first,
     # so staff does not need to repeat the task code.
