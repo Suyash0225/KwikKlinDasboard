@@ -30,8 +30,12 @@ def _source_from_message(text: str | None) -> str:
     body = text or ""
     if re.search(r"(?im)^Lead source:\s*website\s*$", body):
         utm = re.search(r"(?im)^utm_source:\s*([^\r\n]{1,100})", body)
-        if utm and utm.group(1).strip().lower() == "google":
-            return "google"
+        if utm:
+            # UTM values come from a public URL. Keep only a compact source
+            # slug before storing it in the reporting dimension.
+            source = re.sub(r"[^a-z0-9._-]", "", utm.group(1).strip().lower())[:40]
+            if source:
+                return source
         return "website"
     first = " ".join(body.strip().split()[:2]).upper()
     for tag, source in (("POSTER", "poster"), ("GOOGLE", "google"),
