@@ -80,6 +80,8 @@ jobs:
           add_if_present tests/test_agent_quality.py test_low_signal_staff_messages_are_classified_without_llm
           add_if_present tests/test_scheduler_marketing.py test_repeat_order_segment_is_paid_up_and_waits_15_days
           add_if_present tests/test_llm_client_timeout.py test_llm_timeout_is_bounded_and_translated
+          add_if_present tests/test_staff_panel.py test_a_worker_sees_only_his_own_work
+          add_if_present tests/test_staff_panel.py test_manager_status_update_uses_customer_notifications_only_at_delivery_milestones
 
           if (( ${#focused[@]} )); then
             pytest -q "${focused[@]}"
