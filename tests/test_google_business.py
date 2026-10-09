@@ -206,6 +206,55 @@ async def test_status_marks_reauth_required_for_expired_refresh_token() -> None:
             await db.commit()
 
 
+async def test_gbp_auto_post_records_failure_retries_and_deduplicates(monkeypatch) -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app.services import gbp_auto_post
+
+    other = await _tenant("gbp-post-retry-shop")
+    calls = {"publish": 0, "generate": 0}
+
+    async def fake_generate(db, now_ist):
+        calls["generate"] += 1
+        return {"summary": "A useful laundry care tip", "topic_type": "STANDARD"}
+
+    async def fake_publish(*args, **kwargs):
+        calls["publish"] += 1
+        if calls["publish"] == 1:
+            raise gbp.GBPError("temporary Google error")
+        return {"name": "accounts/1/locations/2/localPosts/3"}
+
+    async def fake_connection(db):
+        return {"refresh_token": "dummy", "account": "accounts/1", "location": "locations/2"}
+
+    monkeypatch.setattr(gbp, "enabled", lambda: True)
+    monkeypatch.setattr(gbp, "get_connection", fake_connection)
+    monkeypatch.setattr(gbp_auto_post, "_generate_post", fake_generate)
+    monkeypatch.setattr(gbp_auto_post, "_api_post", fake_publish)
+    now = datetime(2026, 10, 10, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    try:
+        async with tenant_context.as_tenant(other):
+            async with async_session_factory() as db:
+                await app_settings.set_value(db, "gbp_auto_post_enabled", True)
+                await app_settings.set_value(db, "gbp_auto_posts", [])
+                with pytest.raises(gbp.GBPError, match="temporary Google error"):
+                    await gbp_auto_post.auto_post_daily(db, now)
+                history = await app_settings.get(db, "gbp_auto_posts")
+                assert history[-1]["status"] == "failed"
+                result = await gbp_auto_post.auto_post_daily(db, now)
+                assert result["published"] is True
+                again = await gbp_auto_post.auto_post_daily(db, now)
+                assert again["reason"] == "already_published"
+                history = await app_settings.get(db, "gbp_auto_posts")
+                assert [item["status"] for item in history] == ["failed", "published"]
+        assert calls == {"publish": 2, "generate": 2}
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(sqltext("DELETE FROM settings_kv WHERE tenant_id = :t"), {"t": other})
+            await db.execute(sqltext("DELETE FROM tenants WHERE id = :t"), {"t": other})
+            await db.commit()
+
+
 async def test_gbp_daily_post_uses_tenant_shop_name(monkeypatch) -> None:
     from datetime import datetime
     from zoneinfo import ZoneInfo
