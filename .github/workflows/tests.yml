@@ -31,7 +31,9 @@ jobs:
 
     env:
       DATABASE_URL: postgresql+asyncpg://kwikklin:kwikklin@localhost:5432/kwikklin_test
-      APP_DATABASE_URL: postgresql+asyncpg://kwikklin:kwikklin@localhost:5432/kwikklin_test
+      # Runtime tests must use a NOSUPERUSER role so PostgreSQL RLS is genuinely enforced.
+      # Alembic continues to use DATABASE_URL (the migration owner).
+      APP_DATABASE_URL: postgresql+asyncpg://kk_app:ci-app-role-password-2026@localhost:5432/kwikklin_test
       MANAGER_PHONE: "+919999000000"
       ADMIN_API_KEY: ci-only-not-a-secret
       VENDOR_API_KEY: ci-only-vendor-key
@@ -62,6 +64,11 @@ jobs:
 
       - name: Apply database migrations
         run: alembic upgrade heads
+
+      - name: Create non-superuser application role for RLS tests
+        env:
+          APP_DB_PASSWORD: ci-app-role-password-2026
+        run: python -m scripts.create_app_role
 
       - name: Run available focused regression tests (required)
         shell: bash
