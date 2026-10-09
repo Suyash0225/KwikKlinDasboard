@@ -309,6 +309,61 @@ async def test_review_request_is_neutral_for_every_rating(monkeypatch, kind) -> 
         assert any(m["to"] == "+919999000001" for m in sent_messages)
 
 
+@pytest.mark.parametrize(
+    "stop_text",
+    ["STOP", "unsubscribe", "band karo", "band kro", "msg mat bhejo", "message mat bhejo"],
+)
+async def test_stop_variants_set_global_and_marketing_optout(client, sent, stop_text) -> None:
+    """Every supported opt-out phrase must persist before any future marketing send."""
+    from app.database import async_session_factory
+    from app.models import Customer
+
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one_or_none()
+        if customer is not None:
+            customer.opted_out = False
+            customer.marketing_opt_out = False
+            await db.commit()
+
+    await _inbound_from(
+        client, stop_text, None, f"wamid.TEST-stop-{abs(hash(stop_text))}"
+    )
+
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one()
+        assert customer.opted_out is True
+        assert customer.marketing_opt_out is True
+
+
+async def test_start_reenables_customer_after_stop(client, sent) -> None:
+    from app.database import async_session_factory
+    from app.models import Customer
+
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one_or_none()
+        if customer is None:
+            customer = Customer(phone=TEST_CUSTOMER_PHONE, name="Optout Test")
+            db.add(customer)
+        customer.opted_out = True
+        customer.marketing_opt_out = True
+        await db.commit()
+
+    await _inbound_from(client, "START", None, "wamid.TEST-start-reenable")
+
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one()
+        assert customer.opted_out is False
+        assert customer.marketing_opt_out is False
+
+
 # --- statuses ---
 
 async def test_status_receipt_moves_the_ticks_forward_only(client, sent) -> None:
