@@ -128,6 +128,36 @@ async def test_ai_quota_enforced(_restore_plan) -> None:
     await quota.check_ai_quota()
 
 
+async def test_ai_monthly_budget_blocks_expensive_request(monkeypatch, _restore_plan) -> None:
+    from app.services import app_settings
+
+    async with async_session_factory() as db:
+        prior = await app_settings.get(db, "llm_monthly_budget_usd")
+        await app_settings.set_value(db, "llm_monthly_budget_usd", 0.000001)
+    async def no_call_limit(db, tenant_id):
+        return 0
+    monkeypatch.setattr(quota, "ai_calls_this_month", no_call_limit)
+    try:
+        with pytest.raises(QuotaExceeded, match="AI monthly budget USD"):
+            await quota.check_ai_quota(
+                model="gemini-3.8-flash",
+                input_text="small prompt",
+                max_output_tokens=512,
+            )
+    finally:
+        async with async_session_factory() as db:
+            await app_settings.set_value(db, "llm_monthly_budget_usd", prior or 0.0)
+
+
+def test_estimated_cost_uses_dashboard_rate_card() -> None:
+    from decimal import Decimal
+    from app.services.quota import estimated_cost_usd
+
+    rates = {"gemini-3.1-flash-lite": {"in": 0.25, "out": 1.50}}
+    assert estimated_cost_usd("gemini-3.1-flash-lite", 1_000_000, 1_000_000, rates) == Decimal("1.75")
+    assert estimated_cost_usd("unknown-model", 1_000_000, 1_000_000, rates) == Decimal("1.75")
+
+
 async def test_wa_quota_enforced(monkeypatch, _restore_plan) -> None:
     from app.services import whatsapp
 
