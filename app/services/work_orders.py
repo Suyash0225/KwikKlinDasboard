@@ -205,9 +205,9 @@ def items_summary(order: Order) -> str:
 async def resolve_workers(db: AsyncSession, order: Order, role: str = "WASHER") -> list[Staff]:
     """Resolve every operational recipient.
 
-    Assigned workers get the work order alone. Unassigned washing orders are
-    notified to all active washers so a two-washer shop does not silently
-    leave one person unaware. Broadcasts have no action buttons.
+    Exactly one eligible staff member gets the work order. Prefer the explicit
+    assignment; if that person is inactive or has their agent switch off, pick
+    the least-loaded eligible worker. Never broadcast the same job to all washers.
     """
     if role == "DELIVERY":
         if order.assigned_delivery_id:
@@ -216,20 +216,23 @@ async def resolve_workers(db: AsyncSession, order: Order, role: str = "WASHER") 
         from app.services import team
         st = await team.delivery_staff(db)
         return [st] if st else []
-    if order.assigned_washer_id:
-        st = await db.get(Staff, order.assigned_washer_id)
-        return [st] if st else []
-    washers = list((await db.execute(
-        select(Staff).where(Staff.is_active, Staff.role == StaffRole.WASHER).order_by(Staff.name)
-    )).scalars().all())
-    if washers:
-        return washers
-    default_phone = await app_settings.get(db, "default_washer_phone")
-    if default_phone:
-        st = (await db.execute(select(Staff).where(Staff.phone == default_phone))).scalar_one_or_none()
-        if st:
-            return [st]
-    return []
+    from app.services import ops_agent
+
+    assigned = await db.get(Staff, order.assigned_washer_id) if order.assigned_washer_id else None
+    if assigned is not None and assigned.is_active and await app_settings.get(
+        db, f"staff_agent_enabled_{assigned.id}", True
+    ):
+        return [assigned]
+    selected = await ops_agent.pick_staff(db, "WASHER", None)
+    if selected is None:
+        default_phone = await app_settings.get(db, "default_washer_phone")
+        if default_phone:
+            candidate = (await db.execute(select(Staff).where(
+                Staff.phone == default_phone, Staff.is_active.is_(True), Staff.role == StaffRole.WASHER
+            ))).scalar_one_or_none()
+            if candidate and await app_settings.get(db, f"staff_agent_enabled_{candidate.id}", True):
+                selected = candidate
+    return [selected] if selected else []
 
 
 async def resolve_worker(db: AsyncSession, order: Order, role: str = "WASHER") -> Staff | None:
