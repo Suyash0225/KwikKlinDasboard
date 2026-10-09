@@ -338,7 +338,7 @@ async def test_escalation_alert_failure_is_swallowed(monkeypatch) -> None:
 
 
 def test_simple_greetings_are_recognized_without_matching_literal_backslashes() -> None:
-    for text in ("Hi", "  hello! ", "HY", "Namaste", "hey??"):
+    for text in ("Hi", "  hello! ", "HY", "Namaste 🙏", "hey??"):
         assert agent_module._is_simple_greeting(text), text
     for text in ("", "hi there", "hello, what is the rate?", r"\s", "hiii can you pick up"):
         assert not agent_module._is_simple_greeting(text), text
