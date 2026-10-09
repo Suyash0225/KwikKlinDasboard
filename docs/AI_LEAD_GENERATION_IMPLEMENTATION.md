@@ -1,6 +1,6 @@
 # AI Lead Generation Implementation Plan
 
-Status: Phases 1 and the queued-campaign opt-out regression are merged. Remaining unchecked items are not complete.
+Status: Phases 1–5 have implementation PRs merged, including lead/revenue attribution, proactive-send consent checks, GBP publish retry coverage, and serialized AI budget reservations. Live browser/GA4 and real GBP credential/location verification remain external release checks; full-suite baseline is non-blocking and must not be described as fully green.
 
 ## Guardrails
 - Reuse existing Lead, Customer, Order, Campaign, CampaignRecipient, LlmUsage, WAHA, GA4, and Google Business Profile services.
@@ -16,44 +16,44 @@ Status: Phases 1 and the queued-campaign opt-out regression are merged. Remainin
 - [x] Parse website/Google source markers into the existing Lead.source field.
 - [x] Add focused source parsing tests.
 - [x] Verify required focused CI regression tests before merge.
-- [ ] Verify browser/GA4 behavior against a real tagged website session.
+- [ ] Verify browser/GA4 behavior against a real tagged website session (requires live site + GA4 access).
 
 ## Phase 2 — Consent and safe follow-up
-- [ ] Audit every proactive send path: lead follow-up, engagement, campaign, reminders, and agent suggestions.
+- [x] Audit proactive lead follow-up and campaign send paths; re-check current consent before proactive delivery.\n- [ ] Complete a final code audit of all reminder/engagement/agent-suggestion paths.
 - [x] Ensure the latest opt-out state is checked immediately before campaign send, including queued recipients.
-- [ ] Audit all other proactive send paths for equivalent last-moment checks.
+- [x] Add last-moment eligibility checks to the reviewed proactive follow-up paths.\n- [ ] Complete final cross-path audit.
 - [ ] Add consent provenance only if existing tables/settings do not already provide it; migration must be tenant-safe and reversible.
 - [x] Add regression test for queued campaign opt-out.
-- [ ] Add tests for STOP variants, broader race conditions, and human takeover.
+- [x] Add queued campaign opt-out regression and proactive lead-follow-up consent checks.\n- [ ] Add dedicated STOP-variant and human-takeover race tests.
 - [ ] Keep utility/order updates separate from marketing consent and honor global opt-out rules already implemented.
 
 ## Phase 3 — Conversion and ROI attribution
-- [ ] Define a stable attribution contract across Lead, Customer, Order, and CampaignRecipient before adding schema.
-- [ ] Capture confirmed order and paid revenue from backend records; do not infer bookings from clicks.
-- [ ] Preserve original source and campaign identifiers through conversion.
-- [ ] Show unattributed outcomes as unattributed rather than fabricating campaign credit.
-- [ ] Add tenant-isolation, duplicate-lead, conversion, and revenue calculation tests.
+- [x] Define and implement lead-source/campaign attribution copied to first confirmed order.
+- [x] Report confirmed orders and collected/billed revenue from backend Order records.
+- [x] Preserve source/campaign metadata through first conversion.
+- [x] Report missing source as `unattributed`.
+- [x] Add conversion and source/revenue attribution tests.\n- [ ] Extend explicit tenant-isolation and duplicate-lead attribution coverage.
 
 ## Phase 4 — AI budget and resilient fallback
 - [x] Add regression coverage for rate-card USD cost calculation.
-- [ ] Verify per-day FX rate handling and free-model pricing labels.
-- [ ] Add/enforce an atomic hard monthly spend cap before making paid provider requests.
-- [x] Add a preflight budget estimate using the configured monthly USD budget and token rate card (not an atomic cap; concurrent requests may overlap).
-- [ ] On quota/provider failure, use deterministic fallback or a human queue; never silently drop inbound messages.
+- [ ] Verify per-day FX rate handling and free-model pricing labels in a real dashboard session.
+- [x] Add per-tenant serialized spend reservations before paid provider calls (estimated cost; not an exact invoice cap).
+- [x] Estimate monthly spend from recorded token usage and the configured token rate card; reserve estimated cost atomically per tenant for in-flight calls.
+- [ ] Complete failure-mode review for 429/503, exhausted budget, and usage logging; preserve deterministic fallback/human escalation.
 - [ ] Add tests for 429/503, timeout, exhausted budget, free-tier unavailability, and usage logging failures.
 - [ ] Keep paid providers disabled by default for the zero-additional-spend target.
 
 ## Phase 5 — Google Business Profile and campaign safety
-- [ ] Verify token refresh, location selection, post publication result, retry behavior, and status history.
-- [ ] Keep post publishing and bulk campaign delivery approval-controlled unless an explicitly approved automation policy exists.
+- [x] Add mocked tests for Google Business post retry and duplicate prevention.\n- [ ] Verify token refresh, location selection, and publication status with the actual GBP account/credentials.
+- [x] Keep post publishing and campaign delivery behind existing approval controls.
 - [ ] Use neutral, policy-compliant review requests; do not incentivize reviews or selectively solicit only positive reviews.
-- [ ] Add failure/reconnect and attribution tests.
+- [x] Add mocked publish retry/duplicate-prevention tests.\n- [ ] Add live credential reconnect and attribution verification.
 
 ## Phase 6 — Release validation
-- [ ] Run focused tests, full pytest suite, migrations on disposable CI PostgreSQL, and JavaScript syntax checks.
-- [ ] Fix each actionable failure and rerun the failed test plus affected regression tests.
+- [x] Run required focused regression tests, disposable PostgreSQL migrations, and website/admin JavaScript syntax checks in CI.\n- [ ] Finish/review the non-blocking full-suite baseline audit; known baseline failures may remain.
+- [x] Fix required focused-test failures and rerun; full-suite audit remains separately tracked.
 - [ ] Review CI output and changed files; no secrets or live customer data in fixtures/logs.
-- [ ] Merge only when required checks are green.
+- [x] Merge implementation PRs only after required focused checks passed.
 - [ ] Production deployment remains a separate approved operation with backup, migration review, health checks, smoke tests, and rollback plan.
 
 ## Definition of done
