@@ -15,6 +15,7 @@ drop nahi. Counting tenant-scoped hai (tenant_context ka effective tenant).
 """
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import structlog
 from sqlalchemy import func, select
@@ -26,7 +27,7 @@ log = structlog.get_logger()
 
 
 class QuotaExceeded(Exception):
-    def __init__(self, meter: str, used: int, limit: int, plan_name: str):
+    def __init__(self, meter: str, used: int | float, limit: int | float, plan_name: str):
         self.meter, self.used, self.limit, self.plan_name = meter, used, limit, plan_name
         super().__init__(
             f"{meter} limit reached ({used}/{limit} this month on {plan_name} plan) — upgrade karein"
@@ -118,22 +119,80 @@ async def _spend_credit(db, tenant_id, kind: str) -> bool:
     return True
 
 
-async def check_ai_quota() -> None:
-    """LLM call se pehle. Raises QuotaExceeded. Apna session kholta hai."""
+def estimated_cost_usd(model: str, input_tokens: int, output_tokens: int, rates: dict) -> Decimal:
+    """Estimated USD using the same per-million-token rate card as the dashboard."""
+    rate = rates.get(model) or {}
+    if not rate:
+        available = [r for r in rates.values() if isinstance(r, dict)]
+        rate = {
+            "in": max((float(r.get("in", 0) or 0) for r in available), default=0),
+            "out": max((float(r.get("out", 0) or 0) for r in available), default=0),
+        }
+    incoming = Decimal(str(rate.get("in", 0) or 0))
+    outgoing = Decimal(str(rate.get("out", 0) or 0))
+    return (
+        Decimal(max(0, int(input_tokens))) * incoming
+        + Decimal(max(0, int(output_tokens))) * outgoing
+    ) / Decimal(1_000_000)
+
+
+async def check_ai_quota(
+    *, model: str | None = None, input_text: str = "",
+    max_output_tokens: int = 0, image: bool = False,
+) -> None:
+    """Enforce per-tenant call limits and configured monthly USD budget before provider I/O."""
     from app.database import async_session_factory
+    from app.models import LlmUsage
+    from app.services import app_settings
 
     async with async_session_factory() as db:
         tid, limits, plan_name = await _tenant_and_limits(db)
-        if tid is None or limits["ai_usage_limit"] is None:
+        if tid is None:
             return
-        used = await ai_calls_this_month(db, tid)
-        if used < limits["ai_usage_limit"]:
+
+        call_limit = limits["ai_usage_limit"]
+        if call_limit is not None:
+            used = await ai_calls_this_month(db, tid)
+            if used >= call_limit and not await _spend_credit(db, tid, "ai"):
+                log.warning("ai_quota_exceeded", used=used, limit=call_limit)
+                raise QuotaExceeded("AI usage", used, call_limit, plan_name)
+
+        monthly_budget = Decimal(str(await app_settings.get(db, "llm_monthly_budget_usd") or 0))
+        if monthly_budget <= 0:
             return
-        # Limit khatam — recharge bacha ho to usse chalao
-        if await _spend_credit(db, tid, "ai"):
-            return
-    log.warning("ai_quota_exceeded", used=used, limit=limits["ai_usage_limit"])
-    raise QuotaExceeded("AI usage", used, limits["ai_usage_limit"], plan_name)
+
+        rates = await app_settings.get(db, "llm_rates") or {}
+        usage_rows = (
+            await db.execute(
+                select(LlmUsage.model, LlmUsage.input_tokens, LlmUsage.output_tokens)
+                .where(LlmUsage.at >= _month_start(), LlmUsage.tenant_id == tid)
+            )
+        ).all()
+        spent = sum(
+            (estimated_cost_usd(row.model, row.input_tokens, row.output_tokens, rates)
+             for row in usage_rows),
+            start=Decimal("0"),
+        )
+
+        # Reserve a conservative upper bound for this request before calling
+        # the provider. Image input gets an additional allowance. The setting
+        # is opt-in (0 disables it); the dashboard rate card is the source of
+        # truth, so pricing changes do not require a migration.
+        estimated_input_tokens = (len(input_text) + 3) // 4 + (1000 if image else 0)
+        reserve = estimated_cost_usd(
+            model or "", estimated_input_tokens, max(0, max_output_tokens), rates
+        )
+        if spent + reserve > monthly_budget:
+            log.warning(
+                "ai_monthly_budget_exceeded", spent_usd=round(float(spent), 6),
+                reserve_usd=round(float(reserve), 6), budget_usd=float(monthly_budget),
+            )
+            raise QuotaExceeded(
+                "AI monthly budget USD",
+                round(float(spent), 4),
+                round(float(monthly_budget), 4),
+                plan_name,
+            )
 
 
 async def check_wa_quota(db) -> None:
