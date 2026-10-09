@@ -309,6 +309,100 @@ async def test_review_request_is_neutral_for_every_rating(monkeypatch, kind) -> 
         assert any(m["to"] == "+919999000001" for m in sent_messages)
 
 
+@pytest.mark.parametrize(
+    "stop_text",
+    ["STOP", "unsubscribe", "band karo", "band kro", "msg mat bhejo", "message mat bhejo"],
+)
+async def test_stop_variants_set_global_and_marketing_optout(client, sent, stop_text) -> None:
+    """Every supported opt-out phrase must persist before any future marketing send."""
+    from app.database import async_session_factory
+    from app.models import Customer
+
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one_or_none()
+        if customer is not None:
+            customer.opted_out = False
+            customer.marketing_opt_out = False
+            await db.commit()
+
+    await _inbound_from(
+        client, stop_text, None, f"wamid.TEST-stop-{abs(hash(stop_text))}"
+    )
+
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one()
+        assert customer.opted_out is True
+        assert customer.marketing_opt_out is True
+
+
+async def test_start_reenables_customer_after_stop(client, sent) -> None:
+    from app.database import async_session_factory
+    from app.models import Customer
+
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one_or_none()
+        if customer is None:
+            customer = Customer(phone=TEST_CUSTOMER_PHONE, name="Optout Test")
+            db.add(customer)
+        customer.opted_out = True
+        customer.marketing_opt_out = True
+        await db.commit()
+
+    await _inbound_from(client, "START", None, "wamid.TEST-start-reenable")
+
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one()
+        assert customer.opted_out is False
+        assert customer.marketing_opt_out is False
+
+
+async def test_human_takeover_grace_window_suppresses_agent_reply(monkeypatch) -> None:
+    from datetime import datetime, timedelta, timezone
+    import uuid
+    from app.database import async_session_factory
+    from app.models import Conversation, Customer, Direction
+    from app.routers.webhook import _human_handoff_waiting
+    from app.services import app_settings
+
+    async def grace_setting(db, key):
+        assert key == "human_handoff_grace_minutes"
+        return 15
+
+    monkeypatch.setattr(app_settings, "get", grace_setting)
+    phone = f"+91998{uuid.uuid4().int % 10**7:07d}"
+    async with async_session_factory() as db:
+        customer = Customer(phone=phone, name="Human Takeover Test")
+        db.add(customer)
+        await db.flush()
+        human_message = Conversation(
+            customer_id=customer.id,
+            direction=Direction.OUTBOUND,
+            message_text="Main aapki madad karta hoon.",
+            sent_by="human",
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+        )
+        inbound = Conversation(
+            customer_id=customer.id,
+            direction=Direction.INBOUND,
+            message_text="order ka status?",
+            wa_message_id=f"wamid.TEST-human-takeover-{uuid.uuid4().hex}",
+        )
+        db.add_all([human_message, inbound])
+        await db.flush()
+        assert await _human_handoff_waiting(db, customer, inbound) is True
+        human_message.created_at = datetime.now(timezone.utc) - timedelta(minutes=16)
+        await db.flush()
+        assert await _human_handoff_waiting(db, customer, inbound) is False
+
+
 # --- statuses ---
 
 async def test_status_receipt_moves_the_ticks_forward_only(client, sent) -> None:
