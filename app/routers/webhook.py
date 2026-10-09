@@ -216,8 +216,8 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
         short = await customer_messages.short_review_link(db, tenant)
         link = short if short and short not in links else links[sum(ord(c) for c in phone) % len(links)]
         reply_text += (
-            "\\n\\nAgar aap chahein, apna imaandaar feedback Google par share kar sakte hain. "
-            "Har tarah ka feedback hamare liye madadgar hai.\\n"
+            "\n\nAgar aap chahein, apna imaandaar feedback Google par share kar sakte hain. "
+            "Har tarah ka feedback hamare liye madadgar hai.\n"
             f"{link}"
         )
     try:
