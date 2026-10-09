@@ -1708,6 +1708,39 @@ async def list_leads(
     ]
 
 
+@router.get("/leads/attribution", dependencies=[Depends(require_feature("marketing_agent"))])
+async def lead_attribution_summary(db: AsyncSession = Depends(get_db)) -> dict:
+    """Confirmed orders and collected payments grouped by original acquisition source."""
+    from app.models import Order
+
+    rows = (
+        await db.execute(
+            select(
+                Order.acquisition_source,
+                Order.acquisition_campaign,
+                func.count(Order.id).label("orders"),
+                func.coalesce(func.sum(Order.amount_paid), 0).label("collected_revenue"),
+                func.coalesce(func.sum(Order.total_amount), 0).label("billed_revenue"),
+            )
+            .group_by(Order.acquisition_source, Order.acquisition_campaign)
+            .order_by(func.sum(Order.amount_paid).desc())
+        )
+    ).all()
+    return {
+        "items": [
+            {
+                "source": source or "unattributed",
+                "campaign": campaign,
+                "confirmed_orders": int(count),
+                "collected_revenue": float(collected or 0),
+                "billed_revenue": float(billed or 0),
+            }
+            for source, campaign, count, collected, billed in rows
+        ],
+        "revenue_basis": "collected_revenue is sum of Order.amount_paid; billed_revenue is sum of Order.total_amount",
+    }
+
+
 @router.get("/templates/registry")
 async def templates_registry() -> list[dict]:
     """Local template registry — works even when Meta's API is down."""
