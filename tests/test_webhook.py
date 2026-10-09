@@ -260,6 +260,55 @@ async def test_a_number_is_not_a_name(client, sent) -> None:
     assert (await _customer()).name is None
 
 
+@pytest.mark.parametrize("kind", ["good", "mid", "bad"])
+async def test_review_request_is_neutral_for_every_rating(monkeypatch, kind) -> None:
+    """Review links must not be gated on a positive rating or offer incentives."""
+    import uuid
+    import app.routers.webhook as wh
+    from app.database import async_session_factory
+    from app.models import Customer
+    from app.services import audit, customer_messages, tenant_context
+
+    sent_messages = []
+
+    async def fake_send(db, *, to_phone, text, **kwargs):
+        sent_messages.append({"to": to_phone, "text": text})
+        return "mock-wa-id"
+
+    async def fake_audit(**kwargs):
+        return None
+
+    async def fake_links(db):
+        return ["https://reviews.example/kwikklin"]
+
+    async def fake_short(db, tenant):
+        return None
+
+    monkeypatch.setattr(wh, "send_message", fake_send)
+    monkeypatch.setattr(wh, "manager_phone", lambda: "+919999000001")
+    monkeypatch.setattr(tenant_context, "effective_tenant_id", lambda: None)
+    monkeypatch.setattr(customer_messages, "review_links", fake_links)
+    monkeypatch.setattr(customer_messages, "short_review_link", fake_short)
+    monkeypatch.setattr(audit, "record", fake_audit)
+
+    phone = f"+91999{uuid.uuid4().int % 10**7:07d}"
+    async with async_session_factory() as db:
+        customer = Customer(phone=phone, name="Review Test")
+        db.add(customer)
+        await db.flush()
+        await wh._handle_rating(db, customer, phone, kind)
+
+    customer_messages_sent = [m for m in sent_messages if m["to"] == phone]
+    assert len(customer_messages_sent) == 1
+    message = customer_messages_sent[0]["text"]
+    assert "honest feedback" in message.lower() or "imaandaar feedback" in message.lower()
+    assert "https://reviews.example/kwikklin" in message
+    assert "⭐⭐⭐⭐⭐" not in message
+    assert "🎁" not in message
+    if kind == "bad":
+        assert any(m["to"] == "+919999000001" for m in sent_messages)
+
+
 # --- statuses ---
 
 async def test_status_receipt_moves_the_ticks_forward_only(client, sent) -> None:

@@ -203,26 +203,23 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
 
     reply_key = {"good": "rate_good_reply", "mid": "rate_mid_reply", "bad": "rate_bad_reply"}[kind]
     reply_text = get_message(reply_key)
-    if kind == "good":
-        # Google review link ONLY on happy ratings (owner's spec). Two
-        # listings — rotate by phone so both profiles grow.
-        from app.models.tenant import Tenant
-        from app.services import customer_messages, tenant_context
+    # Google prohibits selectively soliciting positive reviews or offering
+    # incentives. Offer the same neutral, optional review invitation after
+    # every rating (good, mid, or bad); unhappy customers still get escalation.
+    from app.models.tenant import Tenant
+    from app.services import customer_messages, tenant_context
 
-        tid = tenant_context.effective_tenant_id()
-        tenant = await db.get(Tenant, tid) if tid else None
-        links = await customer_messages.review_links(db)
-        if links:
-            # Choti link (/r/<slug>) public URL pata ho to — wo khud dono
-            # listing mein baari-baari bhejti hai. Warna seedhi Google link.
-            short = await customer_messages.short_review_link(db, tenant)
-            link = short if short and short not in links else links[sum(ord(c) for c in phone) % len(links)]
-            reply_text += (
-                "\n\nCustomers like you keep our shop going 🥰 "
-                "It takes just 30 seconds — tap here and leave us a quick Google review. "
-                "It means the world to a small shop like ours! 🎁\n"
-                f"{link}"
-            )
+    tid = tenant_context.effective_tenant_id()
+    tenant = await db.get(Tenant, tid) if tid else None
+    links = await customer_messages.review_links(db)
+    if links:
+        short = await customer_messages.short_review_link(db, tenant)
+        link = short if short and short not in links else links[sum(ord(c) for c in phone) % len(links)]
+        reply_text += (
+            "\n\nAgar aap chahein, apna imaandaar feedback Google par share kar sakte hain. "
+            "Har tarah ka feedback hamare liye madadgar hai.\n"
+            f"{link}"
+        )
     try:
         await send_message(db, to_phone=phone, text=reply_text)
     except SendError:
