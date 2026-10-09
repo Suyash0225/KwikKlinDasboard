@@ -40,6 +40,14 @@ def _source_from_message(text: str | None) -> str:
             return source
     return "whatsapp"
 
+def _utm_value(text: str | None, key: str) -> str | None:
+    """Read a bounded UTM field from the website WhatsApp prefill."""
+    body = text or ""
+    if not re.search(r"(?im)^Lead source:\s*website\s*$", body):
+        return None
+    match = re.search(rf"(?im)^{re.escape(key)}:\s*([^\r\n]{{1,100}})", body)
+    return match.group(1).strip()[:100] or None if match else None
+
 _LADDER = [  # (followup_count -> delay after the previous customer touch, days, message key)
     (0, 2 / 24, "lead_followup_2h"),
     (1, 1, "lead_day1"),
@@ -72,6 +80,8 @@ async def note_inquiry(db: AsyncSession, customer: Customer, text: str) -> None:
                 Lead(
                     phone=customer.phone, name=customer.name,
                     items_text=text[:300], stage="CONTACTED", source=source,
+                    source_medium=_utm_value(text, "utm_medium"),
+                    source_campaign=_utm_value(text, "utm_campaign"),
                     last_contact_at=now, next_followup_at=now + timedelta(hours=2),
                 )
             )
@@ -120,6 +130,20 @@ async def mark_converted(db: AsyncSession, phone: str) -> None:
             await db.execute(select(Lead).where(Lead.phone == phone))
         ).scalar_one_or_none()
         if lead and lead.stage != "CONVERTED":
+            # Copy attribution only to the first conversion order. Repeat orders
+            # must not overwrite the original acquisition source.
+            order = (
+                await db.execute(
+                    select(Order)
+                    .join(Customer, Customer.id == Order.customer_id)
+                    .where(Customer.phone == phone)
+                    .order_by(Order.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if order is not None and not order.acquisition_source:
+                order.acquisition_source = lead.source or "unattributed"
+                order.acquisition_campaign = lead.source_campaign
             lead.stage = "CONVERTED"
             lead.next_followup_at = None
             await db.commit()

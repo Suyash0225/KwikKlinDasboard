@@ -55,6 +55,9 @@ class Order(Base, TenantScoped):
     customer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("customers.id"), index=True
     )
+    # Acquisition metadata copied from the lead on first conversion only.
+    acquisition_source: Mapped[str | None] = mapped_column(String(40), index=True)
+    acquisition_campaign: Mapped[str | None] = mapped_column(String(100), index=True)
 
     status: Mapped[OrderStatus] = mapped_column(
         Enum(OrderStatus, name="order_status"), default=OrderStatus.RECEIVED, index=True
