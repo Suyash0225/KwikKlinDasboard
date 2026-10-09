@@ -205,6 +205,36 @@ async def run_lead_followups(now: datetime | None = None) -> int:
                 await db.commit()
                 continue
             _, delay_days, key = step
+            # A lead follow-up is proactive marketing. Re-read the customer
+            # and apply the same full eligibility gate used by campaigns right
+            # before sending; queued/due work is not a consent lock.
+            customer = (
+                await db.execute(select(Customer).where(Customer.phone == lead.phone))
+            ).scalar_one_or_none()
+            if customer is None:
+                lead.next_followup_at = None
+                lead.stage = "LOST"
+                await db.commit()
+                continue
+            if customer.agent_paused:
+                # Respect human takeover; scheduler will retry after the pause
+                # expires without consuming a follow-up attempt.
+                lead.next_followup_at = now + timedelta(hours=1)
+                await db.commit()
+                continue
+            ok, reason = await check_marketing_eligible(db, customer.id)
+            if not ok:
+                if reason in ("opted_out", "inactive"):
+                    lead.stage = "LOST"
+                    lead.next_followup_at = None
+                elif reason == "active_order":
+                    lead.stage = "CONVERTED"
+                    lead.next_followup_at = None
+                else:
+                    lead.next_followup_at = now + timedelta(days=1)
+                await db.commit()
+                log.info("lead_followup_skipped", reason=reason)
+                continue
             try:
                 await send_message(
                     db,
