@@ -32,7 +32,7 @@ log = structlog.get_logger()
 
 
 _SIMPLE_GREETING_RE = re.compile(
-    r"^\\s*(?:hi|hii|hiii|hello|hey|heyy|hy|namaste|namaskar)\\s*[!.?,]*\\s*$",
+    r"^\s*(?:hi|hii|hiii|hello|hey|heyy|hy|namaste|namaskar)\s*[!.?,🙏🙂👋😊]*\s*$",
     re.I,
 )
 
@@ -396,6 +396,14 @@ async def build_ai_reply(
         if not _is_simple_greeting(text) and await should_suppress_inbound(text):
             return None
 
+    # Plain greetings are deterministic: do not spend a model call merely to
+    # say hello. Keep this after the feature/anti-loop guards so those controls
+    # still apply, and before context gathering/composition.
+    if _is_simple_greeting(text):
+        return (
+            "Namaste! 🙏 Welcome to Kwik Klin. Would you like help with "
+            "laundry pickup, rates, or an existing order? — Kwik Klin AI"
+        )
 
     # Billing is a transactional action, not a language-generation task.
     # Handle it only after media normalization and the global AI switch.
