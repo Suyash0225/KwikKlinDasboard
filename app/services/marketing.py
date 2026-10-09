@@ -347,6 +347,14 @@ async def send_campaign(campaign_id) -> None:
                 # that happened after the campaign was queued.
                 await db.refresh(cust)
                 still_eligible, skip_reason = await eligible(db, cust.id)
+                if still_eligible:
+                    # Re-run the broader segment gate too: active orders and
+                    # rating-based exclusions can change after queue creation.
+                    from app.services.leads import check_marketing_eligible_bulk
+                    verdicts = await check_marketing_eligible_bulk(db, [cust.id])
+                    still_eligible, skip_reason = verdicts.get(
+                        cust.id, (False, "not_eligible")
+                    )
                 if not still_eligible:
                     rec.status = "skipped"
                     rec.detail = skip_reason[:200] or "not_eligible"
