@@ -133,6 +133,7 @@ async def test_due_interested_lead_gets_conversion_nudge(monkeypatch) -> None:
             .astimezone(timezone.utc)
         )
         async with async_session_factory() as db:
+            db.add(Customer(phone=TEST_LEAD_PHONE, name="Lead Test"))
             db.add(
                 Lead(
                     phone=TEST_LEAD_PHONE,
@@ -186,6 +187,49 @@ async def test_website_utm_fields_are_saved_on_lead(monkeypatch) -> None:
             assert lead.source == "google"
             assert lead.source_medium == "organic"
             assert lead.source_campaign == "winter-laundry"
+    finally:
+        await _cleanup_lead()
+
+
+async def test_due_lead_followup_respects_marketing_opt_out(monkeypatch) -> None:
+    sent = []
+
+    async def fake_send(db, *, to_phone: str, text: str, **kwargs):
+        sent.append({"to": to_phone, "text": text})
+        return "wamid.TEST-lead"
+
+    async def fake_setting(db, key):
+        if key == "marketing_autonomy":
+            return "auto"
+        return 0
+
+    monkeypatch.setattr(leads_service, "send_message", fake_send)
+    monkeypatch.setattr(app_settings, "get", fake_setting)
+    try:
+        ist = timezone(timedelta(hours=5, minutes=30))
+        run_at = datetime.now(timezone.utc).astimezone(ist).replace(
+            hour=10, minute=0, second=0, microsecond=0
+        ).astimezone(timezone.utc)
+        async with async_session_factory() as db:
+            customer = Customer(
+                phone=TEST_LEAD_PHONE, name="Opted Out", marketing_opt_out=True
+            )
+            db.add(customer)
+            db.add(Lead(
+                phone=TEST_LEAD_PHONE, name="Opted Out", stage="INTERESTED",
+                followup_count=0, next_followup_at=run_at - timedelta(minutes=1),
+            ))
+            await db.commit()
+
+        sent_count = await leads_service.run_lead_followups(now=run_at)
+        assert sent_count == 0
+        assert not [item for item in sent if item["to"] == TEST_LEAD_PHONE]
+        async with async_session_factory() as db:
+            lead = (
+                await db.execute(select(Lead).where(Lead.phone == TEST_LEAD_PHONE))
+            ).scalar_one()
+            assert lead.stage == "LOST"
+            assert lead.next_followup_at is None
     finally:
         await _cleanup_lead()
 

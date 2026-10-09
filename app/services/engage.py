@@ -156,6 +156,7 @@ async def run_conversation_followups() -> int:
                         Customer.last_message_at >= window_start,
                         Customer.last_message_at <= now - timedelta(hours=gap_h),
                         Customer.opted_out.is_(False),
+                        Customer.marketing_opt_out.is_(False),
                         Customer.is_active.is_(True),
                     )
                     .order_by(Customer.last_message_at)
@@ -195,6 +196,11 @@ async def run_conversation_followups() -> int:
 
 async def _skip(db, cust: Customer, now, gap_h: float, max_n: int) -> bool:
     """Everything that makes a nudge the wrong move right now."""
+    # The initial query is only a candidate list. Refresh consent and takeover
+    # state immediately before sending to catch changes made after that query.
+    await db.refresh(cust)
+    if not cust.is_active or cust.opted_out or cust.marketing_opt_out:
+        return True
     # 1. an order already came of this conversation -> nothing to chase
     ordered = (
         await db.execute(
