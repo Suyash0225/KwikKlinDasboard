@@ -66,27 +66,24 @@ async def test_threads_list_shows_participant(client) -> None:
 
 async def test_reply_quotes_the_message_on_whatsapp_and_in_the_thread(client) -> None:
     """Answering one message must reach WhatsApp as a real quoted reply."""
-    import app.services.whatsapp as wa
+    from app.services import waha
 
     await _seed_customer(window_open=True)
     seen: dict = {}
-    orig = wa._post_with_retry
 
-    async def spy(payload, to_phone):
-        seen.update(payload)
-        return await orig(payload, to_phone)
+    async def spy(to_phone, body, reply_to=None, **kwargs):
+        seen.update({"to": to_phone, "body": body, "reply_to": reply_to, **kwargs})
+        return "wamid.TESTINBOX-OUT-QUOTE"
 
-    wa._post_with_retry = spy
-    try:
+    from unittest.mock import patch
+    with patch.object(waha, "send_text", spy):
         r = await client.post(
             "/admin/api/inbox/send", headers=AUTH,
             json={"phone": PHONE, "text": "haan bhaiya, sham tak", "reply_to": "wamid.TESTINBOX-1"},
         )
         assert r.status_code == 200
-    finally:
-        wa._post_with_retry = orig
 
-    assert seen.get("context") == {"message_id": "wamid.TESTINBOX-1"}, seen
+    assert seen.get("reply_to") == "wamid.TESTINBOX-1", seen
     d = (await client.get(f"/admin/api/inbox/thread?phone={PHONE}", headers=AUTH)).json()
     last = d["messages"][-1]
     assert last["reply_to"] == "wamid.TESTINBOX-1"
@@ -118,8 +115,8 @@ async def test_template_send_keeps_its_words_in_the_thread(client, monkeypatch) 
         )
     r = (await client.get(f"/admin/api/inbox/thread?phone={PHONE}", headers=AUTH)).json()
     last = r["messages"][-1]["text"]
-    assert last.startswith("[template:kk_staff_alert]"), last
     assert "sham tak deliver" in last, "asli message thread mein dikhna chahiye"
+    assert not last.startswith("[template:"), "thread mein rendered text dikhna chahiye"
 
 
 async def test_one_person_is_one_thread(client) -> None:
@@ -299,7 +296,9 @@ async def test_delete_inbox_thread_keeps_customer_but_removes_history(client) ->
     r = await client.delete(f"/admin/api/inbox/thread?phone={PHONE}", headers=AUTH)
     assert r.status_code == 200, r.text
     assert r.json()["deleted"] == 2
-    assert (await client.get(f"/admin/api/inbox/thread?phone={PHONE}", headers=AUTH)).status_code == 404
+    empty_thread = await client.get(f"/admin/api/inbox/thread?phone={PHONE}", headers=AUTH)
+    assert empty_thread.status_code == 200
+    assert empty_thread.json()["messages"] == []
     async with async_session_factory() as s:
         cust = (await s.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
         assert cust.name == "Inbox Grahak"
@@ -320,14 +319,15 @@ async def test_thread_fetch_messages_and_window(client) -> None:
 
 async def test_manager_send_records_sent_by(client, sent, monkeypatch) -> None:
     """Manager reply goes out via the single door and is stored as 'manager'."""
+    from app.services import waha
     import app.services.whatsapp as whatsapp_module
     import app.routers.admin as admin_module
 
-    # patch the REAL door's HTTP call only, so conversation-recording still runs
-    async def fake_post(payload, to_phone):
-        return {"messages": [{"id": "wamid.TESTINBOX-OUT1"}]}
+    # Patch the active WAHA transport, keeping conversation-recording real.
+    async def fake_send_text(to_phone, body, reply_to=None, **kwargs):
+        return "wamid.TESTINBOX-OUT1"
 
-    monkeypatch.setattr(whatsapp_module, "_post_with_retry", fake_post)
+    monkeypatch.setattr(waha, "send_text", fake_send_text)
     # admin.py imported send_message directly; restore the real one (the
     # shared `sent` fixture stubs it in other import sites)
     monkeypatch.setattr(admin_module, "send_message", whatsapp_module.send_message)
@@ -418,10 +418,10 @@ async def test_media_serve_requires_key(client) -> None:
     test_file.write_bytes(b"fake-jpg-bytes")
     try:
         assert (await client.get("/admin/media/test-qa.jpg")).status_code == 401
-        r = await client.get(f"/admin/media/test-qa.jpg?key={settings.ADMIN_API_KEY}")
+        r = await client.get("/admin/media/test-qa.jpg", headers=AUTH)
         assert r.status_code == 200
         # traversal must not escape the media dir
-        r2 = await client.get(f"/admin/media/..%2F..%2F.env?key={settings.ADMIN_API_KEY}")
+        r2 = await client.get("/admin/media/..%2F..%2F.env", headers=AUTH)
         assert r2.status_code == 404
     finally:
         test_file.unlink(missing_ok=True)
@@ -455,6 +455,7 @@ async def test_send_media_endpoint_auth_and_validation(client, monkeypatch) -> N
     assert r.json()["wa_message_id"] == "wamid.MEDIA-TEST"
 
 
+@pytest.mark.skipif(settings.WHATSAPP_PROVIDER != "meta", reason="Meta 24-hour messaging window does not apply to WAHA/NOWEB")
 async def test_manager_send_blocked_outside_window(client, monkeypatch) -> None:
     import app.services.whatsapp as whatsapp_module
     import app.routers.admin as admin_module
