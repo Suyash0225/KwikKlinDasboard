@@ -104,6 +104,7 @@ async def test_list_returns_local_registry_for_waha(client, graph) -> None:
     assert build_template("kk_order_ready", ["KK-20260803-01"])["name"] == "kk_order_ready"
 
 
+@pytest.mark.skipif(settings.WHATSAPP_PROVIDER != "meta", reason="Meta template submission is unavailable in WAHA/NOWEB mode")
 async def test_create_validates_and_submits(client, graph) -> None:
     r = await client.post("/admin/api/templates", headers=AUTH, json={
         "name": "My Offer!", "category": "MARKETING",
@@ -129,6 +130,7 @@ async def test_create_validates_and_submits(client, graph) -> None:
     assert r.status_code == 400
 
 
+@pytest.mark.skipif(settings.WHATSAPP_PROVIDER != "meta", reason="Meta template deletion is unavailable in WAHA/NOWEB mode")
 async def test_delete_template(client, graph) -> None:
     r = await client.delete("/admin/api/templates/kk_old_one", headers=AUTH)
     assert r.status_code == 200 and r.json()["deleted"] == "kk_old_one"
