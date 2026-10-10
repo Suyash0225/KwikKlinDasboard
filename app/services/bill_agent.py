@@ -3014,7 +3014,7 @@ async def _apply_relay(
     # The extractor is not the source of truth: never relay to a person whose
     # name the manager did not actually mention in the incoming message.
     source_text = (sender_text or "").casefold()
-    if target and target.casefold() not in source_text:
+    if target and source_text and target.casefold() not in source_text:
         staff_rows = (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
         names = ", ".join(s.name for s in staff_rows if s.name) or "-"
         return f"Kisko bhejun? Message mein recipient ka naam nahi mila. Staff: {names} 🙏"
@@ -3059,7 +3059,7 @@ async def _apply_relay(
             word for word in re.findall(r"[a-z0-9]+", raw_message.casefold())
             if len(word) >= 3 and word not in ignored and word not in target_words
         }
-        if not (message_words & source_words):
+        if source_text and not (message_words & source_words):
             _PENDING[sender_phone] = PendingRelay(target=staff.name)
             return f"{staff.name} ko kya bhejun? Message ka text bata dijiye. 🙏"
         message = raw_message if message_is_user_text else await _compose_relay_message(raw_message, "STAFF", staff.name)
