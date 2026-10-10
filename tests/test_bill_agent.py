@@ -319,7 +319,7 @@ async def test_relay_to_known_staff_becomes_a_tracked_task(
     calls: list[dict] = []
 
     async def fake_send(db, *, to_phone, text=None, **kw):
-        calls.append({"to": to_phone, "text": text})
+        calls.append({"to": to_phone, "text": text, "list_rows": kw.get("list_rows")})
         return "wamid.RELAY"
 
     monkeypatch.setattr(tasks_module, "send_message", fake_send)
@@ -342,7 +342,11 @@ async def test_relay_to_known_staff_becomes_a_tracked_task(
     assert "T-" in reply, "the owner gets a code he can follow up on"
     assert calls and calls[0]["to"] == TEST_WASHER_PHONE
     assert "naya order aya" in calls[0]["text"]
-    assert "done T-" in calls[0]["text"], "the assignee must know how to close it"
+    rows = calls[0]["list_rows"] or []
+    assert rows, "the assignee must receive a tappable task-status menu"
+    assert any("T-" in row.id and ("done" in row.id.lower() or "yes" in row.id.lower()) for row in rows), (
+        "the assignee must have a row that closes the assigned task"
+    )
 
 
 async def test_relay_unknown_target_lists_staff(monkeypatch, test_washer) -> None:
