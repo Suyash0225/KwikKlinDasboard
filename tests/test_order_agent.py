@@ -38,7 +38,7 @@ async def test_picked_up_sets_sla_and_notifies(sent) -> None:
     assert any("have been picked up" in (c["text"] or "") for c in sent)
 
 
-async def test_done_command_by_delivery_boy(sent) -> None:
+async def test_done_command_by_delivery_boy(sent, no_task_residue) -> None:
     async with async_session_factory() as db:
         order = await create_order(
             db, customer_phone=PHONE, items=[{"type": "Shirt", "qty": 2}],
@@ -58,7 +58,7 @@ async def test_done_command_by_delivery_boy(sent) -> None:
         assert fresh.status is OrderStatus.DELIVERED
 
 
-async def test_washer_cannot_touch_delivery_status(monkeypatch, sent, test_washer) -> None:
+async def test_washer_cannot_touch_delivery_status(monkeypatch, sent, test_washer, no_task_residue) -> None:
     async with async_session_factory() as db:
         order = await create_order(
             db, customer_phone=PHONE, items=[{"type": "Shirt", "qty": 1}],
