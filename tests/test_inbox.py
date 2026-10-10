@@ -414,11 +414,11 @@ async def test_media_serve_requires_key(client) -> None:
 
     media_dir = Path("app/media")
     media_dir.mkdir(exist_ok=True)
-    test_file = media_dir / "test-qa.jpg"
+    test_file = media_dir / "in-abcdef0123456789abcdef0123456789.jpg"
     test_file.write_bytes(b"fake-jpg-bytes")
     try:
         assert (await client.get("/admin/media/test-qa.jpg")).status_code == 401
-        r = await client.get(f"/admin/media/test-qa.jpg?key={settings.ADMIN_API_KEY}")
+        r = await client.get(f"/admin/media/in-abcdef0123456789abcdef0123456789.jpg?key={settings.ADMIN_API_KEY}")
         assert r.status_code == 200
         # traversal must not escape the media dir
         r2 = await client.get(f"/admin/media/..%2F..%2F.env?key={settings.ADMIN_API_KEY}")
