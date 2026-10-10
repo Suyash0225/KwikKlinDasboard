@@ -1582,6 +1582,10 @@ async def edit_task_api(code: str, body: TaskEditIn, db: AsyncSession = Depends(
             raise HTTPException(status_code=404, detail="Selected order not found")
 
     customer = await db.get(_C, task.customer_id) if task.customer_id else None
+    if customer is None and task.order_id:
+        existing_order = await db.get(_O, task.order_id)
+        if existing_order is not None:
+            customer = await db.get(_C, existing_order.customer_id)
     if order is not None:
         if customer is not None and order.customer_id != customer.id:
             raise HTTPException(status_code=400, detail="Order must belong to the selected customer")
