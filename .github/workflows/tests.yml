@@ -104,6 +104,5 @@ jobs:
             python -m compileall -q app tests
           fi
 
-      - name: Full-suite baseline audit (currently known failures; non-blocking)
-        continue-on-error: true
+      - name: Full test suite (required)
         run: pytest -q
