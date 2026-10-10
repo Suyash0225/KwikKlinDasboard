@@ -126,7 +126,7 @@ async def test_an_admin_staff_row_gets_owner_powers() -> None:
             await db.commit()
 
 
-async def test_a_worker_is_not_an_admin() -> None:
+async def test_a_worker_is_not_an_admin(test_washer) -> None:
     """Koi bhi non-admin staff owner nahi hai.
 
     Owner ka apna number is jaanch se bahar hai: use taakat .env se milti
