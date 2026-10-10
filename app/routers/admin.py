@@ -881,6 +881,26 @@ async def expenses_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
     return [exp_svc.row(e) for e in rows]
 
 
+@router.put("/api/expenses/{expense_id}", dependencies=[Depends(require_admin_owner)])
+async def expense_update(expense_id: str, body: ExpenseIn, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.services import expenses as exp_svc
+    try:
+        eid = uuid_module.UUID(expense_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid expense id")
+    exp = await db.get(Expense, eid)
+    if exp is None:
+        raise HTTPException(status_code=404, detail="expense not found")
+    exp.category = await exp_svc.canonical_category(db, body.category) or body.category.strip()
+    exp.amount = body.amount
+    exp.spent_on = body.spent_on
+    exp.description = (body.description or "").strip()[:300] or None
+    await db.commit()
+    await db.refresh(exp)
+    log.info("expense_updated", expense_id=expense_id, category=exp.category, amount=str(exp.amount))
+    return exp_svc.row(exp)
+
+
 @router.post("/api/expenses", dependencies=[Depends(require_admin_owner)], status_code=201)
 async def expense_create(body: ExpenseIn, db: AsyncSession = Depends(get_db)) -> dict:
     from app.services import expenses as exp_svc
