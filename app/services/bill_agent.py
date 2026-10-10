@@ -1480,6 +1480,44 @@ async def handle_staff_message(
     if pickup_reply is not None:
         return pickup_reply
 
+    # Operational issue reports must attach to the one unambiguous open task.
+    # Common blockers should not depend on an order number or LLM classification.
+    if sender_label != "manager" and text and not text.startswith("["):
+        issue_text = " ".join(text.casefold().split())
+        issue_terms = (
+            "geela", "geele", "geeli", "wet clothes", "kapde wet",
+            "pickup nahi", "pickup nhi", "pickup nahi ho", "pickup nhi ho",
+            "nahi ho payega", "nhi ho payega", "nahi ho paega", "nhi ho paega",
+            "not possible", "cannot pick", "can't pick", "machine kharab",
+            "kapde nahi sookhe", "kapde nahi sukhe", "dry nahi hue",
+        )
+        if any(term in issue_text for term in issue_terms):
+            from app.services import tasks as task_service, team
+            issue_staff = (
+                await db.execute(select(Staff).where(Staff.phone == sender_phone))
+            ).scalar_one_or_none()
+            if issue_staff is not None and issue_staff.is_active:
+                open_issue_tasks = await task_service.open_tasks_for_staff(db, issue_staff.id)
+                if len(open_issue_tasks) == 1:
+                    issue_task = open_issue_tasks[0]
+                    await task_service.note_reply(
+                        db, issue_staff.id, text, by=issue_staff.name,
+                        task_code=issue_task.code,
+                    )
+                    await team.notify_admins(
+                        db,
+                        f"⚠️ *Task issue — {issue_task.code}*\n"
+                        f"Staff: {issue_staff.name}\n"
+                        f"Task: {issue_task.title}\n"
+                        f"Issue: {text.strip()[:400]}\n"
+                        "Task remains OPEN until a manager resolves/reassigns it.",
+                        skip_phone=issue_staff.phone,
+                    )
+                    return (
+                        f"⚠️ *{issue_task.code}* par issue record kar diya aur manager ko bata diya. "
+                        "Task abhi OPEN hai; bina confirmation ke complete nahi kiya."
+                    )
+
     # Order par dikkat — LLM se pehle, kyunki ye khone wali baat nahi hai.
     problem = await _handle_order_problem(db, sender_phone, sender_label, text or "")
     if problem is not None:
