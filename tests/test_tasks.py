@@ -901,3 +901,34 @@ async def test_operational_task_links_customer(worker) -> None:
         await db.flush()
         await db.delete(customer)
         await db.commit()
+
+
+
+async def test_dashboard_can_edit_task_and_persist_priority_and_due_date(client, worker, sent) -> None:
+    from app.models import Task
+    from sqlalchemy import select
+
+    async with async_session_factory() as db:
+        task = await _mk(db, worker, title="Old task")
+        code = task.code
+
+    due = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+    response = await client.put(f"/admin/api/tasks/{code}", headers=H, json={
+        "title": "Updated task instructions",
+        "staff": "Taskram",
+        "order_number": None,
+        "kind": "delivery",
+        "due_at": due,
+        "priority": "urgent",
+        "customer_name": None,
+        "customer_phone": None,
+    })
+    assert response.status_code == 200, response.text
+
+    async with async_session_factory() as db:
+        updated = (await db.execute(select(Task).where(Task.code == code))).scalar_one()
+        assert updated.title == "Updated task instructions"
+        assert updated.kind == "delivery"
+        assert updated.urgent is True
+        assert updated.due_at is not None
+        assert updated.assigned_staff_id == worker

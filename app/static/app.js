@@ -2741,6 +2741,51 @@ const whenIST = (s) => (s ? new Date(s).toLocaleString("en-IN", {
 
 /* Card par click -> poori kahani ek jagah: kise diya, kab, kitni baar
    yaad dilaya, usne kya kaha. Pehle ye sab kahin dikhta hi nahi tha. */
+function editTaskModal(code) {
+  const t = TASKS.find((x) => x.code === code);
+  if (!t) return;
+  const staffOpts = (STAFF || []).filter((s) => s.is_active || s.name === t.staff)
+    .map((s) => `<option value="${esc(s.name)}" ${s.name === t.staff ? "selected" : ""}>${esc(s.name)} · ${esc(s.role || "")}</option>`).join("");
+  const localDue = t.due_at ? (() => { const d = new Date(t.due_at); return new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16); })() : "";
+  openModal(`<h3>Edit task · ${esc(t.code)}</h3>
+    <div class="frm">
+      <div class="setfield"><label>Task / Instructions</label><textarea id="et-title" rows="3">${esc(t.title)}</textarea></div>
+      <div class="split2">
+        <div class="setfield"><label>Task type</label><select id="et-kind">
+          ${[["pickup","Pickup"],["wash","Washing"],["dry","Drying"],["iron","Ironing"],["delivery","Delivery"],["general","General"]].map(([v,l])=>`<option value="${v}" ${(t.kind||"general")===v?"selected":""}>${l}</option>`).join("")}
+        </select></div>
+        <div class="setfield"><label>Priority</label><select id="et-priority">
+          <option value="normal" ${t.urgent?"":"selected"}>Normal</option><option value="urgent" ${t.urgent?"selected":""}>Urgent</option>
+        </select></div>
+      </div>
+      <div class="setfield"><label>Assigned staff</label><select id="et-staff"><option value="">Unassigned</option>${staffOpts}</select></div>
+      <div class="split2">
+        <div class="setfield"><label>Customer name</label><input id="et-customer-name" value="${esc(t.customer_name || "")}"></div>
+        <div class="setfield"><label>Customer phone</label><input id="et-customer-phone" type="tel" value="${esc(t.customer_phone || "")}"></div>
+      </div>
+      <div class="setfield"><label>Order number (optional)</label><input id="et-order" value="${esc(t.order_number || "")}" placeholder="KK-YYYYMMDD-01"></div>
+      <div class="setfield"><label>Due date & time (IST)</label><input id="et-due" type="datetime-local" value="${localDue}"></div>
+      <small class="muted">Save karne par changes database mein save honge.</small>
+      <small class="fielderr" id="et-err"></small>
+    </div>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" id="et-save">Save changes</button></div>`);
+  $("et-save").onclick = (e) => busy(e.target, async () => {
+    const title = $("et-title").value.trim();
+    if (title.length < 2) { $("et-err").textContent = "Task instructions likhiye."; return; }
+    const phone = $("et-customer-phone").value.trim();
+    if (phone && phone.replace(/\D/g, "").length < 10) { $("et-err").textContent = "Customer phone valid nahi hai."; return; }
+    await api(`/admin/api/tasks/${encodeURIComponent(code)}`, { method: "PUT", body: {
+      title, kind: $("et-kind").value, priority: $("et-priority").value,
+      staff: $("et-staff").value || null,
+      customer_name: $("et-customer-name").value.trim() || null,
+      customer_phone: phone || null,
+      order_number: $("et-order").value.trim() || null,
+      due_at: $("et-due").value ? taskDueISO($("et-due").value) : null,
+    }});
+    closeModal(); toast("Task updated and saved"); await loadTasks();
+  });
+}
+
 function taskDetail(code) {
   const t = TASKS.find((x) => x.code === code);
   if (!t) return;
@@ -2769,6 +2814,7 @@ function taskDetail(code) {
     ${t.reply ? `<div class="tc-reply" style="margin-top:12px">💬 ${esc(t.staff || "they")}: ${esc(t.reply)}</div>` : ""}
     <div id="tt-box"></div>
     <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal();editTaskModal('${t.code}')">✏️ Edit task</button>
       <button class="btn ghost" onclick="closeModal()">Close</button>
       ${open ? `
         <button class="btn ghost" onclick="pingTask('${t.code}', this, true)">Ask again</button>
@@ -3121,7 +3167,7 @@ function renderExpenses() {
       <tr><td class="nowrap">${fmtDate(e.spent_on)}</td><td>${esc(e.category)}</td>
       <td class="money">${money(e.amount)}</td>
       <td class="muted" style="max-width:260px" title="${esc(e.description || "")}"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.description || "")}</div>${e.added_by ? `<div style="font-size:11.5px">by ${esc(e.added_by)}</div>` : ""}</td>
-      <td><button class="btn sm ghost danger-ic" aria-label="Delete expense" title="Delete" onclick="delExpense('${e.id}')">🗑</button></td></tr>`).join("")}
+      <td><div class="act"><button class="btn sm ghost" aria-label="Edit expense" title="Edit" onclick="editExpense('${e.id}')">✏️</button><button class="btn sm ghost danger-ic" aria-label="Delete expense" title="Delete" onclick="delExpense('${e.id}')">🗑</button></div></td></tr>`).join("")}
     </tbody>
     <tfoot><tr class="totalrow"><td>Total</td><td class="muted">${rows.length} item${rows.length > 1 ? "s" : ""}</td>
       <td class="money">${money(total)}</td><td></td><td></td></tr></tfoot></table>
@@ -3129,7 +3175,7 @@ function renderExpenses() {
       <div class="rowcard"><div class="r1"><b>${esc(e.category)}</b><span class="money">${money(e.amount)}</span></div>
       <div class="kv"><span>${fmtDate(e.spent_on)}</span><span>${esc(e.description || "")}</span></div>
       ${e.added_by ? `<div class="kv"><span>Added by</span><span>${esc(e.added_by)}</span></div>` : ""}
-      <div class="act"><button class="btn sm ghost danger-ic" onclick="delExpense('${e.id}')">🗑 Delete</button></div></div>`).join("")}
+      <div class="act"><button class="btn sm ghost" onclick="editExpense('${e.id}')">✏️ Edit</button><button class="btn sm ghost danger-ic" onclick="delExpense('${e.id}')">🗑 Delete</button></div></div>`).join("")}
       <div class="rowcard" style="background:var(--n50)"><div class="r1"><b>Total (${rows.length})</b><span class="money">${money(total)}</span></div></div>
     </div>`;
 }
@@ -3194,6 +3240,29 @@ function delExpCat(i) {
       EXP_CATS = r.all; EXP_CUSTOM = EXP_CUSTOM.filter((c) => c !== name);
       paintExpCats(); toast(`"${name}" removed`); manageExpCats();
     } catch (e) { toast(e.message, true); }
+  });
+}
+function editExpense(id) {
+  const e = EXPENSES.find((x) => x.id === id);
+  if (!e) return;
+  const cats = [...new Set([...(EXP_CATS || []), e.category])];
+  openModal(`<h3>Edit expense</h3>
+    <div class="frm">
+      <div class="setfield"><label>Date</label><input id="ee-date" type="date" value="${esc(e.spent_on)}" required></div>
+      <div class="setfield"><label>Category</label><select id="ee-category">${cats.map((x) => `<option value="${esc(x)}" ${x===e.category?"selected":""}>${esc(x)}</option>`).join("")}</select></div>
+      <div class="setfield"><label>Amount (₹)</label><input id="ee-amount" type="number" min="0.01" step="0.01" value="${esc(e.amount)}" required></div>
+      <div class="setfield"><label>Description</label><textarea id="ee-description" rows="2" maxlength="300">${esc(e.description || "")}</textarea></div>
+      <small class="fielderr" id="ee-err"></small>
+    </div>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" id="ee-save">Save changes</button></div>`);
+  $("ee-save").onclick = (btn) => busy(btn.target || btn, async () => {
+    const amount = Number($("ee-amount").value);
+    if (!$("ee-date").value || !Number.isFinite(amount) || amount <= 0) { $("ee-err").textContent = "Date aur positive amount required hain."; return; }
+    await api(`/admin/api/expenses/${encodeURIComponent(id)}`, { method: "PUT", body: {
+      spent_on: $("ee-date").value, category: $("ee-category").value,
+      amount, description: $("ee-description").value.trim() || null,
+    }});
+    closeModal(); toast("Expense updated and saved"); await loadExpenses();
   });
 }
 function delExpense(id) {
