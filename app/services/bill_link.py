@@ -45,8 +45,11 @@ def _unb64(s: str) -> bytes:
 
 
 def make(tenant_id: uuid.UUID, order_id: uuid.UUID, now: float | None = None) -> str:
-    """Compact signed bill token; legacy tokens are still accepted by parse()."""
-    body = tenant_id.bytes + order_id.bytes
+    """Compact expiring bill token; older non-expiring tokens remain parseable."""
+    issued_at = time.time() if now is None else now
+    exp = int(issued_at + TTL_SECONDS)
+    body = tenant_id.bytes + order_id.bytes + exp.to_bytes(5, "big")
+    # 37-byte body + 6-byte signature stays under 60 URL-safe characters.
     sig = hmac.new(_key(), body, hashlib.sha256).digest()[:6]
     return _b64(body) + _SEP + _b64(sig)
 
@@ -58,13 +61,20 @@ def parse(token: str, now: float | None = None) -> tuple[uuid.UUID, uuid.UUID] |
         body = _unb64(body_b64)
         sig = _unb64(sig_b64)
         if len(body) == 32:
+            # Legacy compact token: no embedded expiry, accepted for links
+            # already sent before expiry was added.
             want = hmac.new(_key(), body, hashlib.sha256).digest()[:6]
             if not hmac.compare_digest(want, sig):
                 return None
             return uuid.UUID(bytes=body[:16]), uuid.UUID(bytes=body[16:32])
         if len(body) != 37:
             return None
-        want = hmac.new(_key(), body, hashlib.sha256).digest()[:12]
+        # New compact tokens use a 6-byte signature; older expiring tokens
+        # used 12 bytes. Accept both formats without weakening either MAC.
+        sig_size = 6 if len(sig) == 6 else 12 if len(sig) == 12 else 0
+        if not sig_size:
+            return None
+        want = hmac.new(_key(), body, hashlib.sha256).digest()[:sig_size]
         if not hmac.compare_digest(want, sig):
             return None
         if (now if now is not None else time.time()) > int.from_bytes(body[32:], "big"):
