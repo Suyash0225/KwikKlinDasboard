@@ -172,7 +172,7 @@ async def test_voice_note_is_transcribed_and_acted_on(client, sent, monkeypatch)
         (Path(dest_dir) / "in-voice1.ogg").write_bytes(b"fake-ogg-bytes")
         return "in-voice1.ogg"
 
-    async def fake_transcribe(blob, mime):
+    async def fake_transcribe(blob, mime, *, purpose="voice"):
         assert blob == b"fake-ogg-bytes"
         assert mime == "audio/ogg"
         return "Bhaiya do shirt aur ek pant dhulwana hai"
@@ -228,7 +228,7 @@ async def test_unclear_voice_note_falls_back_to_acknowledgement(
         (Path(dest_dir) / "in-voice2.ogg").write_bytes(b"noise")
         return "in-voice2.ogg"
 
-    async def unclear(blob, mime):
+    async def unclear(blob, mime, *, purpose="voice"):
         return None
 
     monkeypatch.setattr("app.services.whatsapp.download_media", fake_download)
@@ -303,7 +303,7 @@ async def test_unreadable_voice_note_from_staff_gets_an_honest_reply(
     async def no_download(media_id, media_dir):
         return "in-testvoice.ogg"
 
-    async def no_transcript(path, part):
+    async def no_transcript(path, part, *, purpose="voice"):
         return None
 
     import app.services.whatsapp as wa_module
@@ -335,7 +335,7 @@ async def test_a_transcribed_voice_note_still_runs_the_command(
     async def no_download(media_id, media_dir):
         return "in-testvoice2.ogg"
 
-    async def transcript(path, part):
+    async def transcript(path, part, *, purpose="voice"):
         return "aaj ka kaam batao"
 
     seen: dict = {}
