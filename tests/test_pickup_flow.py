@@ -134,7 +134,7 @@ async def test_yes_button_closes_task_and_moves_the_order(boy, sent) -> None:
     async with async_session_factory() as db:
         reply = await bill_agent.handle_staff_message(
             db, sender_phone=PICKUP_STAFF_PHONE, sender_label="Ajitram",
-            text="[button:✅ Haan, ho gaya]",
+            text=f"[button:job_yes:{task.code}]",
         )
     assert reply and "Shukriya" in reply
 
@@ -160,7 +160,7 @@ async def test_no_button_keeps_it_open(boy, sent) -> None:
     async with async_session_factory() as db:
         reply = await bill_agent.handle_staff_message(
             db, sender_phone=PICKUP_STAFF_PHONE, sender_label="Ajitram",
-            text="[button:❌ Abhi nahi]",
+            text=f"[button:job_no:{task.code}]",
         )
     assert reply and "batana" in reply
     async with async_session_factory() as db:
