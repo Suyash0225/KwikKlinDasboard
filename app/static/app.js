@@ -2741,6 +2741,51 @@ const whenIST = (s) => (s ? new Date(s).toLocaleString("en-IN", {
 
 /* Card par click -> poori kahani ek jagah: kise diya, kab, kitni baar
    yaad dilaya, usne kya kaha. Pehle ye sab kahin dikhta hi nahi tha. */
+function editTaskModal(code) {
+  const t = TASKS.find((x) => x.code === code);
+  if (!t) return;
+  const staffOpts = (STAFF || []).filter((s) => s.is_active || s.name === t.staff)
+    .map((s) => `<option value="${esc(s.name)}" ${s.name === t.staff ? "selected" : ""}>${esc(s.name)} · ${esc(s.role || "")}</option>`).join("");
+  const localDue = t.due_at ? (() => { const d = new Date(t.due_at); return new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16); })() : "";
+  openModal(`<h3>Edit task · ${esc(t.code)}</h3>
+    <div class="frm">
+      <div class="setfield"><label>Task / Instructions</label><textarea id="et-title" rows="3">${esc(t.title)}</textarea></div>
+      <div class="split2">
+        <div class="setfield"><label>Task type</label><select id="et-kind">
+          ${[["pickup","Pickup"],["wash","Washing"],["dry","Drying"],["iron","Ironing"],["delivery","Delivery"],["general","General"]].map(([v,l])=>`<option value="${v}" ${(t.kind||"general")===v?"selected":""}>${l}</option>`).join("")}
+        </select></div>
+        <div class="setfield"><label>Priority</label><select id="et-priority">
+          <option value="normal" ${t.urgent?"":"selected"}>Normal</option><option value="urgent" ${t.urgent?"selected":""}>Urgent</option>
+        </select></div>
+      </div>
+      <div class="setfield"><label>Assigned staff</label><select id="et-staff"><option value="">Unassigned</option>${staffOpts}</select></div>
+      <div class="split2">
+        <div class="setfield"><label>Customer name</label><input id="et-customer-name" value="${esc(t.customer_name || "")}"></div>
+        <div class="setfield"><label>Customer phone</label><input id="et-customer-phone" type="tel" value="${esc(t.customer_phone || "")}"></div>
+      </div>
+      <div class="setfield"><label>Order number (optional)</label><input id="et-order" value="${esc(t.order_number || "")}" placeholder="KK-YYYYMMDD-01"></div>
+      <div class="setfield"><label>Due date & time (IST)</label><input id="et-due" type="datetime-local" value="${localDue}"></div>
+      <small class="muted">Save karne par changes database mein save honge.</small>
+      <small class="fielderr" id="et-err"></small>
+    </div>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" id="et-save">Save changes</button></div>`);
+  $("et-save").onclick = (e) => busy(e.target, async () => {
+    const title = $("et-title").value.trim();
+    if (title.length < 2) { $("et-err").textContent = "Task instructions likhiye."; return; }
+    const phone = $("et-customer-phone").value.trim();
+    if (phone && phone.replace(/\D/g, "").length < 10) { $("et-err").textContent = "Customer phone valid nahi hai."; return; }
+    await api(`/admin/api/tasks/${encodeURIComponent(code)}`, { method: "PUT", body: {
+      title, kind: $("et-kind").value, priority: $("et-priority").value,
+      staff: $("et-staff").value || null,
+      customer_name: $("et-customer-name").value.trim() || null,
+      customer_phone: phone || null,
+      order_number: $("et-order").value.trim() || null,
+      due_at: $("et-due").value ? taskDueISO($("et-due").value) : null,
+    }});
+    closeModal(); toast("Task updated and saved"); await loadTasks();
+  });
+}
+
 function taskDetail(code) {
   const t = TASKS.find((x) => x.code === code);
   if (!t) return;
@@ -2769,6 +2814,7 @@ function taskDetail(code) {
     ${t.reply ? `<div class="tc-reply" style="margin-top:12px">💬 ${esc(t.staff || "they")}: ${esc(t.reply)}</div>` : ""}
     <div id="tt-box"></div>
     <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal();editTaskModal('${t.code}')">✏️ Edit task</button>
       <button class="btn ghost" onclick="closeModal()">Close</button>
       ${open ? `
         <button class="btn ghost" onclick="pingTask('${t.code}', this, true)">Ask again</button>
