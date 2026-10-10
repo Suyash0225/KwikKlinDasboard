@@ -196,7 +196,7 @@ def _select_customer_tools_deterministic(text: str) -> dict[str, int]:
         selected["get_customer_bills"] = 5
 
     if re.search(
-        r"\b(?:price|prices|rate|rates|cost|charge|charges|kitna|kitne|rate card|price list|laundry rate|dhulai|dry ?clean|wash|iron)\b",
+        r"\b(?:price|prices|rate|rates|cost|charge|charges|rate card|price list|laundry rate|dhulai|dry ?clean)\b",
         lowered,
     ):
         selected["get_shop_rate_card"] = 20
