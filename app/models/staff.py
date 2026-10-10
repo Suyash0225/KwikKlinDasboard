@@ -32,8 +32,6 @@ class Staff(Base, TenantScoped):
     # Staff are also WhatsApp users to Meta — same 24h window rule applies.
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    # Per-staff switch for automated AI-agent WhatsApp messaging.
-    ai_agent_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
     # --- staff panel ka login ---
     # Khali = is aadmi ka panel account bana hi nahi (sirf WhatsApp par hai).
