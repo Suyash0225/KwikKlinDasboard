@@ -21,6 +21,30 @@ async def _cleanup(sent):
         await s.commit()
 
 
+@pytest.fixture
+async def reports_enabled():
+    """Reports/export assertions need a plan that actually includes reports."""
+    async with async_session_factory() as db:
+        old_plan = (
+            await db.execute(
+                sqltext("SELECT plan FROM tenants WHERE slug = 'kwik-klin'")
+            )
+        ).scalar_one()
+        await db.execute(
+            sqltext("UPDATE tenants SET plan = 'growth' WHERE slug = 'kwik-klin'")
+        )
+        await db.commit()
+    try:
+        yield
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(
+                sqltext("UPDATE tenants SET plan = :plan WHERE slug = 'kwik-klin'"),
+                {"plan": old_plan},
+            )
+            await db.commit()
+
+
 async def test_bill_with_discount_gst_advance(client) -> None:
     body = {
         "customer_phone": PHONE,
@@ -66,7 +90,7 @@ async def test_expenses_crud_and_auth(client) -> None:
     assert not any(e["id"] == eid for e in rows)
 
 
-async def test_reports_summary_shape(client) -> None:
+async def test_reports_summary_shape(client, reports_enabled) -> None:
     r = await client.get("/admin/api/reports/summary", headers=AUTH)
     assert r.status_code == 200
     d = r.json()
@@ -190,7 +214,7 @@ async def test_staff_settings_crud(client) -> None:
             await s.commit()
 
 
-async def test_csv_exports(client) -> None:
+async def test_csv_exports(client, reports_enabled) -> None:
     assert (await client.get("/admin/api/export/orders.csv")).status_code == 401
     r = await client.get("/admin/api/export/orders.csv", headers=AUTH)
     assert r.status_code == 200
