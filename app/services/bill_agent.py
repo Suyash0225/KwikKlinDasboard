@@ -803,6 +803,7 @@ async def _handle_task_followup(
             db, sender_label,
             {**_EMPTY_EXTRACT, "relay_to": pending.target, "relay_message": text.strip()},
             sender_text=f"{pending.target} {text}", sender_phone=sender_phone,
+            message_is_user_text=True,
         )
 
     # Order wale jawab: ETA/dikkat order ke notes par chadhti hai aur owner
@@ -2996,7 +2997,7 @@ async def _compose_relay_message(
 
 async def _apply_relay(
     db: AsyncSession, sender_label: str, extracted: dict, sender_text: str = "",
-    sender_phone: str = "",
+    sender_phone: str = "", message_is_user_text: bool = False,
 ) -> str | None:
     """Route an owner instruction; staff messages must never create new tasks."""
     # A staff member's free-form message can be misclassified by the LLM as
@@ -3061,7 +3062,7 @@ async def _apply_relay(
         if not (message_words & source_words):
             _PENDING[sender_phone] = PendingRelay(target=staff.name)
             return f"{staff.name} ko kya bhejun? Message ka text bata dijiye. 🙏"
-        message = await _compose_relay_message(raw_message, "STAFF", staff.name)
+        message = raw_message if message_is_user_text else await _compose_relay_message(raw_message, "STAFF", staff.name)
         urgent = bool(_URGENT_RE.search(message))
         order = await _order_in_text(
             db, f"{raw_message} {extracted.get('order_number', '')}"
