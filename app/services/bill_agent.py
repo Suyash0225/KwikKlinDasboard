@@ -1414,6 +1414,12 @@ async def handle_staff_message(
                 return f"⏳ *{task.code}* ka response *No* record kar diya. Manager ko bata diya."
         return None
 
+    # Casual staff acknowledgements are not task updates. Short-circuit
+    # before saved order/task context can turn "ok thanks" into an unrelated
+    # reply, while preserving any active multi-turn confirmation above.
+    if sender_label != "manager" and not pending and _LOW_SIGNAL_STAFF_RE.fullmatch(text or ""):
+        return None
+
     # A staff request such as "Sunita ka bill bhejo" is a bill lookup,
     # not a new task/relay command. Resolve it before task-context handling.
     named_bill = await _staff_named_bill_lookup(
@@ -1482,12 +1488,6 @@ async def handle_staff_message(
     worklist = await _staff_worklist(db, sender_phone, sender_label, text or "")
     if worklist is not None:
         return worklist
-
-    # Short acknowledgements and greetings are not task progress. Keep them
-    # silent instead of sending an unsolicited reply; explicit task/button
-    # commands and pending confirmations were handled above.
-    if sender_label != "manager" and not pending and _LOW_SIGNAL_STAFF_RE.fullmatch(text or ""):
-        return None
 
     # Natural-language reply to the latest assigned task — task context first,
     # so staff does not need to repeat the task code.
