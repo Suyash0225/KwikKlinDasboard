@@ -2653,3 +2653,72 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   .status-modal-current { align-items: flex-start; flex-direction: column; }
   .status-modal-danger .btn { flex: 1 1 42%; }
 }
+
+
+/* Mobile overlay scroll containment: keep gestures inside the active sheet/drawer.
+   Prevent the dashboard underneath from moving while a dialog is open. */
+html.overlay-scroll-locked,
+html.overlay-scroll-locked body {
+  overscroll-behavior: none;
+}
+html.overlay-scroll-locked body {
+  position: fixed;
+  inset-inline: 0;
+  top: var(--kk-scroll-lock-top, 0);
+  width: 100%;
+  overflow: hidden;
+}
+.overlay,
+.drawer,
+.modal,
+#drawer,
+#modal-body {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+}
+.overlay {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+.modal {
+  min-height: 0;
+  max-height: min(92vh, 92dvh);
+  max-height: 92dvh;
+  overscroll-behavior: contain;
+}
+.drawer {
+  max-height: 100vh;
+  max-height: 100dvh;
+  overscroll-behavior: contain;
+}
+.overlay iframe,
+.drawer iframe,
+.modal iframe {
+  display: block;
+  max-width: 100%;
+  touch-action: pan-y;
+}
+@media (max-width: 767px) {
+  .drawer {
+    left: 0;
+    right: 0;
+    width: 100%;
+    padding: 16px;
+    padding-top: calc(16px + env(safe-area-inset-top));
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    transform: translateY(105%);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  .drawer.open { transform: none; }
+  .modal {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+}

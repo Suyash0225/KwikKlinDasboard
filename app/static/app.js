@@ -139,15 +139,43 @@ const emptyBox = (msg, ico = "🧺") => `<div class="empty"><div class="ico">${i
 const errBox = (msg, retry) => `<div class="errbox">⚠️ ${esc(msg)}<br><br><button class="btn ghost" onclick="${retry}()">${T.tryAgain}</button></div>`;
 /* Android/phone back: popup pehle band ho, phir section badle (hash), aur
    pehle section par "Exit?" poochhe — seedha app band na ho. */
+/* Lock background scrolling while any modal/drawer is open; restore exact position on close. */
+let KK_SCROLL_LOCK_Y = 0;
+let KK_SCROLL_LOCKED = false;
+function syncOverlayScrollLock() {
+  const active = !!document.querySelector(".overlay.open, #modal-ov.open, .drawer.open, #drawer.open, .modal-ov.open");
+  const root = document.documentElement;
+  if (active && !KK_SCROLL_LOCKED) {
+    KK_SCROLL_LOCK_Y = window.scrollY || window.pageYOffset || 0;
+    root.style.setProperty("--kk-scroll-lock-top", "-" + KK_SCROLL_LOCK_Y + "px");
+    root.classList.add("overlay-scroll-locked");
+    KK_SCROLL_LOCKED = true;
+  } else if (!active && KK_SCROLL_LOCKED) {
+    root.classList.remove("overlay-scroll-locked");
+    root.style.removeProperty("--kk-scroll-lock-top");
+    KK_SCROLL_LOCKED = false;
+    window.scrollTo(0, KK_SCROLL_LOCK_Y);
+  }
+}
+if (typeof MutationObserver !== "undefined") {
+  const kkOverlayObserver = new MutationObserver(syncOverlayScrollLock);
+  document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll(".overlay, #modal-ov, .drawer, #drawer, .modal-ov").forEach((node) => {
+      kkOverlayObserver.observe(node, { attributes: true, attributeFilter: ["class"] });
+    });
+    syncOverlayScrollLock();
+  }, { once: true });
+}
 const modalOpen = () => $("modal-ov") && $("modal-ov").classList.contains("open");
 function openModal(html) {
   if (!modalOpen() && !(history.state && history.state.kk === "modal")) history.pushState({ kk: "modal" }, "", location.href);
   $("modal-body").innerHTML = html;
   $("modal-ov").classList.add("open");
+  syncOverlayScrollLock();
   const first = $("modal-body").querySelector("input, select, textarea, button");
   if (first) first.focus();
 }
-function closeModal() { $("modal-ov").classList.remove("open"); }
+function closeModal() { $("modal-ov").classList.remove("open"); syncOverlayScrollLock(); }
 let EXITING = false;
 function askExit() {
   history.pushState({ kk: "nav" }, "", location.href);
@@ -1134,6 +1162,7 @@ function dateModal(number) {
 
 async function orderDetail(number) {
   $("drawer").classList.add("open");
+  syncOverlayScrollLock();
   $("drawer-body").innerHTML = skeleton(4);
   try {
     const d = await api(`/orders/${number}`);
@@ -1168,7 +1197,7 @@ async function orderDetail(number) {
       </div>`;
   } catch (e) { $("drawer-body").innerHTML = errBox(e.message, "closeDrawer"); }
 }
-function closeDrawer() { $("drawer").classList.remove("open"); }
+function closeDrawer() { $("drawer").classList.remove("open"); syncOverlayScrollLock(); }
 function jumpChat(phone) { go("inbox"); setTimeout(() => openThread(phone), 250); }
 
 /* ============================= new bill ============================= */
