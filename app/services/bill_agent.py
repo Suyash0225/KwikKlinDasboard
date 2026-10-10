@@ -464,8 +464,7 @@ async def _handle_task_button(
             )
             return (
                 f"⏳ *{task.code}* — Pending status recorded.\n"
-                "Please tell me the expected completion time, for example: "
-                "2 baje / sham tak / kal subah."
+                "Time batana: 2 baje / sham tak / kal subah."
             )
         return f"⏳ *{task.code}* — Pending status recorded. Please update again when the task is completed."
 
