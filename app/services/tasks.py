@@ -224,6 +224,8 @@ async def _send_to_assignee(
     db: AsyncSession, task: Task, staff: Staff, *, first: bool
 ) -> bool:
     """WhatsApp the assignee. False = could not deliver (logged, never raises)."""
+    if not staff.ai_agent_enabled:
+        return False
     order_bit = ""
     order_details = ""
     order = None

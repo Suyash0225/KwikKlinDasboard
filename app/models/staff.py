@@ -24,11 +24,14 @@ class Staff(Base, TenantScoped):
     role: Mapped[StaffRole] = mapped_column(Enum(StaffRole, name="staff_role"))
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # Per-staff control for automated AI-agent WhatsApp messages.
+    ai_agent_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     # Staff are also WhatsApp users to Meta — same 24h window rule applies.
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 
     # --- staff panel ka login ---
     # Khali = is aadmi ka panel account bana hi nahi (sirf WhatsApp par hai).
