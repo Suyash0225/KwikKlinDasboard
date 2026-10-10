@@ -1135,7 +1135,6 @@ class RateIn(BaseModel):
 class RateUpdateIn(BaseModel):
     rate: Decimal | None = Field(default=None, gt=0)
     is_active: bool | None = None
-    ai_agent_enabled: bool | None = None
 
 
 @router.get("/api/rates", dependencies=[Depends(require_admin_key)])
@@ -1234,6 +1233,7 @@ class StaffUpdateIn(BaseModel):
     phone: str | None = Field(default=None, min_length=6, max_length=20)
     role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY|SUPERVISOR|MANAGER|ADMIN)$")
     is_active: bool | None = None
+    ai_agent_enabled: bool | None = None
 
 
 async def _active_order_count(db: AsyncSession, staff_id: uuid_module.UUID) -> int:
