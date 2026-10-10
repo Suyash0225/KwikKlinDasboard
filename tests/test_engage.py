@@ -36,12 +36,18 @@ async def _autonomous_marketing():
     """Nudge tests must explicitly opt into autonomous marketing."""
     async with async_session_factory() as db:
         previous = await app_settings.get(db, "marketing_autonomy")
+        previous_enabled = await app_settings.get(db, "engage_followups_enabled")
         await app_settings.set_value(db, "marketing_autonomy", "auto")
+        await app_settings.set_value(db, "engage_followups_enabled", True)
     try:
         yield
     finally:
         async with async_session_factory() as db:
             await app_settings.set_value(db, "marketing_autonomy", previous or "suggest")
+            await app_settings.set_value(
+                db, "engage_followups_enabled",
+                previous_enabled if previous_enabled is not None else False,
+            )
 
 
 async def _talking_customer(hours_ago: float, *, name="Chup Grahak") -> Customer:
