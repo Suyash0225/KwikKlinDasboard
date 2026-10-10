@@ -364,7 +364,7 @@ async def test_media_opens_for_a_logged_in_owner(client) -> None:
 
     media_dir = Path("app/media")
     media_dir.mkdir(exist_ok=True)
-    test_file = media_dir / "test-session-media.jpg"
+    test_file = media_dir / "in-0123456789abcdef0123456789abcdef.jpg"
     test_file.write_bytes(b"fake-jpg-bytes")
 
     async with async_session_factory() as s:
@@ -398,7 +398,7 @@ async def test_media_opens_for_a_logged_in_owner(client) -> None:
 
     try:
         # bina kuch diye -> 401
-        assert (await client.get("/admin/media/test-session-media.jpg")).status_code == 401
+        assert (await client.get("/admin/media/in-0123456789abcdef0123456789abcdef.jpg")).status_code == 401
         # sirf login se -> khul jaaye
         client.cookies.set(auth.SESSION_COOKIE, token)
         r = await client.get("/admin/media/test-session-media.jpg")
@@ -418,10 +418,10 @@ async def test_media_serve_requires_key(client) -> None:
     test_file.write_bytes(b"fake-jpg-bytes")
     try:
         assert (await client.get("/admin/media/test-qa.jpg")).status_code == 401
-        r = await client.get("/admin/media/test-qa.jpg", headers=AUTH)
+        r = await client.get(f"/admin/media/test-qa.jpg?key={settings.ADMIN_API_KEY}")
         assert r.status_code == 200
         # traversal must not escape the media dir
-        r2 = await client.get("/admin/media/..%2F..%2F.env", headers=AUTH)
+        r2 = await client.get(f"/admin/media/..%2F..%2F.env?key={settings.ADMIN_API_KEY}")
         assert r2.status_code == 404
     finally:
         test_file.unlink(missing_ok=True)
