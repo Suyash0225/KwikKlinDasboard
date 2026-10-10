@@ -181,7 +181,7 @@ async def test_staff_message_goes_to_staff_row_no_ack(client, sent, test_washer)
             "from": TEST_WASHER_PHONE_RAW,
             "id": "wamid.TEST-ravi",
             "type": "text",
-            "text": {"body": "aaj 5 order complete"},
+            "text": {"body": "ok thanks"},
         }]
     )
     r = await client.post("/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)})
