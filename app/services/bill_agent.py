@@ -227,7 +227,7 @@ class PendingOrderIssue:
 
 
 # sender phone -> action awaiting 'haan' (a bill draft or a payment)
-_PENDING: dict[str, PendingBill | PendingPayment] = {}
+_PENDING: dict[str, PendingBill | PendingPayment | PendingRelay | PendingTaskEta | PendingTaskIssue | PendingOrderEta | PendingOrderIssue] = {}
 
 # owner's WhatsApp sandbox: phone -> {"last_q": last test question}
 # ('test customer' se on, 'test band' se off; sikhao: se Correction banti hai)
@@ -1294,6 +1294,18 @@ async def handle_staff_message(
     if pending and pending.expired:
         _PENDING.pop(sender_phone, None)
         pending = None
+
+    # A relay without message text is a two-turn flow. The next owner message
+    # is the exact text to relay; handle it deterministically before any LLM
+    # classification so we never substitute a previous bot response.
+    if isinstance(pending, PendingRelay) and sender_label == "manager" and text and not text.startswith("["):
+        _PENDING.pop(sender_phone, None)
+        return await _apply_relay(
+            db, sender_label,
+            {**_EMPTY_EXTRACT, "relay_to": pending.target, "relay_message": text.strip(),
+             "recipient_type": "STAFF"},
+            sender_text=f"{pending.target} {text}", sender_phone=sender_phone,
+        )
 
     # Fixed-choice confirmations are deterministic and handled before the LLM.
     fixed = _FIXED_BTN_RE.match(text or "")
@@ -3047,6 +3059,7 @@ async def _apply_relay(
             if len(word) >= 3 and word not in ignored and word not in target_words
         }
         if not (message_words & source_words):
+            _PENDING[sender_phone] = PendingRelay(target=staff.name)
             return f"{staff.name} ko kya bhejun? Message ka text bata dijiye. 🙏"
         message = await _compose_relay_message(raw_message, "STAFF", staff.name)
         urgent = bool(_URGENT_RE.search(message))
