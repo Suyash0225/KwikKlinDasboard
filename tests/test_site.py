@@ -66,8 +66,12 @@ async def test_rate_change_in_crm_reaches_the_site() -> None:
         page = await site_rates.render("{{RATE_PANELS}}")
         assert '<li data-price="₹321">Zzsitetest Jacket</li>' in page
 
-        row.rate = Decimal("654")
-        await db.commit()
+        async with tenant_context.as_tenant(home):
+            async with async_session_factory() as db:
+                fresh = await db.get(Rate, rid)
+                assert fresh is not None
+                fresh.rate = Decimal("654")
+                await db.commit()
         # Dashboard save ke baad website ka cached rate turant invalidate hota hai.
         site_rates.invalidate_cache()
         page = await site_rates.render("{{RATE_PANELS}}")

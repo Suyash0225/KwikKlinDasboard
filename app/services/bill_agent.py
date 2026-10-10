@@ -227,7 +227,7 @@ class PendingOrderIssue:
 
 
 # sender phone -> action awaiting 'haan' (a bill draft or a payment)
-_PENDING: dict[str, PendingBill | PendingPayment] = {}
+_PENDING: dict[str, PendingBill | PendingPayment | PendingRelay | PendingTaskEta | PendingTaskIssue | PendingOrderEta | PendingOrderIssue] = {}
 
 # owner's WhatsApp sandbox: phone -> {"last_q": last test question}
 # ('test customer' se on, 'test band' se off; sikhao: se Correction banti hai)
@@ -337,6 +337,8 @@ _TASK_BTN_RE = re.compile(
     r"^\s*\[button:task:(T-?\d+):(done|later|problem|wash|iron|ready|pending)\]",
     re.I,
 )
+# WAHA list menus use row IDs rather than Meta button IDs.
+_JOB_BTN_RE = re.compile(r"^\s*\[button:job_(yes|no):(T-?\d+)\]", re.I)
 # List se chuna gaya kaam ("pick:o:KK-...", "pick:t:T-11") aur order card ke
 # apne teen button. Order ke button ko pehle parkha jata hai — warna
 # "ord:KK-..:done" ko pick samajh liya jata.
@@ -347,7 +349,7 @@ _ORDER_BTN_RE = re.compile(r"^\s*\[button:ord:(KK-\S+?):(done|later|problem)\]",
 # Handle them before the contextual task classifier and generic extractor so
 # casual staff chat does not consume one or two model calls.
 _LOW_SIGNAL_STAFF_RE = re.compile(
-    r"^\s*(?:ok(?:ay)?|thanks?|thank\s+you|thx|welcome|good\s+morning|"
+    r"^\s*(?:ok(?:ay)?(?:\s+thanks?)?|thanks?|thank\s+you|thx|welcome|good\s+morning|"
     r"good\s+evening|good\s+night|hi|hello|hey|namaste|theek\s+hai|"
     r"thik\s+hai|achha|acha)\s*[!.?,🙏🙂👍]*\s*$",
     re.I,
@@ -407,11 +409,15 @@ async def _handle_task_button(
     db: AsyncSession, sender_phone: str, sender_label: str, text: str
 ) -> str | None:
     """Handle deterministic task-menu replies. None means this is not a task menu."""
-    m = _TASK_BTN_RE.match(text or "")
-    if not m:
-        return None
-
-    code, action = m.group(1).upper(), m.group(2).lower()
+    job_choice = _JOB_BTN_RE.match(text or "")
+    if job_choice:
+        code = job_choice.group(2).upper()
+        action = "done" if job_choice.group(1).lower() == "yes" else "pending"
+    else:
+        m = _TASK_BTN_RE.match(text or "")
+        if not m:
+            return None
+        code, action = m.group(1).upper(), m.group(2).lower()
     from app.services import tasks as task_service, team
 
     task = await task_service.get_by_code(db, code)
@@ -458,8 +464,7 @@ async def _handle_task_button(
             )
             return (
                 f"⏳ *{task.code}* — Pending status recorded.\n"
-                "Please tell me the expected completion time, for example: "
-                "2 baje / sham tak / kal subah."
+                "Time batana: 2 baje / sham tak / kal subah."
             )
         return f"⏳ *{task.code}* — Pending status recorded. Please update again when the task is completed."
 
@@ -803,6 +808,7 @@ async def _handle_task_followup(
             db, sender_label,
             {**_EMPTY_EXTRACT, "relay_to": pending.target, "relay_message": text.strip()},
             sender_text=f"{pending.target} {text}", sender_phone=sender_phone,
+            message_is_user_text=True,
         )
 
     # Order wale jawab: ETA/dikkat order ke notes par chadhti hai aur owner
@@ -1089,6 +1095,18 @@ async def _staff_reference_lookup(
         return None
 
     raw = text.strip()
+    # Explicit status-change language must reach the action handler, where
+    # role authorization is enforced. Do not misclassify "delivery pe nikal
+    # gaya" as a passive request for order details.
+    if re.search(
+        r"\b(?:status\s*(?:update|change)?|out\s+for\s+delivery|"
+        r"delivery\s+pe\s+nikal(?:\s+gaya|\s+gayi)?|"
+        r"(?:delivery|deliver)\s+ho\s+gaya|"
+        r"mark\s+(?:as\s+)?(?:ready|delivered))\b",
+        raw, re.I,
+    ):
+        return None
+
     task_match = _TASK_REF_RE.search(raw)
     order_match = _ORDER_REF_RE_STAFF.search(raw)
 
@@ -1140,7 +1158,7 @@ async def _staff_reference_lookup(
             Decimal("0"),
         )
 
-        if re.search(r"kahan|pata|address|location|pickup|delivery", low):
+        if re.search(r"kahan|pata|address|location|jagah", low):
             place = address or "Address database mein save nahi hai."
             return (
                 f"📍 *{task.code} — Location*\n"
@@ -1185,7 +1203,7 @@ async def _staff_reference_lookup(
         Decimal("0"),
     )
 
-    if re.search(r"kahan|pata|address|location|pickup|delivery", low):
+    if re.search(r"kahan|pata|address|location|jagah", low):
         return (
             f"📍 *{order.order_number} — Location*\n"
             f"*Customer:* {customer_name}\n"
@@ -1295,6 +1313,19 @@ async def handle_staff_message(
         _PENDING.pop(sender_phone, None)
         pending = None
 
+    # A relay without message text is a two-turn flow. The next owner message
+    # is the exact text to relay; handle it deterministically before any LLM
+    # classification so we never substitute a previous bot response.
+    if isinstance(pending, PendingRelay) and sender_label == "manager" and text and not text.startswith("["):
+        _PENDING.pop(sender_phone, None)
+        return await _apply_relay(
+            db, sender_label,
+            {**_EMPTY_EXTRACT, "relay_to": pending.target, "relay_message": text.strip(),
+             "recipient_type": "STAFF"},
+            sender_text=f"{pending.target} {text}", sender_phone=sender_phone,
+            message_is_user_text=True,
+        )
+
     # Fixed-choice confirmations are deterministic and handled before the LLM.
     fixed = _FIXED_BTN_RE.match(text or "")
     if fixed:
@@ -1383,6 +1414,12 @@ async def handle_staff_message(
                 return f"⏳ *{task.code}* ka response *No* record kar diya. Manager ko bata diya."
         return None
 
+    # Casual staff acknowledgements are not task updates. Short-circuit
+    # before saved order/task context can turn "ok thanks" into an unrelated
+    # reply, while preserving any active multi-turn confirmation above.
+    if sender_label != "manager" and not pending and _LOW_SIGNAL_STAFF_RE.fullmatch(text or ""):
+        return None
+
     # A staff request such as "Sunita ka bill bhejo" is a bill lookup,
     # not a new task/relay command. Resolve it before task-context handling.
     named_bill = await _staff_named_bill_lookup(
@@ -1451,13 +1488,6 @@ async def handle_staff_message(
     worklist = await _staff_worklist(db, sender_phone, sender_label, text or "")
     if worklist is not None:
         return worklist
-
-    # Short acknowledgements and greetings are not task progress. Reply
-    # deterministically and avoid invoking both task classification and the
-    # generic command extractor for casual chat. Pending confirmations and
-    # explicit task/button commands have already been handled above.
-    if sender_label != "manager" and not pending and _LOW_SIGNAL_STAFF_RE.fullmatch(text or ""):
-        return "Ji, theek hai. Kaam ka update ho to task button ya task code bhej dein."
 
     # Natural-language reply to the latest assigned task — task context first,
     # so staff does not need to repeat the task code.
@@ -1542,7 +1572,9 @@ async def handle_staff_message(
             title="Bill confirmation",
         )
         if sent:
-            reply = None
+            # The menu was delivered directly; stop here so the manager's
+            # generic fallback does not send a second, unrelated help message.
+            return None
     elif action == "delay_update":
         reply = await _apply_delay(db, sender_label, extracted)
     elif action == "status_update":
@@ -2982,7 +3014,7 @@ async def _compose_relay_message(
 
 async def _apply_relay(
     db: AsyncSession, sender_label: str, extracted: dict, sender_text: str = "",
-    sender_phone: str = "",
+    sender_phone: str = "", message_is_user_text: bool = False,
 ) -> str | None:
     """Route an owner instruction; staff messages must never create new tasks."""
     # A staff member's free-form message can be misclassified by the LLM as
@@ -2995,8 +3027,14 @@ async def _apply_relay(
     target = (extracted.get("relay_to") or "").strip()
     raw_message = (extracted.get("relay_message") or "").strip()
     recipient_type = (extracted.get("recipient_type") or "UNKNOWN").strip().upper()
-    if not raw_message:
-        return get_message("staff_cmd_unknown")
+
+    # The extractor is not the source of truth: never relay to a person whose
+    # name the manager did not actually mention in the incoming message.
+    source_text = (sender_text or "").casefold()
+    if target and source_text and target.casefold() not in source_text:
+        staff_rows = (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
+        names = ", ".join(s.name for s in staff_rows if s.name) or "-"
+        return f"Kisko bhejun? Message mein recipient ka naam nahi mila. Staff: {names} 🙏"
 
     if recipient_type == "UNKNOWN":
         staff_rows = (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
@@ -3013,7 +3051,8 @@ async def _apply_relay(
         elif target.lower() in {"customer", "grahak", "buyer", "client"}:
             recipient_type = "CUSTOMER"
         else:
-            return "Kisko bhejna hai? Customer ya staff ka naam bata dijiye. 🙏"
+            names = ", ".join(s.name for s in staff_rows if s.name) or "-"
+            return f"'{target or 'Naam'}' staff mein nahi mila. Customer ya staff ka sahi naam bataiye. Staff: {names} 🙏"
 
     if recipient_type == "STAFF":
         staff_rows = (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
@@ -3028,7 +3067,19 @@ async def _apply_relay(
             return f"Kis staff member ko bhejna hai? Naam bata dijiye. 🙏\nStaff: {names}"
 
         staff = matches[0]
-        message = await _compose_relay_message(raw_message, "STAFF", staff.name)
+        # If the user only said "send it to <name>", do not turn a stale bot
+        # response or previous note into the message being relayed.
+        ignored = {"message", "bhejo", "bhej", "bolo", "bata", "batao", "ko", "do", "please", "send", "tell", "karo"}
+        source_words = set(re.findall(r"[a-z0-9]+", source_text))
+        target_words = set(re.findall(r"[a-z0-9]+", target.casefold()))
+        message_words = {
+            word for word in re.findall(r"[a-z0-9]+", raw_message.casefold())
+            if len(word) >= 3 and word not in ignored and word not in target_words
+        }
+        if source_text and not (message_words & source_words):
+            _PENDING[sender_phone] = PendingRelay(target=staff.name)
+            return f"{staff.name} ko kya bhejun? Message ka text bata dijiye. 🙏"
+        message = raw_message if message_is_user_text else await _compose_relay_message(raw_message, "STAFF", staff.name)
         urgent = bool(_URGENT_RE.search(message))
         order = await _order_in_text(
             db, f"{raw_message} {extracted.get('order_number', '')}"

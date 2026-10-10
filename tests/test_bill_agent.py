@@ -17,6 +17,7 @@ from tests.conftest import TEST_WASHER_NAME, TEST_WASHER_PHONE
 SENDER = "+911111100001"          # pretend staff/manager phone
 CUST_PHONE = "+919999900124"      # bill target customer
 SERVICE = "TestServiceX"          # our own rate rows -> deterministic pricing
+SERVICE_ALT = "TestDryCleanX"
 
 
 def _extract_result(**overrides) -> dict:
@@ -54,8 +55,13 @@ async def _setup_and_cleanup():
     await purge_phones(CUST_PHONE)  # crashed earlier runs must not poison this one
     async with async_session_factory() as s:
         # idempotent: a crashed earlier run may have left the row behind
-        await s.execute(sqltext(f"DELETE FROM rate_card WHERE service = '{SERVICE}'"))
+        await s.execute(
+            sqltext("DELETE FROM rate_card WHERE service IN (:service, :service_alt)"),
+            {"service": SERVICE, "service_alt": SERVICE_ALT},
+        )
         s.add(Rate(service=SERVICE, garment="Kurta", unit="pc", rate=40))
+        s.add(Rate(service=SERVICE_ALT, garment="Kurta", unit="pc", rate=50))
+        s.add(Rate(service=SERVICE_ALT, garment="Sherwani", unit="pc", rate=300))
         await s.commit()
     yield
     _PENDING.clear()
@@ -63,7 +69,10 @@ async def _setup_and_cleanup():
 
     await purge_phones(CUST_PHONE)
     async with async_session_factory() as s:
-        await s.execute(sqltext(f"DELETE FROM rate_card WHERE service = '{SERVICE}'"))
+        await s.execute(
+            sqltext("DELETE FROM rate_card WHERE service IN (:service, :service_alt)"),
+            {"service": SERVICE, "service_alt": SERVICE_ALT},
+        )
         await s.commit()
 
 
@@ -164,7 +173,7 @@ async def test_confirm_without_phone_keeps_draft(monkeypatch) -> None:
     assert SENDER in _PENDING  # draft survives until a phone arrives
 
 
-async def test_unknown_item_not_priced(monkeypatch) -> None:
+async def test_unknown_item_not_priced(monkeypatch, sent) -> None:
     _patch_extract(
         monkeypatch,
         _extract_result(
@@ -177,8 +186,10 @@ async def test_unknown_item_not_priced(monkeypatch) -> None:
         reply = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="manager", text="1 spacesuit"
         )
-    assert "rate card mein nahi" in reply
-    assert "Total: ₹0" in reply
+    assert reply is None  # the draft text is delivered with the confirmation menu
+    menu = next(m for m in sent if m.get("list_rows") and m["to"] == SENDER)
+    assert "rate card mein nahi" in menu["text"]
+    assert "Total: ₹0" in menu["text"]
 
 
 async def test_delay_update_writes_db_first_and_hides_reason(monkeypatch, sent) -> None:
@@ -308,7 +319,7 @@ async def test_relay_to_known_staff_becomes_a_tracked_task(
     calls: list[dict] = []
 
     async def fake_send(db, *, to_phone, text=None, **kw):
-        calls.append({"to": to_phone, "text": text})
+        calls.append({"to": to_phone, "text": text, "list_rows": kw.get("list_rows")})
         return "wamid.RELAY"
 
     monkeypatch.setattr(tasks_module, "send_message", fake_send)
@@ -317,21 +328,36 @@ async def test_relay_to_known_staff_becomes_a_tracked_task(
         _extract_result(
             action="relay",
             relay_to=TEST_WASHER_NAME,
-            relay_message="naya order aya hai, ready ho jao",
+            relay_message="naya order aya, kapde receive kar lena",
         ),
     )
+    from app.models import Staff
+    from app.services import tenant_context
+
     async with async_session_factory() as db:
-        reply = await handle_staff_message(
-            db,
-            sender_phone=SENDER,
-            sender_label="manager",
-            text=f"{TEST_WASHER_NAME} ko bata do order aya",
-        )
+        worker = await db.get(Staff, test_washer)
+        assert worker is not None
+        tenant_id = worker.tenant_id
+    tenant_token = tenant_context.current_tenant_id.set(tenant_id)
+    try:
+        async with async_session_factory() as db:
+            reply = await handle_staff_message(
+                db,
+                sender_phone=SENDER,
+                sender_label="manager",
+                text=f"{TEST_WASHER_NAME} ko bata do order aya",
+            )
+    finally:
+        tenant_context.current_tenant_id.reset(tenant_token)
     assert reply.startswith("✅") and TEST_WASHER_NAME in reply
     assert "T-" in reply, "the owner gets a code he can follow up on"
     assert calls and calls[0]["to"] == TEST_WASHER_PHONE
-    assert "naya order aya hai" in calls[0]["text"]
-    assert "done T-" in calls[0]["text"], "the assignee must know how to close it"
+    assert "naya order aya" in calls[0]["text"]
+    rows = calls[0]["list_rows"] or []
+    assert rows, "the assignee must receive a tappable task-status menu"
+    assert any("T-" in row.id and ("done" in row.id.lower() or "yes" in row.id.lower()) for row in rows), (
+        "the assignee must have a row that closes the assigned task"
+    )
 
 
 async def test_relay_unknown_target_lists_staff(monkeypatch, test_washer) -> None:
@@ -453,7 +479,7 @@ def _with_photo(monkeypatch, result: dict, seen: dict | None = None):
     return photo
 
 
-async def test_bill_from_photo(monkeypatch) -> None:
+async def test_bill_from_photo(monkeypatch, sent) -> None:
     seen: dict = {}
     photo = _with_photo(
         monkeypatch,
@@ -473,7 +499,9 @@ async def test_bill_from_photo(monkeypatch) -> None:
     finally:
         photo.unlink(missing_ok=True)
 
-    assert reply is not None and "₹120" in reply and "Photo Grahak" in reply
+    assert reply is None
+    menu = next(m for m in sent if m.get("list_rows") and m["to"] == SENDER)
+    assert "₹120" in menu["text"] and "Photo Grahak" in menu["text"]
     assert seen["image_bytes"] == b"fake-jpg"
     assert "Bill bnao iska" in seen["user_text"]
     assert SENDER in _PENDING  # confirm loop still required
@@ -500,7 +528,7 @@ async def test_photo_unreadable_asks_instead_of_inventing(monkeypatch) -> None:
     assert SENDER not in _PENDING  # nothing invented, nothing staged
 
 
-async def test_photo_unknown_garment_is_flagged_not_swapped(monkeypatch) -> None:
+async def test_photo_unknown_garment_is_flagged_not_swapped(monkeypatch, sent) -> None:
     """An item that isn't on the rate card keeps the slip's own word."""
     photo = _with_photo(
         monkeypatch,
@@ -522,18 +550,20 @@ async def test_photo_unknown_garment_is_flagged_not_swapped(monkeypatch) -> None
     finally:
         photo.unlink(missing_ok=True)
 
-    assert reply is not None
+    assert reply is None
+    menu = next(m for m in sent if m.get("list_rows") and m["to"] == SENDER)
+    draft_text = menu["text"]
     # unknown word survives as written, marked — never turned into a shirt
-    assert "Topi" in reply and "⚠️" in reply and "❓" in reply
-    assert "Shirt" not in reply and "Pant" not in reply
+    assert "Topi" in draft_text and "⚠️" in draft_text and "❓" in draft_text
+    assert "Shirt" not in draft_text and "Pant" not in draft_text
     # a plural spelling still finds its single rate-card row
-    assert "Sherwani" in reply and "₹300" in reply
+    assert "Sherwani" in draft_text and "₹300" in draft_text
     draft = _PENDING[SENDER].draft
     assert [i["garment"] for i in draft["items"]] == ["Topi", "Sherwani"]
     assert draft["total"] == 300                 # unpriced item adds nothing
 
 
-async def test_photo_ambiguous_service_asks_which_one(monkeypatch) -> None:
+async def test_photo_ambiguous_service_asks_which_one(monkeypatch, sent) -> None:
     """Kurta exists under several services — ask, don't pick one."""
     photo = _with_photo(
         monkeypatch,
@@ -551,8 +581,10 @@ async def test_photo_ambiguous_service_asks_which_one(monkeypatch) -> None:
     finally:
         photo.unlink(missing_ok=True)
 
-    assert reply is not None and "kaunsi service" in reply
-    assert "Dry Clean" in reply and SERVICE in reply
+    assert reply is None
+    menu = next(m for m in sent if m.get("list_rows") and m["to"] == SENDER)
+    assert "kaunsi service" in menu["text"]
+    assert SERVICE_ALT in menu["text"] and SERVICE in menu["text"]
     assert _PENDING[SENDER].draft["total"] == 0  # never guesses a price
 
 
@@ -669,7 +701,7 @@ async def test_llm_down_notifies_manager_but_not_staff(monkeypatch) -> None:
         staff_reply = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="Ravi", text="Sharma 2 kurta"
         )
-    assert manager_reply is not None and "uplabdh nahi" in manager_reply
+    assert manager_reply is not None and "AI response" in manager_reply
     assert staff_reply is None
 
 

@@ -136,7 +136,7 @@ async def test_dotpe_button_reply_preserves_payload(client, sent) -> None:
 
 # --- provider switch in the send door ---
 
-async def test_send_door_routes_to_dotpe(monkeypatch) -> None:
+async def test_send_door_rejects_disabled_dotpe_provider(monkeypatch) -> None:
     calls: list[dict] = []
 
     async def fake_text(to_phone: str, body: str) -> str:
@@ -151,21 +151,10 @@ async def test_send_door_routes_to_dotpe(monkeypatch) -> None:
     async with async_session_factory() as db:
         db.add(Customer(phone=PHONE, last_message_at=datetime.now(timezone.utc)))
         await db.commit()
-        wa_id = await send_message(db, to_phone=PHONE, text="namaste")
+        with pytest.raises(SendError, match="only enabled WhatsApp provider"):
+            await send_message(db, to_phone=PHONE, text="namaste")
 
-    assert wa_id == "dotpe:kk-test"
-    # customer ko jaane wale har automated message par AI sign lagta hai —
-    # provider badalne se wo niyam nahi badalta
-    assert len(calls) == 1 and calls[0]["to"] == PHONE
-    assert calls[0]["body"].startswith("namaste")
-    assert AI_SIGNATURE in calls[0]["body"]
-    async with async_session_factory() as s:
-        conv = (
-            await s.execute(
-                select(Conversation).where(Conversation.wa_message_id == "dotpe:kk-test")
-            )
-        ).scalar_one()
-        assert conv.message_text.startswith("namaste")
+    assert calls == [], "disabled DotPe provider must never be called"
 
 
 async def test_dotpe_provider_rejects_buttons(monkeypatch) -> None:
@@ -175,7 +164,7 @@ async def test_dotpe_provider_rejects_buttons(monkeypatch) -> None:
     async with async_session_factory() as db:
         db.add(Customer(phone=PHONE, last_message_at=datetime.now(timezone.utc)))
         await db.commit()
-        with pytest.raises(SendError, match="buttons"):
+        with pytest.raises(SendError, match="only enabled WhatsApp provider"):
             await send_message(
                 db, to_phone=PHONE, text="choose",
                 buttons=[Button("a", "A")],

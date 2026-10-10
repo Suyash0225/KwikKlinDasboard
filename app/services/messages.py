@@ -531,6 +531,8 @@ def get_message(key: str, lang: str | None = None, **fmt: str) -> str:
     lang = lang or lang_for(key)
     text = _OVERRIDES.get(key) or by_lang.get(lang) or by_lang.get(DEFAULT_LANG) or by_lang["en"]
     fmt.setdefault("shop", settings.SHOP_NAME)
+    # Bill links are optional; older callers may not provide one.
+    fmt.setdefault("bill_line", "")
     return text.format(**fmt)
 
 

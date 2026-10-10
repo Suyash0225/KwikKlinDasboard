@@ -10,7 +10,8 @@ def test_pickup_billing_reuses_existing_staff_bill_ui():
     assert '/bill-context' in js
     assert "pickup_task_code" in js
     assert 'function showNewBill()' in js
-    assert 'id="b-save"' in html
+    # The existing bill UI is rendered from staff.js, not static staff.html.
+    assert 'id="b-save"' in js
 
 
 def test_pickup_billing_backend_is_linked_to_existing_bill_endpoint():

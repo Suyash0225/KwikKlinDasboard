@@ -241,9 +241,13 @@ async def test_dunning_reminder_ladder_idempotent(client, monkeypatch) -> None:
 # ------------------------------------------------------ limits and usage --
 
 async def test_order_monthly_limit_enforced(client) -> None:
-    orig = plans.PLANS["growth"]
-    plans.PLANS["growth"] = dataclasses.replace(orig, max_orders_month=0)
+    # The CI home tenant may use any valid plan. Set the order limit to zero
+    # for every plan so this test exercises server-side enforcement without
+    # assuming the home shop is on "growth".
+    original = dict(plans.PLANS)
     try:
+        for code, plan in original.items():
+            plans.PLANS[code] = dataclasses.replace(plan, max_orders_month=0)
         r = await client.post("/orders", headers=SHOP_AUTH, json={
             "customer_phone": "+919999900054",
             "items": [{"type": "shirt", "qty": 1}],
@@ -252,7 +256,8 @@ async def test_order_monthly_limit_enforced(client) -> None:
         # mamla hai — dashboard 402 par hi Upgrade prompt dikhata hai.
         assert r.status_code == 402 and "Upgrade" in r.json()["detail"]
     finally:
-        plans.PLANS["growth"] = orig
+        plans.PLANS.clear()
+        plans.PLANS.update(original)
     # purge_phones FK ka sahi kram jaanta hai (orders, payments, tasks...
     # phir customer). Seedha "DELETE FROM customers" tab girta hai jab is
     # number par koi order pada ho — aur wajah agle test mein dikhti hai.
@@ -267,7 +272,20 @@ async def test_tenant_list_shows_usage_vs_limit(client) -> None:
     u = home["usage"]
     assert set(u) >= {"orders_month", "orders_limit", "wa_msgs_month",
                       "wa_limit", "staff", "staff_limit"}
-    assert u["staff"] >= 1  # asli shop ke staff hain
+    # CI starts with an empty home-shop staff table; compare the API usage
+    # with the database rather than assuming production staff exist in fixtures.
+    async with async_session_factory() as db:
+        staff_count = (
+            await db.execute(
+                sqltext(
+                    "SELECT count(*) FROM staff WHERE tenant_id = "
+                    "(SELECT id FROM tenants WHERE slug = :slug)"
+                ),
+                {"slug": "kwik-klin"},
+            )
+        ).scalar_one()
+    assert u["staff"] == staff_count
+    assert u["staff_limit"] >= u["staff"]
     assert "trial_warning" in home and home["trial_warning"] is False
 
 

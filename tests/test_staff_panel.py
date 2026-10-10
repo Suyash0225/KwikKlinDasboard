@@ -1747,7 +1747,7 @@ async def test_today_counts_late_work_the_same_way_the_list_does(
 
 
 async def test_only_a_manager_can_send_a_payment_reminder(
-    client, two_shops, sent
+    client, two_shops, sent, monkeypatch
 ) -> None:
     """Bill delivery wala bana sakta hai, par paisa maangna manager ka kaam.
 
@@ -1772,10 +1772,25 @@ async def test_only_a_manager_can_send_a_payment_reminder(
         )).status_code == 403, "washerman bhi nahi"
 
         await _login(client, A_MGR_PHONE)          # manager
+        from app.services import whatsapp
+
+        reminder_sends = []
+
+        async def _capture_reminder(db, *, to_phone, text=None, **kwargs):
+            reminder_sends.append({"to": to_phone, "text": text})
+            return "wamid.TEST-reminder"
+
+        monkeypatch.setattr(whatsapp, "send_message", _capture_reminder)
         r = await client.post(f"/staff/api/orders/{bill['order_number']}/remind")
         assert r.status_code == 200, r.text
-        # Aur wo message ANGREZI mein ho — dashboard ke reminder jaisa,
-        # taaki grahak ko pata na chale ki kisne yaad dilaya.
-        assert "pending" in (r.json()["text"] or "").lower(), r.json()["text"]
+        # API send successful ho to duplicate text return nahi hota; inspect
+        # the recorded outbound message. If the API failed, the fallback text
+        # is returned for the staff member's WhatsApp link.
+        payload = r.json()
+        if payload["sent"]:
+            assert payload["text"] is None
+            assert reminder_sends and "pending" in reminder_sends[-1]["text"].lower()
+        else:
+            assert "pending" in (payload["text"] or "").lower(), payload["text"]
     finally:
         await _drop_rate()

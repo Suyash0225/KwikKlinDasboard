@@ -10,7 +10,7 @@ Teen shikayatein jo ye file pakadti hai:
 """
 
 import pytest
-from sqlalchemy import select, text as sqltext
+from sqlalchemy import delete, select, text as sqltext
 
 from app.database import async_session_factory
 from app.models import Order, OrderStatus, Staff, StaffRole, Task
@@ -413,18 +413,27 @@ async def test_a_bill_that_needs_pickup_reaches_the_delivery_boy(
 
 
 async def test_staff_can_lookup_task_bill_and_follow_up(
-    client, test_washer, two_shops, sent  # noqa: F811
+    client, two_shops, sent  # noqa: F811
 ) -> None:
     """Staff can ask a task/bill reference and then ask a context-only follow-up."""
     from app.models import Customer
     from app.services import tasks as task_service
     from app.services.bill_agent import handle_staff_message
-    from tests.conftest import TEST_WASHER_NAME, TEST_WASHER_PHONE
+    from tests.conftest import TEST_WASHER_NAME
 
+    staff_phone = "+919999901233"
     tok = tenant_context.current_tenant_id.set(two_shops["a"])
     try:
         async with async_session_factory() as db:
-            staff = await db.get(Staff, test_washer)
+            # Seed the worker in the same tenant as the order. The global
+            # test_washer fixture belongs to the home tenant and is invisible
+            # under shop A's row-level security context.
+            staff = Staff(
+                phone=staff_phone, name=TEST_WASHER_NAME,
+                role=StaffRole.WASHER, is_active=True,
+            )
+            db.add(staff)
+            await db.flush()
             customer = Customer(
                 phone="+919999901234",
                 name="Keeran",
@@ -452,7 +461,7 @@ async def test_staff_can_lookup_task_bill_and_follow_up(
 
             reply = await handle_staff_message(
                 db,
-                sender_phone=TEST_WASHER_PHONE,
+                sender_phone=staff_phone,
                 sender_label=TEST_WASHER_NAME,
                 text=f"{task.code} kis jagah ka pickup hai?",
             )
@@ -461,7 +470,7 @@ async def test_staff_can_lookup_task_bill_and_follow_up(
 
             reply = await handle_staff_message(
                 db,
-                sender_phone=TEST_WASHER_PHONE,
+                sender_phone=staff_phone,
                 sender_label=TEST_WASHER_NAME,
                 text="aur kitne pcs hain?",
             )
@@ -469,10 +478,18 @@ async def test_staff_can_lookup_task_bill_and_follow_up(
 
             reply = await handle_staff_message(
                 db,
-                sender_phone=TEST_WASHER_PHONE,
+                sender_phone=staff_phone,
                 sender_label=TEST_WASHER_NAME,
                 text="bill number kya hai?",
             )
             assert "KK-20260923-77" in reply
     finally:
+        async with async_session_factory() as db:
+            staff_row = (
+                await db.execute(select(Staff).where(Staff.phone == staff_phone))
+            ).scalar_one_or_none()
+            if staff_row is not None:
+                await db.execute(delete(Task).where(Task.assigned_staff_id == staff_row.id))
+                await db.delete(staff_row)
+                await db.commit()
         tenant_context.current_tenant_id.reset(tok)

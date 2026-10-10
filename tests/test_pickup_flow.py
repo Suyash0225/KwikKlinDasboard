@@ -104,11 +104,15 @@ async def test_boys_answer_becomes_the_customers_promise(boy, sent) -> None:
     assert "Ajitram" in body and PICKUP_STAFF_PHONE in body, "name AND number"
     assert num in body
 
-    # and he is asked to confirm, with buttons
-    with_buttons = [c for c in sent if c.get("buttons")]
-    assert with_buttons, "Yes/No buttons must follow"
-    titles = [b.title for b in with_buttons[0]["buttons"]]
-    assert any("Haan" in t for t in titles) and any("Abhi nahi" in t for t in titles)
+    # Staff gets tappable completion actions; the customer gets the promise.
+    staff_choices = [
+        message for message in sent
+        if message["to"] == PICKUP_STAFF_PHONE and message.get("list_rows")
+    ]
+    assert staff_choices, "Assigned staff must receive tappable completion choices"
+    row_ids = [row.id for row in staff_choices[-1]["list_rows"]]
+    assert f"job_yes:{task.code}" in row_ids
+    assert f"job_no:{task.code}" in row_ids
 
 
 async def test_chatter_is_not_mistaken_for_a_time(boy, sent) -> None:
@@ -134,7 +138,7 @@ async def test_yes_button_closes_task_and_moves_the_order(boy, sent) -> None:
     async with async_session_factory() as db:
         reply = await bill_agent.handle_staff_message(
             db, sender_phone=PICKUP_STAFF_PHONE, sender_label="Ajitram",
-            text="[button:✅ Haan, ho gaya]",
+            text=f"[button:job_yes:{task.code}]",
         )
     assert reply and "Shukriya" in reply
 
@@ -160,7 +164,7 @@ async def test_no_button_keeps_it_open(boy, sent) -> None:
     async with async_session_factory() as db:
         reply = await bill_agent.handle_staff_message(
             db, sender_phone=PICKUP_STAFF_PHONE, sender_label="Ajitram",
-            text="[button:❌ Abhi nahi]",
+            text=f"[button:job_no:{task.code}]",
         )
     assert reply and "batana" in reply
     async with async_session_factory() as db:

@@ -176,12 +176,16 @@ async def test_list_reply_arrives_as_a_button(client, sent) -> None:
 # --- staff sender ---
 
 async def test_staff_message_goes_to_staff_row_no_ack(client, sent, test_washer) -> None:
+    # Other command tests share the in-memory pending map; this neutral message
+    # must not inherit a previous task/order context for the same staff phone.
+    from app.services import bill_agent
+    bill_agent._PENDING.clear()
     body = meta_payload(
         messages=[{
             "from": TEST_WASHER_PHONE_RAW,
             "id": "wamid.TEST-ravi",
             "type": "text",
-            "text": {"body": "aaj 5 order complete"},
+            "text": {"body": "ok thanks"},
         }]
     )
     r = await client.post("/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)})

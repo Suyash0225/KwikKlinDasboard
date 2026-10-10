@@ -32,7 +32,7 @@ from app.models import Customer, Order, OrderStatus, PaymentStatus, SentEvent, S
 from app.services import app_settings, audit
 from app.services.messages import get_message, status_label
 from app.services.order_service import ACTIVE_STATUSES
-from app.services.whatsapp import SendError, WindowClosedError, send_message
+from app.services.whatsapp import ListRow, SendError, WindowClosedError, send_message
 from app.services.work_orders import items_summary
 from app.services.tenant_context import manager_phone
 
@@ -841,8 +841,36 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
             ])
             text = "\n".join(lines)
 
+            # WAHA exposes interactive list rows (not Meta button payloads).
+            # Keep the text summary for readability, but make each task/order
+            # selectable so replies are bound to the right work item.
+            list_rows = [
+                ListRow(
+                    f"pick:t:{t.code}",
+                    t.code,
+                    (t.title or "Pending task")[:72],
+                )
+                for t in task_rows
+            ]
+            for o in orders:
+                cust = await db.get(Customer, o.customer_id)
+                cust_label = (cust.name or cust.phone) if cust else "Customer"
+                list_rows.append(
+                    ListRow(
+                        f"pick:o:{o.order_number}",
+                        o.order_number,
+                        f"{cust_label} · {status_label(o.status)}"[:72],
+                    )
+                )
             try:
-                await send_message(db, to_phone=st.phone, text=text)
+                if list_rows:
+                    await send_message(
+                        db, to_phone=st.phone, text=text,
+                        list_rows=list_rows[:10], list_button="Kaam chuniye",
+                        list_title="Aaj ka kaam",
+                    )
+                else:
+                    await send_message(db, to_phone=st.phone, text=text)
                 sends += 1
             except SendError:
                 log.warning("standup_send_failed", staff=st.name)

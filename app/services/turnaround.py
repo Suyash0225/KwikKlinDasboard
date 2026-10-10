@@ -98,20 +98,19 @@ def track(order: Order, history: list, stage_limits: dict, now: datetime | None 
     due_today = bool(active and order.expected_delivery == today_ist()
                      and order.status not in (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY))
     total_hours = _hours(order.created_at, order.actual_delivery or now)
+    reasons = []
+    if promise_late:
+        reasons.append(f"Delivery date {order.expected_delivery.strftime('%d %b')} passed")
+    if stage_late:
+        reasons.append(f"{STAGE_LABEL.get(status, status)} for {stage_hours:g}h (limit {limit}h)")
     return {
         "stage": status, "stage_label": STAGE_LABEL.get(status, status),
         "stage_since": since.isoformat(), "stage_hours": stage_hours, "stage_limit": limit,
         "stage_late": stage_late, "promise_late": promise_late, "due_today": due_today,
-        # Dashboard "Delayed" means the customer promise was missed.
-        # Stage lateness remains a separate operational warning/reminder signal.
+        # Keep the customer promise and internal stage timer as separate flags,
+        # but report both reasons when both deadlines have been missed.
         "delayed": promise_late,
-        "delay_reason": (
-            f"Delivery date {order.expected_delivery.strftime('%d %b')} passed" if promise_late
-            else (
-                f"{STAGE_LABEL.get(status, status)} for {stage_hours:g}h (limit {limit}h)"
-                if stage_late else ""
-            )
-        ),
+        "delay_reason": "; ".join(reasons),
         "total_hours": total_hours,
         "bill_seconds": order.bill_seconds,
         "milestones": milestones,
@@ -150,13 +149,20 @@ async def run_delay_alerts(db: AsyncSession) -> int:
     fresh = []
     for o in orders:
         t = tracked[o.id]
-        if not t["promise_late"]:
+        if not (t["promise_late"] or t["stage_late"]):
             continue
-        key = f"{o.order_number}:{t['stage']}:promise"
+        key = f"{o.order_number}:{t['stage']}:delay"
+        # Preserve idempotency for rows written by the older promise-only
+        # alert implementation, while allowing stage-only delays to alert too.
+        legacy_keys = [
+            key,
+            f"{o.order_number}:{t['stage']}:promise",
+            f"{o.order_number}:{t['stage']}:stage",
+        ]
         seen = (
             await db.execute(
                 select(AuditLog.id).where(
-                    AuditLog.action == "order_delayed", AuditLog.result == key
+                    AuditLog.action == "order_delayed", AuditLog.result.in_(legacy_keys)
                 ).limit(1)
             )
         ).scalar_one_or_none()

@@ -127,14 +127,14 @@ async def task_status_menu(db: AsyncSession, code: str) -> list[ListRow]:
 
     staff = await db.get(Staff, task.assigned_staff_id) if task.assigned_staff_id else None
     role = staff.role.name if staff is not None else ""
-    if role in {"WASHER", "SUPERVISOR"}:
+    if role in {"WASHER", "SUPERVISOR"} and task.kind in {"wash", "dry", "iron"}:
         return [
             ListRow(f"task:{code}:wash", "🧼 Wash", "Washing is in progress"),
             ListRow(f"task:{code}:iron", "👔 Iron", "Move to ironing"),
             ListRow(f"task:{code}:ready", "✅ Ready", "Order is ready"),
             ListRow(f"task:{code}:pending", "⏳ Pending", "Still in progress"),
         ]
-    if role == "DELIVERY":
+    if role == "DELIVERY" and task.kind in {"pickup", "delivery"}:
         return [
             ListRow(f"task:{code}:done", "✅ Done", "Pickup or delivery completed"),
             ListRow(f"task:{code}:pending", "⏳ Pending", "Still pending"),

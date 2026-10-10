@@ -37,7 +37,7 @@ jobs:
       MANAGER_PHONE: "+919999000000"
       ADMIN_API_KEY: ci-only-not-a-secret
       VENDOR_API_KEY: ci-only-vendor-key
-      TOKEN_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
       SHOP_NAME: "Kwik Klin CI"
       ENVIRONMENT: development
       WHATSAPP_PROVIDER: waha
@@ -104,6 +104,5 @@ jobs:
             python -m compileall -q app tests
           fi
 
-      - name: Full-suite baseline audit (currently known failures; non-blocking)
-        continue-on-error: true
+      - name: Full test suite (required)
         run: pytest -q

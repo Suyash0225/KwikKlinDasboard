@@ -158,6 +158,7 @@ async def test_limit_overrides_enforced(client, tenant_b) -> None:
 
 # ------------------------------------------------------------- WA via panel --
 
+@pytest.mark.skipif(settings.WHATSAPP_PROVIDER != "meta", reason="Per-tenant Meta credential validation is not active in WAHA/NOWEB mode")
 async def test_wa_creds_via_panel(client, monkeypatch, tenant_b) -> None:
     from app.services import whatsapp
 

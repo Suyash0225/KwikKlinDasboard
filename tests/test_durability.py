@@ -139,10 +139,12 @@ async def _window_open_customer():
 
 
 async def test_transient_send_failure_lands_in_queue(_window_open_customer, monkeypatch) -> None:
-    async def _network_down(payload, to_phone):
-        raise SendError(f"send to {to_phone} failed: network error", transient=True)
+    from app.services import waha
 
-    monkeypatch.setattr(whatsapp_module, "_post_with_retry", _network_down)
+    async def _network_down(to_phone, text, **kwargs):
+        raise waha.WahaError(f"send to {to_phone} failed: network error", transient=True)
+
+    monkeypatch.setattr(waha, "send_text", _network_down)
     async with async_session_factory() as db:
         with pytest.raises(SendError):
             await send_message(db, to_phone=TEST_CUSTOMER_PHONE, text="kal ready hoga")
@@ -160,6 +162,8 @@ async def test_transient_send_failure_lands_in_queue(_window_open_customer, monk
 
 
 async def test_drain_sends_queued_message(_window_open_customer, monkeypatch) -> None:
+    from app.services import waha
+
     async with async_session_factory() as s:
         s.add(
             OutboundMessage(
@@ -169,10 +173,10 @@ async def test_drain_sends_queued_message(_window_open_customer, monkeypatch) ->
         )
         await s.commit()
 
-    async def _post_ok(payload, to_phone):
-        return {"messages": [{"id": "wamid.TESTQ-drained"}]}
+    async def _post_ok(to_phone, text, **kwargs):
+        return "wamid.TESTQ-drained"
 
-    monkeypatch.setattr(whatsapp_module, "_post_with_retry", _post_ok)
+    monkeypatch.setattr(waha, "send_text", _post_ok)
     sent_count = await whatsapp_module.drain_outbound_queue()
     assert sent_count == 1
 
@@ -192,10 +196,12 @@ async def test_drain_sends_queued_message(_window_open_customer, monkeypatch) ->
 
 
 async def test_permanent_send_failure_not_queued(_window_open_customer, monkeypatch) -> None:
-    async def _rejected(payload, to_phone):
-        raise SendError("send failed: 400 code=131047 window closed", transient=False)
+    from app.services import waha
 
-    monkeypatch.setattr(whatsapp_module, "_post_with_retry", _rejected)
+    async def _rejected(to_phone, text, **kwargs):
+        raise waha.WahaError("WAHA rejected request 400: invalid recipient", transient=False)
+
+    monkeypatch.setattr(waha, "send_text", _rejected)
     async with async_session_factory() as db:
         with pytest.raises(SendError):
             await send_message(db, to_phone=TEST_CUSTOMER_PHONE, text="reject me")

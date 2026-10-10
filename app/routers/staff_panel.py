@@ -2151,8 +2151,10 @@ async def _route_query(db: AsyncSession, p: StaffPrincipal, tab: str = "todo"):
         )
     else:
         q = select(Order).where(Order.status.in_(stages))
-    if not p.is_manager:
-        # Operational staff share the queue by role. The assigned_* column
+    if not p.is_manager and tab != "done":
+        # Operational staff share the active queue by role. Done-tab stages
+        # were already selected above and must not be filtered back to todo.
+        # The assigned_* column
         # remains the primary owner for routing/audit, but it no longer hides
         # the order from another washer/delivery teammate.
         if is_delivery:
