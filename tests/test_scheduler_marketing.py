@@ -222,6 +222,12 @@ async def test_campaign_queue_send_and_track(sched_sent, sent, monkeypatch) -> N
         await track_status_update(s, rec.wa_message_id, "read")
         await s.refresh(rec)
         assert rec.status == "read"
+        # Late/out-of-order lower acknowledgements must not downgrade READ.
+        await track_status_update(s, rec.wa_message_id, "delivered")
+        await track_status_update(s, rec.wa_message_id, "sent")
+        await track_status_update(s, rec.wa_message_id, "failed")
+        await s.refresh(rec)
+        assert rec.status == "read"
 
 
 async def test_queued_campaign_skips_customer_who_opts_out_before_send(
