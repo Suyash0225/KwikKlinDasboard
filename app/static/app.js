@@ -4314,6 +4314,7 @@ function renderStaff() {
         <button class="btn sm ghost" onclick="panelAccess('${s.id}')">${
           s.has_login ? "🔑 New password" : "🔑 Panel login"}</button>
         <button class="btn sm ghost" onclick="editStaffModal('${s.id}')">Edit</button>
+        <button class="btn sm ghost" onclick="updStaff('${s.id}', {ai_agent_enabled: ${!s.ai_agent_enabled}})">${s.ai_agent_enabled ? "Disable AI WhatsApp" : "Enable AI WhatsApp"}</button>
         ${s.is_active
           ? `<button class="btn sm ghost" onclick="deactivateStaff('${s.id}')">Deactivate</button>`
           : `<button class="btn sm ghost" onclick="updStaff('${s.id}', {is_active: true})">Reactivate</button>`}
