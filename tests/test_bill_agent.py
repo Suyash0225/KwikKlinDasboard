@@ -331,13 +331,24 @@ async def test_relay_to_known_staff_becomes_a_tracked_task(
             relay_message="naya order aya, kapde receive kar lena",
         ),
     )
+    from app.models import Staff
+    from app.services import tenant_context
+
     async with async_session_factory() as db:
-        reply = await handle_staff_message(
-            db,
-            sender_phone=SENDER,
-            sender_label="manager",
-            text=f"{TEST_WASHER_NAME} ko bata do order aya",
-        )
+        worker = await db.get(Staff, test_washer)
+        assert worker is not None
+        tenant_id = worker.tenant_id
+    tenant_token = tenant_context.current_tenant_id.set(tenant_id)
+    try:
+        async with async_session_factory() as db:
+            reply = await handle_staff_message(
+                db,
+                sender_phone=SENDER,
+                sender_label="manager",
+                text=f"{TEST_WASHER_NAME} ko bata do order aya",
+            )
+    finally:
+        tenant_context.current_tenant_id.reset(tenant_token)
     assert reply.startswith("✅") and TEST_WASHER_NAME in reply
     assert "T-" in reply, "the owner gets a code he can follow up on"
     assert calls and calls[0]["to"] == TEST_WASHER_PHONE
