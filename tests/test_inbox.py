@@ -401,7 +401,7 @@ async def test_media_opens_for_a_logged_in_owner(client) -> None:
         assert (await client.get("/admin/media/in-0123456789abcdef0123456789abcdef.jpg")).status_code == 401
         # sirf login se -> khul jaaye
         client.cookies.set(auth.SESSION_COOKIE, token)
-        r = await client.get("/admin/media/test-session-media.jpg")
+        r = await client.get("/admin/media/in-0123456789abcdef0123456789abcdef.jpg")
         assert r.status_code == 200, "logged-in owner ko photo dikhni chahiye"
         assert r.content == b"fake-jpg-bytes"
     finally:
