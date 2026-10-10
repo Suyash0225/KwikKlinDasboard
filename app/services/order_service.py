@@ -407,6 +407,7 @@ async def update_status(
         )
 
     order.status = new_status
+    order.updated_at = datetime.now(timezone.utc)
     if new_status is OrderStatus.DELIVERED:
         order.actual_delivery = datetime.now(timezone.utc)
     if new_status is OrderStatus.PICKED_UP:
