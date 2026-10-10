@@ -105,7 +105,7 @@ async def test_control_page_has_strict_csp_and_no_inline_js(client) -> None:
     assert not re.search(r"\son[a-z]+\s*=", html), "inline event handler mila"
     assert not re.search(r'\sstyle\s*=\s*"', html), "inline style attribute mila"
     assert 'lang="en"' in html and 'name="description"' in html
-    assert 'autocomplete="new-password"' in html, "key input browser mein save na ho"
+    assert 'autocomplete="username"' in html and 'autocomplete="current-password"' in html
     assert 'class="skip"' in html and 'aria-live="polite"' in html
 
 
