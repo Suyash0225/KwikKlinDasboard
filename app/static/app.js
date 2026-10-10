@@ -3175,7 +3175,7 @@ function renderExpenses() {
       <div class="rowcard"><div class="r1"><b>${esc(e.category)}</b><span class="money">${money(e.amount)}</span></div>
       <div class="kv"><span>${fmtDate(e.spent_on)}</span><span>${esc(e.description || "")}</span></div>
       ${e.added_by ? `<div class="kv"><span>Added by</span><span>${esc(e.added_by)}</span></div>` : ""}
-      <div class="act"><button class="btn sm ghost danger-ic" onclick="delExpense('${e.id}')">🗑 Delete</button></div></div>`).join("")}
+      <div class="act"><button class="btn sm ghost" onclick="editExpense('${e.id}')">✏️ Edit</button><button class="btn sm ghost danger-ic" onclick="delExpense('${e.id}')">🗑 Delete</button></div></div>`).join("")}
       <div class="rowcard" style="background:var(--n50)"><div class="r1"><b>Total (${rows.length})</b><span class="money">${money(total)}</span></div></div>
     </div>`;
 }
