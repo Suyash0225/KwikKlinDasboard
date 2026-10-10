@@ -85,7 +85,7 @@ Rules:
 # signals. Ordinary customer messages should not pay for a second LLM call
 # before the customer reply composer runs.
 _SUSPICIOUS_INBOUND_RE = re.compile(
-    r"(?:https?://|www\.|\b(?:seo|digital marketing|website development|software development|bulk sms|bulk whatsapp|advertis(?:e|ing)|recruitment|job offer|agency|marketing services|lead generation|partnership|vendor|supplier|reseller)\b)",
+    r"(?:https?://|www\.|\b(?:seo|digital marketing|websites?|website development|software(?: development)?|bulk sms|bulk whatsapp|advertis(?:e|ing)|recruitment|job offer|agency|marketing services|lead generation|partnership|vendor|supplier|reseller)\b)",
     re.IGNORECASE,
 )
 
