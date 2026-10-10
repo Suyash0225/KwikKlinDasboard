@@ -709,7 +709,9 @@ async def test_work_order_to_staff_carries_the_same_buttons(sent, worker) -> Non
 async def test_task_reminder_repeats_the_status_menu(sent, worker, awake) -> None:
     """Reminder mein bhi wahi clear status menu repeat hota hai."""
     async with async_session_factory() as db:
-        task = await _mk(db, worker)
+        # This assertion is specifically for the washer menu; the generic
+        # custom-task menu intentionally exposes Done/Pending/Problem instead.
+        task = await _mk(db, worker, kind="wash")
         code = task.code
     sent.clear()
 
