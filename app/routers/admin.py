@@ -393,6 +393,7 @@ async def customers_list(
             "outstanding": str(max(Decimal("0"), Decimal(biz) - Decimal(pd))),
             "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
             "opted_out": c.opted_out,
+            "payment_reminders_enabled": c.payment_reminders_enabled,
         }
         for c, active, total, biz, pd in rows
     ]
@@ -739,6 +740,7 @@ class CustomerEditIn(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, min_length=6, max_length=20)
     address: str | None = Field(default=None, max_length=400)
+    payment_reminders_enabled: bool | None = None
 
 
 async def _customer_by_phone(db: AsyncSession, phone: str) -> Customer:
@@ -764,6 +766,8 @@ async def customer_edit(
         cust.name = body.name.strip() or None
     if body.address is not None:
         cust.address = body.address.strip() or None
+    if body.payment_reminders_enabled is not None:
+        cust.payment_reminders_enabled = body.payment_reminders_enabled
     if body.phone is not None:
         try:
             new_phone = _norm_phone(body.phone)
