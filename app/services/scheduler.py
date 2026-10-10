@@ -1167,7 +1167,8 @@ async def run_payment_reminders() -> int:
         firm_days = settings.FOLLOWUP_DAYS
         flagged: list[str] = []
         for o, cust in rows:
-            if cust.opted_out or not cust.is_active:
+            # Automatic reminders are opt-in per customer. A STOP/opt-out always wins.
+            if cust.opted_out or not cust.is_active or not cust.payment_reminders_enabled:
                 continue
             due = (o.total_amount or Decimal("0")) - (o.amount_paid or Decimal("0"))
             if due <= 0:

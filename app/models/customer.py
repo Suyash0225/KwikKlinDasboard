@@ -39,6 +39,10 @@ class Customer(Base, TenantScoped):
     marketing_opt_out: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    # Automatic payment reminders are opt-in per customer; STOP/opted_out always wins.
+    payment_reminders_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     # When we last sent them a MARKETING message — enforces the frequency cap.
     last_marketing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Agent paused on this thread (owner pressed 'Take over' in Inbox, ya

@@ -94,8 +94,26 @@ async def test_standup_lists_pending_and_is_idempotent(sched_sent, sent, test_wa
     assert n2 == 0 and len(sched_sent) == before
 
 
+async def test_payment_reminders_skip_customer_without_opt_in(sched_sent, sent) -> None:
+    order = await _seed_order(total_amount=Decimal("500"))
+    async with async_session_factory() as s:
+        customer = (await s.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        assert customer.payment_reminders_enabled is False
+        row = (await s.execute(select(Order).where(Order.order_number == order.order_number))).scalar_one()
+        row.status = OrderStatus.DELIVERED
+        row.actual_delivery = datetime.now(timezone.utc) - timedelta(days=4)
+        await s.commit()
+
+    await run_payment_reminders()
+    assert not [c for c in sched_sent if c["to"] == PHONE]
+
+
 async def test_payment_reminders_polite_then_firm(sched_sent, sent) -> None:
     order = await _seed_order(total_amount=Decimal("500"))
+    async with async_session_factory() as s:
+        customer = (await s.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        customer.payment_reminders_enabled = True
+        await s.commit()
     async with async_session_factory() as s:
         row = (
             await s.execute(select(Order).where(Order.order_number == order.order_number))
