@@ -10,7 +10,7 @@ Teen shikayatein jo ye file pakadti hai:
 """
 
 import pytest
-from sqlalchemy import select, text as sqltext
+from sqlalchemy import delete, select, text as sqltext
 
 from app.database import async_session_factory
 from app.models import Order, OrderStatus, Staff, StaffRole, Task
@@ -470,7 +470,7 @@ async def test_staff_can_lookup_task_bill_and_follow_up(
 
             reply = await handle_staff_message(
                 db,
-                sender_phone=TEST_WASHER_PHONE,
+                sender_phone=staff_phone,
                 sender_label=TEST_WASHER_NAME,
                 text="aur kitne pcs hain?",
             )
@@ -478,10 +478,18 @@ async def test_staff_can_lookup_task_bill_and_follow_up(
 
             reply = await handle_staff_message(
                 db,
-                sender_phone=TEST_WASHER_PHONE,
+                sender_phone=staff_phone,
                 sender_label=TEST_WASHER_NAME,
                 text="bill number kya hai?",
             )
             assert "KK-20260923-77" in reply
     finally:
+        async with async_session_factory() as db:
+            staff_row = (
+                await db.execute(select(Staff).where(Staff.phone == staff_phone))
+            ).scalar_one_or_none()
+            if staff_row is not None:
+                await db.execute(delete(Task).where(Task.assigned_staff_id == staff_row.id))
+                await db.delete(staff_row)
+                await db.commit()
         tenant_context.current_tenant_id.reset(tok)
