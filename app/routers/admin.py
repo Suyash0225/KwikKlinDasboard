@@ -2461,6 +2461,8 @@ async def inbox_send_media(
 async def serve_media(
     name: str,
     kk_session: str = Cookie(default=""),
+    key: str = Query(default=""),
+    x_api_key: str = Header(default=""),
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     """Serve chat media to the Inbox.
@@ -2481,6 +2483,14 @@ async def serve_media(
         # (unguessable); asli per-tenant media partitioning backlog note mein.
         user = await auth_service.user_for_token(db, kk_session)
         allowed = user is not None
+    if not allowed:
+        import hmac
+
+        expected = settings.ADMIN_API_KEY
+        for supplied in (key, x_api_key):
+            if expected and supplied and hmac.compare_digest(supplied, expected):
+                allowed = True
+                break
     if not allowed:
         raise HTTPException(status_code=401, detail="login chahiye")
     # Only generated customer media is public to a logged-in tenant user.
