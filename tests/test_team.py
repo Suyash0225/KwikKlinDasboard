@@ -319,11 +319,26 @@ async def test_yes_on_delivery_marks_the_order_delivered(boy, sent) -> None:
     sent.clear()
 
     async with async_session_factory() as db:
-        reply = await bill_agent.handle_staff_message(
+        first_reply = await bill_agent.handle_staff_message(
             db, sender_phone=BOY_PHONE, sender_label="Ajit Test",
             text=f"[button:job_yes:{task.code}]",
         )
-    assert reply and "Shukriya" in reply
+    assert first_reply and "out for delivery" in first_reply.lower()
+
+    async with async_session_factory() as db:
+        fresh = (
+            await db.execute(select(Order).where(Order.id == order.id))
+        ).scalar_one()
+        assert fresh.status is OrderStatus.OUT_FOR_DELIVERY
+
+    # Actual customer hand-off is a second explicit confirmation. One tap
+    # must not skip the OUT_FOR_DELIVERY milestone.
+    async with async_session_factory() as db:
+        final_reply = await bill_agent.handle_staff_message(
+            db, sender_phone=BOY_PHONE, sender_label="Ajit Test",
+            text=f"[button:job_yes:{task.code}]",
+        )
+    assert final_reply and "Shukriya" in final_reply
 
     async with async_session_factory() as db:
         fresh = (
