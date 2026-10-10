@@ -321,7 +321,7 @@ async def test_yes_on_delivery_marks_the_order_delivered(boy, sent) -> None:
     async with async_session_factory() as db:
         reply = await bill_agent.handle_staff_message(
             db, sender_phone=BOY_PHONE, sender_label="Ajit Test",
-            text="[button:✅ Haan, ho gayi]",
+            text=f"[button:job_yes:{task.code}]",
         )
     assert reply and "Shukriya" in reply
 
