@@ -2997,8 +2997,14 @@ async def _apply_relay(
     target = (extracted.get("relay_to") or "").strip()
     raw_message = (extracted.get("relay_message") or "").strip()
     recipient_type = (extracted.get("recipient_type") or "UNKNOWN").strip().upper()
-    if not raw_message:
-        return get_message("staff_cmd_unknown")
+
+    # The extractor is not the source of truth: never relay to a person whose
+    # name the manager did not actually mention in the incoming message.
+    source_text = (sender_text or "").casefold()
+    if target and target.casefold() not in source_text:
+        staff_rows = (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
+        names = ", ".join(s.name for s in staff_rows if s.name) or "-"
+        return f"Kisko bhejun? Message mein recipient ka naam nahi mila. Staff: {names} 🙏"
 
     if recipient_type == "UNKNOWN":
         staff_rows = (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
@@ -3015,7 +3021,8 @@ async def _apply_relay(
         elif target.lower() in {"customer", "grahak", "buyer", "client"}:
             recipient_type = "CUSTOMER"
         else:
-            return "Kisko bhejna hai? Customer ya staff ka naam bata dijiye. 🙏"
+            names = ", ".join(s.name for s in staff_rows if s.name) or "-"
+            return f"'{target or 'Naam'}' staff mein nahi mila. Customer ya staff ka sahi naam bataiye. Staff: {names} 🙏"
 
     if recipient_type == "STAFF":
         staff_rows = (await db.execute(select(Staff).where(Staff.is_active))).scalars().all()
@@ -3030,6 +3037,17 @@ async def _apply_relay(
             return f"Kis staff member ko bhejna hai? Naam bata dijiye. 🙏\nStaff: {names}"
 
         staff = matches[0]
+        # If the user only said "send it to <name>", do not turn a stale bot
+        # response or previous note into the message being relayed.
+        ignored = {"message", "bhejo", "bhej", "bolo", "bata", "batao", "ko", "do", "please", "send", "tell", "karo"}
+        source_words = set(re.findall(r"[a-z0-9]+", source_text))
+        target_words = set(re.findall(r"[a-z0-9]+", target.casefold()))
+        message_words = {
+            word for word in re.findall(r"[a-z0-9]+", raw_message.casefold())
+            if len(word) >= 3 and word not in ignored and word not in target_words
+        }
+        if not (message_words & source_words):
+            return f"{staff.name} ko kya bhejun? Message ka text bata dijiye. 🙏"
         message = await _compose_relay_message(raw_message, "STAFF", staff.name)
         urgent = bool(_URGENT_RE.search(message))
         order = await _order_in_text(
