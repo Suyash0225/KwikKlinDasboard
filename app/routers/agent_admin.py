@@ -1495,6 +1495,11 @@ async def list_tasks(
                     if t.customer_id else
                     ((await db.get(Customer, order.customer_id)).name if order and order.customer_id else None)
                 ),
+                "customer_phone": (
+                    (await db.get(Customer, t.customer_id)).phone
+                    if t.customer_id else
+                    ((await db.get(Customer, order.customer_id)).phone if order and order.customer_id else None)
+                ),
                 "created_by": t.created_by,
                 "created_at": t.created_at.isoformat(),
                 "completed_at": t.completed_at.isoformat() if t.completed_at else None,
