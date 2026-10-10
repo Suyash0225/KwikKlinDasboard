@@ -3,11 +3,11 @@
 from datetime import date, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 import app.services.bill_agent as bill_module
 from app.database import async_session_factory
-from app.models import Order, OrderStatus, Staff, StaffRole
+from app.models import Order, OrderStatus, Staff, StaffRole, Task
 from app.services.bill_agent import handle_staff_message
 from app.services.order_service import create_order, update_status
 from tests.conftest import TEST_WASHER_NAME, TEST_WASHER_PHONE
@@ -57,6 +57,7 @@ async def test_done_command_by_delivery_boy(sent) -> None:
             db, sender_phone=SUPERMAN, sender_label="Superman",
             text=f"done {order.order_number}",
         )
+        await db.execute(delete(Task).where(Task.assigned_staff_id == staff.id))
         await db.delete(staff)
         await db.commit()
     assert "DELIVERED" in reply
