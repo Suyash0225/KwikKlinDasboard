@@ -1149,7 +1149,7 @@ async function shareBill(number, knownBillUrl = "") {
     SHARE_TEXT = text;
     openModal(`<h3>Bill created ✅</h3>
       <p class="said">Payment link ready hai. Customer ko ye link bhej sakte hain.</p>
-      <div class="card" style="word-break:break-all"><a href="${esc(knownBillUrl)}" target="_blank" rel="noopener">${esc(knownBillUrl)}</a></div>
+      <div class="card break-all"><a href="${esc(knownBillUrl)}" target="_blank" rel="noopener">${esc(knownBillUrl)}</a></div>
       <pre class="sharetext">${esc(text)}</pre>
       <div class="btnrow">
         <a class="btn go" href="${esc(knownBillUrl)}" target="_blank" rel="noopener">Open payment page</a>
