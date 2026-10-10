@@ -2340,9 +2340,10 @@ function renderCustomers() {
     ? `<div style="padding:12px;text-align:center"><button class="btn ghost sm" onclick="custMore(this)">⬇ Show more (${rows.length}${CUST_MAYBE_MORE ? "+" : " / " + all.length})</button></div>`
     : "";
   $("cust-list").innerHTML = `
-    <table class="tbl"><thead><tr><th>Customer</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Last seen</th><th>Actions</th></tr></thead>
+    <table class="tbl"><thead><tr><th>Customer</th><th>Auto reminder</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Last seen</th><th>Actions</th></tr></thead>
     <tbody>${rows.map((c) => `
       <tr><td>${esc(displayName(c.name, c.phone))}${c.opted_out ? ' <span class="tag">opted out</span>' : ""}<div class="muted">${c.phone}</div></td>
+      <td><label title="Automatic payment reminders"><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\'${c.phone}\', this.checked)"> Enable</label></td>
       <td>${c.total_orders} <span class="muted">(${c.active_orders} active)</span></td>
       <td class="money">${money(c.business)}</td><td class="money">${money(c.paid)}</td>
       <td class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</td>
@@ -2355,6 +2356,7 @@ function renderCustomers() {
     <div class="rowcards">${rows.map((c) => `
       <div class="rowcard"><div class="r1"><b>${esc(displayName(c.name, c.phone))}</b><span class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</span></div>
       <div class="kv"><span>${c.phone}</span><span>${c.total_orders} orders</span></div>
+      <div class="kv"><label><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\'${c.phone}\', this.checked)"> Auto payment reminder</label></div>
       <div class="kv"><span>Business ${money(c.business)}</span><span>Paid ${money(c.paid)}</span></div>
       <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
       <button class="btn sm ghost" onclick="customerMenu('${c.phone}')">⋯ Actions</button></div></div>`).join("")}</div>${moreBtn}`;
@@ -2427,6 +2429,18 @@ function deleteCustomerModal(phone) {
     closeModal(); toast(`${label} deleted`); loadCustomers(); loadDashboard();
   });
 }
+async function setPaymentReminder(phone, enabled) {
+  try {
+    await api(`/admin/api/customers/${encodeURIComponent(phone)}`, { method: "PUT", body: { payment_reminders_enabled: enabled } });
+    const c = customerByPhone(phone);
+    if (c) c.payment_reminders_enabled = enabled;
+    toast(enabled ? "Automatic payment reminders enabled" : "Automatic payment reminders disabled");
+  } catch (e) {
+    toast(e.message, true);
+    loadCustomers(true);
+  }
+}
+
 async function sendReminder(phone) {
   // Text SERVER banata hai. Browser ke paas sirf kul rakam hoti hai —
   // kaunse bill, kis din ke, kitne ke, aur dukaan ka asli naam, ye sab
