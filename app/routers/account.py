@@ -807,7 +807,7 @@ async def _google_callback_inner(request, code, state, error, db) -> Response:
         google_auth.PENDING_COOKIE,
         _sign_google_pending(json.dumps({"sub": ident["sub"], "email": ident["email"], "name": ident["name"]}, separators=(",", ":"))),
         max_age=1800, httponly=True, samesite="lax",
-        secure=True, path="/",
+        secure=request.url.scheme == "https", path="/",
     )
     resp.delete_cookie(google_auth.STATE_COOKIE, path="/")
     log.info("google_new_user_needs_shop", email=ident["email"])
