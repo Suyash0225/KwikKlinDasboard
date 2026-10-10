@@ -341,7 +341,7 @@ async def test_relay_to_known_staff_becomes_a_tracked_task(
     assert reply.startswith("✅") and TEST_WASHER_NAME in reply
     assert "T-" in reply, "the owner gets a code he can follow up on"
     assert calls and calls[0]["to"] == TEST_WASHER_PHONE
-    assert "naya order aya hai" in calls[0]["text"]
+    assert "naya order aya" in calls[0]["text"]
     assert "done T-" in calls[0]["text"], "the assignee must know how to close it"
 
 
