@@ -104,17 +104,15 @@ async def test_boys_answer_becomes_the_customers_promise(boy, sent) -> None:
     assert "Ajitram" in body and PICKUP_STAFF_PHONE in body, "name AND number"
     assert num in body
 
-    # WAHA sends tappable list rows rather than Meta quick-reply buttons.
-    titles = []
-    for message in sent:
-        choices = message.get("buttons") or message.get("list_rows") or []
-        candidate = [choice.title for choice in choices]
-        if any("Haan" in title for title in candidate) and any(
-            "Abhi nahi" in title for title in candidate
-        ):
-            titles = candidate
-            break
-    assert titles, "Customer confirmation must have tappable Haan/Abhi nahi choices"
+    # Staff gets tappable completion actions; the customer gets the promise.
+    staff_choices = [
+        message for message in sent
+        if message["to"] == PICKUP_STAFF_PHONE and message.get("list_rows")
+    ]
+    assert staff_choices, "Assigned staff must receive tappable completion choices"
+    row_ids = [row.id for row in staff_choices[-1]["list_rows"]]
+    assert f"job_yes:{task.code}" in row_ids
+    assert f"job_no:{task.code}" in row_ids
 
 
 async def test_chatter_is_not_mistaken_for_a_time(boy, sent) -> None:
