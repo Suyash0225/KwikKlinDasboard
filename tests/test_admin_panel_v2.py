@@ -272,7 +272,20 @@ async def test_tenant_list_shows_usage_vs_limit(client) -> None:
     u = home["usage"]
     assert set(u) >= {"orders_month", "orders_limit", "wa_msgs_month",
                       "wa_limit", "staff", "staff_limit"}
-    assert u["staff"] >= 1  # asli shop ke staff hain
+    # CI starts with an empty home-shop staff table; compare the API usage
+    # with the database rather than assuming production staff exist in fixtures.
+    async with async_session_factory() as db:
+        staff_count = (
+            await db.execute(
+                sqltext(
+                    "SELECT count(*) FROM staff WHERE tenant_id = "
+                    "(SELECT id FROM tenants WHERE slug = :slug)"
+                ),
+                {"slug": "kwik-klin"},
+            )
+        ).scalar_one()
+    assert u["staff"] == staff_count
+    assert u["staff_limit"] >= u["staff"]
     assert "trial_warning" in home and home["trial_warning"] is False
 
 
