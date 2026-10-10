@@ -328,7 +328,7 @@ async def test_relay_to_known_staff_becomes_a_tracked_task(
         _extract_result(
             action="relay",
             relay_to=TEST_WASHER_NAME,
-            relay_message="naya order aya hai, ready ho jao",
+            relay_message="naya order aya hai, kapde receive kar lena",
         ),
     )
     async with async_session_factory() as db:
