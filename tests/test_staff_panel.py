@@ -1774,8 +1774,14 @@ async def test_only_a_manager_can_send_a_payment_reminder(
         await _login(client, A_MGR_PHONE)          # manager
         r = await client.post(f"/staff/api/orders/{bill['order_number']}/remind")
         assert r.status_code == 200, r.text
-        # Aur wo message ANGREZI mein ho — dashboard ke reminder jaisa,
-        # taaki grahak ko pata na chale ki kisne yaad dilaya.
-        assert "pending" in (r.json()["text"] or "").lower(), r.json()["text"]
+        # API send successful ho to duplicate text return nahi hota; inspect
+        # the recorded outbound message. If the API failed, the fallback text
+        # is returned for the staff member's WhatsApp link.
+        payload = r.json()
+        if payload["sent"]:
+            assert payload["text"] is None
+            assert sent and "pending" in sent[-1]["text"].lower()
+        else:
+            assert "pending" in (payload["text"] or "").lower(), payload["text"]
     finally:
         await _drop_rate()
