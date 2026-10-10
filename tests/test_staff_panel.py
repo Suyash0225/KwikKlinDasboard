@@ -1747,7 +1747,7 @@ async def test_today_counts_late_work_the_same_way_the_list_does(
 
 
 async def test_only_a_manager_can_send_a_payment_reminder(
-    client, two_shops, sent
+    client, two_shops, sent, monkeypatch
 ) -> None:
     """Bill delivery wala bana sakta hai, par paisa maangna manager ka kaam.
 
@@ -1772,6 +1772,15 @@ async def test_only_a_manager_can_send_a_payment_reminder(
         )).status_code == 403, "washerman bhi nahi"
 
         await _login(client, A_MGR_PHONE)          # manager
+        from app.services import whatsapp
+
+        reminder_sends = []
+
+        async def _capture_reminder(db, *, to_phone, text=None, **kwargs):
+            reminder_sends.append({"to": to_phone, "text": text})
+            return "wamid.TEST-reminder"
+
+        monkeypatch.setattr(whatsapp, "send_message", _capture_reminder)
         r = await client.post(f"/staff/api/orders/{bill['order_number']}/remind")
         assert r.status_code == 200, r.text
         # API send successful ho to duplicate text return nahi hota; inspect
@@ -1780,7 +1789,7 @@ async def test_only_a_manager_can_send_a_payment_reminder(
         payload = r.json()
         if payload["sent"]:
             assert payload["text"] is None
-            assert sent and "pending" in sent[-1]["text"].lower()
+            assert reminder_sends and "pending" in reminder_sends[-1]["text"].lower()
         else:
             assert "pending" in (payload["text"] or "").lower(), payload["text"]
     finally:
