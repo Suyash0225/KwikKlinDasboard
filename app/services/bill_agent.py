@@ -1095,6 +1095,18 @@ async def _staff_reference_lookup(
         return None
 
     raw = text.strip()
+    # Explicit status-change language must reach the action handler, where
+    # role authorization is enforced. Do not misclassify "delivery pe nikal
+    # gaya" as a passive request for order details.
+    if re.search(
+        r"\\b(?:status\\s*(?:update|change)?|out\\s+for\\s+delivery|"
+        r"delivery\\s+pe\\s+nikal(?:\\s+gaya|\\s+gayi)?|"
+        r"(?:delivery|deliver)\\s+ho\\s+gaya|"
+        r"mark\\s+(?:as\\s+)?(?:ready|delivered))\\b",
+        raw, re.I,
+    ):
+        return None
+
     task_match = _TASK_REF_RE.search(raw)
     order_match = _ORDER_REF_RE_STAFF.search(raw)
 
@@ -1471,12 +1483,11 @@ async def handle_staff_message(
     if worklist is not None:
         return worklist
 
-    # Short acknowledgements and greetings are not task progress. Reply
-    # deterministically and avoid invoking both task classification and the
-    # generic command extractor for casual chat. Pending confirmations and
-    # explicit task/button commands have already been handled above.
+    # Short acknowledgements and greetings are not task progress. Keep them
+    # silent instead of sending an unsolicited reply; explicit task/button
+    # commands and pending confirmations were handled above.
     if sender_label != "manager" and not pending and _LOW_SIGNAL_STAFF_RE.fullmatch(text or ""):
-        return "Ji, theek hai. Kaam ka update ho to task button ya task code bhej dein."
+        return None
 
     # Natural-language reply to the latest assigned task — task context first,
     # so staff does not need to repeat the task code.
