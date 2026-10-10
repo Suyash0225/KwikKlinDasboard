@@ -1135,6 +1135,7 @@ class RateIn(BaseModel):
 class RateUpdateIn(BaseModel):
     rate: Decimal | None = Field(default=None, gt=0)
     is_active: bool | None = None
+    ai_agent_enabled: bool | None = None
 
 
 @router.get("/api/rates", dependencies=[Depends(require_admin_key)])
@@ -1324,6 +1325,7 @@ async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
             {
                 "id": str(s.id), "name": s.name, "phone": s.phone,
                 "role": s.role.name, "is_active": s.is_active,
+                "ai_agent_enabled": s.ai_agent_enabled,
                 # the UI needs these to explain WHY delete is blocked
                 "active_orders": await _active_order_count(db, s.id),
                 "is_default": s.phone in (default_washer, default_delivery),
@@ -1409,6 +1411,8 @@ async def staff_update(staff_id: str, body: StaffUpdateIn, db: AsyncSession = De
         staff.role = StaffRole[body.role]
     if body.is_active is not None:
         staff.is_active = body.is_active
+    if body.ai_agent_enabled is not None:
+        staff.ai_agent_enabled = body.ai_agent_enabled
     await db.commit()
     log.info("staff_updated_via_settings", staff_id=staff_id)
     return {"ok": True, "ready": _staff_ready_note(staff), "warning": warning}
