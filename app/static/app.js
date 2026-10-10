@@ -3447,7 +3447,15 @@ async function loadCampaigns() {
     renderCampaigns(camps);
     selectCampaignAudience($("camp-seg")?.value || "all_active", false);
     updateCampaignPreview();
-    if ((overview.running_campaigns || []).length) {
+    // Keep polling briefly after send completion too: WhatsApp delivery/read
+    // acknowledgements often arrive after the campaign worker marks "sent".
+    const nowMs = Date.now();
+    const awaitingReceipts = camps.some((c) => {
+      if (c.status !== "sent" || !c.sent_at) return false;
+      const sentAt = Date.parse(c.sent_at);
+      return Number.isFinite(sentAt) && nowMs - sentAt < 5 * 60 * 1000;
+    });
+    if ((overview.running_campaigns || []).length || awaitingReceipts) {
       CAMPAIGN_POLL_TIMER = setTimeout(loadCampaigns, 10000);
     }
   } catch (e) {
