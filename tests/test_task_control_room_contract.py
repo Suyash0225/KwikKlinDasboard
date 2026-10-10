@@ -18,7 +18,8 @@ def test_task_control_room_is_database_linked():
     assert "due_at:" in model
     assert "customer=customer" in router
     assert "due_at=body.due_at" in router
-    assert "customer_id=(customer.id" in service
+    assert "linked_customer_id = order.customer_id" in service
+    assert "customer_id=linked_customer_id" in service
     assert "task.due_at" in service
     assert "searchTaskCustomers" in js
     assert "newTaskCustomerModal" in js
