@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 import app.services.bill_agent as bill_module
 from app.database import async_session_factory
-from app.models import Order, OrderStatus
+from app.models import Order, OrderStatus, Staff, StaffRole
 from app.services.bill_agent import handle_staff_message
 from app.services.order_service import create_order, update_status
 from tests.conftest import TEST_WASHER_NAME, TEST_WASHER_PHONE
@@ -42,6 +42,11 @@ async def test_picked_up_sets_sla_and_notifies(sent) -> None:
 
 async def test_done_command_by_delivery_boy(sent) -> None:
     async with async_session_factory() as db:
+        staff = Staff(
+            phone=SUPERMAN, name="Superman", role=StaffRole.DELIVERY, is_active=True,
+        )
+        db.add(staff)
+        await db.flush()
         order = await create_order(
             db, customer_phone=PHONE, items=[{"type": "Shirt", "qty": 2}],
             created_by="test",
@@ -52,6 +57,8 @@ async def test_done_command_by_delivery_boy(sent) -> None:
             db, sender_phone=SUPERMAN, sender_label="Superman",
             text=f"done {order.order_number}",
         )
+        await db.delete(staff)
+        await db.commit()
     assert "DELIVERED" in reply
     async with async_session_factory() as s:
         fresh = (
