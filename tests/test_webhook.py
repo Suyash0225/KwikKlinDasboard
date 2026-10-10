@@ -179,7 +179,7 @@ async def test_staff_message_goes_to_staff_row_no_ack(client, sent, test_washer)
     # Other command tests share the in-memory pending map; this neutral message
     # must not inherit a previous task/order context for the same staff phone.
     from app.services import bill_agent
-    bill_agent._PENDING.pop(TEST_WASHER_PHONE, None)
+    bill_agent._PENDING.clear()
     body = meta_payload(
         messages=[{
             "from": TEST_WASHER_PHONE_RAW,
