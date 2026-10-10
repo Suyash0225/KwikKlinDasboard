@@ -1099,10 +1099,10 @@ async def _staff_reference_lookup(
     # role authorization is enforced. Do not misclassify "delivery pe nikal
     # gaya" as a passive request for order details.
     if re.search(
-        r"\\b(?:status\\s*(?:update|change)?|out\\s+for\\s+delivery|"
-        r"delivery\\s+pe\\s+nikal(?:\\s+gaya|\\s+gayi)?|"
-        r"(?:delivery|deliver)\\s+ho\\s+gaya|"
-        r"mark\\s+(?:as\\s+)?(?:ready|delivered))\\b",
+        r"\b(?:status\s*(?:update|change)?|out\s+for\s+delivery|"
+        r"delivery\s+pe\s+nikal(?:\s+gaya|\s+gayi)?|"
+        r"(?:delivery|deliver)\s+ho\s+gaya|"
+        r"mark\s+(?:as\s+)?(?:ready|delivered))\b",
         raw, re.I,
     ):
         return None
