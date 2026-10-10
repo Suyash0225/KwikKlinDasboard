@@ -3167,7 +3167,7 @@ function renderExpenses() {
       <tr><td class="nowrap">${fmtDate(e.spent_on)}</td><td>${esc(e.category)}</td>
       <td class="money">${money(e.amount)}</td>
       <td class="muted" style="max-width:260px" title="${esc(e.description || "")}"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.description || "")}</div>${e.added_by ? `<div style="font-size:11.5px">by ${esc(e.added_by)}</div>` : ""}</td>
-      <td><button class="btn sm ghost danger-ic" aria-label="Delete expense" title="Delete" onclick="delExpense('${e.id}')">🗑</button></td></tr>`).join("")}
+      <td><div class="act"><button class="btn sm ghost" aria-label="Edit expense" title="Edit" onclick="editExpense('${e.id}')">✏️</button><button class="btn sm ghost danger-ic" aria-label="Delete expense" title="Delete" onclick="delExpense('${e.id}')">🗑</button></div></td></tr>`).join("")}
     </tbody>
     <tfoot><tr class="totalrow"><td>Total</td><td class="muted">${rows.length} item${rows.length > 1 ? "s" : ""}</td>
       <td class="money">${money(total)}</td><td></td><td></td></tr></tfoot></table>
@@ -3240,6 +3240,29 @@ function delExpCat(i) {
       EXP_CATS = r.all; EXP_CUSTOM = EXP_CUSTOM.filter((c) => c !== name);
       paintExpCats(); toast(`"${name}" removed`); manageExpCats();
     } catch (e) { toast(e.message, true); }
+  });
+}
+function editExpense(id) {
+  const e = EXPENSES.find((x) => x.id === id);
+  if (!e) return;
+  const cats = [...new Set([...(EXP_CATS || []), e.category])];
+  openModal(`<h3>Edit expense</h3>
+    <div class="frm">
+      <div class="setfield"><label>Date</label><input id="ee-date" type="date" value="${esc(e.spent_on)}" required></div>
+      <div class="setfield"><label>Category</label><select id="ee-category">${cats.map((x) => `<option value="${esc(x)}" ${x===e.category?"selected":""}>${esc(x)}</option>`).join("")}</select></div>
+      <div class="setfield"><label>Amount (₹)</label><input id="ee-amount" type="number" min="0.01" step="0.01" value="${esc(e.amount)}" required></div>
+      <div class="setfield"><label>Description</label><textarea id="ee-description" rows="2" maxlength="300">${esc(e.description || "")}</textarea></div>
+      <small class="fielderr" id="ee-err"></small>
+    </div>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" id="ee-save">Save changes</button></div>`);
+  $("ee-save").onclick = (btn) => busy(btn.target || btn, async () => {
+    const amount = Number($("ee-amount").value);
+    if (!$("ee-date").value || !Number.isFinite(amount) || amount <= 0) { $("ee-err").textContent = "Date aur positive amount required hain."; return; }
+    await api(`/admin/api/expenses/${encodeURIComponent(id)}`, { method: "PUT", body: {
+      spent_on: $("ee-date").value, category: $("ee-category").value,
+      amount, description: $("ee-description").value.trim() || null,
+    }});
+    closeModal(); toast("Expense updated and saved"); await loadExpenses();
   });
 }
 function delExpense(id) {
