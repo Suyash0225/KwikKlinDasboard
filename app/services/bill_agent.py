@@ -1506,10 +1506,10 @@ async def handle_staff_message(
                     )
                     await team.notify_admins(
                         db,
-                        f"⚠️ *Task issue — {issue_task.code}*\\n"
-                        f"Staff: {issue_staff.name}\\n"
-                        f"Task: {issue_task.title}\\n"
-                        f"Issue: {text.strip()[:400]}\\n"
+                        f"⚠️ *Task issue — {issue_task.code}*\n"
+                        f"Staff: {issue_staff.name}\n"
+                        f"Task: {issue_task.title}\n"
+                        f"Issue: {text.strip()[:400]}\n"
                         "Task remains OPEN until a manager resolves/reassigns it.",
                         skip_phone=issue_staff.phone,
                     )
