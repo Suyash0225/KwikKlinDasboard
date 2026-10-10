@@ -663,3 +663,6 @@ h3.mt-lg { margin-top: 20px; }
 .status-option:nth-child(7) .status-dot,
 .status-option:nth-child(8) .status-dot { background:var(--ready); }
 .status-option:nth-child(9) .status-dot { background:var(--brand); }
+
+/* Long customer bill URLs must wrap without inline styles (strict CSP). */
+.break-all { overflow-wrap: anywhere; word-break: break-all; }
