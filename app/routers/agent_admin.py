@@ -1545,6 +1545,68 @@ async def create_task_api(body: TaskIn, db: AsyncSession = Depends(get_db)) -> d
         "due_at": task.due_at.isoformat() if task.due_at else None,
     }
 
+class TaskEditIn(BaseModel):
+    title: str = Field(min_length=2, max_length=2000)
+    staff: str | None = None
+    order_number: str | None = None
+    kind: str = Field(default="general", pattern="^(general|pickup|wash|dry|iron|delivery)$")
+    due_at: datetime | None = None
+    priority: str = Field(default="normal", pattern="^(normal|urgent)$")
+    customer_name: str | None = Field(default=None, max_length=120)
+    customer_phone: str | None = Field(default=None, max_length=20)
+
+
+@router.put("/tasks/{code}")
+async def edit_task_api(code: str, body: TaskEditIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Edit an assigned task and persist every editable field."""
+    from app.models import Customer as _C, Order as _O, Staff as _S, Task
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+
+    staff = await task_service.find_staff(db, body.staff or "") if body.staff else None
+    if body.staff and staff is None:
+        raise HTTPException(status_code=400, detail="Selected staff not found")
+
+    order = None
+    if body.order_number:
+        order = (await db.execute(select(_O).where(_O.order_number == body.order_number.upper()))).scalar_one_or_none()
+        if order is None:
+            raise HTTPException(status_code=404, detail="Selected order not found")
+
+    customer = await db.get(_C, task.customer_id) if task.customer_id else None
+    if order is not None:
+        if customer is not None and order.customer_id != customer.id:
+            raise HTTPException(status_code=400, detail="Order must belong to the selected customer")
+        task.order_id = order.id
+        customer = await db.get(_C, order.customer_id)
+        task.customer_id = customer.id if customer else None
+    else:
+        task.order_id = None
+
+    if customer is not None:
+        if body.customer_name is not None:
+            customer.name = body.customer_name.strip() or None
+        if body.customer_phone is not None:
+            phone = normalize_phone(body.customer_phone)
+            clash = (await db.execute(select(_C).where(_C.phone == phone, _C.id != customer.id))).scalar_one_or_none()
+            if clash:
+                raise HTTPException(status_code=409, detail="This phone number already belongs to another customer")
+            customer.phone = phone
+
+    task.title = body.title.strip()
+    task.assigned_staff_id = staff.id if staff else None
+    task.kind = body.kind
+    task.due_at = body.due_at
+    task.urgent = body.priority == "urgent"
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return {"ok": True, "code": task.code}
+
+
 @router.post("/tasks/{code}/done")
 async def complete_task_api(code: str, db: AsyncSession = Depends(get_db)) -> dict:
     from app.services import tasks as task_service
