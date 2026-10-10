@@ -135,8 +135,26 @@ async def task_status_menu(db: AsyncSession, code: str) -> list[ListRow]:
             ListRow(f"task:{code}:pending", "⏳ Pending", "Still in progress"),
         ]
     if role == "DELIVERY" and task.kind in {"pickup", "delivery"}:
+        # A delivery task has two separate milestones. The button must say
+        # what the tap actually does; a vague "Done" previously looked like
+        # final delivery even though the first tap only dispatched the order.
+        if task.kind == "delivery":
+            order = await db.get(Order, task.order_id) if task.order_id else None
+            from app.models import OrderStatus
+            if order is not None and order.status is OrderStatus.READY:
+                done_title = "🚚 Out for delivery"
+                done_desc = "Parcel leaves shop; confirm again when handed over"
+            elif order is not None and order.status is OrderStatus.OUT_FOR_DELIVERY:
+                done_title = "✅ Delivered"
+                done_desc = "Customer received the parcel"
+            else:
+                done_title = "✅ Done"
+                done_desc = "Confirm the task status"
+        else:
+            done_title = "✅ Pickup done"
+            done_desc = "Pickup completed"
         return [
-            ListRow(f"task:{code}:done", "✅ Done", "Pickup or delivery completed"),
+            ListRow(f"task:{code}:done", done_title, done_desc),
             ListRow(f"task:{code}:pending", "⏳ Pending", "Still pending"),
         ]
     return [

@@ -396,6 +396,17 @@ async def _handle_task_menu_display_text(
                 _display_key(title), _display_key(f"{title} {desc}"), _display_key(desc)
             }:
                 candidates.append((row.id, row.title))
+
+        # Backward compatibility for menu messages sent before the delivery
+        # labels became stage-aware. WAHA may return the old display text for
+        # a menu already on the worker's phone. Resolve it to that task's
+        # explicit action ID, but still require exactly one matching task
+        # below so a stale label can never update an arbitrary open task.
+        if (
+            raw_key == "done pickup or delivery completed"
+            and task.kind in {"pickup", "delivery"}
+        ):
+            candidates.append((f"task:{task.code}:done", "legacy Done"))
     if len(candidates) != 1:
         return None
 

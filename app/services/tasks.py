@@ -882,12 +882,32 @@ async def open_tasks_for_staff(db: AsyncSession, staff_id) -> list[Task]:
     )
 
 
-async def note_reply(db: AsyncSession, staff_id, text: str, *, by: str | None = None) -> Task | None:
-    """Store the latest shared-team reply and record who made it."""
+async def note_reply(
+    db: AsyncSession, staff_id, text: str, *, by: str | None = None,
+    task_code: str | None = None,
+) -> Task | None:
+    """Store a reply only against an unambiguous task.
+
+    A staff member can have several open jobs. Never guess that a free-text
+    reply belongs to the most recently pinged task; menu replies should pass
+    their embedded task code, while unreferenced text is recorded only when
+    exactly one open task is available.
+    """
     tasks = await open_tasks_for_staff(db, staff_id)
-    if not tasks:
-        return None
-    task = tasks[0]
+    if task_code:
+        task = await get_by_code(db, task_code)
+        if task is None or task.status != TASK_OPEN:
+            return None
+        if staff_id is not None:
+            staff = await db.get(Staff, staff_id)
+            if staff is None or not await staff_can_access_task(db, task, staff):
+                return None
+    else:
+        if len(tasks) != 1:
+            if len(tasks) > 1:
+                log.info("task_reply_ambiguous_not_attached", staff_id=str(staff_id), open_tasks=len(tasks))
+            return None
+        task = tasks[0]
     author = by or "staff"
     task.reply = text[:1000]
     db.add(task)
