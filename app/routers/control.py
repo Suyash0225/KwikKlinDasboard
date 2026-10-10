@@ -1784,6 +1784,7 @@ async def open_vendor_session(
     response: Response,
     body: VendorLoginIn | None = None,
     x_api_key: str = Header(default=""),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Exchange Control Room credentials for the existing httpOnly session cookie.
 
@@ -1833,6 +1834,33 @@ async def open_vendor_session(
         level = "danger"
         label = "env-key"
         via = "header"
+    elif x_api_key:
+        # Per-admin keys keep their original level in the browser cookie.
+        # Revocation remains effective because the key ID is embedded in the
+        # signed token and checked against the database on every request.
+        import hashlib as _hl
+
+        from app.models import AdminKey
+
+        digest = _hl.sha256(x_api_key.encode()).hexdigest()
+        key = (
+            await db.execute(
+                select(AdminKey).where(
+                    AdminKey.key_hash == digest,
+                    AdminKey.revoked_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if key is not None:
+            key.last_used_at = datetime.now(timezone.utc)
+            await db.commit()
+            level = key.level
+            label = key.label
+            kid = str(key.id)
+            via = "header"
+        else:
+            _auth_throttle.note_failure(ip)
+            raise HTTPException(status_code=401, detail="invalid login or password")
     else:
         _auth_throttle.note_failure(ip)
         raise HTTPException(status_code=401, detail="invalid login or password")
