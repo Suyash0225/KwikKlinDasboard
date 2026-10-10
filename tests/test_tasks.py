@@ -16,6 +16,8 @@ from app.services import team
 from app.config import settings
 from app.database import async_session_factory
 from app.models import TASK_DONE, TASK_OPEN, Conversation, OrderStatus, Staff, StaffRole, Task
+from app.services.order_service import create_order
+from tests.conftest import purge_phones
 
 H = {"X-API-Key": settings.ADMIN_API_KEY}
 TASK_STAFF_PHONE = "+919999900085"
@@ -708,24 +710,29 @@ async def test_work_order_to_staff_carries_the_same_buttons(sent, worker) -> Non
 
 async def test_task_reminder_repeats_the_status_menu(sent, worker, awake) -> None:
     """Reminder mein bhi wahi clear status menu repeat hota hai."""
-    async with async_session_factory() as db:
-        # This assertion is specifically for the washer menu; the generic
-        # custom-task menu intentionally exposes Done/Pending/Problem instead.
-        task = await _mk(db, worker, kind="wash")
-        code = task.code
-    sent.clear()
+    customer_phone = "+919999900086"
+    try:
+        async with async_session_factory() as db:
+            order = await create_order(
+                db, customer_phone=customer_phone, customer_name="Reminder customer",
+                items=[{"type": "Shirt", "qty": 1}], created_by="test",
+            )
+            task = await _mk(db, worker, kind="wash", order=order)
+            code = task.code
+        sent.clear()
 
-    async with async_session_factory() as db:
-        st = await db.get(Staff, worker)
-        t = (await db.execute(select(Task).where(Task.code == code))).scalar_one()
-        assert await task_service._send_to_assignee(db, t, st, first=False)
-    ping = next(c for c in sent if c["to"] == TASK_STAFF_PHONE)
-    assert "reminder" in ping["text"].lower()
-    assert [row.id for row in (ping.get("list_rows") or [])] == [
-        f"task:{code}:wash", f"task:{code}:iron",
-        f"task:{code}:ready", f"task:{code}:pending",
-    ]
-
+        async with async_session_factory() as db:
+            st = await db.get(Staff, worker)
+            t = (await db.execute(select(Task).where(Task.code == code))).scalar_one()
+            assert await task_service._send_to_assignee(db, t, st, first=False)
+        ping = next(c for c in sent if c["to"] == TASK_STAFF_PHONE)
+        assert "reminder" in ping["text"].lower()
+        assert [row.id for row in (ping.get("list_rows") or [])] == [
+            f"task:{code}:wash", f"task:{code}:iron",
+            f"task:{code}:ready", f"task:{code}:pending",
+        ]
+    finally:
+        await purge_phones(customer_phone)
 
 async def test_operational_team_shares_queue_and_first_completion_wins(worker, sent) -> None:
     """Any active washer can update the shared queue; duplicate completion is harmless."""
