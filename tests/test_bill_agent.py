@@ -164,7 +164,7 @@ async def test_confirm_without_phone_keeps_draft(monkeypatch) -> None:
     assert SENDER in _PENDING  # draft survives until a phone arrives
 
 
-async def test_unknown_item_not_priced(monkeypatch) -> None:
+async def test_unknown_item_not_priced(monkeypatch, sent) -> None:
     _patch_extract(
         monkeypatch,
         _extract_result(
@@ -177,8 +177,10 @@ async def test_unknown_item_not_priced(monkeypatch) -> None:
         reply = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="manager", text="1 spacesuit"
         )
-    assert "rate card mein nahi" in reply
-    assert "Total: ₹0" in reply
+    assert reply is None  # the draft text is delivered with the confirmation menu
+    menu = next(m for m in sent if m.get("list_rows") and m["to"] == SENDER)
+    assert "rate card mein nahi" in menu["text"]
+    assert "Total: ₹0" in menu["text"]
 
 
 async def test_delay_update_writes_db_first_and_hides_reason(monkeypatch, sent) -> None:
@@ -453,7 +455,7 @@ def _with_photo(monkeypatch, result: dict, seen: dict | None = None):
     return photo
 
 
-async def test_bill_from_photo(monkeypatch) -> None:
+async def test_bill_from_photo(monkeypatch, sent) -> None:
     seen: dict = {}
     photo = _with_photo(
         monkeypatch,
@@ -473,7 +475,9 @@ async def test_bill_from_photo(monkeypatch) -> None:
     finally:
         photo.unlink(missing_ok=True)
 
-    assert reply is not None and "₹120" in reply and "Photo Grahak" in reply
+    assert reply is None
+    menu = next(m for m in sent if m.get("list_rows") and m["to"] == SENDER)
+    assert "₹120" in menu["text"] and "Photo Grahak" in menu["text"]
     assert seen["image_bytes"] == b"fake-jpg"
     assert "Bill bnao iska" in seen["user_text"]
     assert SENDER in _PENDING  # confirm loop still required
@@ -500,7 +504,7 @@ async def test_photo_unreadable_asks_instead_of_inventing(monkeypatch) -> None:
     assert SENDER not in _PENDING  # nothing invented, nothing staged
 
 
-async def test_photo_unknown_garment_is_flagged_not_swapped(monkeypatch) -> None:
+async def test_photo_unknown_garment_is_flagged_not_swapped(monkeypatch, sent) -> None:
     """An item that isn't on the rate card keeps the slip's own word."""
     photo = _with_photo(
         monkeypatch,
@@ -522,18 +526,20 @@ async def test_photo_unknown_garment_is_flagged_not_swapped(monkeypatch) -> None
     finally:
         photo.unlink(missing_ok=True)
 
-    assert reply is not None
+    assert reply is None
+    menu = next(m for m in sent if m.get("list_rows") and m["to"] == SENDER)
+    draft_text = menu["text"]
     # unknown word survives as written, marked — never turned into a shirt
-    assert "Topi" in reply and "⚠️" in reply and "❓" in reply
-    assert "Shirt" not in reply and "Pant" not in reply
+    assert "Topi" in draft_text and "⚠️" in draft_text and "❓" in draft_text
+    assert "Shirt" not in draft_text and "Pant" not in draft_text
     # a plural spelling still finds its single rate-card row
-    assert "Sherwani" in reply and "₹300" in reply
+    assert "Sherwani" in draft_text and "₹300" in draft_text
     draft = _PENDING[SENDER].draft
     assert [i["garment"] for i in draft["items"]] == ["Topi", "Sherwani"]
     assert draft["total"] == 300                 # unpriced item adds nothing
 
 
-async def test_photo_ambiguous_service_asks_which_one(monkeypatch) -> None:
+async def test_photo_ambiguous_service_asks_which_one(monkeypatch, sent) -> None:
     """Kurta exists under several services — ask, don't pick one."""
     photo = _with_photo(
         monkeypatch,
@@ -551,8 +557,10 @@ async def test_photo_ambiguous_service_asks_which_one(monkeypatch) -> None:
     finally:
         photo.unlink(missing_ok=True)
 
-    assert reply is not None and "kaunsi service" in reply
-    assert "Dry Clean" in reply and SERVICE in reply
+    assert reply is None
+    menu = next(m for m in sent if m.get("list_rows") and m["to"] == SENDER)
+    assert "kaunsi service" in menu["text"]
+    assert "Dry Clean" in menu["text"] and SERVICE in menu["text"]
     assert _PENDING[SENDER].draft["total"] == 0  # never guesses a price
 
 
