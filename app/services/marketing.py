@@ -308,6 +308,7 @@ async def send_campaign(campaign_id) -> None:
         # campaigns run at the same time, at 1/25th the cost.
         spent = await month_send_count(db)
         sent_now = 0
+        last_send_at: float | None = None
         while True:
             # Page the queue instead of re-querying one row at a time, and
             # bring each recipient's customer along — 'queued' is still the
@@ -366,6 +367,13 @@ async def send_campaign(campaign_id) -> None:
                     )
                     continue
                 text = campaign.message_text.replace("{name}", cust.name or "ji")
+                # Enforce a real server-side gap between outbound sends.
+                # Skipped recipients do not consume the delay; parallel UI
+                # refreshes cannot bypass this worker's pacing.
+                if last_send_at is not None:
+                    remaining = random.uniform(15.0, 20.0) - (asyncio.get_running_loop().time() - last_send_at)
+                    if remaining > 0:
+                        await asyncio.sleep(remaining)
                 try:
                     # One campaign = one approved creative. Send the same
                     # generated image + caption to each eligible customer;
@@ -394,12 +402,14 @@ async def send_campaign(campaign_id) -> None:
                     cust.last_marketing_at = datetime.now(timezone.utc)
                     sent_now += 1
                     spent += 1
+                    last_send_at = asyncio.get_running_loop().time()
                 except SendError as exc:
                     # window closed & no approved marketing template -> honest fail
                     rec.status = "failed"
                     rec.detail = str(exc)[:200]
                 await db.commit()
-                # Randomize the campaign gap between 15–20 seconds.\n                # This is intentionally slower than the old 1-second pace.\n                await asyncio.sleep(random.uniform(15.0, 20.0))
+                # Delay is enforced immediately before the next actual send,
+                # so the final recipient does not add an unnecessary wait.
 
         campaign.status = "sent"
         campaign.sent_at = datetime.now(timezone.utc)
@@ -512,7 +522,7 @@ async def campaign_stats(db: AsyncSession, campaign_id) -> dict:
 
 async def track_status_update(db: AsyncSession, wa_message_id: str, status: str) -> None:
     """Called from the webhook statuses handler — delivery/read tracking."""
-    if status not in ("delivered", "read"):
+    if status not in ("sent", "delivered", "read", "failed"):
         return
     rec = (
         await db.execute(
@@ -523,8 +533,10 @@ async def track_status_update(db: AsyncSession, wa_message_id: str, status: str)
     ).scalar_one_or_none()
     if rec is None:
         return
-    # never downgrade read -> delivered
-    if rec.status == "read" and status == "delivered":
+    # Acknowledgements can arrive out of order; never downgrade a stronger
+    # receipt (read/replied/delivered) to sent or failed.
+    rank = {"queued": 0, "sent": 1, "failed": 1, "delivered": 2, "read": 3, "replied": 4}
+    if rank.get(status, 0) < rank.get(rec.status, 0):
         return
     rec.status = status
     await db.commit()
