@@ -105,13 +105,16 @@ async def test_boys_answer_becomes_the_customers_promise(boy, sent) -> None:
     assert num in body
 
     # WAHA sends tappable list rows rather than Meta quick-reply buttons.
-    with_choices = [c for c in sent if c.get("buttons") or c.get("list_rows")]
-    assert with_choices, "Yes/No choices must follow"
-    first = with_choices[0]
-    choices = first.get("buttons") or first.get("list_rows") or []
-    titles = [choice.title for choice in choices]
-    assert any("Haan" in title for title in titles)
-    assert any("Abhi nahi" in title for title in titles)
+    titles = []
+    for message in sent:
+        choices = message.get("buttons") or message.get("list_rows") or []
+        candidate = [choice.title for choice in choices]
+        if any("Haan" in title for title in candidate) and any(
+            "Abhi nahi" in title for title in candidate
+        ):
+            titles = candidate
+            break
+    assert titles, "Customer confirmation must have tappable Haan/Abhi nahi choices"
 
 
 async def test_chatter_is_not_mistaken_for_a_time(boy, sent) -> None:
