@@ -388,7 +388,7 @@ _JOB = {
         "done_q": "Pickup ho gaya?",
         "yes_title": "✅ Pickup done",
         "customer_line": "Your pickup is scheduled",
-        "done_reply": "👍 Thank you. Pickup marked as done.",
+        "done_reply": "👍 Shukriya — thank you. Pickup marked as done.",
     },
     "delivery": {
         "emoji": "🚚",
