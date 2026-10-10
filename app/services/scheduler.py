@@ -338,12 +338,12 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
     # Fixed staff follow-up windows: 10:00, 15:00, 18:00 IST only.
     # No stale-order follow-up ping is sent at the other hourly ticks.
     try:
-        if now_ist.hour in (10, 15, 18):
+        if now_ist.hour in (10, 18):
             await run_follow_up_pings()
     except Exception:
         log.exception("follow_up_pings_failed")
-    # Staff task follow-ups: only 3 fixed windows per day.
-    # 10:00 AM, 3:00 PM and 6:00 PM IST — never on the other hourly ticks.
+    # Staff task follow-ups: only two fixed windows per day.
+    # 10:00 AM and 6:00 PM IST — never on the other hourly ticks.
     try:
         if now_ist.hour in (10, 15, 18):
             from app.services.tasks import run_task_followups

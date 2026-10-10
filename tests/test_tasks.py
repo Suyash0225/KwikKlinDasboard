@@ -99,6 +99,26 @@ async def test_owner_saying_bol_do_creates_a_tracked_task(worker, sent, monkeypa
     assert any(c["to"] == TASK_STAFF_PHONE for c in sent)
 
 
+async def test_staff_reports_wet_clothes_issue_on_unique_open_task(worker, sent) -> None:
+    async with async_session_factory() as db:
+        task = await _mk(db, worker, title="Customer pickup")
+        code = task.code
+    sent.clear()
+
+    async with async_session_factory() as db:
+        reply = await bill_agent.handle_staff_message(
+            db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
+            text="Kapde geele hain, pickup nahi ho payega",
+        )
+    assert reply and code in reply and "OPEN" in reply
+
+    async with async_session_factory() as db:
+        task = await task_service.get_by_code(db, code)
+    assert task.status == TASK_OPEN
+    assert "geele" in (task.reply or "").lower()
+    assert any("Task issue" in (message["text"] or "") for message in sent)
+
+
 # --- completing ---
 
 async def test_staff_closes_task_with_done_code(worker, sent) -> None:
