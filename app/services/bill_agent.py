@@ -1542,7 +1542,9 @@ async def handle_staff_message(
             title="Bill confirmation",
         )
         if sent:
-            reply = None
+            # The menu was delivered directly; stop here so the manager's
+            # generic fallback does not send a second, unrelated help message.
+            return None
     elif action == "delay_update":
         reply = await _apply_delay(db, sender_label, extracted)
     elif action == "status_update":
