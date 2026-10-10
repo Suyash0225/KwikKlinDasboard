@@ -17,6 +17,7 @@ from tests.conftest import TEST_WASHER_NAME, TEST_WASHER_PHONE
 SENDER = "+911111100001"          # pretend staff/manager phone
 CUST_PHONE = "+919999900124"      # bill target customer
 SERVICE = "TestServiceX"          # our own rate rows -> deterministic pricing
+SERVICE_ALT = "TestDryCleanX"
 
 
 def _extract_result(**overrides) -> dict:
@@ -54,8 +55,13 @@ async def _setup_and_cleanup():
     await purge_phones(CUST_PHONE)  # crashed earlier runs must not poison this one
     async with async_session_factory() as s:
         # idempotent: a crashed earlier run may have left the row behind
-        await s.execute(sqltext(f"DELETE FROM rate_card WHERE service = '{SERVICE}'"))
+        await s.execute(
+            sqltext("DELETE FROM rate_card WHERE service IN (:service, :service_alt)"),
+            {"service": SERVICE, "service_alt": SERVICE_ALT},
+        )
         s.add(Rate(service=SERVICE, garment="Kurta", unit="pc", rate=40))
+        s.add(Rate(service=SERVICE_ALT, garment="Kurta", unit="pc", rate=50))
+        s.add(Rate(service=SERVICE_ALT, garment="Sherwani", unit="pc", rate=300))
         await s.commit()
     yield
     _PENDING.clear()
@@ -63,7 +69,10 @@ async def _setup_and_cleanup():
 
     await purge_phones(CUST_PHONE)
     async with async_session_factory() as s:
-        await s.execute(sqltext(f"DELETE FROM rate_card WHERE service = '{SERVICE}'"))
+        await s.execute(
+            sqltext("DELETE FROM rate_card WHERE service IN (:service, :service_alt)"),
+            {"service": SERVICE, "service_alt": SERVICE_ALT},
+        )
         await s.commit()
 
 
@@ -560,7 +569,7 @@ async def test_photo_ambiguous_service_asks_which_one(monkeypatch, sent) -> None
     assert reply is None
     menu = next(m for m in sent if m.get("list_rows") and m["to"] == SENDER)
     assert "kaunsi service" in menu["text"]
-    assert "Dry Clean" in menu["text"] and SERVICE in menu["text"]
+    assert SERVICE_ALT in menu["text"] and SERVICE in menu["text"]
     assert _PENDING[SENDER].draft["total"] == 0  # never guesses a price
 
 
