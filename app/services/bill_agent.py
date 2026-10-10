@@ -337,6 +337,8 @@ _TASK_BTN_RE = re.compile(
     r"^\s*\[button:task:(T-?\d+):(done|later|problem|wash|iron|ready|pending)\]",
     re.I,
 )
+# WAHA list menus use row IDs rather than Meta button IDs.
+_JOB_BTN_RE = re.compile(r"^\s*\[button:job_(yes|no):(T-?\d+)\]", re.I)
 # List se chuna gaya kaam ("pick:o:KK-...", "pick:t:T-11") aur order card ke
 # apne teen button. Order ke button ko pehle parkha jata hai — warna
 # "ord:KK-..:done" ko pick samajh liya jata.
@@ -407,11 +409,15 @@ async def _handle_task_button(
     db: AsyncSession, sender_phone: str, sender_label: str, text: str
 ) -> str | None:
     """Handle deterministic task-menu replies. None means this is not a task menu."""
-    m = _TASK_BTN_RE.match(text or "")
-    if not m:
-        return None
-
-    code, action = m.group(1).upper(), m.group(2).lower()
+    job_choice = _JOB_BTN_RE.match(text or "")
+    if job_choice:
+        code = job_choice.group(2).upper()
+        action = "done" if job_choice.group(1).lower() == "yes" else "pending"
+    else:
+        m = _TASK_BTN_RE.match(text or "")
+        if not m:
+            return None
+        code, action = m.group(1).upper(), m.group(2).lower()
     from app.services import tasks as task_service, team
 
     task = await task_service.get_by_code(db, code)
