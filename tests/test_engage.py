@@ -31,6 +31,19 @@ def _no_quiet_hours(monkeypatch):
     monkeypatch.setattr(engage, "_in_quiet_hours", lambda now_ist: False)
 
 
+@pytest.fixture(autouse=True)
+async def _autonomous_marketing():
+    """Nudge tests must explicitly opt into autonomous marketing."""
+    async with async_session_factory() as db:
+        previous = await app_settings.get(db, "marketing_autonomy")
+        await app_settings.set_value(db, "marketing_autonomy", "auto")
+    try:
+        yield
+    finally:
+        async with async_session_factory() as db:
+            await app_settings.set_value(db, "marketing_autonomy", previous or "suggest")
+
+
 async def _talking_customer(hours_ago: float, *, name="Chup Grahak") -> Customer:
     """A customer who wrote `hours_ago` and never heard back since."""
     async with async_session_factory() as s:
