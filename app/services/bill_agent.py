@@ -1146,7 +1146,7 @@ async def _staff_reference_lookup(
             Decimal("0"),
         )
 
-        if re.search(r"kahan|pata|address|location|pickup|delivery", low):
+        if re.search(r"kahan|pata|address|location|jagah", low):
             place = address or "Address database mein save nahi hai."
             return (
                 f"📍 *{task.code} — Location*\n"
@@ -1191,7 +1191,7 @@ async def _staff_reference_lookup(
         Decimal("0"),
     )
 
-    if re.search(r"kahan|pata|address|location|pickup|delivery", low):
+    if re.search(r"kahan|pata|address|location|jagah", low):
         return (
             f"📍 *{order.order_number} — Location*\n"
             f"*Customer:* {customer_name}\n"
