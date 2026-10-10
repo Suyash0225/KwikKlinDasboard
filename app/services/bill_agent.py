@@ -1306,6 +1306,7 @@ async def handle_staff_message(
             {**_EMPTY_EXTRACT, "relay_to": pending.target, "relay_message": text.strip(),
              "recipient_type": "STAFF"},
             sender_text=f"{pending.target} {text}", sender_phone=sender_phone,
+            message_is_user_text=True,
         )
 
     # Fixed-choice confirmations are deterministic and handled before the LLM.
