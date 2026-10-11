@@ -2359,20 +2359,59 @@ async function custMore(btn) {
   CUST_SHOWN += 50;
   renderCustomers();
 }
+const CUST_SELECTED = new Set();
+
+function toggleCustomerSelected(phone, checked) {
+  if (checked) CUST_SELECTED.add(phone); else CUST_SELECTED.delete(phone);
+  renderCustomers();
+}
+function toggleVisibleCustomers(checked) {
+  const rows = visibleCustomers().slice(0, CUST_SHOWN);
+  rows.forEach((c) => checked ? CUST_SELECTED.add(c.phone) : CUST_SELECTED.delete(c.phone));
+  renderCustomers();
+}
+async function bulkDeleteCustomers() {
+  const phones = [...CUST_SELECTED];
+  if (!phones.length) { toast("Select customers first", true); return; }
+  const selected = phones.map(customerByPhone).filter(Boolean);
+  const bills = selected.reduce((n, c) => n + Number(c.total_orders || 0), 0);
+  const promptText = `You selected ${phones.length} customer(s). ${bills} bill(s), payments and chat history may also be deleted. Type DELETE to confirm.`;
+  if (prompt(promptText) !== "DELETE") return;
+  try {
+    const r = await api("/admin/api/customers/bulk-delete", { method: "DELETE", body: { phones } });
+    phones.forEach((p) => CUST_SELECTED.delete(p));
+    toast(`${r.deleted_count} customer(s) deleted; ${r.orders_deleted} bill(s) removed`);
+    await loadCustomers();
+    loadDashboard();
+  } catch (e) {
+    toast(e.message || "Bulk delete failed", true);
+  }
+}
 function renderCustomers() {
   if (!$("cust-list")) return;
   const all = visibleCustomers();
-  if (!all.length) { $("cust-list").innerHTML = emptyBox("No customers yet — they appear after their first bill or message.", "👥"); return; }
+  if (!all.length) {
+    $("cust-list").innerHTML = emptyBox("No customers yet — they appear after their first bill or message.", "👥");
+    return;
+  }
   const rows = all.slice(0, CUST_SHOWN);
   const more = all.length > rows.length || CUST_MAYBE_MORE;
+  const selectedCount = CUST_SELECTED.size;
+  const allVisibleSelected = rows.length > 0 && rows.every((c) => CUST_SELECTED.has(c.phone));
   const moreBtn = more
     ? `<div style="padding:12px;text-align:center"><button class="btn ghost sm" onclick="custMore(this)">⬇ Show more (${rows.length}${CUST_MAYBE_MORE ? "+" : " / " + all.length})</button></div>`
     : "";
-  $("cust-list").innerHTML = `
-    <table class="tbl"><thead><tr><th>Customer</th><th>Auto reminder</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Last seen</th><th>Actions</th></tr></thead>
+  const selectBar = `<div class="row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 0">
+    <label><input type="checkbox" ${allVisibleSelected ? "checked" : ""} onchange="toggleVisibleCustomers(this.checked)"> Select visible (${rows.length})</label>
+    <div><span class="muted">${selectedCount} selected</span>
+    <button class="btn sm danger" ${selectedCount ? "" : "disabled"} onclick="bulkDeleteCustomers()">🗑 Delete selected</button></div>
+  </div>`;
+  $("cust-list").innerHTML = selectBar + `
+    <table class="tbl"><thead><tr><th>Select</th><th>Customer</th><th>Auto reminder</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Last seen</th><th>Actions</th></tr></thead>
     <tbody>${rows.map((c) => `
-      <tr><td>${esc(displayName(c.name, c.phone))}${c.opted_out ? ' <span class="tag">opted out</span>' : ""}<div class="muted">${c.phone}</div></td>
-      <td><label title="Automatic payment reminders"><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\'${c.phone}\', this.checked)"> Enable</label></td>
+      <tr><td><input aria-label="Select ${esc(c.phone)}" type="checkbox" ${CUST_SELECTED.has(c.phone) ? "checked" : ""} onchange="toggleCustomerSelected('${esc(c.phone)}', this.checked)"></td>
+      <td>${esc(displayName(c.name, c.phone))}${c.opted_out ? ' <span class="tag">opted out</span>' : ""}<div class="muted">${esc(c.phone)}</div></td>
+      <td><label title="Automatic payment reminders"><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\\'${c.phone}\\', this.checked)"> Enable</label></td>
       <td>${c.total_orders} <span class="muted">(${c.active_orders} active)</span></td>
       <td class="money">${money(c.business)}</td><td class="money">${money(c.paid)}</td>
       <td class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</td>
@@ -2383,9 +2422,9 @@ function renderCustomers() {
       </div></td></tr>`).join("")}
     </tbody></table>
     <div class="rowcards">${rows.map((c) => `
-      <div class="rowcard"><div class="r1"><b>${esc(displayName(c.name, c.phone))}</b><span class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</span></div>
-      <div class="kv"><span>${c.phone}</span><span>${c.total_orders} orders</span></div>
-      <div class="kv"><label><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\'${c.phone}\', this.checked)"> Auto payment reminder</label></div>
+      <div class="rowcard"><div class="r1"><label><input type="checkbox" ${CUST_SELECTED.has(c.phone) ? "checked" : ""} onchange="toggleCustomerSelected('${esc(c.phone)}', this.checked)"> <b>${esc(displayName(c.name, c.phone))}</b></label><span class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</span></div>
+      <div class="kv"><span>${esc(c.phone)}</span><span>${c.total_orders} orders</span></div>
+      <div class="kv"><label><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\\'${c.phone}\\', this.checked)"> Auto payment reminder</label></div>
       <div class="kv"><span>Business ${money(c.business)}</span><span>Paid ${money(c.paid)}</span></div>
       <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
       <button class="btn sm ghost" onclick="customerMenu('${c.phone}')">⋯ Actions</button></div></div>`).join("")}</div>${moreBtn}`;
