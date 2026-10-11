@@ -242,3 +242,44 @@ async def test_reminder_uses_the_upi_id_from_settings(client, monkeypatch) -> No
     await client.post("/admin/api/customers/reminder", json={"phone": PHONE}, headers=AUTH)
     assert "UPI:" not in sends[0]["text"]
     assert "Payment can be made at the shop." in sends[0]["text"]
+
+
+async def test_bulk_delete_removes_selected_customer_and_orders(client) -> None:
+    """Bulk deletion removes only the validated selection and reports its counts."""
+    created = await client.post("/orders", json=ORDER_BODY, headers=AUTH)
+    assert created.status_code == 201, created.text
+
+    response = await client.request(
+        "DELETE",
+        "/admin/api/customers/bulk-delete",
+        headers=AUTH,
+        json={"phones": [PHONE, PHONE]},  # duplicate selections must be deduplicated
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ok"] is True
+    assert body["deleted_count"] == 1
+    assert body["orders_deleted"] == 1
+    assert body["bills_found"] == 1
+
+    listed = await client.get("/admin/api/customers", headers=AUTH)
+    assert listed.status_code == 200, listed.text
+    assert PHONE not in {row["phone"] for row in listed.json()}
+
+
+async def test_bulk_delete_validates_all_customers_before_deleting_any(client) -> None:
+    """A missing selection must not partially delete customers that do exist."""
+    created = await client.post("/orders", json=ORDER_BODY, headers=AUTH)
+    assert created.status_code == 201, created.text
+
+    response = await client.request(
+        "DELETE",
+        "/admin/api/customers/bulk-delete",
+        headers=AUTH,
+        json={"phones": [PHONE, "+919999900067"]},
+    )
+    assert response.status_code == 404, response.text
+
+    listed = await client.get("/admin/api/customers", headers=AUTH)
+    assert listed.status_code == 200, listed.text
+    assert PHONE in {row["phone"] for row in listed.json()}
