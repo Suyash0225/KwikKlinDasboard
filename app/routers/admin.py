@@ -794,6 +794,51 @@ async def customer_edit(
     return {"ok": True, "phone": cust.phone}
 
 
+class BulkCustomerDeleteIn(BaseModel):
+    phones: list[str] = Field(min_length=1, max_length=100)
+
+
+@router.delete("/api/customers/bulk-delete", dependencies=[Depends(require_admin_owner)])
+async def customers_bulk_delete(
+    body: BulkCustomerDeleteIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Delete up to 100 selected customers; validate the whole selection first."""
+    phones = list(dict.fromkeys(p.strip() for p in body.phones if p and p.strip()))
+    if not phones:
+        raise HTTPException(status_code=400, detail="Select at least one customer.")
+    if len(phones) > 100:
+        raise HTTPException(status_code=400, detail="Delete at most 100 customers at a time.")
+
+    customers = (
+        await db.execute(select(Customer).where(Customer.phone.in_(phones)))
+    ).scalars().all()
+    by_phone = {c.phone: c for c in customers}
+    missing = [p for p in phones if p not in by_phone]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"{len(missing)} selected customer(s) were not found. Refresh the list and retry.")
+
+    counts = (
+        await db.execute(
+            select(Customer.phone, func.count(Order.id))
+            .outerjoin(Order, Order.customer_id == Customer.id)
+            .where(Customer.phone.in_(phones))
+            .group_by(Customer.phone)
+        )
+    ).all()
+    bills = {phone: count for phone, count in counts}
+    total_bills = sum(bills.values())
+
+    # The UI asks for explicit confirmation before calling this destructive route.
+    deleted = []
+    orders_deleted = 0
+    for phone in phones:
+        result = await customer_delete(phone, db, force=True)
+        deleted.append(result["deleted"])
+        orders_deleted += result["orders_deleted"]
+    log.info("customers_bulk_delete", count=len(deleted), orders=orders_deleted)
+    return {"ok": True, "deleted_count": len(deleted), "orders_deleted": orders_deleted, "deleted": deleted, "bills_found": total_bills}
+
+
 @router.delete("/api/customers/{phone}", dependencies=[Depends(require_admin_owner)])
 async def customer_delete(
     phone: str,
