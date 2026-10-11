@@ -374,7 +374,7 @@
         <div class="camp-card">
           <div class="camp-step"><span class="blue">2</span><div><b>Select Audience</b><small>Use an existing segment or choose exact customers.</small></div></div>
           <div class="camp-audience-grid">
-            <button type="button" class="camp-audience active" data-segment="all_active" onclick="selectCampaignAudience('all_active')"><span>👥</span><b>All Customers</b><small>All active customers</small></button>
+            <button type="button" class="camp-audience active" data-segment="all_active" onclick="selectCampaignAudience('all_active')"><span>👥</span><b>All Eligible Customers</b><small>Every active customer who passes send-safety checks</small></button>
             <button type="button" class="camp-audience" data-segment="active_regular" onclick="selectCampaignAudience('active_regular')"><span>👑</span><b>Regular Customers</b><small>Customers with 2+ orders</small></button>
             <button type="button" class="camp-audience" data-segment="lapsed" onclick="selectCampaignAudience('lapsed')"><span>◷</span><b>Inactive Customers</b><small>No order for 60–120 days</small></button>
             <button type="button" class="camp-audience" data-segment="high_value" onclick="selectCampaignAudience('high_value')"><span>💎</span><b>High Value</b><small>Top-value customers</small></button>
@@ -386,7 +386,7 @@
             <button type="button" class="btn" style="width:100%;margin-top:10px" onclick="openCampaignCustomerPicker()">👥 Select customers</button>
             <div id="camp-selected-list" class="camp-selected-list"></div>
           </div>
-          <div class="camp-audience-meta"><span id="camp-audience-count">Loading audience…</span><span>Opt-outs are skipped automatically</span></div>
+          <div class="camp-audience-meta"><span id="camp-audience-count">Loading audience…</span><span>Opt-outs, complaints, frequency limits and blocked test numbers are skipped</span></div>
         </div>
 
         <div class="camp-card">
