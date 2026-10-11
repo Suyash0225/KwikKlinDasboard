@@ -229,9 +229,9 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
     verdicts = await check_marketing_eligible_bulk(db, [st["id"] for st in targets])
     eligible_ids = [st["id"] for st in targets if verdicts.get(st["id"], (False, ""))[0]]
 
-    # Owner-picked campaigns are already a controlled audience. Do not
-    # silently carve a subset into the global holdout; compliance, budget and
-    # frequency caps still apply below.
+    # Broad-reach (all_active) and owner-picked campaigns express an explicit
+    # intent to reach every eligible target. Do not silently carve a subset
+    # into the global holdout; compliance and frequency caps still apply.
     # "All customers" is an explicit owner choice to reach every customer who
     # passes the marketing eligibility gate. Do not silently suppress a
     # holdout subset for broad-reach or owner-picked campaigns.
