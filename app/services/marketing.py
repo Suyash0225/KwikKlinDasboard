@@ -232,9 +232,6 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
     # Broad-reach (all_active) and owner-picked campaigns express an explicit
     # intent to reach every eligible target. Do not silently carve a subset
     # into the global holdout; compliance and frequency caps still apply.
-    # "All customers" is an explicit owner choice to reach every customer who
-    # passes the marketing eligibility gate. Do not silently suppress a
-    # holdout subset for broad-reach or owner-picked campaigns.
     holdout_pct = 0 if campaign.segment in ("selected", "all_active") else int(
         await app_settings.get(db, "marketing_holdout_percent")
     )
