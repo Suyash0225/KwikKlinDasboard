@@ -2411,7 +2411,7 @@ function renderCustomers() {
     <tbody>${rows.map((c) => `
       <tr><td><input aria-label="Select ${esc(c.phone)}" type="checkbox" ${CUST_SELECTED.has(c.phone) ? "checked" : ""} onchange="toggleCustomerSelected('${esc(c.phone)}', this.checked)"></td>
       <td>${esc(displayName(c.name, c.phone))}${c.opted_out ? ' <span class="tag">opted out</span>' : ""}<div class="muted">${esc(c.phone)}</div></td>
-      <td><label title="Automatic payment reminders"><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\'${c.phone}\\', this.checked)"> Enable</label></td>
+      <td><label title="Automatic payment reminders"><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\'${c.phone}\', this.checked)"> Enable</label></td>
       <td>${c.total_orders} <span class="muted">(${c.active_orders} active)</span></td>
       <td class="money">${money(c.business)}</td><td class="money">${money(c.paid)}</td>
       <td class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</td>
@@ -2424,7 +2424,7 @@ function renderCustomers() {
     <div class="rowcards">${rows.map((c) => `
       <div class="rowcard"><div class="r1"><label><input type="checkbox" ${CUST_SELECTED.has(c.phone) ? "checked" : ""} onchange="toggleCustomerSelected('${esc(c.phone)}', this.checked)"> <b>${esc(displayName(c.name, c.phone))}</b></label><span class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</span></div>
       <div class="kv"><span>${esc(c.phone)}</span><span>${c.total_orders} orders</span></div>
-      <div class="kv"><label><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\'${c.phone}\\', this.checked)"> Auto payment reminder</label></div>
+      <div class="kv"><label><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\'${c.phone}\', this.checked)"> Auto payment reminder</label></div>
       <div class="kv"><span>Business ${money(c.business)}</span><span>Paid ${money(c.paid)}</span></div>
       <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
       <button class="btn sm ghost" onclick="customerMenu('${c.phone}')">⋯ Actions</button></div></div>`).join("")}</div>${moreBtn}`;
