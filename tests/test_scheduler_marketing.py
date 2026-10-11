@@ -383,6 +383,45 @@ async def test_holdout_group_is_carved_out_and_never_messaged(
             await s.commit()
 
 
+async def test_all_active_campaign_reaches_all_eligible_without_holdout(sent) -> None:
+    """Broad-reach campaigns must not silently suppress a control-group subset."""
+    await _seed_lapsed_crowd(HOLDOUT_PHONES)
+    try:
+        async with async_session_factory() as db:
+            await app_settings.set_value(db, "marketing_holdout_percent", 20)
+            campaign = Campaign(
+                name="test-all-eligible", segment="all_active",
+                message_text="Namaste {name}! — Kwik Klin",
+                status="approved", created_by="test",
+            )
+            db.add(campaign)
+            await db.commit()
+            queued = await queue_campaign(db, campaign)
+            cid = campaign.id
+
+        async with async_session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Customer.phone, CampaignRecipient.status)
+                    .join(CampaignRecipient, CampaignRecipient.customer_id == Customer.id)
+                    .where(
+                        CampaignRecipient.campaign_id == cid,
+                        Customer.phone.in_(HOLDOUT_PHONES),
+                    )
+                )
+            ).all()
+        statuses = {phone: status for phone, status in rows}
+        assert len(statuses) == len(HOLDOUT_PHONES)
+        assert all(status == "queued" for status in statuses.values())
+        assert queued >= len(HOLDOUT_PHONES)
+    finally:
+        from tests.conftest import purge_phones
+        await purge_phones(*HOLDOUT_PHONES)
+        async with async_session_factory() as db:
+            await db.execute(sqltext("DELETE FROM settings_kv WHERE key = 'marketing_holdout_percent'"))
+            await db.commit()
+
+
 async def test_tiny_segment_gets_no_holdout(sent) -> None:
     """Silencing 1 of 4 customers buys no signal — just less reach."""
     await _seed_lapsed_crowd(HOLDOUT_PHONES[:4])

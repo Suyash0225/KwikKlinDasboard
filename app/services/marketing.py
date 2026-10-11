@@ -229,10 +229,10 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
     verdicts = await check_marketing_eligible_bulk(db, [st["id"] for st in targets])
     eligible_ids = [st["id"] for st in targets if verdicts.get(st["id"], (False, ""))[0]]
 
-    # Owner-picked campaigns are already a controlled audience. Do not
-    # silently carve a subset into the global holdout; compliance, budget and
-    # frequency caps still apply below.
-    holdout_pct = 0 if campaign.segment == "selected" else int(
+    # Broad-reach (all_active) and owner-picked campaigns express an explicit
+    # intent to reach every eligible target. Do not silently carve a subset
+    # into the global holdout; compliance and frequency caps still apply.
+    holdout_pct = 0 if campaign.segment in ("selected", "all_active") else int(
         await app_settings.get(db, "marketing_holdout_percent")
     )
     if len(eligible_ids) < MIN_REACH_FOR_HOLDOUT:

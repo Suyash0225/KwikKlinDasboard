@@ -40,7 +40,7 @@ const STATUS_SEQ = ["RECEIVED", "IN_WASH", "IN_DRY", "IN_IRON", "READY", "OUT_FO
 const SEGMENT_LABEL = {
   new: "New customers", active_regular: "Active regulars", at_risk: "At risk", selected: "Selected customers",
   lapsed: "Lapsed (60–120d)", lost: "Lost (120d+)", high_value: "High value",
-  outstanding_dues: "Has dues", all_active: "All customers",
+  outstanding_dues: "Has dues", all_active: "All eligible customers",
 };
 
 /* ============================= core ============================= */
@@ -3716,7 +3716,7 @@ function selectCampaignAudience(segment, doPreview=true) {
   const picker=$("camp-selected-picker");if(picker)picker.hidden=segment!=="selected";
   const label=segment==="selected"?"Selected Customers":(SEGMENT_LABEL[segment]||segment);
   const count=segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.length:window.CAMPAIGN_SEG_COUNTS?.[segment];
-  if($("camp-audience-count"))$("camp-audience-count").textContent=count==null?"Audience unavailable":count+" customer"+(count===1?"":"s")+" selected";
+  if($("camp-audience-count"))$("camp-audience-count").textContent=count==null?"Audience unavailable":count+" customer"+(count===1?"":"s")+(segment==="selected"?" selected":" in audience");
   if($("camp-summary-audience"))$("camp-summary-audience").textContent=label;
   if(doPreview)updateCampaignPreview();
 }
