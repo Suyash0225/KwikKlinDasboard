@@ -779,6 +779,7 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
             await db.execute(
                 select(Staff).where(
                     Staff.is_active,
+                    Staff.ai_agent_enabled.is_(True),
                     Staff.role.in_((StaffRole.WASHER, StaffRole.DELIVERY)),
                 )
             )
@@ -880,6 +881,7 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
             await db.execute(
                 select(Staff).where(
                     Staff.is_active,
+                    Staff.ai_agent_enabled.is_(True),
                     Staff.role.in_((StaffRole.MANAGER, StaffRole.SUPERVISOR)),
                 )
             )

@@ -230,22 +230,40 @@ async def resolve_workers(db: AsyncSession, order: Order, role: str = "WASHER") 
     if role == "DELIVERY":
         if order.assigned_delivery_id:
             st = await db.get(Staff, order.assigned_delivery_id)
-            return [st] if st else []
+            return [st] if st and st.is_active and st.ai_agent_enabled else []
+        # Only eligible, active delivery staff may receive automated work messages.
         from app.services import team
         st = await team.delivery_staff(db)
-        return [st] if st else []
+        if st and st.is_active and st.ai_agent_enabled:
+            return [st]
+        # A disabled default delivery worker must not block every other
+        # eligible worker from receiving the operational work order.
+        fallback = (
+            await db.execute(
+                select(Staff).where(
+                    Staff.is_active,
+                    Staff.ai_agent_enabled.is_(True),
+                    Staff.role == StaffRole.DELIVERY,
+                ).order_by(Staff.name).limit(1)
+            )
+        ).scalar_one_or_none()
+        return [fallback] if fallback else []
     if order.assigned_washer_id:
         st = await db.get(Staff, order.assigned_washer_id)
-        return [st] if st else []
+        return [st] if st and st.is_active and st.ai_agent_enabled else []
     washers = list((await db.execute(
-        select(Staff).where(Staff.is_active, Staff.role == StaffRole.WASHER).order_by(Staff.name)
+        select(Staff).where(
+            Staff.is_active,
+            Staff.ai_agent_enabled.is_(True),
+            Staff.role == StaffRole.WASHER,
+        ).order_by(Staff.name)
     )).scalars().all())
     if washers:
         return washers
     default_phone = await app_settings.get(db, "default_washer_phone")
     if default_phone:
         st = (await db.execute(select(Staff).where(Staff.phone == default_phone))).scalar_one_or_none()
-        if st:
+        if st and st.is_active and st.ai_agent_enabled:
             return [st]
     return []
 
