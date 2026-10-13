@@ -115,6 +115,37 @@ async def test_boys_answer_becomes_the_customers_promise(boy, sent) -> None:
     assert f"job_no:{task.code}" in row_ids
 
 
+async def test_staff_messages_do_not_update_tasks_without_button(boy, sent, monkeypatch) -> None:
+    task, _ = await _new_pickup()
+    calls = []
+
+    async def record_reply(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    async def extract_other(db, text, pending, history=""):
+        return dict(bill_agent._EMPTY_EXTRACT)
+
+    monkeypatch.setattr(task_service, "note_reply", record_reply)
+    monkeypatch.setattr(bill_agent, "_extract", extract_other)
+
+    async with async_session_factory() as db:
+        await bill_agent.handle_staff_message(
+            db, sender_phone=PICKUP_STAFF_PHONE, sender_label="Ajitram",
+            text=f"done {task.code}",
+        )
+        await bill_agent.handle_staff_message(
+            db, sender_phone=PICKUP_STAFF_PHONE, sender_label="Ajitram",
+            text="Aaj kapde late honge, main baad mein bataunga",
+        )
+
+    async with async_session_factory() as db:
+        saved = await task_service.get_by_code(db, task.code)
+
+    assert saved.status == "OPEN"
+    assert saved.eta_text is None
+    assert calls == [], "ordinary messages must not be saved as task replies"
+
+
 async def test_chatter_is_not_mistaken_for_a_time(boy, sent) -> None:
     """Only a message that looks like a time answers the question."""
     task, _ = await _new_pickup()
