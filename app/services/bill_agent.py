@@ -1586,7 +1586,7 @@ async def handle_staff_message(
         reply = await _apply_note(db, sender_label, extracted, sender_phone)
     elif action == "record_payment":
         reply = await _stage_payment(db, sender_phone, sender_label, extracted)
-    # Standup/status text is not a task action. Task mutations are handled
+    # Standup replies are not task actions. Task mutations are handled
     # only by the explicit interactive-button handlers above.
     if reply is not None:
         await audit.record(
