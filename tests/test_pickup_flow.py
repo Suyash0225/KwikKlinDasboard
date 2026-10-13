@@ -135,7 +135,7 @@ async def test_staff_messages_do_not_update_tasks_without_button(boy, sent, monk
         )
         await bill_agent.handle_staff_message(
             db, sender_phone=PICKUP_STAFF_PHONE, sender_label="Ajitram",
-            text="Aaj kapde late honge, main baad mein bataunga",
+            text="Weather kaisa chal raha hai?",
         )
 
     async with async_session_factory() as db:
