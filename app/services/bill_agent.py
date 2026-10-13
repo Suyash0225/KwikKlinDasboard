@@ -1573,9 +1573,7 @@ async def handle_staff_message(
     elif action == "delay_update":
         reply = await _apply_delay(db, sender_label, extracted)
     elif action == "status_update":
-        # Natural-language status claims are never authoritative. Status
-        # transitions must come through the explicit interactive buttons.
-        reply = "Status message se update nahi kiya. Kripya task/order ka button use karein."
+        reply = await _apply_status(db, sender_label, extracted, sender_phone)
     elif action == "relay":
         reply = await _apply_relay(
             db, sender_label, extracted, sender_text=text or "", sender_phone=sender_phone
