@@ -854,14 +854,17 @@ async def _handle_task_followup(
     if task is None:
         return None
     if isinstance(pending, PendingTaskEta):
+        task.eta_text = text.strip()[:120]
+        db.add(task)
+        await db.commit()
         await team.notify_admins(
-            db, f"⏳ {sender_label}: [{task.code}] {task.title} — {text.strip()[:120]}"
+            db, f"⏳ {sender_label}: [{task.code}] {task.title} — {task.eta_text}"
         )
-        return "👍 Message manager ko bhej diya. Task update nahi kiya gaya; status button se karein."
+        return f"👍 Note kar liya: {task.eta_text}"
     await team.notify_admins(
         db, f"❗ {sender_label} ki dikkat [{task.code}]: {text.strip()[:300]}"
     )
-    return "Samajh gaya 🙏 Maine owner ko bata diya hai. Task update nahi kiya gaya."
+    return "Samajh gaya 🙏 Maine owner ko bata diya hai."
 
 
 # "aaj ka kaam kya hai", "order details do", "kitne order pending hai" —
@@ -2741,8 +2744,22 @@ async def _handle_pickup_exchange(
             db, task, done=bool(_PICKUP_YES_RE.search(payload)), by=staff.name or sender_label
         )
 
-    # Free-text ETA replies are not task actions. The staff must use the
-    # task's interactive buttons for status changes.
+    # not a button: is this the answer to "kab tak pickup karoge?"
+    if text and not text.startswith("["):
+        pending = await task_service.open_pickup_awaiting_eta(db, staff.id)
+        if pending is not None and _ETA_HINT_RE.search(text):
+            order = await db.get(Order, pending.order_id) if pending.order_id else None
+            if order is not None and order.pickup_date is not None:
+                today_ist = datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
+                mentioned = _pickup_reference_date(text, today_ist)
+                if mentioned is not None and mentioned != order.pickup_date:
+                    target = order.pickup_date.strftime("%d %b %Y")
+                    return (
+                        f"⚠️ Pickup date mismatch for {order.order_number}. "
+                        f"The customer requested pickup on {target}. "
+                        f"Please give a pickup time for {target} (for example: 12 PM / 1 PM / evening)."
+                    )
+            return await task_service.record_pickup_eta(db, pending, text)
     return None
 
 
