@@ -173,6 +173,29 @@ async def create_task(
     if order is not None and customer is not None and order.customer_id != customer.id:
         raise ValueError("task customer does not match the selected order")
 
+    # Idempotency guard: repeated automation/manual requests for the same
+    # open work item must reuse the existing task rather than notify staff twice.
+    # The database partial unique indexes added alongside this change are the
+    # final race-condition guard; this lookup handles the normal request path.
+    existing_query = select(Task).where(
+        Task.status == TASK_OPEN,
+        Task.kind == kind,
+    )
+    if order is not None:
+        existing_query = existing_query.where(Task.order_id == order.id)
+    elif customer is not None:
+        existing_query = existing_query.where(
+            Task.customer_id == customer.id,
+            Task.order_id.is_(None),
+        )
+    else:
+        existing_query = None
+    if existing_query is not None:
+        existing_task = (await db.execute(existing_query.order_by(Task.created_at.desc()).limit(1))).scalar_one_or_none()
+        if existing_task is not None:
+            log.info("task_duplicate_reused", code=existing_task.code, kind=kind)
+            return existing_task
+
     linked_customer_id = order.customer_id if order is not None else (
         customer.id if customer is not None else None
     )
