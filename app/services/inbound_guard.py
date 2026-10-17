@@ -64,8 +64,7 @@ Classify the incoming WhatsApp message into exactly one category:
 
 CUSTOMER_LEAD:
 - A genuine customer/prospect asking about laundry, dry cleaning, pickup, delivery, pricing, placing an order, or using Kwik Klin.
-- A concrete service request or question about using Kwik Klin.
-- Existing-customer service questions also belong here; the backend separately prevents existing orders from being re-created as new leads.
+- A concrete new-service or purchase request from a prospective customer.
 
 CUSTOMER_SERVICE:
 - An existing-order, bill, payment, delivery-status, complaint, or support question that is not a new purchase enquiry.
@@ -241,7 +240,7 @@ def is_customer_lead(result: dict[str, Any]) -> bool:
         confidence = float(result.get("confidence", 0))
     except (TypeError, ValueError):
         confidence = 0.0
-    return result.get("classification") == "CUSTOMER_LEAD" and confidence >= 0.70
+    return result.get("classification") == "CUSTOMER_LEAD" and confidence >= 0.85
 
 
 def is_suppressed_classification(result: dict[str, Any]) -> bool:
