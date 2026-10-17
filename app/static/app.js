@@ -959,10 +959,50 @@ function billMenu(num) {
       <button class="btn ghost" onclick="closeModal();printReceiptFromOrder('${num}')">🖨 Print receipt</button>
       <button class="btn ghost" onclick="closeModal();shareBillFromOrder('${num}')">📲 Share on WhatsApp</button>
       <button class="btn ghost" onclick="closeModal();messageMenu('${num}')">💬 Send a message</button>
+      <button class="btn ghost" onclick="closeModal();billingChargeModal('${num}')">➕ Add charge / due</button>
       <button class="btn ghost" onclick="closeModal();editBillModal('${num}')">✏️ Edit bill</button>
       <button class="btn ghost danger-ic" onclick="closeModal();deleteBillModal('${num}')">🗑 Delete bill</button>
     </div>
     <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
+}
+
+async function billingChargeModal(number) {
+  openModal(`<h3>➕ Add charge / due — ${esc(number)}</h3>
+    <div class="frm">
+      <div><label>Charge / due name</label><input id="bc-label" maxlength="100" placeholder="Pickup charge"></div>
+      <div><label>Amount (₹)</label><input id="bc-amount" type="number" min="0.01" max="1000000" step="0.01" inputmode="decimal"></div>
+      <div><label>Type</label><select id="bc-kind"><option value="extra_charge">Extra charge</option><option value="due_charge">Additional due</option></select></div>
+      <div><label>Note (optional)</label><input id="bc-note" maxlength="300" placeholder="Why was this added?"></div>
+    </div>
+    <p class="muted">Due is always Total − Paid. This records an adjustment without changing payment history.</p>
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" id="bc-save">Add to bill</button></div>`);
+  $("bc-save").onclick = (e) => busy(e.target, async () => {
+    const label = $("bc-label").value.trim();
+    const amount = Number($("bc-amount").value);
+    if (!label || !Number.isFinite(amount) || amount <= 0 || amount > 1000000) {
+      throw new Error("Charge name and amount between ₹0.01 and ₹10,00,000 are required");
+    }
+    await api(`/orders/${encodeURIComponent(number)}/billing-adjustment`, {
+      method: "POST",
+      body: { label, amount, kind: $("bc-kind").value, note: $("bc-note").value.trim() || null, changed_by: "dashboard" }
+    });
+    closeModal();
+    toast("Charge added");
+    if ($("drawer").classList.contains("open")) orderDetail(number);
+    loadDashboard();
+    if ($("bills-list")) loadBills();
+  });
+}
+function removeBillingAdjustment(number, adjustmentId) {
+  confirmDialog("Remove this billing adjustment? The bill total and outstanding due will be recalculated.", async () => {
+    try {
+      await api(`/orders/${encodeURIComponent(number)}/billing-adjustment/${encodeURIComponent(adjustmentId)}`, { method: "DELETE" });
+      toast("Billing adjustment removed");
+      orderDetail(number);
+      loadDashboard();
+      if ($("bills-list")) loadBills();
+    } catch (e) { toast(e.message, true); }
+  });
 }
 
 /* ---- bill par grahak ko message: yaad, thank you, review ----
@@ -1240,14 +1280,16 @@ async function orderDetail(number) {
   syncOverlayScrollLock();
   $("drawer-body").innerHTML = skeleton(4);
   try {
-    const d = await api(`/orders/${number}`);
+    const d = await api(`/orders/${encodeURIComponent(number)}`);
     const o = d.order;
+    const billingAdjustments = (o.items || []).filter((i) => i && i.id && ["extra_charge", "due_charge"].includes(i.kind));
     $("drawer-body").innerHTML = `
       <h3>${o.order_number} <span class="pill ${o.status}">${statusName(o.status)}</span></h3>
       <p class="muted">${esc(displayName(o.customer_name, o.customer_phone))} · ${esc(o.customer_phone)}</p><hr class="hr">
       <b>Items</b>
-      ${(o.items || []).map((i) => `<div class="sumrow"><span>${i.qty} × ${esc(i.type || i.garment || i.service || "?")}</span><span>${i.amount != null ? money(i.amount) : ""}</span></div>`
+      ${(o.items || []).filter((i) => !(i && i.id && ["extra_charge", "due_charge"].includes(i.kind))).map((i) => `<div class="sumrow"><span>${i.qty} × ${esc(i.type || i.garment || i.service || "?")}</span><span>${i.amount != null ? money(i.amount) : ""}</span></div>`
         + (piecesCount(i.pieces) ? `<div class="muted" style="font-size:12.5px;margin:-4px 0 6px">👕 ${esc(piecesLabel(i.pieces))}</div>` : "")).join("")}
+      ${billingAdjustments.length ? `<hr class="hr"><b>Additional charges / due</b>${billingAdjustments.map((a) => `<div class="sumrow"><span>${esc(a.label || a.type || "Additional charge")} <span class="muted">(${a.kind === "due_charge" ? "additional due" : "extra charge"})</span>${a.note ? `<div class="muted" style="font-size:12px">${esc(a.note)}</div>` : ""}</span><span>${money(a.amount)} <button class="btn sm ghost danger-ic" onclick="removeBillingAdjustment('${esc(o.order_number)}','${esc(a.id)}')">Remove</button></span></div>`).join("")}` : ""}
       <div class="sumrow"><span>Discount</span><span>${money(o.discount_amount || 0)}</span></div>
       <div class="sumrow"><span>GST</span><span>${money(o.gst_amount || 0)}</span></div>
       <div class="sumrow total"><span>Total</span><span>${o.total_amount ? money(o.total_amount) : "—"}</span></div>
@@ -1267,6 +1309,7 @@ async function orderDetail(number) {
       <div class="btnrow" style="margin-top:14px">
         ${nextStepBtn(o, "btn")}
         ${!["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn ghost" onclick="statusModal('${o.order_number}','${o.status}')">🔄 Status</button>` : ""}
+        <button class="btn ghost" onclick="billingChargeModal('${o.order_number}')">➕ Add charge</button>
         <button class="btn ghost" onclick="printReceiptFromOrder('${o.order_number}')">🖨 Print</button>
         <button class="btn ghost" onclick="jumpChat('${o.customer_phone}')">💬 Chat</button>
       </div>`;
