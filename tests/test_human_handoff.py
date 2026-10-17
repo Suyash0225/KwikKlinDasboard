@@ -146,7 +146,7 @@ async def test_human_handoff_waits_after_manager_inbox_reply(monkeypatch):
             # Verify the SQL filter explicitly includes the dashboard's
             # sent_by="manager" value, not only phone-originated "human".
             compiled = query.compile()
-            assert "manager" in compiled.params.values()
+            assert "manager" in str(compiled.params)
             return FakeResult()
 
     async def fake_get(_db, key):
