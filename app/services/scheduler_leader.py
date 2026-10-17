@@ -134,8 +134,11 @@ class SchedulerLeader:
                 # A connection failure triggers scheduler shutdown and election
                 # retry. Other workers can acquire the lock after this session
                 # disappears, providing automatic failover.
-                await conn.execute(text("SELECT 1"))
-                await conn.commit()
+                async def _ping() -> None:
+                    await conn.execute(text("SELECT 1"))
+                    await conn.commit()
+
+                await asyncio.wait_for(_ping(), timeout=self._health_interval)
 
     async def _wait(self, seconds: float) -> bool:
         try:
@@ -165,8 +168,14 @@ class SchedulerLeader:
             await conn.commit()
             log.info("scheduler_advisory_lock_unlocked", unlocked=unlocked)
         except Exception:
-            # Closing a broken connection also releases any session-level lock.
+            # A plain close may return a live DB session to the pool with its
+            # session-level lock still held. Invalidate it to force server-side
+            # disconnect and guarantee that PostgreSQL releases the lock.
             log.warning("scheduler_advisory_unlock_failed", exc_info=True)
+            try:
+                await conn.invalidate()
+            except Exception:
+                log.warning("scheduler_leader_invalidate_failed", exc_info=True)
 
     async def _close(self, conn: AsyncConnection) -> None:
         try:
