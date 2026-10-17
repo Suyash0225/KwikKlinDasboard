@@ -118,6 +118,14 @@ async def enforce_outbound_policy(
         if _quiet_now():
             raise SendError("promotional send blocked: quiet hours", transient=False)
         await _reserve_promotional_slot(db, tenant_id, datetime.now(IST))
+        # A queued slot may wait 15–20 seconds. Re-read consent and quiet
+        # hours after that wait so an opt-out during pacing still wins.
+        await db.refresh(customer)
+        if _quiet_now():
+            raise SendError("promotional send blocked: quiet hours", transient=False)
+        ok, reason = await eligible(db, customer.id)
+        if not ok:
+            raise SendError(f"promotional send blocked: {reason}", transient=False)
         return
 
     # STOP is global and always wins; a marketing-only opt-out does not
