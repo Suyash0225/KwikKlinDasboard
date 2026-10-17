@@ -1147,6 +1147,22 @@ async def _handle_inbound_message(
             except SendError:
                 log.exception("start_confirm_send_failed", phone=phone)
             return
+        # Suppress obvious vendor/competitor spam before lead capture, but
+        # do not couple lead capture to whether the AI is allowed to reply.
+        # Genuine inbound enquiries must survive agent OFF, human takeover,
+        # and per-customer pause so a paid lead pipeline does not lose them.
+        from app.services.inbound_guard import should_suppress_inbound
+
+        if await should_suppress_inbound(spoken):
+            return
+        if not customer.opted_out and not customer.marketing_opt_out:
+            try:
+                from app.services.leads import note_inquiry
+
+                await note_inquiry(db, customer, spoken or text or "")
+            except Exception:
+                log.exception("lead_capture_failed", phone=phone)
+
         # Human phone reply gets a short, per-message grace period.
         # During it the customer can continue talking without AI talking over
         # the owner. The scheduler takes over after the grace period expires.
@@ -1188,12 +1204,6 @@ async def _handle_inbound_message(
             log.info("agent_disabled_no_autoreply", phone=phone)
             return
 
-        # High-confidence business ads/vendors/spam are stored for Inbox
-        # visibility but must not reach AI, fallback replies, or lead capture.
-        from app.services.inbound_guard import should_suppress_inbound
-
-        if await should_suppress_inbound(spoken):
-            return
         # Ek baat, ek jawab. Jaldi-jaldi aaye messages ("11 iron" ... 7s
         # baad "3 dryclean") par pehle HAR message ka apna AI jawab jata
         # tha — doosra jawab pehli poori baat dohrata tha aur customer
@@ -1235,13 +1245,6 @@ async def _handle_inbound_message(
                 reply,
                 allow_paused_once=(not was_agent_paused and customer.agent_paused),
             )
-        # first-contact numbers with no orders -> lead pipeline (never raises)
-        try:
-            from app.services.leads import note_inquiry
-
-            await note_inquiry(db, customer, spoken or text or "")
-        except Exception:
-            log.exception("lead_capture_failed")
 
 
 async def _customer_agent_enabled(db: AsyncSession, customer: Customer) -> bool:
