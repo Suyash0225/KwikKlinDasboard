@@ -1301,11 +1301,26 @@ async def sitemap_xml(request: Request):
 
 
 @app.get("/join", include_in_schema=False)
-async def join_page():
-    from fastapi.responses import Response as _Resp
+async def join_page(request: Request):
+    """Public CRM signup/login page with one explicit canonical URL.
 
+    /join is intentionally public and indexable, but www/non-www can expose
+    the same HTML. Pin its canonical to SITE_URL (production) just like the
+    main SEO pages so Search Console does not treat the host variants as an
+    uncategorised duplicate.
+    """
+    from fastapi.responses import Response as _Resp
+    import html as _html
+
+    html = _JOIN_FILE.read_text(encoding="utf-8")
+    canonical = _html.escape(f"{_public_base(request)}/join", quote=True)
+    seo = (
+        f'<link rel="canonical" href="{canonical}">\n'
+        '<meta name="robots" content="index, follow">\n'
+    )
+    html = html.replace("</head>", seo + "</head>", 1)
     return _Resp(
-        content=_JOIN_FILE.read_text(encoding="utf-8"),
+        content=html,
         media_type="text/html",
         headers={"Cache-Control": "no-store"},
     )
