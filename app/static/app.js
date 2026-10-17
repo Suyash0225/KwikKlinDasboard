@@ -707,6 +707,8 @@ async function loadBusinessManager() {
     const orders = d.active_orders || [];
     const late = orders.filter((o) => o.tracking && o.tracking.promise_late);
     const dues = d.unpaid_orders || [];
+    const escalationRows = d.open_escalations || [];
+    const overdueEscalations = escalationRows.filter((item) => item.sla_overdue);
     const outstanding = dues.reduce((sum, o) =>
       sum + Math.max(0, Number(o.total_amount || 0) - Number(o.amount_paid || 0)), 0);
     const tile = (label, value, note, icon) =>
@@ -717,7 +719,8 @@ async function loadBusinessManager() {
       tile("New orders today", Number(c.today_new || 0), "Created since the day boundary used by the dashboard", "🧾") +
       tile("Active orders", Number(c.active_total || 0), "Currently in progress", "🧺") +
       tile("Late deliveries", late.length, "Flagged by the delivery tracker", "⏰") +
-      tile("Outstanding on delivered orders", money(outstanding), dues.length + " orders awaiting collection", "💰");
+      tile("Outstanding on delivered orders", money(outstanding), dues.length + " orders awaiting collection", "💰") +
+      tile("Open complaints", escalationRows.length, overdueEscalations.length + " past response SLA", overdueEscalations.length ? "🔴" : "🛟");
     const orderLine = (o, extra) =>
       '<div style="padding:9px 0;border-bottom:1px solid var(--border)">' +
       '<div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><b>' +
@@ -738,8 +741,18 @@ async function loadBusinessManager() {
     if (late.length) steps.push("Review " + late.length + " late order(s) and confirm the next delivery step.");
     if (dues.length) steps.push("Follow up on " + dues.length + " delivered bill(s) with outstanding payment.");
     if (Number(c.due_today || 0)) steps.push(Number(c.due_today) + " active order(s) are due today; check staff progress.");
+    if (overdueEscalations.length) steps.unshift("🔴 " + overdueEscalations.length + " customer complaint(s) are past the response SLA. Reply and resolve them now.");
+    else if (escalationRows.length) steps.push(escalationRows.length + " customer complaint(s) are waiting for an owner response.");
     if (!steps.length) steps.push("No urgent action is flagged by the current records. Keep order statuses and payments up to date.");
-    actionsBox.innerHTML = '<ul style="margin:0;padding-left:20px">' +
+    const escalationCards = escalationRows.slice(0, 5).map((item) =>
+      '<div style="padding:8px 10px;margin-bottom:7px;border-radius:8px;border:1px solid ' +
+      (item.sla_overdue ? '#dc2626' : 'var(--border)') + ';background:' +
+      (item.sla_overdue ? 'rgba(220,38,38,.06)' : 'transparent') + '">' +
+      '<b>' + (item.sla_overdue ? '🔴 SLA overdue' : 'Complaint open') + '</b> · ' +
+      esc(item.customer || 'Customer') + '<div class="muted" style="margin-top:3px">' +
+      esc(item.question || '') + '</div></div>'
+    ).join("");
+    actionsBox.innerHTML = escalationCards + '<ul style="margin:0;padding-left:20px">' +
       steps.map((s) => '<li style="padding:5px 0">' + esc(s) + '</li>').join("") + '</ul>' +
       '<div class="filters" style="margin-top:10px"><button class="btn sm ghost" onclick="go(\'bills\')">Open bill history</button>' +
       '<button class="btn sm ghost" onclick="go(\'tasks\')">Open staff tasks</button></div>';
