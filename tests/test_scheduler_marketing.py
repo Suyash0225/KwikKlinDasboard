@@ -15,7 +15,7 @@ import app.services.marketing_agent as magent_module
 import app.services.scheduler as sched_module
 from app.database import async_session_factory
 from app.models import Campaign, CampaignRecipient, Coupon, Customer, Order, OrderStatus
-from app.services import app_settings
+from app.services import app_settings, outbound_policy
 from app.services.marketing import (
     _classify,
     compute_segments,
@@ -178,7 +178,6 @@ async def test_campaign_queue_send_and_track(sched_sent, sent, monkeypatch) -> N
     import asyncio as aio
 
     real_sleep = aio.sleep
-    from app.services import outbound_policy
     monkeypatch.setattr(outbound_policy.asyncio, "sleep", lambda s: real_sleep(0))
 
     order = await _seed_order(total_amount=Decimal("300"))
@@ -259,7 +258,7 @@ async def test_all_active_campaign_includes_customers_with_active_orders(
     import asyncio as aio
 
     real_sleep = aio.sleep
-    monkeypatch.setattr(marketing_module.asyncio, "sleep", lambda s: real_sleep(0))
+    monkeypatch.setattr(outbound_policy.asyncio, "sleep", lambda s: real_sleep(0))
     await _seed_order(total_amount=Decimal("300"))
     async with async_session_factory() as db:
         campaign = Campaign(
@@ -293,7 +292,7 @@ async def test_queued_campaign_skips_customer_who_opts_out_before_send(
     import asyncio as aio
 
     real_sleep = aio.sleep
-    monkeypatch.setattr(marketing_module.asyncio, "sleep", lambda s: real_sleep(0))
+    monkeypatch.setattr(outbound_policy.asyncio, "sleep", lambda s: real_sleep(0))
     order = await _seed_order(total_amount=Decimal("300"))
     async with async_session_factory() as s:
         row = (
@@ -388,7 +387,7 @@ async def test_holdout_group_is_carved_out_and_never_messaged(
     import asyncio as aio
 
     real_sleep = aio.sleep
-    monkeypatch.setattr(marketing_module.asyncio, "sleep", lambda s: real_sleep(0))
+    monkeypatch.setattr(outbound_policy.asyncio, "sleep", lambda s: real_sleep(0))
     try:
         await _seed_lapsed_crowd(HOLDOUT_PHONES)
         async with async_session_factory() as db:
@@ -797,7 +796,7 @@ async def test_personalized_winback_creates_customer_locked_coupon_and_caps_30_d
     import asyncio as aio
 
     real_sleep = aio.sleep
-    monkeypatch.setattr(marketing_module.asyncio, "sleep", lambda _: real_sleep(0))
+    monkeypatch.setattr(outbound_policy.asyncio, "sleep", lambda _: real_sleep(0))
     now = datetime.now(timezone.utc)
     orders = []
     try:
