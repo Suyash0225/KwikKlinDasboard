@@ -71,6 +71,23 @@ async def ai_calls_this_month(db, tenant_id) -> int:
     ).scalar_one()
 
 
+async def ai_calls_today(db, tenant_id) -> int:
+    """Recorded AI attempts for the current India-local calendar day."""
+    from app.models import LlmUsage
+
+    now_ist = datetime.now(IST)
+    day_start = now_ist.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).astimezone(timezone.utc)
+    return (
+        await db.execute(
+            select(func.count())
+            .select_from(LlmUsage)
+            .where(LlmUsage.at >= day_start, LlmUsage.tenant_id == tenant_id)
+        )
+    ).scalar_one()
+
+
 async def wa_messages_this_month(db, tenant_id) -> int:
     """BILLABLE messages is mahine ke (utility + marketing templates).
 
@@ -212,7 +229,23 @@ async def check_ai_quota(
                     plan_name,
                 )
 
-        # Check call limits after the money check so an exhausted budget never
+        # Owner-configured daily request cap is a hard stop, not dashboard-only
+        # telemetry. Serialize the check so parallel requests cannot all pass
+        # the same observed count at once.
+        daily_cap = int(await app_settings.get(db, "llm_daily_request_cap") or 0)
+        if daily_cap > 0:
+            now_ist = datetime.now(IST)
+            day_key = now_ist.strftime("%Y-%m-%d")
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                {"lock_key": f"kwikklin-ai-daily-cap:{tid}:{day_key}"},
+            )
+            today_used = await ai_calls_today(db, tid)
+            if today_used >= daily_cap:
+                log.warning("ai_daily_request_cap_exceeded", used=today_used, limit=daily_cap)
+                raise QuotaExceeded("AI daily requests", today_used, daily_cap, plan_name)
+
+        # Check plan call limits after the money check so an exhausted budget never
         # consumes a prepaid AI credit.
         call_limit = limits["ai_usage_limit"]
         used = 0
