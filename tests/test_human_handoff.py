@@ -300,3 +300,57 @@ async def test_human_reply_during_ai_generation_cancels_pending_send(monkeypatch
     assert sent == [], "AI must not send after a human replies during generation"
     assert human_checks == 2
     assert len(unclaimed) == 1
+
+
+
+@pytest.mark.asyncio
+async def test_repeated_welcome_is_replaced_after_first_welcome():
+    from app.routers.webhook import _avoid_repeated_welcome
+
+    previous = [
+        type("Message", (), {
+            "message_text": "Welcome to Kwik Klin 😊 May I know your name, please?"
+        })()
+    ]
+
+    class FakeScalars:
+        def all(self):
+            return previous
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDB:
+        async def execute(self, *_args, **_kwargs):
+            return FakeResult()
+
+    customer = type("Customer", (), {"id": 1, "phone": "+919999999999})()
+    result = await _avoid_repeated_welcome(
+        FakeDB(), customer,
+        "Welcome to Kwik Klin 😊 May I know your name, please?",
+    )
+
+    assert "Welcome" not in result
+    assert "laundry pickup" in result
+
+
+@pytest.mark.asyncio
+async def test_first_welcome_is_preserved():
+    from app.routers.webhook import _avoid_repeated_welcome
+
+    class FakeScalars:
+        def all(self):
+            return []
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDB:
+        async def execute(self, *_args, **_kwargs):
+            return FakeResult()
+
+    customer = type("Customer", (), {"id": 1, "phone": "+919999999998"})()
+    reply = "Welcome to Kwik Klin 😊 May I know your name, please?"
+    assert await _avoid_repeated_welcome(FakeDB(), customer, reply) == reply
