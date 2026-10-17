@@ -23,8 +23,11 @@ async def _test_tenant_id():
                     plan="starter", status="active",
                 )
                 db.add(tenant)
+                await db.flush()
+            tenant_id = tenant.id
+            if db.in_transaction():
                 await db.commit()
-            return tenant.id
+            return tenant_id
 
 
 
