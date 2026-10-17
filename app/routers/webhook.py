@@ -1281,6 +1281,48 @@ async def _customer_agent_enabled(db: AsyncSession, customer: Customer) -> bool:
             tenant_context.current_tenant_id.reset(token)
 
 
+async def _avoid_repeated_welcome(
+    db: AsyncSession, customer: Customer, reply: str
+) -> str:
+    """Never send the onboarding welcome more than once in a customer's thread.
+
+    The model sometimes falls back to its welcome wording for unrelated
+    follow-up messages. Keep the first welcome, but replace later welcome-like
+    replies with a short neutral prompt instead of repeating the same pitch.
+    """
+    normalized = " ".join((reply or "").lower().split())
+    welcome_markers = (
+        "welcome to kwik klin",
+        "welcome to kwik klin ai",
+        "welcome! may i know your name",
+        "may i know your name, please",
+    )
+    if not any(marker in normalized for marker in welcome_markers):
+        return reply
+
+    previous_outbound = (
+        await db.execute(
+            select(Conversation)
+            .where(
+                Conversation.customer_id == customer.id,
+                Conversation.direction == Direction.OUTBOUND,
+            )
+            .order_by(Conversation.created_at.asc())
+            .limit(20)
+        )
+    ).scalars().all()
+
+    already_welcomed = any(
+        any(marker in " ".join((row.message_text or "").lower().split()) for marker in welcome_markers)
+        for row in previous_outbound
+    )
+    if not already_welcomed:
+        return reply
+
+    log.warning("repeated_welcome_replaced", phone=customer.phone)
+    return "Ji, batayein aapko laundry pickup, rates ya existing order mein kis cheez ki madad chahiye?"
+
+
 async def _send_customer_agent_reply(
     db: AsyncSession,
     customer: Customer,
@@ -1341,6 +1383,10 @@ async def _send_customer_agent_reply(
         ):
             log.info("human_takeover_active_before_ai_send", phone=phone)
             return False
+
+        # A malformed/model-fallback reply must not send the welcome
+        # template repeatedly on every customer message.
+        reply = await _avoid_repeated_welcome(db, customer, reply)
 
         try:
             await send_message(db, to_phone=phone, text=reply, sent_by="ai")
