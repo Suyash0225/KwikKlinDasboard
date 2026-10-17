@@ -531,6 +531,23 @@ def _waha_to_meta_shape(payload: dict, *, resolved_from: str | None = None) -> d
     # WAHA list/button implementations may expose the selected row in
     # different engine-specific fields. Prefer a stable selected id if present.
     data = payload.get("_data") or {}
+    if not isinstance(data, dict):
+        data = {}
+    message = data.get("message") or {}
+    if not isinstance(message, dict):
+        message = {}
+    list_response = message.get("listResponseMessage") or {}
+    if not isinstance(list_response, dict):
+        list_response = {}
+    single_select = list_response.get("singleSelectReply") or {}
+    if not isinstance(single_select, dict):
+        single_select = {}
+    button_response = message.get("buttonsResponseMessage") or {}
+    if not isinstance(button_response, dict):
+        button_response = {}
+    template_response = message.get("templateButtonReplyMessage") or {}
+    if not isinstance(template_response, dict):
+        template_response = {}
     selected = (
         payload.get("selectedRowId")
         or payload.get("rowId")
@@ -538,6 +555,9 @@ def _waha_to_meta_shape(payload: dict, *, resolved_from: str | None = None) -> d
         or data.get("rowId")
         or data.get("selectedButtonId")
         or data.get("buttonId")
+        or single_select.get("selectedRowId")
+        or button_response.get("selectedButtonId")
+        or template_response.get("selectedId")
     )
     if selected:
         out["type"] = "button"
