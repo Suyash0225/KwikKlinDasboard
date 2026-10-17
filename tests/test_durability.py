@@ -140,16 +140,22 @@ async def test_failed_event_is_replayed(client, sent, monkeypatch) -> None:
 
 @pytest.fixture
 async def _window_open_customer():
-    async with async_session_factory() as s:
-        s.add(
-            Customer(
-                phone=TEST_CUSTOMER_PHONE,
-                name="Test",
-                last_message_at=datetime.now(timezone.utc),
+    from app.services import tenant_context
+
+    tenant_id = await tenant_context.get_home_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("durability test requires a seeded tenant")
+    async with tenant_context.as_tenant(tenant_id):
+        async with async_session_factory() as s:
+            s.add(
+                Customer(
+                    phone=TEST_CUSTOMER_PHONE,
+                    name="Test",
+                    last_message_at=datetime.now(timezone.utc),
+                )
             )
-        )
-        await s.commit()
-    yield
+            await s.commit()
+        yield tenant_id
 
 
 async def test_transient_send_failure_lands_in_queue(_window_open_customer, monkeypatch) -> None:
@@ -182,7 +188,7 @@ async def test_drain_sends_queued_message(_window_open_customer, monkeypatch) ->
         s.add(
             OutboundMessage(
                 to_phone=TEST_CUSTOMER_PHONE,
-                payload={"text": "queued msg", "sent_by": "bot"},
+                payload={"text": "queued msg", "sent_by": "bot", "tenant_id": str(_window_open_customer)},
             )
         )
         await s.commit()
@@ -224,7 +230,7 @@ async def test_queued_ai_reply_is_suppressed_after_agent_stop(_window_open_custo
     async with async_session_factory() as s:
         s.add(OutboundMessage(
             to_phone=TEST_CUSTOMER_PHONE,
-            payload={"text": "queued AI reply", "sent_by": "ai"},
+            payload={"text": "queued AI reply", "sent_by": "ai", "tenant_id": str(_window_open_customer)},
             created_at=datetime.now(timezone.utc) - timedelta(minutes=1),
         ))
         await s.commit()
@@ -272,7 +278,7 @@ async def test_queued_ai_reply_is_suppressed_after_manager_reply(_window_open_cu
         ))
         s.add(OutboundMessage(
             to_phone=TEST_CUSTOMER_PHONE,
-            payload={"text": "old AI reply", "sent_by": "ai"},
+            payload={"text": "old AI reply", "sent_by": "ai", "tenant_id": str(_window_open_customer)},
             created_at=datetime.now(timezone.utc) - timedelta(minutes=1),
         ))
         await s.commit()
