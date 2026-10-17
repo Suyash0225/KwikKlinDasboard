@@ -41,7 +41,8 @@ async def _reserve_promotional_slot(db: AsyncSession, tenant_id, now: datetime) 
     before waiting/sending so concurrent workers cannot take the same slot.
     Failed sends still consume a slot, which is conservative and avoids bursts.
     """
-    cap = max(1, int(await app_settings.get(db, "outbound_daily_msg_cap") or 100))
+    configured_cap = await app_settings.get(db, "outbound_daily_msg_cap")
+    cap = 100 if configured_cap is None else max(0, int(configured_cap))
     today = now.astimezone(IST).date()
     await db.execute(
         pg_insert(OutboundThrottle)
