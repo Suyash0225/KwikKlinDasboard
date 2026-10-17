@@ -28,9 +28,14 @@ import structlog
 
 log = structlog.get_logger()
 
-# None => system context (trusted in-process code, no HTTP user behind it).
+# None means no tenant is selected; it is NOT system access.
 current_tenant_id: ContextVar[uuid.UUID | None] = ContextVar(
     "current_tenant_id", default=None
+)
+
+# Cross-tenant access must be opted into by trusted code paths explicitly.
+current_system_context: ContextVar[bool] = ContextVar(
+    "current_system_context", default=False
 )
 
 # Home tenant cache — is deployment ki apni dukaan.
@@ -117,7 +122,8 @@ async def tenant_id_for_session(token: str) -> uuid.UUID | None:
 
     try:
         async with async_session_factory() as db:
-            user = await user_for_token(db, token)
+            async with system_context(db):
+                user = await user_for_token(db, token)
     except Exception:
         log.exception("tenant_context_session_lookup_failed")
         return None
@@ -157,14 +163,14 @@ async def tenant_id_for_staff_token(token: str) -> uuid.UUID | None:
     if hit and hit[1] > now:
         return hit[0]
 
-    prev = current_tenant_id.set(None)          # system context
     try:
         async with async_session_factory() as db:
-            row = (
-                await db.execute(
-                    select(StaffSession).where(StaffSession.token_hash == h)
-                )
-            ).scalar_one_or_none()
+            async with system_context(db):
+                row = (
+                    await db.execute(
+                        select(StaffSession).where(StaffSession.token_hash == h)
+                    )
+                ).scalar_one_or_none()
         if row is None or row.revoked_at is not None:
             return None
         if row.expires_at <= datetime.now(timezone.utc):
@@ -176,8 +182,6 @@ async def tenant_id_for_staff_token(token: str) -> uuid.UUID | None:
     except Exception:
         log.exception("tenant_context_staff_lookup_failed")
         return None
-    finally:
-        current_tenant_id.reset(prev)
 
 
 # ---------------------------------------------------------------------------
@@ -269,14 +273,17 @@ class as_tenant:
         self.owner_phone = owner_phone
         self._t1 = None
         self._t2 = None
+        self._t3 = None
 
     async def __aenter__(self):
         phone = self.owner_phone or await owner_phone_for(self.tid)
         self._t1 = current_tenant_id.set(self.tid)
         self._t2 = current_owner_phone.set(phone)
+        self._t3 = current_system_context.set(False)
         return self
 
     async def __aexit__(self, *exc):
+        current_system_context.reset(self._t3)
         current_owner_phone.reset(self._t2)
         current_tenant_id.reset(self._t1)
         return False
@@ -310,37 +317,32 @@ def claim_prefix() -> str:
     return f"t{tid.hex[:8]}:" if tid else ""
 
 @asynccontextmanager
+async def as_system_context():
+    """Explicitly allow trusted platform code to cross tenant boundaries."""
+    tenant_token = current_tenant_id.set(None)
+    system_token = current_system_context.set(True)
+    try:
+        yield
+    finally:
+        current_system_context.reset(system_token)
+        current_tenant_id.reset(tenant_token)
+
+
+@asynccontextmanager
 async def system_context(db):
-    """Is block mein kisi ek dukaan ka pehra nahi — poora platform.
+    """Explicit cross-tenant access for a trusted operation using this DB session.
 
-    Account lifecycle ke kuch kaam kisi dukaan ke ANDAR nahi hote:
-
-      signup        nayi dukaan BANATA hai
-      login         user milne se PEHLE pata hi nahi kis dukaan ka hai
-      google login  wahi baat, google_sub se
-      invite accept token kis dukaan ka hai ye token hi batata hai
-      impersonate   vendor kisi bhi dukaan mein ja sakta hai
-
-    Bina session ke in requests ka context HOME tenant hota hai
-    (main.py ka tenant_scope). Users/invites par RLS lagte hi ye sab
-    tootte hain — doosri dukaan ka owner apne hi account se login nahi kar
-    paata, 401, bina kisi wajah ke.
-
-    DO cheezein set karni padti hain aur dono zaroori hain:
-
-      ContextVar  -> ORM ka with_loader_criteria filter
-      SET LOCAL   -> Postgres ki RLS policy
-
-    SET LOCAL isliye ki GUC transaction ke shuru mein ContextVar se bheja
-    jaata hai (database.py ka "begin" event); beech mein ContextVar badalne
-    par wo dobara nahi bhejta. SET LOCAL commit/rollback par khud hat jaata
-    hai, isliye pooled connection par leak nahi hota.
+    Both ORM ContextVars and PostgreSQL transaction-local GUCs are set.
+    The GUC is set directly because the transaction may already be open.
     """
     from sqlalchemy import text as _text
 
-    token = current_tenant_id.set(None)
+    tenant_token = current_tenant_id.set(None)
+    system_token = current_system_context.set(True)
     try:
         await db.execute(_text("SET LOCAL app.tenant_id = ''"))
+        await db.execute(_text("SET LOCAL app.system_context = 'on'"))
         yield
     finally:
-        current_tenant_id.reset(token)
+        current_system_context.reset(system_token)
+        current_tenant_id.reset(tenant_token)

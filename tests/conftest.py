@@ -46,24 +46,26 @@ async def purge_phones(*phones: str) -> None:
     sub = f"(SELECT id FROM customers WHERE phone IN ({in_list}))"
     orders_sub = f"(SELECT id FROM orders WHERE customer_id IN {sub})"
     async with async_session_factory() as s:
-        for stmt in (
-            f"DELETE FROM payments WHERE order_id IN {orders_sub}",
-            f"DELETE FROM order_status_history WHERE order_id IN {orders_sub}",
-            f"DELETE FROM coupon_redemptions WHERE customer_id IN {sub}",
-            f"DELETE FROM campaign_recipients WHERE customer_id IN {sub}",
-            f"DELETE FROM open_questions WHERE customer_id IN {sub}",
-            # pickup/delivery tasks point at orders — they must go first
-            # Tasks can point directly at the customer OR through an order.
-            # Both must be removed before deleting the customer.
-            f"DELETE FROM tasks WHERE customer_id IN {sub}",
-            f"DELETE FROM tasks WHERE order_id IN {orders_sub}",
-            f"DELETE FROM escalations WHERE customer_id IN {sub}",
-            f"DELETE FROM conversations WHERE customer_id IN {sub}",
-            f"DELETE FROM orders WHERE customer_id IN {sub}",
-            f"DELETE FROM customers WHERE phone IN ({in_list})",
-        ):
-            await s.execute(sqltext(stmt))
-        await s.commit()
+        from app.services import tenant_context
+        async with tenant_context.system_context(s):
+            for stmt in (
+                f"DELETE FROM payments WHERE order_id IN {orders_sub}",
+                f"DELETE FROM order_status_history WHERE order_id IN {orders_sub}",
+                f"DELETE FROM coupon_redemptions WHERE customer_id IN {sub}",
+                f"DELETE FROM campaign_recipients WHERE customer_id IN {sub}",
+                f"DELETE FROM open_questions WHERE customer_id IN {sub}",
+                # pickup/delivery tasks point at orders — they must go first
+                # Tasks can point directly at the customer OR through an order.
+                # Both must be removed before deleting the customer.
+                f"DELETE FROM tasks WHERE customer_id IN {sub}",
+                f"DELETE FROM tasks WHERE order_id IN {orders_sub}",
+                f"DELETE FROM escalations WHERE customer_id IN {sub}",
+                f"DELETE FROM conversations WHERE customer_id IN {sub}",
+                f"DELETE FROM orders WHERE customer_id IN {sub}",
+                f"DELETE FROM customers WHERE phone IN ({in_list})",
+            ):
+                await s.execute(sqltext(stmt))
+            await s.commit()
 
 
 def sign_body(body: bytes) -> str:

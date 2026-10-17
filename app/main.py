@@ -188,7 +188,7 @@ async def tenant_scope(request: Request, call_next):
                 content={"detail": "Bahut tezi se requests — thoda ruk kar try karein."},
                 headers={"Retry-After": "30"},
             )
-        async with _noop():
+        async with tenant_context.as_system_context():
             return await call_next(request)
 
     tid = None

@@ -42,48 +42,49 @@ async def two_tenants():
     system context mein saaf kiya."""
     home_id = await _home_id()
     async with async_session_factory() as db:
-        tenant_b = Tenant(
-            slug=B_SLUG,
-            shop_name="Isolation Test Laundry",
-            owner_name="Tenant B",
-            owner_phone="+919999900083",
-            plan="starter",
-            status="active",
-        )
-        db.add(tenant_b)
-        await db.flush()
-        b_id = tenant_b.id
-        db.add(Customer(phone=HOME_PHONE, name="Home Grahak", tenant_id=home_id))
-        db.add(Customer(phone=B_PHONE, name="B Grahak", tenant_id=b_id))
-        await db.commit()
+        async with tenant_context.system_context(db):
+            tenant_b = Tenant(
+                slug=B_SLUG,
+                shop_name="Isolation Test Laundry",
+                owner_name="Tenant B",
+                owner_phone="+919999900083",
+                plan="starter",
+                status="active",
+            )
+            db.add(tenant_b)
+            await db.flush()
+            b_id = tenant_b.id
+            db.add(Customer(phone=HOME_PHONE, name="Home Grahak", tenant_id=home_id))
+            db.add(Customer(phone=B_PHONE, name="B Grahak", tenant_id=b_id))
+            await db.commit()
     try:
         yield home_id, b_id
     finally:
-        tenant_context.current_tenant_id.set(None)  # cleanup always system ctx
         async with async_session_factory() as db:
-            await db.execute(
-                sqltext("DELETE FROM customers WHERE phone IN (:p1, :p2)"),
-                {"p1": HOME_PHONE, "p2": B_PHONE},
-            )
-            await db.execute(
-                sqltext(
-                    "DELETE FROM login_sessions WHERE user_id IN "
-                    "(SELECT id FROM users WHERE tenant_id = "
-                    " (SELECT id FROM tenants WHERE slug = :s))"
-                ),
-                {"s": B_SLUG},
-            )
-            await db.execute(
-                sqltext(
-                    "DELETE FROM users WHERE tenant_id = "
-                    "(SELECT id FROM tenants WHERE slug = :s)"
-                ),
-                {"s": B_SLUG},
-            )
-            await db.execute(
-                sqltext("DELETE FROM tenants WHERE slug = :s"), {"s": B_SLUG}
-            )
-            await db.commit()
+            async with tenant_context.system_context(db):
+                await db.execute(
+                    sqltext("DELETE FROM customers WHERE phone IN (:p1, :p2)"),
+                    {"p1": HOME_PHONE, "p2": B_PHONE},
+                )
+                await db.execute(
+                    sqltext(
+                        "DELETE FROM login_sessions WHERE user_id IN "
+                        "(SELECT id FROM users WHERE tenant_id = "
+                        " (SELECT id FROM tenants WHERE slug = :s))"
+                    ),
+                    {"s": B_SLUG},
+                )
+                await db.execute(
+                    sqltext(
+                        "DELETE FROM users WHERE tenant_id = "
+                        "(SELECT id FROM tenants WHERE slug = :s)"
+                    ),
+                    {"s": B_SLUG},
+                )
+                await db.execute(
+                    sqltext("DELETE FROM tenants WHERE slug = :s"), {"s": B_SLUG}
+                )
+                await db.commit()
 
 
 async def test_orm_layer_scopes_selects_per_tenant(two_tenants) -> None:
@@ -161,12 +162,13 @@ async def test_rls_blocks_raw_sql_writes(two_tenants) -> None:
 
     # System context se verify: row untouched hai.
     async with async_session_factory() as db:
-        name = (
-            await db.execute(
-                sqltext("SELECT name FROM customers WHERE phone = :p"),
-                {"p": HOME_PHONE},
-            )
-        ).scalar_one()
+        async with tenant_context.system_context(db):
+            name = (
+                await db.execute(
+                    sqltext("SELECT name FROM customers WHERE phone = :p"),
+                    {"p": HOME_PHONE},
+                )
+            ).scalar_one()
     assert name == "Home Grahak"
 
 
@@ -240,13 +242,58 @@ async def test_system_context_still_sees_everything(two_tenants) -> None:
     mein dono tenants ke rows dikhte hain — warna replay/backup toot jaata."""
     assert tenant_context.current_tenant_id.get() is None
     async with async_session_factory() as db:
+        async with tenant_context.system_context(db):
+            rows = (
+                await db.execute(
+                    sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                    {"p1": HOME_PHONE, "p2": B_PHONE},
+                )
+            ).scalars().all()
+    assert set(rows) == {HOME_PHONE, B_PHONE}
+
+
+async def test_rls_unset_tenant_returns_no_rows(two_tenants) -> None:
+    """No tenant and no explicit system grant must fail closed at PostgreSQL."""
+    async with async_session_factory() as db:
         rows = (
             await db.execute(
                 sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
                 {"p1": HOME_PHONE, "p2": B_PHONE},
             )
         ).scalars().all()
-    assert set(rows) == {HOME_PHONE, B_PHONE}
+    assert rows == []
+
+
+async def test_rls_context_does_not_leak_on_reused_connection(two_tenants) -> None:
+    """The same checked-out connection must not retain a prior tenant GUC."""
+    from app.database import engine
+
+    home_id, _b_id = two_tenants
+    async with engine.connect() as conn:
+        async with conn.begin():
+            rows = (await conn.execute(
+                sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                {"p1": HOME_PHONE, "p2": B_PHONE},
+            )).scalars().all()
+            assert rows == []
+
+        token = tenant_context.current_tenant_id.set(home_id)
+        try:
+            async with conn.begin():
+                rows = (await conn.execute(
+                    sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                    {"p1": HOME_PHONE, "p2": B_PHONE},
+                )).scalars().all()
+                assert rows == [HOME_PHONE]
+        finally:
+            tenant_context.current_tenant_id.reset(token)
+
+        async with conn.begin():
+            rows = (await conn.execute(
+                sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                {"p1": HOME_PHONE, "p2": B_PHONE},
+            )).scalars().all()
+            assert rows == []
 
 
 # ---------------------------------------- per-dukaan unique constraints ----
@@ -261,8 +308,9 @@ async def _fresh(slug: str, table: str):
     """
     tid = await _tenant(slug)
     async with async_session_factory() as db:
-        await db.execute(sqltext(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": tid})
-        await db.commit()
+        async with tenant_context.system_context(db):
+            await db.execute(sqltext(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": tid})
+            await db.commit()
     return tid
 
 
