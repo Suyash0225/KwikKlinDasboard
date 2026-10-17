@@ -111,3 +111,47 @@ async def test_human_handoff_without_human_reply_does_not_pause(monkeypatch):
             return FakeResult()
 
     assert await webhook._human_handoff_waiting(FakeDB(), customer, inbound) is False
+
+
+@pytest.mark.asyncio
+async def test_human_handoff_waits_after_manager_inbox_reply(monkeypatch):
+    """Dashboard Inbox replies are stored as sent_by=manager and count as human."""
+    from app.routers import webhook
+    from app.services import app_settings
+
+    now = datetime.now(timezone.utc)
+    customer = Customer(phone="+919999999996")
+    inbound = Conversation(
+        customer_id=customer.id,
+        direction=Direction.INBOUND,
+        message_text="rate kya hai?",
+        wa_message_id="in-manager-1",
+        created_at=now,
+    )
+    manager = Conversation(
+        customer_id=customer.id,
+        direction=Direction.OUTBOUND,
+        message_text="Main rate bata deta hoon",
+        wa_message_id="out-manager-1",
+        sent_by="manager",
+        created_at=now - timedelta(minutes=2),
+    )
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return manager
+
+    class FakeDB:
+        async def execute(self, query, *_args, **_kwargs):
+            # Verify the SQL filter explicitly includes the dashboard's
+            # sent_by="manager" value, not only phone-originated "human".
+            compiled = query.compile()
+            assert "manager" in compiled.params.values()
+            return FakeResult()
+
+    async def fake_get(_db, key):
+        assert key == "human_handoff_grace_minutes"
+        return 15
+
+    monkeypatch.setattr(app_settings, "get", fake_get)
+    assert await webhook._human_handoff_waiting(FakeDB(), customer, inbound) is True
