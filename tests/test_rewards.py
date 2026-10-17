@@ -171,3 +171,68 @@ async def test_rewards_stay_inside_their_shop(client, clean, two_shops, sent) ->
         async with async_session_factory() as db:
             assert await rewards.active_rules(db) == []
     await _wipe_rewards(two_shops["a"])
+
+
+async def test_referral_code_discount_and_referrer_reward_after_delivery(client, clean, sent, monkeypatch) -> None:
+    from app.services import app_settings
+    from app.models import Coupon, CustomerReward
+    from sqlalchemy import select
+
+    async with async_session_factory() as db:
+        old_autonomy = await app_settings.get(db, "marketing_autonomy")
+        await app_settings.set_value(db, "marketing_autonomy", "auto")
+
+    try:
+        # Referrer gets a share code only after the first order is delivered.
+        referrer_order = await _order(PHONE, total="450")
+        async with async_session_factory() as db:
+            order = await db.get(Order, referrer_order.id)
+            await order_service.update_status(db, order, OrderStatus.DELIVERED, changed_by="test")
+
+        share_message = next(
+            (m.get("text", "") for m in sent if m.get("to") == PHONE and "REF-" in m.get("text", "")),
+            "",
+        )
+        import re
+        match = re.search(r"REF-[A-F0-9]{8}", share_message)
+        assert match, f"referral code was not sent after delivery: {sent}"
+        referral_code = match.group(0)
+
+        # Friend gets the referral discount on their first order only.
+        friend_order = await _order(OTHER, total="450", coupon=referral_code)
+        assert friend_order.total_amount == Decimal("400")
+        assert friend_order.discount_amount == Decimal("50")
+        assert friend_order.acquisition_source == "referral"
+        assert friend_order.acquisition_campaign
+
+        async with async_session_factory() as db:
+            order = await db.get(Order, friend_order.id)
+            await order_service.update_status(db, order, OrderStatus.DELIVERED, changed_by="test")
+
+        async with async_session_factory() as db:
+            from app.models import Customer
+            referrer = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+            rewards_for_referrer = (
+                await db.execute(
+                    select(CustomerReward).where(
+                        CustomerReward.customer_id == referrer.id,
+                        CustomerReward.note.like("referral:%"),
+                    )
+                )
+            ).scalars().all()
+            assert len(rewards_for_referrer) == 1
+            reward = rewards_for_referrer[0]
+            assert reward.status == "earned"
+            assert reward.label == "₹100 referral reward"
+            coupon = (
+                await db.execute(select(Coupon).where(Coupon.code == reward.coupon_code))
+            ).scalar_one()
+            assert coupon.customer_id == referrer.id
+            assert coupon.active is True
+
+        # Same friend cannot use a referral code again or use one after having an order.
+        with pytest.raises(order_service.OrderError, match="referral code sirf pehle order"):
+            await _order(OTHER, total="450", coupon=referral_code)
+    finally:
+        async with async_session_factory() as db:
+            await app_settings.set_value(db, "marketing_autonomy", old_autonomy)
