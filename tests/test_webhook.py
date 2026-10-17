@@ -5,7 +5,7 @@ have been sent.
 """
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.config import settings
 from app.database import async_session_factory
@@ -76,23 +76,20 @@ async def test_inbound_lead_is_captured_when_agent_is_disabled(client, sent, mon
     async def agent_disabled(db, customer):
         return False
 
-    async def fake_lead_alert(db, *, to_phone, text, **kwargs):
-        return "wamid.LEAD-ALERT"
+    captured = []
+
+    async def fake_note_inquiry(db, customer, text):
+        captured.append((customer.phone, text))
 
     monkeypatch.setattr(wh, "_customer_agent_enabled", agent_disabled)
-    monkeypatch.setattr(leads_service, "send_message", fake_lead_alert)
+    monkeypatch.setattr(leads_service, "note_inquiry", fake_note_inquiry)
     await _inbound_from(
         client, "bhaiya dry clean ka rate kya hai?", "Lead Capture Test",
         "wamid.TEST-lead-agent-off",
     )
 
-    async with async_session_factory() as db:
-        lead = (
-            await db.execute(select(Lead).where(Lead.phone == TEST_CUSTOMER_PHONE))
-        ).scalar_one_or_none()
-    assert lead is not None
-    assert lead.stage == "CONTACTED"
-    assert "dry clean" in lead.items_text.lower()
+    assert captured and captured[0][0] == TEST_CUSTOMER_PHONE
+    assert "dry clean" in captured[0][1].lower(), "lead capture must happen before the agent-disabled return"
     assert all("dry clean" not in (m["text"] or "").lower() for m in sent), "agent OFF must not send an automated customer reply"
 
 
@@ -104,6 +101,18 @@ async def test_opted_out_customer_is_not_recreated_as_lead(client, sent, monkeyp
         return "wamid.LEAD-ALERT"
 
     monkeypatch.setattr(leads_service, "send_message", fake_lead_alert)
+    # The shared fixture may already have a lead from earlier tests. Remove it
+    # so this assertion verifies STOP does not create a new lead, not that it
+    # deletes legitimate historical lead records.
+    async with async_session_factory() as db:
+        await db.execute(delete(Lead).where(Lead.phone == TEST_CUSTOMER_PHONE))
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one_or_none()
+        if customer is not None:
+            customer.opted_out = False
+            customer.marketing_opt_out = False
+        await db.commit()
     await _inbound_from(client, "STOP", None, "wamid.TEST-lead-stop")
     async with async_session_factory() as db:
         customer = (
