@@ -15,7 +15,7 @@ from app.config import settings
 from app.models import Lead, Order
 from app.models.tenant import Tenant
 from app.services import app_settings, audit, google_business as gbp, llm_client
-from app.services.tenant_context import current_tenant_id, get_home_tenant_id
+from app.services.tenant_context import current_tenant_id
 
 log = structlog.get_logger()
 
