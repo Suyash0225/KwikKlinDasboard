@@ -952,3 +952,48 @@ async def test_dashboard_can_edit_task_and_persist_priority_and_due_date(client,
         assert updated.urgent is True
         assert updated.due_at is not None
         assert updated.assigned_staff_id == worker
+
+
+
+async def test_dashboard_can_reassign_open_task_and_record_owner(client, worker, sent) -> None:
+    """Explicit assign endpoint changes the owner without changing task identity."""
+    import uuid as _uuid
+    from app.models import Task
+
+    second_phone = f"+919999{_uuid.uuid4().int % 1_000_000:06d}"
+    async with async_session_factory() as db:
+        second = Staff(
+            phone=second_phone,
+            name="Taskram Reassigned",
+            role=StaffRole.WASHER,
+            is_active=True,
+            last_message_at=datetime.now(timezone.utc),
+        )
+        db.add(second)
+        await db.commit()
+        second_id = second.id
+        task = await _mk(db, worker, title="Reassignment contract task", notify=False)
+        code = task.code
+
+    try:
+        response = await client.post(
+            f"/admin/api/tasks/{code}/assign",
+            headers=H,
+            json={"staff": "Taskram Reassigned"},
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["code"] == code
+        assert payload["assigned_staff_id"] == str(second_id)
+
+        async with async_session_factory() as db:
+            updated = await task_service.get_by_code(db, code)
+            assert updated is not None
+            assert updated.assigned_staff_id == second_id
+            assert updated.status == TASK_OPEN
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.code == code))
+            await db.execute(delete(Staff).where(Staff.id == second_id))
+            await db.commit()
