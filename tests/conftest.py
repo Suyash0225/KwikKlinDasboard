@@ -1,8 +1,10 @@
 """Shared fixtures for the test suite.
 
 Tests require a dedicated TEST_DATABASE_URL. The harness rejects a missing URL
-and refuses to run against the configured development database. Each test runs
-inside a rollback-only outer transaction with savepoints for Session commits.
+and refuses to run against the configured development database. Transaction-safe
+tests use a rollback-only outer transaction with savepoints; a small set of
+multi-session integration tests opt out and use their own cleanup fixtures. All
+tests remain confined to TEST_DATABASE_URL.
 
 The WhatsApp send function is monkeypatched in webhook tests — tests must
 never call Meta's real API.

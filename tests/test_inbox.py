@@ -103,6 +103,7 @@ async def test_ping_nudges_the_person(client) -> None:
     assert d["messages"][-1]["sent_by"] == "manager"
 
 
+@pytest.mark.requires_independent_sessions
 async def test_template_send_keeps_its_words_in_the_thread(client, monkeypatch) -> None:
     """'[template:kk_staff_alert]' alone told the owner nothing about what
     was actually sent — the params ARE the message."""
