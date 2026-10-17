@@ -786,6 +786,11 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
                 )
             ).scalars().all()
 
+            # A linked open task already represents this order in the task
+            # section. Do not repeat the same order in the second section.
+            task_order_ids = {t.order_id for t in task_rows if t.order_id is not None}
+            orders = [o for o in orders if o.id not in task_order_ids]
+
             if not orders and not task_rows:
                 continue
             if not await _claim(f"{key_prefix}:{today_key}:worker:{st.phone}"):
@@ -904,6 +909,14 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
                 .limit(30)
             )
         ).all()
+
+        # Manager briefing should not list one order once as an open task
+        # and again as a due order. The task row remains the actionable item.
+        task_order_ids = {
+            task.order_id for task, _assignee, _order, _customer in open_tasks
+            if task.order_id is not None
+        }
+        today_orders = [(o, c) for o, c in today_orders if o.id not in task_order_ids]
 
         if managers:
             manager_text = [
