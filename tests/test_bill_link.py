@@ -195,3 +195,37 @@ async def test_link_goes_into_shared_bill_text(order_with_upi, monkeypatch) -> N
     # Sharten WhatsApp mein nahi (bahut lamba ho jaata tha) — kagaz aur web bill par hain
     assert "Terms" not in out["text"] and "Terms & conditions" in out["print_text"]
     assert bill_link.parse(out["bill_url"].rsplit("/", 1)[1]) == (home, o.id)
+
+
+async def test_delivered_bill_offers_feedback_review_and_repeat_pickup(client, order_with_upi) -> None:
+    """The same signed order link stays useful after delivery."""
+    from app.models import OrderStatus
+    from app.services import delivery
+
+    home, original = order_with_upi
+    async with tenant_context.as_tenant(home):
+        async with async_session_factory() as db:
+            old_phone = await app_settings.get(db, "shop_contact_phone")
+            old_review = await app_settings.get(db, "google_review_link")
+            await app_settings.set_value(db, "shop_contact_phone", "+919876543210")
+            await app_settings.set_value(db, "google_review_link", "https://reviews.example/kwikklin")
+            order = await db.get(Order, original.id)
+            await order_service.update_status(db, order, OrderStatus.READY, changed_by="test", notify=False)
+            await delivery.deliver(db, order, None, by="test")
+
+    try:
+        token = bill_link.make(home, original.id)
+        response = await client.get(f"/b/{token}")
+        assert response.status_code == 200
+        html = response.text
+        assert "After delivery" in html
+        assert "Share feedback" in html and "Book another pickup" in html
+        assert "Previous%20order%3A%20" in html
+        assert "Share an honest Google review" in html
+        assert "/r/" in html
+        assert "{{DELIVERY_ACTIONS}}" not in html
+    finally:
+        async with tenant_context.as_tenant(home):
+            async with async_session_factory() as db:
+                await app_settings.set_value(db, "shop_contact_phone", old_phone or "")
+                await app_settings.set_value(db, "google_review_link", old_review or "")

@@ -601,6 +601,7 @@ async def record_payment(
     method: PaymentMethod,
     recorded_by: str = "dashboard",
     note: str | None = None,
+    provider_reference: str | None = None,
     notify_customer: bool = True,
 ) -> Order:
     """Add a received payment; payment_status derives from the model rule.
@@ -633,6 +634,7 @@ async def record_payment(
             method=method,
             recorded_by=recorded_by[:80],
             note=(note or None),
+            provider_reference=provider_reference,
         )
     )
     order.amount_paid = ((order.amount_paid or Decimal("0")) + amount).quantize(

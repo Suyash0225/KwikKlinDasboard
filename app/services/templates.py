@@ -52,6 +52,8 @@ TEMPLATES: dict[str, dict] = {
     "kk_payment_received": {"language": "en_US", "param_count": 3, "url_button": True},
     "kk_bill_requested": {"language": "en_US", "param_count": 3, "url_button": True},
     "kk_payment_reminder": {"language": "en_US", "param_count": 3, "url_button": True},
+    # {{1}} customer name {{2}} shop name; must be approved before auto mode can send it.
+    "kk_repeat_pickup": {"language": "en_US", "param_count": 2},
     # {{1}} order {{2}} delivered now {{3}} still pending
     "kk_partial_delivery": {"language": "en_US", "param_count": 3, "url_button": True},
 }
@@ -142,6 +144,14 @@ STANDARD_SPECS: dict[str, dict] = {
         "body": "Reminder: ₹{{1}} is pending for order {{2}}. {{3}} Thank you for choosing Kwik Klin.",
         "samples": ["150", "KK-20260916-01", "Please clear the pending amount."],
         "buttons": [BILL_BUTTON],
+    },
+    "kk_repeat_pickup": {
+        "purpose": "Cycle-based repeat pickup reminder (marketing opt-in required)",
+        "body": (
+            "Hello {{1}}, it may be time for your next laundry pickup. "
+            "Would you like us to arrange one? Reply here with a convenient time. — {{2}}. Thank you for choosing us."
+        ),
+        "samples": ["Rahul", "Kwik Klin"],
     },
     "kk_staff_alert": {
         "purpose": "Staff / owner alert",

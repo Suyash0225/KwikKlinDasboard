@@ -11,8 +11,10 @@ Compliance is CODE, not convention — every send passes eligible():
 import asyncio
 import random
 import hashlib
+import uuid
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 
 import structlog
@@ -26,6 +28,8 @@ from app.models import (
     Customer,
     Escalation,
     Order,
+    OrderStatus,
+    SentEvent,
 )
 from app.services import app_settings, audit
 from app.services.whatsapp import SendError, _blocked_test_recipient, send_image, send_message
@@ -597,3 +601,158 @@ async def get_coupon(db, code: str):
     return (
         await db.execute(_select(_C).where(_C.code == code.strip().upper()))
     ).scalar_one_or_none()
+
+
+def _repeat_cycle_window(deliveries: list[datetime], now: datetime) -> tuple[int, date] | None:
+    """Infer a stable repeat cycle from the last three completed deliveries."""
+    ordered = sorted(deliveries)
+    if len(ordered) < 3:
+        return None
+    recent = ordered[-3:]
+    gaps = [
+        (right - left).total_seconds() / 86400
+        for left, right in zip(recent, recent[1:])
+        if right > left
+    ]
+    if len(gaps) < 2:
+        return None
+    cycle_days = round(sum(gaps) / len(gaps))
+    if not 7 <= cycle_days <= 45:
+        return None
+    days_since_last = (now.date() - recent[-1].date()).days
+    if cycle_days <= days_since_last <= cycle_days + 2:
+        return cycle_days, recent[-1].date()
+    return None
+
+
+async def run_customer_cycle_nudges(db: AsyncSession, *, now: datetime | None = None) -> int:
+    """Send cycle-timed repeat-pickup template only in marketing auto mode.
+
+    Uses existing opt-out, complaint, frequency-cap and monthly-budget gates.
+    Outside auto mode it sends nothing; owner-approved campaigns remain intact.
+    """
+    from app.models.tenant import Tenant
+    from app.services import tenant_context
+    from app.services.scheduler import _claim, _unclaim
+
+    current = now or datetime.now(timezone.utc)
+    now_ist = current.astimezone(ZoneInfo("Asia/Kolkata"))
+    start_h, end_h = settings.QUIET_HOURS_START, settings.QUIET_HOURS_END
+    hour = now_ist.hour
+    if (start_h > end_h and (hour >= start_h or hour < end_h)) or (
+        start_h <= end_h and start_h <= hour < end_h
+    ):
+        return 0
+    if (await app_settings.get(db, "marketing_autonomy")) != "auto":
+        return 0
+
+    tenant_id = tenant_context.current_tenant_id.get() or tenant_context.cached_home_tenant_id()
+    tenant = await db.get(Tenant, tenant_id) if tenant_id is not None else None
+    if tenant is None:
+        return 0
+
+    delivered_rows = (
+        await db.execute(
+            select(Order.customer_id, Order.actual_delivery)
+            .where(Order.status == OrderStatus.DELIVERED, Order.actual_delivery.isnot(None))
+            .order_by(Order.customer_id, Order.actual_delivery)
+        )
+    ).all()
+    deliveries_by_customer: dict[uuid.UUID, list[datetime]] = {}
+    for customer_id, delivered_at in delivered_rows:
+        deliveries_by_customer.setdefault(customer_id, []).append(delivered_at)
+    if not deliveries_by_customer:
+        return 0
+
+    ids = list(deliveries_by_customer)
+    rows = (
+        await db.execute(
+            select(Customer, Order.created_at, Order.status, Order.total_amount, Order.amount_paid)
+            .join(Order, Order.customer_id == Customer.id)
+            .where(Customer.id.in_(ids))
+            .order_by(Customer.id, Order.created_at)
+        )
+    ).all()
+    customer_stats: dict[uuid.UUID, dict] = {}
+    for customer, created_at, status, total_amount, amount_paid in rows:
+        stat = customer_stats.setdefault(
+            customer.id,
+            {"customer": customer, "latest_order_created": None, "outstanding": Decimal("0")},
+        )
+        if status is not OrderStatus.CANCELLED:
+            if stat["latest_order_created"] is None or created_at > stat["latest_order_created"]:
+                stat["latest_order_created"] = created_at
+            if total_amount is not None:
+                stat["outstanding"] += max(
+                    Decimal("0"), Decimal(str(total_amount)) - Decimal(str(amount_paid or 0))
+                )
+
+    month_key = current.strftime("%Y-%m")
+    prefix = tenant_context.claim_prefix()
+    cycle_sent = (
+        await db.execute(
+            select(func.count()).select_from(SentEvent).where(
+                SentEvent.event_key.like(f"{prefix}cycle-nudge:{month_key}:%")
+            )
+        )
+    ).scalar_one()
+    budget = int(await app_settings.get(db, "marketing_monthly_msg_budget"))
+    from app.services import plans as _plans
+    limits = _plans.effective_limits(tenant)["max_campaign_msgs_month"]
+    if limits is not None:
+        budget = min(budget, limits)
+    spent = await month_send_count(db) + cycle_sent
+    if spent >= budget:
+        return 0
+
+    sent = 0
+    for customer_id, deliveries in deliveries_by_customer.items():
+        if spent >= budget:
+            break
+        due = _repeat_cycle_window(deliveries, current)
+        if due is None:
+            continue
+        cycle_days, last_delivery_date = due
+        stat = customer_stats.get(customer_id)
+        if stat is None:
+            continue
+        customer = stat["customer"]
+        if not customer.is_active or stat["outstanding"] > Decimal("0.009"):
+            continue
+        latest_delivery = max(deliveries)
+        if stat["latest_order_created"] and stat["latest_order_created"] > latest_delivery:
+            continue
+        allowed, reason = await eligible(db, customer.id)
+        if not allowed:
+            log.info("customer_cycle_nudge_skipped", customer=str(customer.id), reason=reason)
+            continue
+
+        claim_key = f"cycle-nudge:{month_key}:{customer.id}:{last_delivery_date.isoformat()}"
+        if not await _claim(claim_key):
+            continue
+        try:
+            await send_message(
+                db,
+                to_phone=customer.phone,
+                template_name="kk_repeat_pickup",
+                template_params=[(customer.name or "there").split()[0], tenant.shop_name],
+                sent_by="marketing",
+            )
+            customer.last_marketing_at = current
+            await db.commit()
+            sent += 1
+            spent += 1
+            log.info(
+                "customer_cycle_nudge_sent",
+                customer=str(customer.id),
+                cycle_days=cycle_days,
+                last_delivery=last_delivery_date.isoformat(),
+            )
+        except SendError as exc:
+            await _unclaim(claim_key)
+            log.warning("customer_cycle_nudge_failed", customer=str(customer.id), error=str(exc)[:160])
+        except Exception:
+            await _unclaim(claim_key)
+            log.exception("customer_cycle_nudge_unexpected", customer=str(customer.id))
+    return sent
+

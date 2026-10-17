@@ -47,6 +47,7 @@ from app.models import (
     CouponRedemption,
     Customer,
     Escalation,
+    EscalationStatus,
     Expense,
     OpenQuestion,
     Order,
@@ -281,6 +282,17 @@ async def dashboard_data(db: AsyncSession = Depends(get_db)) -> dict:
         )
     ).all()
 
+    sla_cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.ESCALATION_SLA_HOURS)
+    open_escalations = (
+        await db.execute(
+            select(Escalation, Customer)
+            .outerjoin(Customer, Customer.id == Escalation.customer_id)
+            .where(Escalation.status == EscalationStatus.OPEN)
+            .order_by(Escalation.created_at.asc())
+            .limit(50)
+        )
+    ).all()
+
     convs = (
         await db.execute(
             select(Conversation, Customer, Staff)
@@ -331,9 +343,22 @@ async def dashboard_data(db: AsyncSession = Depends(get_db)) -> dict:
                 and (o.expected_delivery - datetime.now(timezone.utc).date()).days in (1, 2)
             ),
             "unpaid_delivered": len(unpaid_delivered),
+            "open_escalations": len(open_escalations),
+            "overdue_escalations": sum(1 for esc, _cu in open_escalations if esc.created_at <= sla_cutoff),
         },
         "active_orders": [_row(o, cu, tracked[o.id]) for o, cu in active_orders],
         "unpaid_orders": [_row(o, cu) for o, cu in unpaid_delivered],
+        "open_escalations": [
+            {
+                "id": str(esc.id),
+                "customer": ((cu.name or cu.phone) if cu else "Unknown customer"),
+                "question": esc.question[:400],
+                "created_at": esc.created_at.isoformat(),
+                "sla_overdue": esc.created_at <= sla_cutoff,
+                "owner_reminded": esc.owner_reminded_at is not None,
+            }
+            for esc, cu in open_escalations
+        ],
         "conversations": [
             {
                 "who": (st.name if st else (cu.name or cu.phone if cu else "?")),

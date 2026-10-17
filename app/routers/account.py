@@ -280,7 +280,15 @@ async def razorpay_webhook(
         event = json.loads(raw.decode())
     except Exception:
         raise HTTPException(status_code=400, detail="bad json")
-    result = await billing.handle_event(db, event)
+    if event.get("event") == "payment_link.paid":
+        # Customer order payments and SaaS subscription billing have separate
+        # ledgers and idempotency rules. Never feed an order payment to the
+        # tenant-subscription state machine.
+        from app.services.order_payment_gateway import handle_payment_link_paid
+
+        result = await handle_payment_link_paid(event)
+    else:
+        result = await billing.handle_event(db, event)
     return {"ok": True, "result": result}
 
 
