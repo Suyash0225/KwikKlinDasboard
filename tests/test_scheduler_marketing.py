@@ -230,6 +230,58 @@ async def test_campaign_queue_send_and_track(sched_sent, sent, monkeypatch) -> N
         assert rec.status == "read"
 
 
+async def test_all_active_includes_active_customers_without_orders(sent) -> None:
+    """All customers means all active customer records, not just past buyers."""
+    import uuid
+
+    phone = f"+919998{uuid.uuid4().int % 10**6:06d}"
+    try:
+        async with async_session_factory() as db:
+            db.add(Customer(phone=phone, name="No Order Yet"))
+            await db.commit()
+        async with async_session_factory() as db:
+            segs = await compute_segments(db)
+            assert any(row["phone"] == phone for row in segs["all_active"])
+    finally:
+        from tests.conftest import purge_phones
+        await purge_phones(phone)
+
+
+async def test_all_active_campaign_includes_customers_with_active_orders(
+    sched_sent, sent, monkeypatch
+) -> None:
+    """Broad-reach service marketing should not skip every current order customer."""
+    import asyncio as aio
+
+    real_sleep = aio.sleep
+    monkeypatch.setattr(marketing_module.asyncio, "sleep", lambda s: real_sleep(0))
+    await _seed_order(total_amount=Decimal("300"))
+    async with async_session_factory() as db:
+        campaign = Campaign(
+            name="test-all-active-with-open-order",
+            segment="all_active",
+            message_text="Namaste {name}, Kwik Klin ki service update.",
+            status="approved",
+            created_by="test",
+        )
+        db.add(campaign)
+        await db.commit()
+        queued = await queue_campaign(db, campaign)
+        cid = campaign.id
+    assert queued >= 1
+    await send_campaign(cid)
+    assert [c for c in sched_sent if c["to"] == PHONE]
+    async with async_session_factory() as db:
+        rec = (
+            await db.execute(
+                select(CampaignRecipient)
+                .join(Customer, Customer.id == CampaignRecipient.customer_id)
+                .where(CampaignRecipient.campaign_id == cid, Customer.phone == PHONE)
+            )
+        ).scalar_one()
+        assert rec.status == "sent"
+
+
 async def test_queued_campaign_skips_customer_who_opts_out_before_send(
     sched_sent, sent, monkeypatch
 ) -> None:

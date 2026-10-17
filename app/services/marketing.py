@@ -58,7 +58,7 @@ async def _customer_stats(db: AsyncSession) -> list[dict]:
                     0,
                 ).label("outstanding"),
             )
-            .join(Order, Order.customer_id == Customer.id)
+            .outerjoin(Order, Order.customer_id == Customer.id)
             .where(Customer.is_active)
             .group_by(Customer.id)
         )
@@ -226,7 +226,16 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
 
     # THE single gate: opt-out, cap, complaints, active order, bad rating —
     # for the whole segment in a fixed number of queries.
-    verdicts = await check_marketing_eligible_bulk(db, [st["id"] for st in targets])
+    # Broad-reach campaigns should not suppress a customer just because
+    # they currently have an order in progress. Keep opt-out, frequency,
+    # complaint and negative-rating gates unchanged. Targeted win-back
+    # segments still exclude active orders.
+    allow_active_orders = campaign.segment in ("selected", "all_active")
+    verdicts = await check_marketing_eligible_bulk(
+        db,
+        [st["id"] for st in targets],
+        allow_active_orders=allow_active_orders,
+    )
     eligible_ids = [st["id"] for st in targets if verdicts.get(st["id"], (False, ""))[0]]
 
     # Broad-reach (all_active) and owner-picked campaigns express an explicit
@@ -352,7 +361,11 @@ async def send_campaign(campaign_id) -> None:
                     # Re-run the broader segment gate too: active orders and
                     # rating-based exclusions can change after queue creation.
                     from app.services.leads import check_marketing_eligible_bulk
-                    verdicts = await check_marketing_eligible_bulk(db, [cust.id])
+                    verdicts = await check_marketing_eligible_bulk(
+                        db,
+                        [cust.id],
+                        allow_active_orders=campaign.segment in ("selected", "all_active"),
+                    )
                     still_eligible, skip_reason = verdicts.get(
                         cust.id, (False, "not_eligible")
                     )
@@ -411,8 +424,13 @@ async def send_campaign(campaign_id) -> None:
                 # Delay is enforced immediately before the next actual send,
                 # so the final recipient does not add an unnecessary wait.
 
-        campaign.status = "sent"
-        campaign.sent_at = datetime.now(timezone.utc)
+        # "sent" must mean at least one recipient was actually accepted by
+        # the WhatsApp provider. A campaign with zero sends is a failure, not
+        # a success-looking green status; recipient-level partial failures
+        # remain visible in final_stats.
+        campaign.status = "sent" if sent_now > 0 else "failed"
+        if sent_now > 0:
+            campaign.sent_at = datetime.now(timezone.utc)
         final_stats = await campaign_stats(db, campaign.id)
         prior_stats = campaign.stats or {}
         if prior_stats.get("creative_file"):
@@ -426,8 +444,10 @@ async def send_campaign(campaign_id) -> None:
         campaign.stats = final_stats
         await db.commit()
         await audit.record(
-            actor_role="system", actor="marketing", action="campaign_sent",
-            args={"campaign": campaign.name}, result=f"sent {sent_now}",
+            actor_role="system", actor="marketing",
+            action="campaign_sent" if sent_now > 0 else "campaign_failed",
+            args={"campaign": campaign.name},
+            result=f"sent {sent_now}; failed {final_stats.get('failed', 0)}; skipped {final_stats.get('skipped', 0)}",
         )
 
 

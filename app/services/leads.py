@@ -67,6 +67,10 @@ async def note_inquiry(db: AsyncSession, customer: Customer, text: str) -> None:
     15-minute response). Never raises.
     """
     try:
+        # STOP must win even if this helper is called from another entry point.
+        # A customer who opted out is not reactivated as a marketing lead.
+        if customer.opted_out or customer.marketing_opt_out or not customer.is_active:
+            return
         has_order = (
             await db.execute(
                 select(Order.id).where(Order.customer_id == customer.id).limit(1)
@@ -362,14 +366,17 @@ async def check_stop_throttle() -> None:
 
 
 async def check_marketing_eligible_bulk(
-    db: AsyncSession, customer_ids: list
+    db: AsyncSession,
+    customer_ids: list,
+    *,
+    allow_active_orders: bool = False,
 ) -> dict:
     """Same gate as check_marketing_eligible, for a whole segment at once.
     
     The per-customer version costs ~6 queries; queueing a 500-person
     campaign was 3000 round trips before the first message went out. This
     is a fixed 5, whatever the reach. Reasons match the single-customer
-    version exactly — one is not allowed to be laxer than the other.
+    version exactly, unless a broad-reach campaign explicitly allows active orders.
     """
     from datetime import datetime as _dt
 
@@ -443,7 +450,7 @@ async def check_marketing_eligible_bulk(
             verdict[cid] = (False, "freq_cap")
         elif cid in complained:
             verdict[cid] = (False, "recent_complaint")
-        elif cid in busy:
+        elif cid in busy and not allow_active_orders:
             verdict[cid] = (False, "active_order")
         elif cid in bad_rated:
             verdict[cid] = (False, "recent_bad_rating")
