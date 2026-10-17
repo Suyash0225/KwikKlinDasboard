@@ -129,7 +129,9 @@ async def enforce_outbound_policy(
 
     # STOP is global and always wins; a marketing-only opt-out does not
     # suppress a legitimate utility update.
-    if customer.opted_out:
+    # A STOP acknowledgement is a compliance confirmation, not marketing.
+    # It must be deliverable even though the customer is now opted out.
+    if customer.opted_out and kind != "opt_out_confirmation":
         raise SendError("transactional send blocked: customer opted out", transient=False)
     if kind in {"payment_reminder", "payment_reminder_firm"} and not customer.payment_reminders_enabled:
         raise SendError("transactional send blocked: payment reminders not enabled", transient=False)
