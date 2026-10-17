@@ -2,7 +2,7 @@
 
 import pytest
 
-from database_safety import validate_test_database_url
+from tests.database_safety import validate_test_database_url
 
 
 def test_guard_rejects_same_database_even_with_different_credentials() -> None:

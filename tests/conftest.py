@@ -15,7 +15,7 @@ import os
 
 from dotenv import dotenv_values
 
-from database_safety import validate_test_database_url
+from tests.database_safety import validate_test_database_url
 
 # Read .env without importing app.config (which creates the DB engine too early).
 _env_file = os.getenv("KWIKKLIN_ENV_FILE", ".env")
@@ -188,7 +188,7 @@ def _fresh_throttles():
 
 
 @pytest.fixture(autouse=True)
-async def _prime_home_tenant():
+async def _prime_home_tenant(_isolated_test_transaction):
     """Home-tenant cache ko har test se pehle bharo.
 
     Production mein ye lifespan startup par hota hai; tests ka ASGITransport
@@ -201,7 +201,7 @@ async def _prime_home_tenant():
 
 
 @pytest.fixture(autouse=True)
-def _default_test_system_context():
+def _default_test_system_context(_isolated_test_transaction):
     """Legacy direct-service tests are trusted system operations by default.
 
     Production requests establish a tenant through middleware. Dedicated RLS
@@ -362,7 +362,7 @@ def _no_live_whatsapp(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-async def _cleanup_test_rows():
+async def _cleanup_test_rows(_isolated_test_transaction):
     """Clean marked test rows before the outer rollback; do not dispose the pool here."""
     from datetime import datetime, timezone
 
