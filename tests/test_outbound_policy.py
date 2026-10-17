@@ -380,3 +380,34 @@ async def test_transactional_policy_honors_stop_and_urgent_quiet_exception(monke
             )
     finally:
         tenant_context.current_tenant_id.reset(token)
+
+
+async def test_dotpe_webhook_retry_without_tenant_is_dead_lettered(monkeypatch) -> None:
+    from app.models import WebhookEvent
+    from app.routers import webhook
+
+    async with async_session_factory() as db:
+        event = WebhookEvent(
+            source="dotpe",
+            event_key=uuid.uuid4().hex + uuid.uuid4().hex,
+            payload={"message": {"from": "+919999000012", "text": "hello"}},
+            status="received",
+            attempts=0,
+            received_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+        )
+        db.add(event)
+        await db.commit()
+        event_key = event.event_key
+
+    async def unexpected_handler(*args, **kwargs):
+        raise AssertionError("DotPe retry without tenant identity must not process/send")
+
+    monkeypatch.setattr(webhook, "_handle_inbound_message", unexpected_handler)
+    await webhook.retry_stuck_webhook_events()
+
+    async with async_session_factory() as db:
+        row = (
+            await db.execute(select(WebhookEvent).where(WebhookEvent.event_key == event_key))
+        ).scalar_one()
+        assert row.status == "dead"
+        assert "tenant_id" in (row.error or "")
