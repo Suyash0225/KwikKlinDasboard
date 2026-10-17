@@ -576,3 +576,81 @@ async def test_single_message_still_replies_instantly(client, sent) -> None:
     assert r.status_code == 200
     replies = [m for m in sent if m["to"] == TEST_CUSTOMER_PHONE]
     assert len(replies) == 1
+
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_sent_by"),
+    [("app", "human"), ("api", None)],
+)
+async def test_waha_outbound_webhook_distinguishes_human_from_api(
+    client, monkeypatch, source, expected_sent_by
+) -> None:
+    """A phone-originated WAHA send starts handoff; API sends do not."""
+    import hashlib
+    import hmac
+    import json
+    import time
+    from datetime import datetime, timezone
+
+    from app.database import async_session_factory
+    from app.models import Direction
+    from app.routers import webhook
+
+    secret = "test-waha-webhook-secret"
+    monkeypatch.setattr(settings, "WAHA_WEBHOOK_SECRET", secret)
+    monkeypatch.setattr(settings, "WAHA_WEBHOOK_HMAC_KEY", "")
+
+    wa_message_id = f"wamid.TEST-handoff-source-{source}"
+    sent_timestamp = int(time.time())
+    payload = {
+        "id": wa_message_id,
+        "fromMe": True,
+        "source": source,
+        "to": f"{TEST_CUSTOMER_PHONE_RAW}@c.us",
+        "body": "Main aapki madad karta hoon",
+        "timestamp": sent_timestamp,
+    }
+    body = json.dumps(
+        {"event": "message", "session": "default", "payload": payload},
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(secret.encode(), body, hashlib.sha512).hexdigest()
+
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(
+                select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE)
+            )
+        ).scalar_one_or_none()
+        if customer is None:
+            customer = Customer(phone=TEST_CUSTOMER_PHONE, name="WAHA Handoff Test")
+            db.add(customer)
+            await db.commit()
+
+    response = await client.post(
+        "/webhook/waha",
+        content=body,
+        headers={"X-Webhook-Hmac": signature},
+    )
+    assert response.status_code == 200, response.text
+
+    async with async_session_factory() as db:
+        row = (
+            await db.execute(
+                select(Conversation).where(
+                    Conversation.wa_message_id == wa_message_id
+                )
+            )
+        ).scalar_one_or_none()
+
+    if expected_sent_by is None:
+        assert row is None, "API-originated messages must not create a human takeover"
+    else:
+        assert row is not None, "phone-originated WhatsApp message was not recorded"
+        assert row.sent_by == expected_sent_by
+        assert row.direction == Direction.OUTBOUND
+        assert row.message_text == "Main aapki madad karta hoon"
+        assert row.created_at.replace(tzinfo=timezone.utc).timestamp() == pytest.approx(
+            sent_timestamp, abs=1
+        )
