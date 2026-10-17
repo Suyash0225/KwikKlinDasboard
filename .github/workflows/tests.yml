@@ -76,6 +76,34 @@ jobs:
           APP_DB_PASSWORD: ci-app-role-password-2026
         run: python -m scripts.create_app_role
 
+      - name: Import every app module (required)
+        run: |
+          python - <<'PY'
+          import importlib
+          import pkgutil
+          import app
+
+          module_names = sorted(
+              module.name
+              for module in pkgutil.walk_packages(
+                  app.__path__, prefix=f"{app.__name__}."
+              )
+          )
+          failures = []
+          for name in module_names:
+              try:
+                  importlib.import_module(name)
+              except Exception as exc:
+                  failures.append((name, type(exc).__name__, str(exc)))
+
+          if failures:
+              for name, error_type, message in failures:
+                  print(f"IMPORT FAILED: {name}: {error_type}: {message}")
+              raise SystemExit(1)
+
+          print(f"Imported all {len(module_names)} app modules.")
+          PY
+
       - name: Run available focused regression tests (required)
         shell: bash
         run: |

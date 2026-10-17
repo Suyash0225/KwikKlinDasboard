@@ -33,8 +33,8 @@ structlog==26.1.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
 python-multipart==0.0.31  # FastAPI file uploads (Inbox media); 0.0.20 ke CVE fix
-pypdf
-openpyxl  # .xlsx contact imports (Inbox bulk upload)
+pypdf==6.21.1
+openpyxl==3.1.5  # .xlsx contact imports (Inbox bulk upload)
 
 # services/social.py module level par `from PIL import ...` karta hai.
 # Ye yahan tha hi nahi — prod par haath se install karke chalaya gaya tha,
