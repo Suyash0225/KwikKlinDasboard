@@ -2249,6 +2249,8 @@ class TemplateSendIn(BaseModel):
     phone: str
     template_name: str = Field(min_length=2)
     params: list[str] = Field(default_factory=list)
+    intent: str | None = Field(default=None, pattern="^(promotional|transactional)$")
+    outbound_kind: str | None = Field(default=None, max_length=40)
 
 
 @router.post("/api/inbox/send-template", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
@@ -2273,6 +2275,7 @@ async def inbox_send_template(
             template_name=body.template_name,
             template_params=[p[:600] for p in body.params],
             sent_by="manager",
+            intent=body.intent, outbound_kind=body.outbound_kind,
         )
     except ValueError as exc:  # unknown template / wrong param count
         raise HTTPException(status_code=400, detail=str(exc))
