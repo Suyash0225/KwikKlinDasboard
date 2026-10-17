@@ -16,7 +16,7 @@ async def test_paid_payment_link_reconciles_once(sent) -> None:
         async with async_session_factory() as db:
             order = await order_service.create_order(
                 db,
-                customer_phone=f"+91{uuid.uuid4().int % 10**10:010d}",
+                customer_phone=f"+919{uuid.uuid4().int % 10**9:09d}",
                 customer_name="Gateway Test",
                 items=[{"type": "Shirt", "qty": 2, "rate": 50, "amount": 100}],
                 total_amount=Decimal("100"),
