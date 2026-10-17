@@ -15,7 +15,7 @@ import app.routers.webhook as webhook_module
 import app.services.whatsapp as whatsapp_module
 from app.config import settings
 from app.database import async_session_factory
-from app.models import Conversation, Customer, OutboundMessage, WebhookEvent
+from app.models import Conversation, Customer, Direction, OutboundMessage, WebhookEvent
 from app.routers.orders import _auth_throttle
 from app.services.whatsapp import SendError, send_message
 from tests.conftest import (
@@ -193,6 +193,85 @@ async def test_drain_sends_queued_message(_window_open_customer, monkeypatch) ->
             )
         ).scalars().first()
         assert conv is not None, "drained send must be recorded in conversations"
+
+
+async def test_queued_ai_reply_is_suppressed_after_agent_stop(_window_open_customer, monkeypatch) -> None:
+    """A queued AI response must not escape after the owner turns the agent off."""
+    from app.services import waha
+
+    async def _agent_off(_db, _customer):
+        return False
+
+    async def _unexpected_send(*_args, **_kwargs):
+        pytest.fail("stopped AI reply must not reach WhatsApp")
+
+    monkeypatch.setattr(webhook_module, "_customer_agent_enabled", _agent_off)
+    monkeypatch.setattr(waha, "send_text", _unexpected_send)
+    async with async_session_factory() as s:
+        s.add(OutboundMessage(
+            to_phone=TEST_CUSTOMER_PHONE,
+            payload={"text": "queued AI reply", "sent_by": "ai"},
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        ))
+        await s.commit()
+
+    sent_count = await whatsapp_module.drain_outbound_queue()
+    assert sent_count == 0
+    async with async_session_factory() as s:
+        row = (
+            await s.execute(
+                select(OutboundMessage).where(OutboundMessage.to_phone == TEST_CUSTOMER_PHONE)
+            )
+        ).scalar_one()
+    assert row.status == "dead"
+    assert "AI retry suppressed" in (row.last_error or "")
+
+
+async def test_queued_ai_reply_is_suppressed_after_manager_reply(_window_open_customer, monkeypatch) -> None:
+    """Inbox replies use sent_by=manager and must suppress a stale queued AI reply."""
+    from app.services import app_settings, waha
+
+    async def _agent_on(_db, _customer):
+        return True
+
+    async def _fake_get(_db, key):
+        assert key == "human_handoff_grace_minutes"
+        return 15
+
+    async def _unexpected_send(*_args, **_kwargs):
+        pytest.fail("AI must not talk over a manager reply")
+
+    monkeypatch.setattr(webhook_module, "_customer_agent_enabled", _agent_on)
+    monkeypatch.setattr(app_settings, "get", _fake_get)
+    monkeypatch.setattr(waha, "send_text", _unexpected_send)
+
+    async with async_session_factory() as s:
+        customer = (
+            await s.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalars().first()
+        s.add(Conversation(
+            customer_id=customer.id,
+            direction=Direction.OUTBOUND,
+            message_text="Main dekh raha hoon",
+            sent_by="manager",
+            created_at=datetime.now(timezone.utc),
+        ))
+        s.add(OutboundMessage(
+            to_phone=TEST_CUSTOMER_PHONE,
+            payload={"text": "old AI reply", "sent_by": "ai"},
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        ))
+        await s.commit()
+
+    sent_count = await whatsapp_module.drain_outbound_queue()
+    assert sent_count == 0
+    async with async_session_factory() as s:
+        row = (
+            await s.execute(
+                select(OutboundMessage).where(OutboundMessage.to_phone == TEST_CUSTOMER_PHONE)
+            )
+        ).scalar_one()
+    assert row.status == "dead"
 
 
 async def test_permanent_send_failure_not_queued(_window_open_customer, monkeypatch) -> None:
