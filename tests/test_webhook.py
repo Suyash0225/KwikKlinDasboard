@@ -736,3 +736,25 @@ def test_waha_to_meta_shape_extracts_nested_list_selection() -> None:
     assert normalized["type"] == "button"
     assert normalized["button"]["payload"] == "task:T-150:wash"
     assert normalized["button"]["text"] == "Washing is in progress"
+
+
+async def test_non_lead_inbound_does_not_create_sales_lead(client, sent, monkeypatch) -> None:
+    import app.routers.webhook as wh
+    import app.services.leads as leads_service
+    from app.services import inbound_guard
+
+    captured = []
+    async def fake_classify(text):
+        return {"classification": "GENERAL_MESSAGE", "confidence": 0.0,
+                "reason": "classifier unavailable"}
+    async def fake_note_inquiry(db, customer, text):
+        captured.append((customer.phone, text))
+    async def agent_disabled(db, customer):
+        return False
+
+    monkeypatch.setattr(inbound_guard, "classify_inbound_message", fake_classify)
+    monkeypatch.setattr(leads_service, "note_inquiry", fake_note_inquiry)
+    monkeypatch.setattr(wh, "_customer_agent_enabled", agent_disabled)
+    await _inbound_from(client, "Hello, are you available?", "Test Greeting",
+                        "wamid.TEST-classifier-failure-nonlead")
+    assert captured == [], f"ambiguous inbound message created a lead: {captured}"
