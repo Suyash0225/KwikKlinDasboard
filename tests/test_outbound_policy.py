@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import uuid
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.database import async_session_factory
 
