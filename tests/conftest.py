@@ -90,7 +90,6 @@ async def test_db_transaction():
         )
         if connection is not None:
             await connection.close()
-        await engine.dispose()
         tenant_context.current_system_context.reset(system_token)
         tenant_context.current_tenant_id.reset(tenant_token)
 
@@ -414,6 +413,10 @@ async def _cleanup_test_rows():
             )
         )
         await s.commit()
+    # Dispose only after the ordinary per-test cleanup has finished. Disposing
+    # inside test_db_transaction runs before this autouse fixture's teardown,
+    # leaving asyncpg connections bound to a loop that the next fixture does not use.
+    await engine.dispose()
 
 
 # --------------------------------------------------------------------------
