@@ -248,7 +248,7 @@ async def weekly_suggestion() -> None:
 
         reach = pick["reach"]
         target_list = (
-            "\\n\\nWin-back shortlist (offer only at 2.5× usual gap):\\n"
+            "\n\nWin-back shortlist (offer only at 2.5× usual gap):\n"
             + _winback_target_list(pick)
             if is_winback else ""
         )
@@ -262,7 +262,7 @@ async def weekly_suggestion() -> None:
                 f"🚀 Maine campaign bhej diya (autopilot ON):\n"
                 f"{campaign.rationale}\n\nMessage:\n{copy}\n\n"
                 f"{queued} eligible customers ko ja raha hai (opted-out/"
-                f"complaint wale auto-skip).{target_list}\\n\\nReport: dashboard → Campaigns. "
+                f"complaint wale auto-skip).{target_list}\n\nReport: dashboard → Campaigns. "
                 f"Rokna ho to: 'campaign nahi'."
             )
             await audit.record(
