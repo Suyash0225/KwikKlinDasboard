@@ -338,6 +338,14 @@ async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> Non
     ok, reason = await eligible(db, referrer.id)
     if not ok or referrer.opted_out or referrer.marketing_opt_out:
         return
+
+    # The reward row is unique per referred customer; the notification needs its
+    # own claim so duplicate delivery webhooks cannot send the same reward twice.
+    from app.services.scheduler import _claim, _unclaim
+
+    notice_claim = f"referral-reward-notice:{order.id}"
+    if not await _claim(notice_claim):
+        return
     try:
         await send_message(
             db,
@@ -359,6 +367,11 @@ async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> Non
             result="sent",
         )
     except SendError as exc:
+        # Transient failures are queued by send_message with tenant identity;
+        # keep the claim while that retry is pending. Permanent failures did
+        # not queue, so release the claim to permit a later safe retry.
+        if not exc.transient:
+            await _unclaim(notice_claim)
         log.info("referral_reward_notice_failed", reason=str(exc)[:100])
         await audit.record(
             actor_role="system", actor="referrals", action="referral_reward_notice_failed",
