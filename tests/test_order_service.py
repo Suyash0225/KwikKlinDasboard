@@ -232,3 +232,54 @@ async def test_expected_delivery_reason_stays_internal() -> None:
         )
         assert order.expected_delivery == new_date
         assert "paani nahi aaya" in (order.notes or "")  # manager-only column
+
+
+
+# --- billing adjustments ---
+async def test_billing_adjustment_add_remove_recalculates_payment_status() -> None:
+    from app.services.order_service import add_billing_adjustment, remove_billing_adjustment
+
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=TEST_PHONE, items=ITEMS,
+            total_amount=Decimal("100.00"), created_by="test",
+        )
+        await record_payment(db, order, amount=Decimal("100.00"), method=PaymentMethod.CASH)
+        assert order.payment_status is PaymentStatus.PAID
+
+        updated = await add_billing_adjustment(
+            db, order.order_number, label="Urgent service",
+            amount=Decimal("25.50"), kind="extra_charge", changed_by="test",
+        )
+        assert updated.total_amount == Decimal("125.50")
+        assert updated.payment_status is PaymentStatus.PARTIAL
+        adjustment = next(item for item in updated.items if item.get("kind") == "extra_charge")
+        assert adjustment["label"] == "Urgent service"
+        assert adjustment["amount"] == "25.50"
+
+        updated = await remove_billing_adjustment(db, order.order_number, adjustment["id"])
+        assert updated.total_amount == Decimal("100.00")
+        assert updated.payment_status is PaymentStatus.PAID
+        assert not any(item.get("id") == adjustment["id"] for item in updated.items)
+
+
+async def test_billing_adjustment_rejects_invalid_and_unknown_adjustment() -> None:
+    from app.services.order_service import add_billing_adjustment, remove_billing_adjustment
+
+    async with async_session_factory() as db:
+        order = await create_order(
+            db, customer_phone=TEST_PHONE, items=ITEMS,
+            total_amount=Decimal("100.00"), created_by="test",
+        )
+        with pytest.raises(OrderError):
+            await add_billing_adjustment(
+                db, order.order_number, label="  ", amount=Decimal("10.00")
+            )
+        with pytest.raises(OrderError):
+            await add_billing_adjustment(
+                db, order.order_number, label="Bad amount", amount=Decimal("-1.00")
+            )
+        with pytest.raises(OrderError):
+            await remove_billing_adjustment(db, order.order_number, "missing-id")
+        await db.refresh(order)
+        assert order.total_amount == Decimal("100.00")

@@ -34,6 +34,7 @@ from app.models import (
 from app.services import audit
 from app.utils.throttle import IPThrottle
 from app.schemas.orders import (
+    BillingAdjustmentIn,
     DeliverIn,
     DeliveryDateIn,
     OrderCreateIn,
@@ -797,6 +798,47 @@ async def update_status(
         await order_service.update_status(db, order, new_status, changed_by=body.changed_by)
     except InvalidTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    return await _order_out(db, order)
+
+
+@router.post("/{order_number}/billing-adjustment", dependencies=[Depends(require_admin_owner), Depends(require_feature("billing"))])
+async def add_billing_adjustment(
+    order_number: str, body: BillingAdjustmentIn, db: AsyncSession = Depends(get_db)
+) -> OrderOut:
+    try:
+        order = await order_service.add_billing_adjustment(
+            db, order_number, label=body.label, amount=body.amount, kind=body.kind,
+            note=body.note, changed_by=body.changed_by,
+        )
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except OrderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await audit.record(
+        actor_role="admin", actor=body.changed_by, action="billing_adjustment_added",
+        args={"order": order_number, "label": body.label, "amount": str(body.amount), "kind": body.kind},
+        result="adjustment added",
+    )
+    return await _order_out(db, order)
+
+
+@router.delete("/{order_number}/billing-adjustment/{adjustment_id}", dependencies=[Depends(require_admin_owner), Depends(require_feature("billing"))])
+async def delete_billing_adjustment(
+    order_number: str, adjustment_id: str, request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> OrderOut:
+    try:
+        order = await order_service.remove_billing_adjustment(db, order_number, adjustment_id)
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except OrderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await audit.record(
+        actor_role="admin", actor=getattr(request.state, "user_email", "dashboard"),
+        action="billing_adjustment_removed",
+        args={"order": order_number, "adjustment_id": adjustment_id},
+        result="adjustment removed",
+    )
     return await _order_out(db, order)
 
 

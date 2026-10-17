@@ -121,3 +121,19 @@ class StatusHistoryOut(BaseModel):
     new_status: str
     changed_by: str
     changed_at: datetime
+
+
+class BillingAdjustmentIn(BaseModel):
+    label: str = Field(min_length=1, max_length=100)
+    amount: Decimal = Field(gt=0, le=1000000, max_digits=10, decimal_places=2)
+    kind: str = Field(default="extra_charge", pattern="^(extra_charge|due_charge)$")
+    note: str | None = Field(default=None, max_length=300)
+    changed_by: str = Field(default="dashboard", max_length=80)
+
+    @field_validator("label")
+    @classmethod
+    def _clean_label(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("label cannot be blank")
+        return value
