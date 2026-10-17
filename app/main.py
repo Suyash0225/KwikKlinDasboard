@@ -16,7 +16,7 @@ from app.config import settings
 from app.database import engine
 from app.routers.admin import router as admin_router
 from app.routers.agent_admin import router as agent_admin_router
-from app.routers.orders import router as orders_router
+from app.routers.orders import _key_matches, router as orders_router
 from app.routers.google_analytics import router as google_analytics_router
 from app.routers.webhook import router as webhook_router
 from app.utils.logger import configure_logging
@@ -160,13 +160,14 @@ async def tenant_scope(request: Request, call_next):
     """Data isolation, layer 1: har HTTP request par tenant context set karo.
 
     - Valid kk_session cookie -> us user ka tenant.
-    - Warna (anonymous, API key, webhook) -> is instance ka HOME tenant.
+    - Valid ADMIN_API_KEY on protected internal API routes -> home tenant.
+    - Anonymous/no-session request -> no tenant (RLS fail-closed).
+    - Staff login and platform webhooks use their own explicit trusted paths.
 
     Aage kya hota hai: app/database.py isi context se har transaction par
     Postgres ko `SET LOCAL app.tenant_id` bhejta hai (RLS enforce karta hai),
-    har ORM SELECT par tenant filter lagta hai, aur har naya row isi tenant
-    par stamp hota hai. HTTP se aane wali koi query kabhi unscoped nahi
-    chal sakti — chahe endpoint code filter karna bhool bhi jaye.
+    har ORM SELECT par tenant filter lagta hai. Public token routes resolve
+    their tenant from the signed token rather than inheriting the home tenant.
     """
     from app.services import tenant_context
 
@@ -209,11 +210,21 @@ async def tenant_scope(request: Request, call_next):
     token = request.cookies.get("kk_session", "")
     if token:
         tid = await tenant_context.tenant_id_for_session(token)
-    if tid is None:
-        tid = await tenant_context.get_home_tenant_id()
 
-    # Anonymous callers must not all share the home tenant bucket.
-    rate_key = f"tenant:{tid}" if token and tid is not None else (
+    # The home tenant is available to the internal admin API key only, and
+    # only on endpoints that actually accept that key. A missing/invalid key
+    # must remain unscoped; it must never inherit the home shop's data.
+    admin_key_paths = (
+        path.startswith("/orders")
+        or path.startswith("/admin/api")
+        or path.startswith("/admin/media")
+    )
+    if tid is None and admin_key_paths:
+        admin_key = request.headers.get("X-API-Key", "")
+        if admin_key and _key_matches(admin_key):
+            tid = await tenant_context.get_home_tenant_id()
+
+    rate_key = f"tenant:{tid}" if tid is not None else (
         f"ip:{request.client.host if request.client else 'unknown'}"
     )
     if _rate_limited(rate_key, request.url.path):
