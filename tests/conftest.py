@@ -138,6 +138,24 @@ async def _prime_home_tenant():
     await tenant_context.get_home_tenant_id()
 
 
+@pytest.fixture(autouse=True)
+async def _default_home_tenant_scope(_prime_home_tenant):
+    """Direct service/DB tests run as the home tenant unless they opt out.
+
+    Production HTTP middleware normally establishes the tenant context. These
+    tests call services directly, so make that default explicit rather than
+    relying on the old fail-open RLS policy.
+    """
+    from app.services import tenant_context
+
+    tid = await tenant_context.get_home_tenant_id()
+    if tid is None:
+        yield
+        return
+    async with tenant_context.as_tenant(tid):
+        yield
+
+
 @pytest.fixture
 def real_agent_switch():
     """Ye fixture maangne wale tests par _agent_switch_on patch nahi lagta —
