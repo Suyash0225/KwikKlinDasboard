@@ -428,7 +428,7 @@ async def test_promotional_daily_cap_zero_blocks_all_sends(monkeypatch) -> None:
             customer = Customer(phone=phone, name="Zero Cap Test")
             db.add(customer)
             await db.flush()
-            with pytest.raises(SendError, match="daily cap reached \(0\)"):
+            with pytest.raises(SendError, match=r"daily cap reached \(0\)"):
                 await outbound_policy.enforce_outbound_policy(
                     db, customer=customer, phone=phone, intent="promotional"
                 )
@@ -441,3 +441,49 @@ async def test_promotional_daily_cap_zero_blocks_all_sends(monkeypatch) -> None:
             await db.execute(delete(OutboundThrottle).where(OutboundThrottle.tenant_id == tenant_id))
             await db.execute(delete(Customer).where(Customer.id == customer_id))
             await db.commit()
+
+
+@pytest.mark.requires_independent_sessions
+async def test_outbound_retry_claim_prevents_duplicate_after_restart(monkeypatch) -> None:
+    """A persisted claim for the same queue attempt suppresses a second send."""
+    import app.services.whatsapp as whatsapp
+    from app.models import OutboundMessage
+    from app.services import tenant_context
+    from app.services.scheduler import _claim
+
+    tenant_id = await _test_tenant_id()
+    async with tenant_context.as_tenant(tenant_id):
+        async with async_session_factory() as db:
+            row = OutboundMessage(
+                to_phone=f"+91993{uuid.uuid4().int % 10**7:07d}",
+                payload={"tenant_id": str(tenant_id), "text": "send once", "sent_by": "bot"},
+                status="queued",
+                next_attempt_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            )
+            db.add(row)
+            await db.commit()
+            row_id = row.id
+        assert await _claim(f"outbound-retry:{row_id}:attempt:0")
+
+    async def unexpected_send(*args, **kwargs):
+        raise AssertionError("a previously claimed retry attempt must not send again")
+
+    monkeypatch.setattr(whatsapp, "send_message", unexpected_send)
+    try:
+        assert await whatsapp.drain_outbound_queue() == 0
+        async with async_session_factory() as db:
+            row = await db.get(OutboundMessage, row_id)
+            assert row is not None and row.status == "dead"
+            assert "duplicate retry claim" in (row.last_error or "")
+    finally:
+        async with async_session_factory() as db:
+            from app.services import tenant_context
+            async with tenant_context.system_context(db):
+                await db.execute(delete(OutboundMessage).where(OutboundMessage.id == row_id))
+                await db.execute(
+                    delete(__import__("app.models", fromlist=["SentEvent"]).SentEvent).where(
+                        __import__("app.models", fromlist=["SentEvent"]).SentEvent.event_key
+                        == f"t{tenant_id.hex[:8]}:outbound-retry:{row_id}:attempt:0"
+                    )
+                )
+                await db.commit()
