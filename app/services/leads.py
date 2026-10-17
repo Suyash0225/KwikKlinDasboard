@@ -245,6 +245,7 @@ async def run_lead_followups(now: datetime | None = None) -> int:
                     db,
                     to_phone=lead.phone,
                     text=get_message(key, name=lead.name or "ji"),
+                    intent="promotional",
                 )
                 sends += 1
             except SendError:
