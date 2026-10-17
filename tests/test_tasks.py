@@ -997,3 +997,51 @@ async def test_dashboard_can_reassign_open_task_and_record_owner(client, worker,
             await db.execute(delete(Task).where(Task.code == code))
             await db.execute(delete(Staff).where(Staff.id == second_id))
             await db.commit()
+
+
+
+async def test_duplicate_open_customer_task_reuses_existing_task(worker, sent) -> None:
+    """Repeated automation must not create or notify a second open work item."""
+    from app.models import Customer
+
+    phone = f"+919999{uuid.uuid4().int % 1_000_000:06d}"
+    async with async_session_factory() as db:
+        staff = await db.get(Staff, worker)
+        customer = Customer(phone=phone, name="Duplicate Guard Customer", is_active=True)
+        db.add(customer)
+        await db.commit()
+        customer_id = customer.id
+        first = await task_service.create_task(
+            db, title="Wash this customer's clothes", staff=staff,
+            customer=customer, kind="wash", notify=True,
+        )
+        first_code = first.code
+
+    first_send_count = len(sent)
+    try:
+        async with async_session_factory() as db:
+            staff = await db.get(Staff, worker)
+            customer = await db.get(Customer, customer_id)
+            second = await task_service.create_task(
+                db, title="Duplicate wash request", staff=staff,
+                customer=customer, kind="wash", notify=True,
+            )
+        assert second.code == first_code
+        assert len(sent) == first_send_count
+        async with async_session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Task).where(
+                        Task.customer_id == customer_id,
+                        Task.order_id.is_(None),
+                        Task.kind == "wash",
+                        Task.status == TASK_OPEN,
+                    )
+                )
+            ).scalars().all()
+            assert len(rows) == 1
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.customer_id == customer_id))
+            await db.execute(delete(Customer).where(Customer.id == customer_id))
+            await db.commit()
