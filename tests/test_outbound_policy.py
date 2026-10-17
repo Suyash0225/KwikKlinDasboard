@@ -142,3 +142,21 @@ async def test_concurrent_referral_code_issuance_reuses_one_coupon() -> None:
                 )
                 await db.execute(delete(Customer).where(Customer.id == customer_id))
                 await db.commit()
+
+
+def test_all_review_templates_are_optional_neutral_and_unincentivized() -> None:
+    from app.services.messages import MESSAGES
+    from app.services.templates import STANDARD_SPECS
+
+    review_copy = MESSAGES["review_request"]
+    assert set(review_copy) == {"hi", "en"}
+    for locale, template in review_copy.items():
+        lowered = template.lower()
+        assert "{review_link}" in template, locale
+        assert "honest feedback" in lowered or "imaandaar feedback" in lowered, locale
+        assert not any(term in lowered for term in ("coupon", "discount", "reward code", "gift", "free", "off")), locale
+
+    rating_template = STANDARD_SPECS["kk_thankyou_rating"]["body"].lower()
+    assert "coupon" not in rating_template
+    assert "discount" not in rating_template
+    assert "review" not in rating_template  # neutral rating request, link is offered after every rating
