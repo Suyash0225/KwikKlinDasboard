@@ -780,11 +780,9 @@ async def run_customer_cycle_nudges(db: AsyncSession, *, now: datetime | None = 
 
     current = now or datetime.now(timezone.utc)
     now_ist = current.astimezone(ZoneInfo("Asia/Kolkata"))
-    start_h, end_h = settings.QUIET_HOURS_START, settings.QUIET_HOURS_END
-    hour = now_ist.hour
-    if (start_h > end_h and (hour >= start_h or hour < end_h)) or (
-        start_h <= end_h and start_h <= hour < end_h
-    ):
+    from app.services.outbound_policy import _quiet_now
+
+    if _quiet_now(now_ist):
         return 0
     if (await app_settings.get(db, "marketing_autonomy")) != "auto":
         return 0
