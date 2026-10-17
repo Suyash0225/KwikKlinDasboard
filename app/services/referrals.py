@@ -54,7 +54,9 @@ async def _code() -> str:
 
 async def _get_or_create_referral_code(
     db: AsyncSession, customer: Customer
-) -> tuple[Campaign, Coupon]:
+ ) -> tuple[Campaign, Coupon]:
+    customer_id = customer.id
+    tenant_id = customer.tenant_id
     campaigns = (
         await db.execute(
             select(Campaign).where(Campaign.segment == "referral").order_by(Campaign.created_at.desc())
@@ -128,8 +130,8 @@ async def _get_or_create_referral_code(
         existing_campaign = (
             await db.execute(
                 select(Campaign).where(
-                    Campaign.tenant_id == customer.tenant_id,
-                    Campaign.referral_owner_customer_id == customer.id,
+                    Campaign.tenant_id == tenant_id,
+                    Campaign.referral_owner_customer_id == customer_id,
                 )
             )
         ).scalar_one_or_none()
