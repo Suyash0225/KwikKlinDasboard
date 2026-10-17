@@ -243,6 +243,9 @@ async def send_message(
     reply_to: str | None = None,
     category: str | None = None,
     log_as: str | None = None,
+    intent: str | None = None,
+    outbound_kind: str | None = None,
+    urgent: bool = False,
 ) -> str:
     """Single outbound gateway. WAHA is first-class; Meta/DotPe keep legacy behavior.
 
@@ -275,6 +278,15 @@ async def send_message(
         raise SendError(str(exc), transient=False) from exc
 
     customer, staff = await _find_recipient(db, to_phone)
+
+    effective_intent = intent or ("promotional" if category == "marketing" else None)
+    if effective_intent is not None:
+        from app.services.outbound_policy import enforce_outbound_policy
+
+        await enforce_outbound_policy(
+            db, customer=customer, phone=to_phone, intent=effective_intent,
+            kind=outbound_kind, urgent=urgent,
+        )
 
     if text:
         text = _wa_format(text)
@@ -468,6 +480,9 @@ async def send_image(
     caption: str | None = None,
     local_url: str,
     sent_by: str = "manager",
+    intent: str | None = None,
+    outbound_kind: str | None = None,
+    urgent: bool = False,
 ) -> str:
     """Send media through WAHA when configured; keep Meta/DotPe legacy path."""
     if settings.WHATSAPP_PROVIDER != "waha":
@@ -478,6 +493,14 @@ async def send_image(
         raise SendError("automated send blocked for test recipient", transient=False)
 
     customer, staff = await _find_recipient(db, to_phone)
+
+    if intent is not None:
+        from app.services.outbound_policy import enforce_outbound_policy
+
+        await enforce_outbound_policy(
+            db, customer=customer, phone=to_phone, intent=intent,
+            kind=outbound_kind, urgent=urgent,
+        )
 
     if settings.WHATSAPP_PROVIDER == "waha":
         from app.services import waha
