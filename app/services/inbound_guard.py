@@ -93,7 +93,7 @@ Rules:
 # else is classified by the cheap model so marketing pitches without a URL or
 # familiar keywords don't automatically become leads.
 _CLEAR_CUSTOMER_INTENT_RE = re.compile(
-    r"\\b(?:mujhe|hume|humein|hamen|i need|i want|looking for|can you "
+    r"\b(?:mujhe|hume|humein|hamen|i need|i want|looking for|can you "
     r"clean|do you clean|how much|kitna|rate kya|price kya|service chahiye|"
     r"karwana hai|karwani hai|dry ?clean kar|kapde dhul|pickup chahiye|"
     r"pickup karwana|book (?:a )?pickup|schedule (?:a )?pickup|pick up my|"
@@ -109,7 +109,7 @@ def _has_clear_customer_intent(text: str) -> bool:
 
 
 _HARD_PROMO_RE = re.compile(
-    r"\\b(?:digital marketing|seo services|website development|bulk sms|"
+    r"\b(?:digital marketing|seo services|website development|bulk sms|"
     r"bulk whatsapp|lead generation services|recruitment agency|software "
     r"development agency|grow your business|boost your sales|rank your website|"
     r"marketing agency|we provide (?:marketing|seo|website|software)|"
