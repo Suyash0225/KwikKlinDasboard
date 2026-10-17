@@ -62,6 +62,15 @@ class Settings(BaseSettings):
     # --- Backups ---
     # Where pg_dump lives on this machine; nightly backups need it.
     PG_DUMP_PATH: str = r"C:\Program Files\PostgreSQL\15\bin\pg_dump.exe"
+    # Optional off-host S3-compatible storage. Empty bucket = local-only backups.
+    BACKUP_S3_BUCKET: str = ""
+    BACKUP_S3_ENDPOINT_URL: str = ""
+    BACKUP_S3_REGION: str = "ap-south-1"
+    BACKUP_S3_PREFIX: str = "kwikklin/backups"
+    BACKUP_S3_ACCESS_KEY_ID: str = ""
+    BACKUP_S3_SECRET_ACCESS_KEY: str = ""
+    BACKUP_S3_SESSION_TOKEN: str = ""
+    BACKUP_S3_ADDRESSING_STYLE: Literal["auto", "virtual", "path"] = "auto"
 
     # --- DotPe BSP (only used when WHATSAPP_PROVIDER=dotpe) ---
     # From the DotPe merchant panel -> API section. Empty = dotpe disabled.
