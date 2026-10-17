@@ -531,3 +531,84 @@ async def test_gbp_daily_post_tick_claims_before_publish_and_runs_once(monkeypat
             async with tenant_context.system_context(db):
                 await db.execute(delete(SentEvent).where(SentEvent.event_key == claim_key))
                 await db.commit()
+
+
+@pytest.mark.requires_independent_sessions
+async def test_campaign_recipient_claim_suppresses_duplicate_after_restart(monkeypatch) -> None:
+    """Simulate provider acceptance followed by a worker crash before DB status commit."""
+    from sqlalchemy import delete, text
+    from app.models import Campaign, CampaignRecipient, Customer
+    from app.services import tenant_context, app_settings, marketing, plans
+
+    tenant_id = await _test_tenant_id()
+    phone = f"+91992{uuid.uuid4().int % 10**7:07d}"
+    async with tenant_context.as_tenant(tenant_id):
+        async with async_session_factory() as db:
+            customer = Customer(phone=phone, name="Campaign Idempotency Test")
+            campaign = Campaign(
+                name="Campaign idempotency test",
+                segment="all_active",
+                message_text="Hello {name}",
+                status="approved",
+                created_by="test",
+                stats={},
+            )
+            db.add_all([customer, campaign])
+            await db.flush()
+            recipient = CampaignRecipient(campaign_id=campaign.id, customer_id=customer.id)
+            db.add(recipient)
+            await db.commit()
+            campaign_id, customer_id, recipient_id = campaign.id, customer.id, recipient.id
+
+    async def setting(db, key):
+        return 100
+
+    async def eligible(db, customer_id):
+        return True, ""
+
+    async def bulk_eligible(db, customer_ids, **kwargs):
+        return {customer_id: (True, "") for customer_id in customer_ids}
+
+    async def no_month_count(db):
+        return 0
+
+    sends = []
+    async def fake_send(db, **kwargs):
+        sends.append(kwargs["to_phone"])
+        raise RuntimeError("simulated crash after provider acceptance")
+
+    monkeypatch.setattr(marketing, "_in_quiet_hours_now", lambda: False)
+    monkeypatch.setattr(app_settings, "get", setting)
+    monkeypatch.setattr(marketing, "eligible", eligible)
+    monkeypatch.setattr(marketing, "month_send_count", no_month_count)
+    monkeypatch.setattr(marketing, "send_message", fake_send)
+    monkeypatch.setattr("app.services.leads.check_marketing_eligible_bulk", bulk_eligible)
+    monkeypatch.setattr(plans, "effective_limits", lambda tenant: {"max_campaign_msgs_month": None})
+
+    claim_key = f"t{tenant_id.hex[:8]}:campaign-send:{campaign_id}:{customer_id}"
+    try:
+        async with tenant_context.as_tenant(tenant_id):
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                await marketing.send_campaign(campaign_id)
+            await marketing.send_campaign(campaign_id)
+
+        assert sends == [phone]
+        async with tenant_context.as_tenant(tenant_id):
+            async with async_session_factory() as db:
+                recipient = await db.get(CampaignRecipient, recipient_id)
+                assert recipient is not None
+                assert recipient.status == "skipped"
+                assert recipient.detail == "duplicate_send_claim_suppressed"
+    finally:
+        async with async_session_factory() as db:
+            async with tenant_context.system_context(db):
+                await db.execute(
+                    delete(CampaignRecipient).where(CampaignRecipient.id == recipient_id)
+                )
+                await db.execute(delete(Campaign).where(Campaign.id == campaign_id))
+                await db.execute(delete(Customer).where(Customer.id == customer_id))
+                await db.execute(
+                    text("DELETE FROM sent_events WHERE event_key = :key"),
+                    {"key": claim_key},
+                )
+                await db.commit()
