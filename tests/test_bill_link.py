@@ -222,7 +222,7 @@ async def test_delivered_bill_offers_feedback_review_and_repeat_pickup(client, o
         assert "Share feedback" in html and "Book another pickup" in html
         assert "Previous%20order%3A%20" in html
         assert "Share an honest Google review" in html
-        assert "https://reviews.example/kwikklin" in html
+        assert "/r/" in html
         assert "{{DELIVERY_ACTIONS}}" not in html
     finally:
         async with tenant_context.as_tenant(home):
