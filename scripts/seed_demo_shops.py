@@ -42,6 +42,7 @@ from decimal import Decimal
 import structlog
 from sqlalchemy import select, text
 
+from scripts._demo_seed_guard import refuse_production_seed
 from app.database import async_session_factory, engine
 from app.models import (
     ROLE_OWNER,
@@ -90,6 +91,7 @@ STAGES = [OrderStatus.RECEIVED, OrderStatus.IN_WASH, OrderStatus.IN_IRON,
 
 async def clear() -> None:
     """Sirf demo dukaanein. Har DELETE slug ke upsarg se bandha hua hai."""
+    refuse_production_seed()
     async with async_session_factory() as db:
         ids = (
             await db.execute(
@@ -247,6 +249,7 @@ async def fill_shop(tid, n_cust: int, n_orders: int, n_tasks: int) -> None:
 
 
 async def seed(n_shops: int, n_cust: int, n_orders: int, n_tasks: int) -> None:
+    refuse_production_seed()
     made = []
     for i in range(min(n_shops, len(SHOPS))):
         name, city, plan = SHOPS[i]
@@ -271,6 +274,7 @@ async def _run() -> None:
     tha — kaam ho chuka hota tha, par output aisa dikhta tha jaise sab
     phat gaya ho.
     """
+    refuse_production_seed()
     if "--clear" in sys.argv:
         await clear()
     else:
@@ -285,6 +289,7 @@ async def _run() -> None:
 
 
 def main() -> None:
+    refuse_production_seed()
     asyncio.run(_run())
 
 
