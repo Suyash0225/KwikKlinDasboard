@@ -500,10 +500,16 @@ async def _handle_task_button(
             OrderStatus.IN_DRY: "iron",
             OrderStatus.IN_IRON: "ready",
         }.get(order.status)
-        if action != next_action:
+        expected_task_kind = {
+            "wash": "wash",
+            "dry": "wash",
+            "iron": "dry",
+            "ready": "iron",
+        }[action]
+        if action != next_action or task.kind != expected_task_kind:
             return (
                 f"⚠️ *{order.order_number}* abhi {status_label(order.status)} stage par hai. "
-                "Purana menu use na karein; task dobara khol kar current next step chunein."
+                "Purana menu use na karein; current stage ka task dobara khol kar next step chunein."
             )
 
         target = {
