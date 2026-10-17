@@ -234,3 +234,91 @@ async def test_transactional_policy_honors_stop_and_urgent_quiet_exception(monke
             )
     finally:
         tenant_context.current_tenant_id.reset(token)
+
+
+@pytest.mark.requires_independent_sessions
+async def test_duplicate_delivery_event_sends_one_referral_share(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from sqlalchemy import delete, text
+    from app.models import Campaign, Coupon, Customer, SentEvent, Tenant
+    from app.services import tenant_context, app_settings
+    from app.services import marketing, referrals
+
+    async with async_session_factory() as db:
+        async with tenant_context.system_context(db):
+            tenant = (
+                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
+            ).scalar_one()
+            tenant_id = tenant.id
+
+    phone = f"+91995{uuid.uuid4().int % 10**7:07d}"
+    async with tenant_context.as_tenant(tenant_id):
+        async with async_session_factory() as db:
+            customer = Customer(phone=phone, name="Referral Duplicate Test")
+            db.add(customer)
+            await db.commit()
+            customer_id = customer.id
+
+    order_id = uuid.uuid4()
+    order = SimpleNamespace(id=order_id, customer_id=customer_id, order_number="KK-20261018-98")
+    async def setting(db, key):
+        return {
+            "referral_program_enabled": True,
+            "marketing_autonomy": "auto",
+            "referral_friend_discount": 50,
+            "referral_min_order": 300,
+            "referral_coupon_valid_days": 90,
+        }.get(key)
+
+    async def eligible(db, customer_id):
+        return True, ""
+
+    sent = []
+    async def fake_send(db, **kwargs):
+        sent.append(kwargs["text"])
+        return "mock-referral-message"
+
+    monkeypatch.setattr(app_settings, "get", setting)
+    monkeypatch.setattr(marketing, "eligible", eligible)
+    monkeypatch.setattr(referrals, "send_message", fake_send)
+
+    try:
+        async with tenant_context.as_tenant(tenant_id):
+            async with async_session_factory() as db:
+                await referrals._issue_share_code_after_delivery(db, order)
+            async with async_session_factory() as db:
+                await referrals._issue_share_code_after_delivery(db, order)
+
+        assert len(sent) == 1
+        async with tenant_context.as_tenant(tenant_id):
+            async with async_session_factory() as db:
+                campaigns = (
+                    await db.execute(
+                        select(Campaign).where(
+                            Campaign.referral_owner_customer_id == customer_id
+                        )
+                    )
+                ).scalars().all()
+                assert len(campaigns) == 1
+                coupons = (
+                    await db.execute(
+                        select(Coupon).where(Coupon.campaign_id == campaigns[0].id)
+                    )
+                ).scalars().all()
+                assert len(coupons) == 1
+    finally:
+        async with async_session_factory() as db:
+            async with tenant_context.system_context(db):
+                await db.execute(
+                    text("DELETE FROM sent_events WHERE event_key = :key"),
+                    {"key": f"t{tenant_id.hex[:8]}:referral-share:{order_id}"},
+                )
+                await db.execute(
+                    text("DELETE FROM coupons WHERE campaign_id IN (SELECT id FROM campaigns WHERE referral_owner_customer_id = :cid)"),
+                    {"cid": customer_id},
+                )
+                await db.execute(
+                    delete(Campaign).where(Campaign.referral_owner_customer_id == customer_id)
+                )
+                await db.execute(delete(Customer).where(Customer.id == customer_id))
+                await db.commit()
