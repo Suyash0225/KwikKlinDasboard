@@ -674,7 +674,13 @@ async def _journal_event(
     """Persist the raw event before any processing. None = already journaled
     (an exact redelivery), so the caller must skip processing."""
     key = hashlib.sha256(body).hexdigest()
-    event = WebhookEvent(source=source, event_key=key, payload=payload)
+    from app.services.tenant_context import current_tenant_id
+
+    stored_payload = dict(payload)
+    tenant_id = current_tenant_id.get()
+    if tenant_id is not None:
+        stored_payload["tenant_id"] = str(tenant_id)
+    event = WebhookEvent(source=source, event_key=key, payload=stored_payload)
     db.add(event)
     try:
         await db.commit()
@@ -715,53 +721,62 @@ _MAX_EVENT_ATTEMPTS = 5
 
 
 async def retry_stuck_webhook_events() -> int:
-    """Scheduler entry: replay journaled events that failed or got stuck.
-
-    'failed'   = processing raised; retry with fresh state.
-    'received' = journaled but never marked — the process crashed mid-handling.
-    After _MAX_EVENT_ATTEMPTS the row is marked 'dead' (visible for forensics).
-    Returns the number of events retried.
-    """
+    """Replay journaled events only under an explicitly resolved tenant."""
     from app.database import async_session_factory
+    from app.services.tenant_context import as_system_context, as_tenant
+    import uuid as _uuid
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
     retried = 0
-    async with async_session_factory() as db:
-        # plain tuples, not ORM instances — the rollback inside _mark_event
-        # would expire instances and async lazy-refresh blows up
-        rows = (
-            await db.execute(
-                select(
-                    WebhookEvent.event_key,
-                    WebhookEvent.attempts,
-                    WebhookEvent.source,
-                    WebhookEvent.payload,
-                    WebhookEvent.error,
+    async with as_system_context():
+        async with async_session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(
+                        WebhookEvent.event_key,
+                        WebhookEvent.attempts,
+                        WebhookEvent.source,
+                        WebhookEvent.payload,
+                        WebhookEvent.error,
+                    )
+                    .where(
+                        WebhookEvent.status.in_(("failed", "received")),
+                        WebhookEvent.received_at <= cutoff,
+                    )
+                    .order_by(WebhookEvent.received_at)
+                    .limit(50)
                 )
-                .where(
-                    WebhookEvent.status.in_(("failed", "received")),
-                    WebhookEvent.received_at <= cutoff,
-                )
-                .order_by(WebhookEvent.received_at)
-                .limit(50)
-            )
-        ).all()
-        for key, attempts, source, payload, error in rows:
-            if (attempts or 0) >= _MAX_EVENT_ATTEMPTS:
-                await _mark_event(db, key, "dead", error=error)
-                continue
-            retried += 1
-            try:
-                if source == "dotpe":
-                    if "message" in payload:
-                        await _handle_inbound_message(_dotpe_to_meta_shape(payload), db)
+            ).all()
+            await db.commit()  # close the global journal read before tenant work
+            for key, attempts, source, payload, error in rows:
+                if (attempts or 0) >= _MAX_EVENT_ATTEMPTS:
+                    await _mark_event(db, key, "dead", error=error)
+                    continue
+                retried += 1
+                try:
+                    if source == "dotpe":
+                        raw_tid = (payload or {}).get("tenant_id")
+                        if not raw_tid:
+                            await _mark_event(
+                                db, key, "dead",
+                                error="missing tenant_id in DotPe retry payload; failed closed",
+                            )
+                            continue
+                        try:
+                            retry_tid = _uuid.UUID(str(raw_tid))
+                        except (ValueError, TypeError, AttributeError):
+                            await _mark_event(db, key, "dead", error="invalid tenant_id in DotPe retry payload")
+                            continue
+                        async with as_tenant(retry_tid):
+                            if "message" in payload:
+                                await _handle_inbound_message(_dotpe_to_meta_shape(payload), db)
+                    else:
+                        await _process_payload(payload, db, require_explicit_tenant=True)
+                except Exception as exc:
+                    log.exception("webhook_event_retry_failed", event_key=key)
+                    await _mark_event(db, key, "failed", error=repr(exc))
                 else:
-                    await _process_payload(payload, db)
-            except Exception as exc:
-                log.exception("webhook_event_retry_failed", event_key=key)
-                await _mark_event(db, key, "failed", error=repr(exc))
-            else:
-                await _mark_event(db, key, "processed")
+                    await _mark_event(db, key, "processed")
     return retried
 
 
@@ -799,7 +814,7 @@ async def _resolve_wa_tenant(
         ).scalar_one_or_none()
         if t is not None:
             return t, True
-    if phone_number_id and phone_number_id == settings.WHATSAPP_PHONE_NUMBER_ID:
+    if allow_home_fallback and phone_number_id and phone_number_id == settings.WHATSAPP_PHONE_NUMBER_ID:
         return await tenant_context.get_home_tenant_id(), True
     if not phone_number_id and allow_home_fallback:
         return await tenant_context.get_home_tenant_id(), True
@@ -831,6 +846,8 @@ async def _process_payload(
                     phone_number_id=pnid,
                     hint="kisi tenant ka connected number nahi — skip",
                 )
+                if require_explicit_tenant:
+                    raise ValueError("webhook retry has missing or unmapped tenant identity")
                 continue
             # Transaction boundary ZAROORI hai: RLS ka GUC transaction ke
             # SHURU mein set hota hai (database.py ka begin event). Purani
