@@ -125,6 +125,7 @@ async def two_shops():
     # Cleanup must run in trusted system context even if a test leaves a tenant ContextVar set.
     async with async_session_factory() as db:
         async with tenant_context.system_context(db):
+      async with async_session_factory() as db:
             for phone in (A_PHONE, A_MGR_PHONE, A_DEL_PHONE, B_PHONE):
                 await db.execute(
                     sqltext(
@@ -159,95 +160,95 @@ async def two_shops():
                     )
                 await db.execute(sqltext("DELETE FROM staff WHERE phone = :p"), {"p": phone})
             await db.commit()
-        # Tests can create customers with phones beyond CUST_A/CUST_B. Purge
-        # every customer belonging to these disposable tenants before deleting
-        # the tenant rows, otherwise the next test fails on the tenant FK.
-        async with async_session_factory() as db:
-            tenant_customer_phones = (
-                await db.execute(
-                    sqltext(
-                        "SELECT phone FROM customers WHERE tenant_id IN "
-                        "(SELECT id FROM tenants WHERE slug IN ('panel-a','panel-b'))"
-                    )
-                )
-            ).scalars().all()
-        await purge_phones(CUST_A, CUST_B, *tenant_customer_phones)
-        async with async_session_factory() as db:
-            await db.execute(sqltext("DELETE FROM tenants WHERE slug IN ('panel-a','panel-b')"))
-            await db.commit()
-
-
-    async def _login(client, phone: str) -> None:
-        r = await client.post("/staff/api/login", json={"phone": phone, "password": PW})
-        assert r.status_code == 200, r.text
-
-
-    async def _task_for(tenant_id, staff_id, cust_phone: str, title: str) -> str:
-        """Us dukaan ka ek order + uspar ek kaam."""
-        from app.services import tenant_context
-
-        token = tenant_context.current_tenant_id.set(tenant_id)
-        try:
-            async with async_session_factory() as db:
-                order = await create_order(
-                    db, customer_phone=cust_phone, customer_name="Grahak",
-                    items=[{"type": "Kurta", "qty": 1}], created_by="test",
-                )
-                st = await db.get(Staff, staff_id)
-                from app.services import tasks as task_service
-
-                t = await task_service.create_task(
-                    db, title=title, staff=st, order=order, notify=False,
-                )
-                return t.code
-        finally:
-            tenant_context.current_tenant_id.reset(token)
-
-
-    # --- 1. TENANT -------------------------------------------------------------
-
-
-    async def test_one_shop_can_never_see_anothers_work(client, two_shops, sent) -> None:
-        """Sabse zaroori test: A ka aadmi B ka kaam na dekhe, na chhue."""
-        b_code = await _task_for(two_shops["b"], two_shops["b_wash"], CUST_B, "B ka kaam")
-
-        await _login(client, A_MGR_PHONE)          # A ka MANAGER — sabse zyada taakat
-        listed = (await client.get("/staff/api/tasks?tab=pending")).json()
-        assert all(t["code"] != b_code for t in listed["tasks"]), "B ka kaam A ko dikh gaya"
-
-        # seedha code se maangne par bhi nahi
-        r = await client.post(f"/staff/api/tasks/{b_code}/done", json={"note": ""})
-        assert r.status_code in (403, 404), r.text
-        async with async_session_factory() as db:
-            t = (
-                await db.execute(
-                    sqltext("SELECT status FROM tasks WHERE code = :c AND tenant_id = :t"),
-                    {"c": b_code, "t": str(two_shops["b"])},
-                )
-            ).scalar_one()
-            assert t == "OPEN", "doosri dukaan ka kaam band ho gaya"
-
-
-    async def test_same_phone_can_work_at_two_shops(client, two_shops) -> None:
-        """Ek hi delivery boy do dukaan mein ho sakta hai — phone ab per-shop
-        unique hai. Pehle poore DB mein ek hi baar chal sakta tha."""
-        async with async_session_factory() as db:
-            sid = uuid.uuid4()
+    # Tests can create customers with phones beyond CUST_A/CUST_B. Purge
+    # every customer belonging to these disposable tenants before deleting
+    # the tenant rows, otherwise the next test fails on the tenant FK.
+    async with async_session_factory() as db:
+        tenant_customer_phones = (
             await db.execute(
                 sqltext(
-                    "INSERT INTO staff (id, tenant_id, phone, name, role, is_active,"
-                    " must_change_password) VALUES (:i, :t, :p, 'Dono jagah', 'DELIVERY', true, false)"
-                ),
-                {"i": str(sid), "t": str(two_shops["a"]), "p": B_PHONE},
+                    "SELECT phone FROM customers WHERE tenant_id IN "
+                    "(SELECT id FROM tenants WHERE slug IN ('panel-a','panel-b'))"
+                )
             )
-            await db.commit()
-            rows = (
-                await db.execute(sqltext("SELECT count(*) FROM staff WHERE phone = :p"), {"p": B_PHONE})
-            ).scalar_one()
-        assert rows == 2, "ek number do dukaan mein hona chahiye"
+        ).scalars().all()
+    await purge_phones(CUST_A, CUST_B, *tenant_customer_phones)
+    async with async_session_factory() as db:
+        await db.execute(sqltext("DELETE FROM tenants WHERE slug IN ('panel-a','panel-b')"))
+        await db.commit()
+
+
+async def _login(client, phone: str) -> None:
+    r = await client.post("/staff/api/login", json={"phone": phone, "password": PW})
+    assert r.status_code == 200, r.text
+
+
+async def _task_for(tenant_id, staff_id, cust_phone: str, title: str) -> str:
+    """Us dukaan ka ek order + uspar ek kaam."""
+    from app.services import tenant_context
+
+    token = tenant_context.current_tenant_id.set(tenant_id)
+    try:
         async with async_session_factory() as db:
-            await db.execute(sqltext("DELETE FROM staff WHERE id = :i"), {"i": str(sid)})
-            await db.commit()
+            order = await create_order(
+                db, customer_phone=cust_phone, customer_name="Grahak",
+                items=[{"type": "Kurta", "qty": 1}], created_by="test",
+            )
+            st = await db.get(Staff, staff_id)
+            from app.services import tasks as task_service
+
+            t = await task_service.create_task(
+                db, title=title, staff=st, order=order, notify=False,
+            )
+            return t.code
+    finally:
+        tenant_context.current_tenant_id.reset(token)
+
+
+# --- 1. TENANT -------------------------------------------------------------
+
+
+async def test_one_shop_can_never_see_anothers_work(client, two_shops, sent) -> None:
+    """Sabse zaroori test: A ka aadmi B ka kaam na dekhe, na chhue."""
+    b_code = await _task_for(two_shops["b"], two_shops["b_wash"], CUST_B, "B ka kaam")
+
+    await _login(client, A_MGR_PHONE)          # A ka MANAGER — sabse zyada taakat
+    listed = (await client.get("/staff/api/tasks?tab=pending")).json()
+    assert all(t["code"] != b_code for t in listed["tasks"]), "B ka kaam A ko dikh gaya"
+
+    # seedha code se maangne par bhi nahi
+    r = await client.post(f"/staff/api/tasks/{b_code}/done", json={"note": ""})
+    assert r.status_code in (403, 404), r.text
+    async with async_session_factory() as db:
+        t = (
+            await db.execute(
+                sqltext("SELECT status FROM tasks WHERE code = :c AND tenant_id = :t"),
+                {"c": b_code, "t": str(two_shops["b"])},
+            )
+        ).scalar_one()
+        assert t == "OPEN", "doosri dukaan ka kaam band ho gaya"
+
+
+async def test_same_phone_can_work_at_two_shops(client, two_shops) -> None:
+    """Ek hi delivery boy do dukaan mein ho sakta hai — phone ab per-shop
+    unique hai. Pehle poore DB mein ek hi baar chal sakta tha."""
+    async with async_session_factory() as db:
+        sid = uuid.uuid4()
+        await db.execute(
+            sqltext(
+                "INSERT INTO staff (id, tenant_id, phone, name, role, is_active,"
+                " must_change_password) VALUES (:i, :t, :p, 'Dono jagah', 'DELIVERY', true, false)"
+            ),
+            {"i": str(sid), "t": str(two_shops["a"]), "p": B_PHONE},
+        )
+        await db.commit()
+        rows = (
+            await db.execute(sqltext("SELECT count(*) FROM staff WHERE phone = :p"), {"p": B_PHONE})
+        ).scalar_one()
+    assert rows == 2, "ek number do dukaan mein hona chahiye"
+    async with async_session_factory() as db:
+        await db.execute(sqltext("DELETE FROM staff WHERE id = :i"), {"i": str(sid)})
+        await db.commit()
 
 
 # --- 2. ROLE ---------------------------------------------------------------
