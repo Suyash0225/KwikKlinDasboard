@@ -29,6 +29,8 @@ async def _clean():
 def _no_quiet_hours(monkeypatch):
     """These tests are about the rules, not about what time it is."""
     monkeypatch.setattr(engage, "_in_quiet_hours", lambda now_ist: False)
+    from app.services import outbound_policy
+    monkeypatch.setattr(outbound_policy, "_quiet_now", lambda: False)
 
 
 @pytest.fixture(autouse=True)
