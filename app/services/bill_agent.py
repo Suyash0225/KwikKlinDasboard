@@ -133,7 +133,6 @@ async def _send_fixed_choice_menu(
         await send_message(
             db, to_phone=to_phone, text=text, list_rows=rows,
             list_button=button, list_title=title, sent_by="bot",
-            intent="transactional", outbound_kind="service_reply",
         )
         return True
     except (WindowClosedError, SendError):
