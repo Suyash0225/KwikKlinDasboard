@@ -54,7 +54,7 @@ async def _code() -> str:
 
 async def _get_or_create_referral_code(
     db: AsyncSession, customer: Customer
- ) -> tuple[Campaign, Coupon]:
+) -> tuple[Campaign, Coupon]:
     customer_id = customer.id
     tenant_id = customer.tenant_id
     campaigns = (
