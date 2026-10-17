@@ -372,7 +372,7 @@ def _in_quiet_hours_now() -> bool:
 
 
 async def send_campaign(campaign_id) -> None:
-    """Worker: send to all queued recipients, ~1 msg/sec, budget-capped.
+    """Worker: send queued recipients with shared tenant-wide 15–20s pacing and budget caps.
 
     Idempotent and resumable — only rows still in 'queued' are touched, so
     a crash/restart continues where it stopped (scheduler resumes it).
