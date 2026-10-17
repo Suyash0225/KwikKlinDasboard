@@ -36,7 +36,7 @@ from app.services.whatsapp import SendError, _blocked_test_recipient, send_image
 
 log = structlog.get_logger()
 
-SEGMENTS = ("new", "active_regular", "at_risk", "lapsed", "lost", "high_value", "outstanding_dues")
+SEGMENTS = ("new", "active_regular", "at_risk", "lapsed", "lost", "high_value", "outstanding_dues", "normal_late")
 
 
 async def _customer_stats(db: AsyncSession) -> list[dict]:
@@ -62,7 +62,11 @@ async def _customer_stats(db: AsyncSession) -> list[dict]:
                     0,
                 ).label("outstanding"),
             )
-            .outerjoin(Order, Order.customer_id == Customer.id)
+            .outerjoin(
+                Order,
+                (Order.customer_id == Customer.id)
+                & (Order.status != OrderStatus.CANCELLED),
+            )
             .where(Customer.is_active)
             .group_by(Customer.id)
         )
@@ -72,12 +76,23 @@ async def _customer_stats(db: AsyncSession) -> list[dict]:
 
 def _classify(stat: dict, now: datetime, high_value_cutoff: Decimal) -> set[str]:
     segs: set[str] = set()
-    last = stat["last_order_at"]
+    last = stat.get("last_visit_at") or stat["last_order_at"]
     first = stat["first_order_at"]
     age_days = (now - last).days if last else 9999
     if first and (now - first).days <= 30:
         segs.add("new")
     has_outstanding = Decimal(stat["outstanding"]) > 0
+    average_gap = stat.get("average_visit_gap_days")
+    # Customer-specific rhythm complements (does not replace) the fixed RFM windows.
+    # Debtors stay in outstanding_dues and are never win-back targets.
+    if (
+        stat["order_count"] >= 2
+        and average_gap is not None
+        and float(average_gap) > 0
+        and age_days > float(average_gap) * 1.5
+        and not has_outstanding
+    ):
+        segs.add("normal_late")
     # Repeat-order reminders are for paid-up regulars, 15–30 days after the
     # last order. This avoids nudging too early or promoting new orders to debtors.
     if stat["order_count"] >= 2 and 14 < age_days <= 30 and not has_outstanding:
@@ -100,6 +115,11 @@ def _classify(stat: dict, now: datetime, high_value_cutoff: Decimal) -> set[str]
 async def compute_segments(db: AsyncSession) -> dict[str, list[dict]]:
     """segment -> [customer stat dicts]. Live computation, no staleness."""
     stats = await _customer_stats(db)
+    from app.services.customer_rhythm import load_customer_rhythms
+
+    rhythms = await load_customer_rhythms(db)
+    for stat in stats:
+        stat.update(rhythms.get(stat["id"], {}))
     now = datetime.now(timezone.utc)
     paid_values = sorted((Decimal(s["lifetime_paid"]) for s in stats), reverse=True)
     cutoff = paid_values[max(0, len(paid_values) // 5 - 1)] if paid_values else Decimal("0")
@@ -127,6 +147,11 @@ async def recompute_segments(db: AsyncSession) -> dict[str, int]:
     else:
         row.value = payload
     await db.commit()
+    await audit.record(
+        actor_role="system", actor="scheduler", action="customer_rhythm_recomputed",
+        args={"customers": counts.get("all_active", 0)},
+        result=f"normal_late={counts.get('normal_late', 0)}",
+    )
     log.info("segments_recomputed", **counts)
     return counts
 
