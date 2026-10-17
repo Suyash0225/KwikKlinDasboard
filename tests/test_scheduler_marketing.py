@@ -178,7 +178,8 @@ async def test_campaign_queue_send_and_track(sched_sent, sent, monkeypatch) -> N
     import asyncio as aio
 
     real_sleep = aio.sleep
-    monkeypatch.setattr(marketing_module.asyncio, "sleep", lambda s: real_sleep(0))
+    from app.services import outbound_policy
+    monkeypatch.setattr(outbound_policy.asyncio, "sleep", lambda s: real_sleep(0))
 
     order = await _seed_order(total_amount=Decimal("300"))
     async with async_session_factory() as s:
