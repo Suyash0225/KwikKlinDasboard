@@ -258,15 +258,6 @@ async def send_message(
         raise SendError("WAHA/NOWEB is the only enabled WhatsApp provider", transient=False)
 
     effective_intent = intent or ("promotional" if category == "marketing" else None)
-    # Automated customer sends must name their policy intent explicitly. Unknown
-    # intent is not safe to treat as transactional or to let bypass consent/quiet hours.
-    if effective_intent is None and sent_by not in {"manager", "human"}:
-        recipient, _staff = await _find_recipient(db, to_phone)
-        if recipient is not None:
-            raise SendError(
-                "customer-facing automated send requires explicit outbound intent",
-                transient=False,
-            )
     if effective_intent is None and _blocked_test_recipient(to_phone) and sent_by not in {"manager", "human"}:
         log.warning("automated_send_blocked_test_recipient", to=to_phone, sent_by=sent_by)
         raise SendError("automated send blocked for test recipient", transient=False)
@@ -289,6 +280,14 @@ async def send_message(
         raise SendError(str(exc), transient=False) from exc
 
     customer, staff = await _find_recipient(db, to_phone)
+
+    # Validate transport payload first, then fail closed for valid automated
+    # customer sends whose caller forgot to classify intent.
+    if customer is not None and effective_intent is None and sent_by not in {"manager", "human"}:
+        raise SendError(
+            "customer-facing automated send requires explicit outbound intent",
+            transient=False,
+        )
 
     if effective_intent is not None and (customer is not None or staff is None):
         from app.services.outbound_policy import enforce_outbound_policy
