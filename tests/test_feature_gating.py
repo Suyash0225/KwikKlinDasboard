@@ -226,3 +226,61 @@ async def test_service_agent_final_kill_switch_blocks_customer_send(monkeypatch)
 
     assert ok is False
     assert sent == []
+
+
+
+async def test_human_reply_during_ai_generation_cancels_pending_reply(monkeypatch) -> None:
+    """A human reply recorded while AI is thinking wins before the final send."""
+    from datetime import datetime, timezone
+    import uuid
+
+    from app.models import Conversation, Customer, Direction
+    from app.routers import webhook
+    from app.services import app_settings, tenant_context
+
+    sent = []
+
+    async def fake_send(*args, **kwargs):
+        sent.append(kwargs)
+        return "fake-wa-id"
+
+    async def fake_get(db, key):
+        if key == "agent_enabled":
+            return True
+        if key == "human_handoff_grace_minutes":
+            return 15
+        raise AssertionError(f"Unexpected setting read: {key}")
+
+    monkeypatch.setattr(webhook, "send_message", fake_send)
+    monkeypatch.setattr(app_settings, "get", fake_get)
+
+    phone = f"+91997{uuid.uuid4().int % 10**7:07d}"
+    async with async_session_factory() as db:
+        customer = Customer(
+            phone=phone,
+            name="Human During Generation Test",
+            tenant_id=tenant_context.cached_home_tenant_id(),
+        )
+        db.add(customer)
+        await db.flush()
+
+        # Simulate the human's message being committed after AI generation
+        # began but before _send_customer_agent_reply performs its final gate.
+        db.add(
+            Conversation(
+                customer_id=customer.id,
+                direction=Direction.OUTBOUND,
+                message_text="Main check karke batata hoon.",
+                sent_by="manager",
+                status="sent",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.flush()
+
+        ok = await webhook._send_customer_agent_reply(
+            db, customer, phone, "AI ka pehle se generate hua jawab"
+        )
+
+    assert ok is False
+    assert sent == [], "AI must not send over the human's reply"
