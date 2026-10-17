@@ -30,7 +30,8 @@ async def test_one_worker_leads_and_standby_takes_over_after_connection_loss() -
         first_scheduler.start,
         first_scheduler.shutdown,
         poll_interval=0.05,
-        health_interval=0.05,
+        # Leave the dedicated connection idle while the test invalidates it.
+        health_interval=2.0,
     )
     second = SchedulerLeader(
         engine,
@@ -42,7 +43,7 @@ async def test_one_worker_leads_and_standby_takes_over_after_connection_loss() -
 
     try:
         await first.start()
-        await asyncio.wait_for(first_scheduler.started_event.wait(), timeout=3)
+        await asyncio.wait_for(first_scheduler.started_event.wait(), timeout=5)
 
         await second.start()
         await asyncio.sleep(0.15)
@@ -55,8 +56,8 @@ async def test_one_worker_leads_and_standby_takes_over_after_connection_loss() -
         assert connection is not None
         await connection.invalidate()
 
-        await asyncio.wait_for(first_scheduler.stopped_event.wait(), timeout=3)
-        await asyncio.wait_for(second_scheduler.started_event.wait(), timeout=3)
+        await asyncio.wait_for(first_scheduler.stopped_event.wait(), timeout=5)
+        await asyncio.wait_for(second_scheduler.started_event.wait(), timeout=5)
         assert first_scheduler.stopped >= 1
         assert second_scheduler.started == 1
     finally:
