@@ -775,7 +775,9 @@ def _signature_valid(body: bytes, header: str | None) -> bool:
     return hmac.compare_digest(expected, header.removeprefix("sha256="))
 
 
-async def _resolve_wa_tenant(db: AsyncSession, phone_number_id: str):
+async def _resolve_wa_tenant(
+    db: AsyncSession, phone_number_id: str, *, allow_home_fallback: bool = True
+):
     """Kis tenant ka number hai ye — multi-tenant routing ka dil.
 
     Returns (tenant_id | None, known: bool). Resolution order:
@@ -797,12 +799,16 @@ async def _resolve_wa_tenant(db: AsyncSession, phone_number_id: str):
         ).scalar_one_or_none()
         if t is not None:
             return t, True
-    if not phone_number_id or phone_number_id == settings.WHATSAPP_PHONE_NUMBER_ID:
+    if phone_number_id and phone_number_id == settings.WHATSAPP_PHONE_NUMBER_ID:
+        return await tenant_context.get_home_tenant_id(), True
+    if not phone_number_id and allow_home_fallback:
         return await tenant_context.get_home_tenant_id(), True
     return None, False
 
 
-async def _process_payload(payload: dict, db: AsyncSession) -> None:
+async def _process_payload(
+    payload: dict, db: AsyncSession, *, require_explicit_tenant: bool = False
+) -> None:
     """Walk Meta's entry/changes structure; handle messages and statuses.
 
     Har change apne bhejne wale number (value.metadata.phone_number_id) ke
@@ -816,7 +822,9 @@ async def _process_payload(payload: dict, db: AsyncSession) -> None:
         for change in entry.get("changes", []):
             value = change.get("value", {})
             pnid = str((value.get("metadata") or {}).get("phone_number_id") or "")
-            tid, known = await _resolve_wa_tenant(db, pnid)
+            tid, known = await _resolve_wa_tenant(
+                db, pnid, allow_home_fallback=not require_explicit_tenant
+            )
             if not known:
                 log.warning(
                     "webhook_unknown_phone_number_id",
@@ -829,23 +837,16 @@ async def _process_payload(payload: dict, db: AsyncSession) -> None:
             # transaction (request-tenant ke GUC wali) yahin band karo taaki
             # agla query is tenant ke GUC ke saath naya transaction khole.
             await db.commit()
-            ctx_token = tenant_context.current_tenant_id.set(tid)
-            try:
-                await _process_change_value(value, db)
-            finally:
+            async with tenant_context.as_tenant(tid):
                 try:
-                    await db.commit()  # tenant ki transaction isi ctx mein band ho
-                except Exception:
-                    # Chupchaap rollback SABSE bura tha: message store ho
-                    # chuka dikhta tha (log mein "inbound_stored"), event
-                    # "processed" ban jaata tha, aur row kahin hoti hi nahi.
-                    # Ab wajah stack ke saath dikhti hai aur event 'failed'
-                    # rehta hai, taaki retry job ise dobara chalaye.
-                    log.exception("webhook_change_commit_failed", tenant=str(tid))
-                    await db.rollback()
-                    tenant_context.current_tenant_id.reset(ctx_token)
-                    raise
-                tenant_context.current_tenant_id.reset(ctx_token)
+                    await _process_change_value(value, db)
+                finally:
+                    try:
+                        await db.commit()  # tenant ki transaction isi ctx mein band ho
+                    except Exception:
+                        log.exception("webhook_change_commit_failed", tenant=str(tid))
+                        await db.rollback()
+                        raise
 
 
 async def _process_change_value(value: dict, db: AsyncSession) -> None:
