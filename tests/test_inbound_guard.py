@@ -47,7 +47,7 @@ async def test_genuine_laundry_customer_is_not_suppressed(monkeypatch):
     monkeypatch.setattr(inbound_guard.llm_client, "ask_json", fake_ask_json)
 
     assert not await inbound_guard.should_suppress_inbound(
-        "Kapde pickup karwana hai, Varanasi mein service hai?"
+        "Do you offer laundry cleaning in Varanasi?"
     )
 
 
@@ -68,15 +68,16 @@ async def test_ambiguous_message_is_not_suppressed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_classifier_failure_allows_normal_customer_flow(monkeypatch):
+async def test_clear_customer_enquiry_does_not_need_classifier(monkeypatch):
     async def fake_ask_json(**kwargs):
-        raise RuntimeError("test failure")
+        raise AssertionError("clear customer enquiries should use the deterministic fast path")
 
     monkeypatch.setattr(inbound_guard.llm_client, "ask_json", fake_ask_json)
 
-    assert not await inbound_guard.should_suppress_inbound(
-        "Mujhe laundry service chahiye."
-    )
+    result = await inbound_guard.classify_inbound_message("Mujhe laundry service chahiye.")
+    assert result["classification"] == "CUSTOMER_LEAD"
+    assert inbound_guard.is_customer_lead(result)
+    assert not await inbound_guard.should_suppress_inbound("Mujhe laundry service chahiye.")
 
 
 
