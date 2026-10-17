@@ -57,24 +57,40 @@ async def test_outbound_policy_without_tenant_fails_closed() -> None:
 
 
 async def test_repeated_claimed_job_sends_once(monkeypatch) -> None:
-    """A simulated restart repeats the same tenant-prefixed claim, not the send."""
+    """Run the real GBP scheduler job twice with Google sync mocked."""
+    from datetime import datetime
     from app.models import Tenant
-    from app.services import tenant_context
-    from app.services.scheduler import _claim
+    from app.services import tenant_context, google_business
+    from app.services.scheduler import IST, _gbp_reviews_tick
+    import app.services.scheduler as scheduler
 
     async with async_session_factory() as db:
-        tenant = (
-            await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
-        ).scalar_one()
-        tenant_id = tenant.id
+        async with tenant_context.system_context(db):
+            tenant = (
+                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
+            ).scalar_one()
+            tenant_id = tenant.id
 
-    sent = []
-    key = f"restart-regression:{uuid.uuid4().hex}"
-    async with tenant_context.as_tenant(tenant_id):
-        for _ in range(2):
-            if await _claim(key):
-                sent.append("mocked message")
-    assert sent == ["mocked message"]
+    sends = []
+    async def fake_for_each(job_name, fn):
+        async with tenant_context.as_tenant(tenant_id):
+            await fn(datetime.now(IST))
+
+    async def fake_connection(db):
+        return {"refresh_token": "mock-token", "account": "mock-account", "location": "mock-location"}
+
+    async def fake_sync(db):
+        sends.append("mocked Google review sync")
+        return {}
+
+    monkeypatch.setattr(scheduler, "_for_each_tenant", fake_for_each)
+    monkeypatch.setattr(google_business, "enabled", lambda: True)
+    monkeypatch.setattr(google_business, "get_connection", fake_connection)
+    monkeypatch.setattr(google_business, "sync", fake_sync)
+
+    await _gbp_reviews_tick()
+    await _gbp_reviews_tick()
+    assert sends == ["mocked Google review sync"]
 
 
 @pytest.mark.requires_independent_sessions
