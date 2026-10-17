@@ -227,3 +227,76 @@ async def test_human_handoff_rechecks_ai_stop_after_model_generation(monkeypatch
     assert sent == []
     assert enabled_checks == 2
     assert len(unclaimed) == 1
+
+
+@pytest.mark.asyncio
+async def test_human_reply_during_ai_generation_cancels_pending_send(monkeypatch):
+    """A human reply arriving during LLM generation resets the 15-minute pause."""
+    from types import SimpleNamespace
+
+    from app.routers import webhook
+    from app.services import human_handoff, scheduler
+
+    now = datetime.now(timezone.utc)
+    customer = SimpleNamespace(
+        id=303,
+        phone="+919876543211",
+        agent_paused=False,
+        opted_out=False,
+    )
+    inbound = SimpleNamespace(
+        id=404,
+        wa_message_id="test-human-reply-race",
+        message_text="Can you tell me the price?",
+        created_at=now - timedelta(minutes=20),
+    )
+    old_human = SimpleNamespace(created_at=now - timedelta(minutes=20))
+    new_human = SimpleNamespace(created_at=now)
+    human_checks = 0
+    sent = []
+    unclaimed = []
+
+    async def latest_human(_db, _customer_id):
+        nonlocal human_checks
+        human_checks += 1
+        # No recent human reply before generation; one arrives while the LLM runs.
+        return old_human if human_checks == 1 else new_human
+
+    async def latest_outbound(_db, _customer_id):
+        return None
+
+    async def latest_inbound(_db, _customer_id):
+        return inbound
+
+    async def agent_enabled(_db, _customer):
+        return True
+
+    async def claim(_key):
+        return True
+
+    async def unclaim(key):
+        unclaimed.append(key)
+
+    async def build_ai_reply(*_args, **_kwargs):
+        return "Here is the price."
+
+    async def send_message(*_args, **kwargs):
+        sent.append(kwargs)
+
+    monkeypatch.setattr(human_handoff, "_latest_human", latest_human)
+    monkeypatch.setattr(human_handoff, "_latest_outbound", latest_outbound)
+    monkeypatch.setattr(human_handoff, "_latest_inbound", latest_inbound)
+    monkeypatch.setattr(webhook, "_customer_agent_enabled", agent_enabled)
+    monkeypatch.setattr(human_handoff, "send_message", send_message)
+    monkeypatch.setattr(scheduler, "_claim", claim)
+    monkeypatch.setattr(scheduler, "_unclaim", unclaim)
+    monkeypatch.setattr("app.services.ai_agent.build_ai_reply", build_ai_reply)
+
+    result = await human_handoff._reply_one(
+        db=object(), customer=customer, inbound=inbound, grace_minutes=15
+    )
+
+    assert result is False
+    assert sent == [], "AI must not send after a human replies during generation"
+    assert human_checks == 2
+    assert len(unclaimed) == 1
