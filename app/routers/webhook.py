@@ -679,9 +679,11 @@ async def _journal_event(
     stored_payload = copy.deepcopy(payload)
     # Never trust identity-looking fields supplied by the external webhook.
     stored_payload.pop("tenant_id", None)
+    stored_payload.pop("_tenant_identity_verified", None)
     tenant_id = current_tenant_id.get()
     if tenant_id is not None:
         stored_payload["tenant_id"] = str(tenant_id)
+        stored_payload["_tenant_identity_verified"] = True
 
     # Persist the resolved tenant beside each Meta change before journaling.
     # Retry workers must not guess the home tenant if the mapping is absent.
@@ -690,6 +692,7 @@ async def _journal_event(
             for change in entry.get("changes", []) or []:
                 value = change.get("value") or {}
                 value.pop("_tenant_id", None)
+                value.pop("_tenant_verified", None)
                 metadata = value.get("metadata") or {}
                 pnid = str(metadata.get("phone_number_id") or "")
                 resolved_id, known = await _resolve_wa_tenant(
@@ -699,6 +702,7 @@ async def _journal_event(
                     resolved_id, known = tenant_id, True
                 if known and resolved_id is not None:
                     value["_tenant_id"] = str(resolved_id)
+                    value["_tenant_verified"] = True
                     change["value"] = value
     # The caller's live processing uses this sanitized/annotated copy too.
     payload.clear()
@@ -863,7 +867,11 @@ async def _process_payload(
             tid = None
             known = False
             if require_explicit_tenant:
-                explicit_tid = value.get("_tenant_id") or payload.get("tenant_id")
+                explicit_tid = (
+                    value.get("_tenant_id") if value.get("_tenant_verified")
+                    else payload.get("tenant_id") if payload.get("_tenant_identity_verified")
+                    else None
+                )
                 if explicit_tid:
                     try:
                         tid = uuid.UUID(str(explicit_tid))
