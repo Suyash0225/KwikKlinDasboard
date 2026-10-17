@@ -4334,6 +4334,7 @@ async function loadSettings() {
     $("set-turnaround").value = s.turnaround_days;
     $("set-freqcap").value = s.marketing_freq_cap_per_month;
     $("set-budget").value = s.marketing_monthly_msg_budget;
+    $("set-ai-budget").value = s.llm_monthly_budget_usd ?? 0;
     $("set-autonomy").value = s.marketing_autonomy;
     $("set-social").value = String(!!s.social_daily_enabled);
     $("set-socialhour").value = s.social_post_hour;
@@ -4833,6 +4834,14 @@ async function saveOps(btn) {
     ];
     for (const [key, value] of pairs) await api("/admin/api/settings", { method: "PUT", body: { key, value } });
     toast("Settings saved — live immediately");
+  });
+}
+async function saveAiBudget(btn) {
+  await busy(btn, async () => {
+    const value = Math.max(0, parseFloat($("set-ai-budget").value) || 0);
+    await api("/admin/api/settings", { method: "PUT", body: { key: "llm_monthly_budget_usd", value } });
+    toast("AI budget saved — budget checks use this value");
+    await loadUsage();
   });
 }
 async function testStandup(btn) {
