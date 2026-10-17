@@ -29,6 +29,7 @@ from decimal import Decimal
 import structlog
 from sqlalchemy import select, text
 
+from scripts._demo_seed_guard import refuse_production_seed
 from app.database import async_session_factory
 from app.models import Customer, Order, OrderStatus, PaymentStatus, Staff, StaffRole, Task
 from app.models.order import OrderStatusHistory
@@ -53,6 +54,7 @@ STAGES = [OrderStatus.RECEIVED, OrderStatus.PICKUP_ASSIGNED, OrderStatus.PICKED_
 
 
 async def clear() -> None:
+    refuse_production_seed()
     async with async_session_factory() as db:
         for stmt, arg in (
             ("DELETE FROM task_messages WHERE task_id IN "
@@ -73,6 +75,7 @@ async def clear() -> None:
 
 
 async def seed(n_orders: int, n_tasks: int, n_cust: int = 0) -> None:
+    refuse_production_seed()
     from scripts._bootstrap import prime
 
     await prime()   # warna sab rows tenant_id=NULL ke saath jayengi
@@ -154,6 +157,7 @@ async def seed(n_orders: int, n_tasks: int, n_cust: int = 0) -> None:
 
 
 def main() -> None:
+    refuse_production_seed()
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     if "--clear" in sys.argv:
         asyncio.run(clear())
