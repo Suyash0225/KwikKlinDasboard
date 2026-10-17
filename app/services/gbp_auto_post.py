@@ -228,8 +228,10 @@ async def _post_strategy(db, now_ist: datetime) -> dict:
     }
 
 async def _generate_post(db, now_ist: datetime) -> dict:
-    tenant_id = current_tenant_id.get() or await get_home_tenant_id()
-    tenant = await db.get(Tenant, tenant_id) if tenant_id else None
+    tenant_id = current_tenant_id.get()
+    if tenant_id is None:
+        raise RuntimeError("GBP auto-post requires explicit tenant context")
+    tenant = await db.get(Tenant, tenant_id)
     cfg = await app_settings.get_many(
         db, "shop_address", "shop_contact_phone", "turnaround_days", "sla_normal_days"
     )
