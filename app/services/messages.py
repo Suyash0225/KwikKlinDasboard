@@ -456,10 +456,10 @@ _OVERRIDES: dict[str, str] = {}
 
 # Keys the owner may safely rewrite from the UI (customer-facing copy).
 EDITABLE_KEYS = [
-    "order_confirmed_bill", "thankyou_rating", "order_ready",
+    "order_confirmed_bill", "order_ready",
     "order_out_for_delivery", "delay_notice", "payment_reminder",
     "payment_reminder_firm", "ack_received", "complaint_ack",
-    "escalated_ack", "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
+    "escalated_ack",
     "stop_confirmed", "start_confirmed",
     "payment_thanks", "service_thanks", "partial_delivery",
     "delivery_update_full", "reward_earned",
