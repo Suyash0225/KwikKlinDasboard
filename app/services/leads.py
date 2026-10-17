@@ -67,6 +67,10 @@ async def note_inquiry(db: AsyncSession, customer: Customer, text: str) -> None:
     15-minute response). Never raises.
     """
     try:
+        # STOP must win even if this helper is called from another entry point.
+        # A customer who opted out is not reactivated as a marketing lead.
+        if customer.opted_out or customer.marketing_opt_out or not customer.is_active:
+            return
         has_order = (
             await db.execute(
                 select(Order.id).where(Order.customer_id == customer.id).limit(1)
