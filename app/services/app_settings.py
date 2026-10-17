@@ -186,6 +186,17 @@ DEFAULTS: dict[str, Any] = {
     # Google Business daily-post history and toggle.
     "gbp_auto_posts": [],
     "gbp_auto_post_enabled": True,
+    # Owner-editable seasonal topics used by the existing GBP daily-post job.
+    "gbp_seasonal_calendar": [
+        {"name": "winter-care", "start": "11-15", "end": "02-15",
+         "focus": "winter garment care, blanket care, and safe storage"},
+        {"name": "monsoon-care", "start": "06-15", "end": "09-15",
+         "focus": "monsoon drying, damp-odor prevention, and fabric care"},
+        {"name": "festive-care", "start": "10-01", "end": "11-15",
+         "focus": "festive garment care for sarees and occasion wear"},
+    ],
+    # Optional publicly reachable HTTPS image URL for GBP post media; blank = text-only.
+    "gbp_public_poster_url": "",
     "google_review_link": "",    # bheja jata hai sirf 4-5 star par
     "google_review_link_2": "",  # doosri listing — customers me rotate hota hai
     # --- live-conversation follow-ups (app/services/engage.py) ---

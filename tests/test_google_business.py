@@ -285,3 +285,56 @@ async def test_gbp_daily_post_uses_tenant_shop_name(monkeypatch) -> None:
             await db.execute(sqltext("DELETE FROM settings_kv WHERE tenant_id = :t"), {"t": other})
             await db.execute(sqltext("DELETE FROM tenants WHERE id = :t"), {"t": other})
             await db.commit()
+
+
+def test_gbp_post_cta_uses_post_specific_utm_markers() -> None:
+    from datetime import datetime
+    from urllib.parse import parse_qs, urlparse
+    from zoneinfo import ZoneInfo
+    from app.services import gbp_auto_post
+
+    now = datetime(2026, 10, 17, 10, 15, tzinfo=ZoneInfo("Asia/Kolkata"))
+    url = gbp_auto_post._cta_url(now, "stain-care", "slow-day")
+    query = parse_qs(urlparse(url).query)
+    assert query["utm_source"] == ["google"]
+    assert query["utm_medium"] == ["gbp"]
+    assert query["utm_campaign"] == ["gbp_daily_20261017_stain-care"]
+    assert query["utm_content"] == ["stain-care"]
+    assert query["utm_term"] == ["slow-day"]
+
+
+def test_gbp_seasonal_calendar_handles_year_wrap_and_bad_entries() -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app.services import gbp_auto_post
+
+    calendar = [
+        {"name": "winter-care", "start": "11-15", "end": "02-15", "focus": "winter fabric care"},
+        {"name": "broken", "start": "bad", "end": "01-01", "focus": "ignore this"},
+    ]
+    winter = datetime(2026, 12, 20, tzinfo=ZoneInfo("Asia/Kolkata"))
+    summer = datetime(2026, 5, 20, tzinfo=ZoneInfo("Asia/Kolkata"))
+    assert gbp_auto_post._calendar_focus(winter, calendar) == ("winter-care", "winter fabric care")
+    assert gbp_auto_post._calendar_focus(summer, calendar) is None
+
+
+def test_gbp_topic_selection_uses_attributed_results_and_avoids_recent_repeat() -> None:
+    from app.services import gbp_auto_post
+
+    performance = {
+        "stain-care": {"leads": 1, "orders": 0, "collected_revenue": 0},
+        "pickup-convenience": {"leads": 2, "orders": 1, "collected_revenue": 1800},
+    }
+    selected = gbp_auto_post._choose_topic(performance, "stain-care", ["pickup-convenience"])
+    assert selected == "stain-care"
+    selected = gbp_auto_post._choose_topic(performance, "family-laundry", [])
+    assert selected == "pickup-convenience"
+
+
+def test_gbp_poster_url_rejects_non_public_or_non_https_urls() -> None:
+    from app.services import gbp_auto_post
+
+    assert gbp_auto_post._public_poster_url("http://example.com/poster.png") is None
+    assert gbp_auto_post._public_poster_url("https://localhost/poster.png") is None
+    assert gbp_auto_post._public_poster_url("https://127.0.0.1/poster.png") is None
+    assert gbp_auto_post._public_poster_url("https://cdn.example.com/poster.png") == "https://cdn.example.com/poster.png"
