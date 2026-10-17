@@ -100,6 +100,7 @@ async def _get_or_create_referral_code(
             "referrer_customer_id": str(customer.id),
             "reward_model": "friend_discount_then_referrer_reward",
         },
+        referral_owner_customer_id=customer.id,
     )
     db.add(campaign)
     await db.flush()
@@ -151,36 +152,51 @@ async def _issue_share_code_after_delivery(db: AsyncSession, order: Order) -> No
             result=reason,
         )
         return
-    campaign, coupon = await _get_or_create_referral_code(db, customer)
-    friend_discount = f"₹{coupon.value:.0f}"
-    minimum = f"₹{coupon.min_order:.0f}" if coupon.min_order is not None else "no minimum"
-    valid_to = coupon.valid_to.strftime("%d %b %Y") if coupon.valid_to else "until further notice"
-    message = (
-        f"Namaste {customer.name or 'ji'}! 🙏\n"
-        f"Aapka order {order.order_number} deliver ho gaya. Doston ko Kwik Klin recommend karein.\n"
-        f"Unke pehle order par {friend_discount} off (minimum {minimum}).\n"
-        f"Referral code: {coupon.code}\nValid till: {valid_to}.\n"
-        "Aapko bhi unka pehla order deliver hone par referral reward milega. 🧺"
-    )
+
+    # Claim before code/coupon creation and before the WhatsApp side effect.
+    # The tenant prefix is applied by scheduler._claim; duplicate delivery
+    # events and concurrent webhook retries therefore cannot issue/send twice.
+    from app.services.scheduler import _claim, _unclaim
+
+    claim_key = f"referral-share:{order.id}"
+    if not await _claim(claim_key):
+        return
     try:
-        await send_message(
-            db, to_phone=customer.phone, text=message, sent_by="bot",
-            intent="promotional",
+        campaign, coupon = await _get_or_create_referral_code(db, customer)
+        friend_discount = f"₹{coupon.value:.0f}"
+        minimum = f"₹{coupon.min_order:.0f}" if coupon.min_order is not None else "no minimum"
+        valid_to = coupon.valid_to.strftime("%d %b %Y") if coupon.valid_to else "until further notice"
+        message = (
+            f"Namaste {customer.name or 'ji'}! 🙏\n"
+            f"Aapka order {order.order_number} deliver ho gaya. Doston ko Kwik Klin recommend karein.\n"
+            f"Unke pehle order par {friend_discount} off (minimum {minimum}).\n"
+            f"Referral code: {coupon.code}\nValid till: {valid_to}.\n"
+            "Aapko bhi unka pehla order deliver hone par referral reward milega. 🧺"
         )
-        customer.last_marketing_at = datetime.now(timezone.utc)
-        await db.commit()
-        await audit.record(
-            actor_role="system", actor="referrals", action="referral_share_code_sent",
-            args={"customer_id": str(customer.id), "campaign_id": str(campaign.id)},
-            result="sent",
-        )
-    except SendError as exc:
-        log.info("referral_share_code_send_failed", reason=str(exc)[:100])
-        await audit.record(
-            actor_role="system", actor="referrals", action="referral_share_code_send_failed",
-            args={"customer_id": str(customer.id), "campaign_id": str(campaign.id)},
-            result=str(exc)[:160], ok=False,
-        )
+        try:
+            await send_message(
+                db, to_phone=customer.phone, text=message, sent_by="bot",
+                intent="promotional",
+            )
+            customer.last_marketing_at = datetime.now(timezone.utc)
+            await db.commit()
+            await audit.record(
+                actor_role="system", actor="referrals", action="referral_share_code_sent",
+                args={"customer_id": str(customer.id), "campaign_id": str(campaign.id)},
+                result="sent",
+            )
+        except SendError as exc:
+            await _unclaim(claim_key)
+            log.info("referral_share_code_send_failed", reason=str(exc)[:100])
+            await audit.record(
+                actor_role="system", actor="referrals", action="referral_share_code_send_failed",
+                args={"customer_id": str(customer.id), "campaign_id": str(campaign.id)},
+                result=str(exc)[:160], ok=False,
+            )
+    except Exception:
+        # Unexpected failures before the send succeeded must remain retryable.
+        await _unclaim(claim_key)
+        raise
 
 
 async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> None:
