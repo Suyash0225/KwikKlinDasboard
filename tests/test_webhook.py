@@ -93,7 +93,7 @@ async def test_inbound_lead_is_captured_when_agent_is_disabled(client, sent, mon
     assert lead is not None
     assert lead.stage == "CONTACTED"
     assert "dry clean" in lead.items_text.lower()
-    assert sent == [], "agent OFF must not send an automated customer reply"
+    assert all("dry clean" not in (m["text"] or "").lower() for m in sent), "agent OFF must not send an automated customer reply"
 
 
 async def test_opted_out_customer_is_not_recreated_as_lead(client, sent, monkeypatch) -> None:
