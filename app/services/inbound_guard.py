@@ -1,8 +1,9 @@
-"""Classify inbound WhatsApp messages before customer-facing AI runs.
+"""Classify inbound WhatsApp messages before AI replies and lead capture.
 
-This guard is intentionally conservative: only high-confidence promotional,
-vendor, or spam messages are suppressed. Ambiguous messages continue through
-the normal customer flow so a genuine enquiry is not silently lost.
+Only genuine service enquiries should enter the lead pipeline. Greetings,
+generic chat, business pitches, spam, and vendor outreach are not leads.
+Ambiguous messages may still receive a customer-service reply, but are not
+automatically recorded as a sales lead.
 """
 
 import re
@@ -43,6 +44,7 @@ _NON_LEAD_SCHEMA = {
             "type": "string",
             "enum": [
                 "CUSTOMER_LEAD",
+                "GENERAL_MESSAGE",
                 "BUSINESS_ADVERTISEMENT",
                 "SPAM",
                 "VENDOR_OR_PARTNER",
@@ -57,11 +59,16 @@ _NON_LEAD_SCHEMA = {
 
 _NON_LEAD_SYSTEM = """You are the inbound-message safety classifier for Kwik Klin laundry in Varanasi.
 
-Classify the customer's incoming WhatsApp message into exactly one category:
+Classify the incoming WhatsApp message into exactly one category:
 
 CUSTOMER_LEAD:
-- A genuine customer/prospect asking about laundry, dry cleaning, pickup, delivery, pricing, orders, payment, or Kwik Klin services.
-- Existing-customer service questions also belong here.
+- A genuine customer/prospect asking about laundry, dry cleaning, pickup, delivery, pricing, placing an order, or using Kwik Klin.
+- A concrete service request or question about using Kwik Klin.
+- Existing-customer service questions also belong here; the backend separately prevents existing orders from being re-created as new leads.
+
+GENERAL_MESSAGE:
+- Greetings, thanks, casual chat, vague "hello", unclear messages, or messages with no clear request to use Kwik Klin.
+- Do not turn a sender into a sales lead merely because they sent any message.
 
 BUSINESS_ADVERTISEMENT:
 - Another business/person is promoting their own service or product to Kwik Klin.
@@ -76,23 +83,39 @@ VENDOR_OR_PARTNER:
 Rules:
 - Judge the intent of the complete message, not individual keywords.
 - Do NOT classify a genuine Kwik Klin service enquiry as an advertisement just because it contains words such as service, business, offer, price, or company.
-- If the message is ambiguous, choose CUSTOMER_LEAD with lower confidence.
+- Do NOT classify a vague greeting or an unclear message as CUSTOMER_LEAD. Use GENERAL_MESSAGE unless there is clear evidence of intent to use Kwik Klin.
+- If the sender is selling their own service/product, use BUSINESS_ADVERTISEMENT or VENDOR_OR_PARTNER even if the pitch is polite and contains no link.
 - Do not invent context that is not present in the message.
 - Keep the reason short and factual.
 """
 
-# Only invoke the paid classifier when the message has strong non-customer
-# signals. Ordinary customer messages should not pay for a second LLM call
-# before the customer reply composer runs.
-_SUSPICIOUS_INBOUND_RE = re.compile(
-    r"(?:https?://|www\.|\b(?:seo|digital marketing|websites?|website development|software(?: development)?|bulk sms|bulk whatsapp|advertis(?:e|ing)|recruitment|job offer|agency|marketing services|lead generation|partnership|vendor|supplier|reseller)\b)",
+# Fast-path only messages that clearly express customer intent. Everything
+# else is classified by the cheap model so marketing pitches without a URL or
+# familiar keywords don't automatically become leads.
+_CLEAR_CUSTOMER_INTENT_RE = re.compile(
+    r"\\b(?:mujhe|hume|humein|hamen|i need|i want|looking for|can you "
+    r"clean|do you clean|how much|kitna|rate kya|price kya|service chahiye|"
+    r"karwana hai|karwani hai|dry ?clean kar|kapde dhul|pickup chahiye|"
+    r"pickup karwana|book (?:a )?pickup|schedule (?:a )?pickup|pick up my|"
+    r"order status|mera order|my order|where is my order|delivery kab|"
+    r"bill bhej|payment link|refund chahiye|shikayat|complaint|rate batao|"
+    r"rates kya|price list)\\b",
     re.IGNORECASE,
 )
 
 
-def _needs_inbound_classifier(text: str) -> bool:
-    message = " ".join((text or "").split())
-    return bool(message and _SUSPICIOUS_INBOUND_RE.search(message))
+def _has_clear_customer_intent(text: str) -> bool:
+    return bool(_CLEAR_CUSTOMER_INTENT_RE.search(" ".join((text or "").split())))
+
+
+_HARD_PROMO_RE = re.compile(
+    r"\\b(?:digital marketing|seo services|website development|bulk sms|"
+    r"bulk whatsapp|lead generation services|recruitment agency|software "
+    r"development agency|grow your business|boost your sales|rank your website|"
+    r"marketing agency|we provide (?:marketing|seo|website|software)|"
+    r"our (?:agency|company) (?:provides|offers))\\b",
+    re.IGNORECASE,
+)
 
 
 async def classify_inbound_message(text: str) -> dict[str, Any]:
@@ -109,15 +132,14 @@ async def classify_inbound_message(text: str) -> dict[str, Any]:
             "reason": "empty message",
         }
 
-    # Most inbound messages are ordinary customer conversations. Let the
-    # customer agent handle those directly instead of spending an extra
-    # Gemini request on a classifier. Suspicious messages still get the
-    # conservative LLM classification below.
-    if not _needs_inbound_classifier(message):
+    # Concrete enquiries are safe to capture without an extra model call.
+    # Crucially, the inverse is NOT true: absence of suspicious keywords does
+    # not prove that a message is a lead.
+    if _has_clear_customer_intent(message):
         return {
             "classification": "CUSTOMER_LEAD",
-            "confidence": 0.0,
-            "reason": "no suspicious non-lead signals",
+            "confidence": 0.99,
+            "reason": "clear customer service intent",
         }
 
     try:
@@ -133,6 +155,7 @@ async def classify_inbound_message(text: str) -> dict[str, Any]:
         classification = out.get("classification")
         if classification not in {
             "CUSTOMER_LEAD",
+            "GENERAL_MESSAGE",
             "BUSINESS_ADVERTISEMENT",
             "SPAM",
             "VENDOR_OR_PARTNER",
@@ -158,11 +181,40 @@ async def classify_inbound_message(text: str) -> dict[str, Any]:
     except Exception:
         log.exception("inbound_non_lead_classifier_unexpected")
 
+    # Do not create a lead merely because classification failed. Preserve a
+    # deterministic catch for unmistakable pitches; direct customer enquiries
+    # already took the fast path above.
+    if _HARD_PROMO_RE.search(message):
+        return {
+            "classification": "BUSINESS_ADVERTISEMENT",
+            "confidence": 0.86,
+            "reason": "strong promotional wording; classifier unavailable",
+        }
     return {
-        "classification": "CUSTOMER_LEAD",
+        "classification": "GENERAL_MESSAGE",
         "confidence": 0.0,
-        "reason": "classifier unavailable; normal customer flow allowed",
+        "reason": "classifier unavailable; not enough evidence to create a lead",
     }
+
+
+def is_customer_lead(result: dict[str, Any]) -> bool:
+    """Only confirmed customer intent can enter the sales-lead pipeline."""
+    try:
+        confidence = float(result.get("confidence", 0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return result.get("classification") == "CUSTOMER_LEAD" and confidence >= 0.70
+
+
+def is_suppressed_classification(result: dict[str, Any]) -> bool:
+    """True only for high-confidence business promotions, spam, and vendors."""
+    try:
+        confidence = float(result.get("confidence", 0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return result.get("classification") in {
+        "BUSINESS_ADVERTISEMENT", "SPAM", "VENDOR_OR_PARTNER"
+    } and confidence >= 0.85
 
 
 async def should_suppress_inbound(text: str) -> bool:
@@ -175,14 +227,7 @@ async def should_suppress_inbound(text: str) -> bool:
     classification = result["classification"]
     confidence = result["confidence"]
 
-    suppress = (
-        classification in {
-            "BUSINESS_ADVERTISEMENT",
-            "SPAM",
-            "VENDOR_OR_PARTNER",
-        }
-        and confidence >= 0.85
-    )
+    suppress = is_suppressed_classification(result)
 
     if suppress:
         log.info(
