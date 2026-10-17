@@ -72,10 +72,15 @@ class SchedulerLeader:
             try:
                 conn = await self._engine.connect()
                 result = await conn.execute(
-                    text("SELECT pg_try_advisory_lock(CAST(:key AS bigint))"),
+                    text(
+                        "SELECT pg_try_advisory_lock(CAST(:key AS bigint)), "
+                        "pg_backend_pid()"
+                    ),
                     {"key": SCHEDULER_LOCK_KEY},
                 )
-                acquired = bool(result.scalar_one())
+                lock_row = result.one()
+                acquired = bool(lock_row[0])
+                backend_pid = int(lock_row[1])
                 # Advisory locks are session-level, so committing the query
                 # does not release the lock; keeping this connection open does.
                 await conn.commit()
@@ -91,7 +96,7 @@ class SchedulerLeader:
                         "scheduler_leader_acquired",
                         lock_key=SCHEDULER_LOCK_KEY,
                     )
-                    await self._monitor_connection(conn)
+                    await self._monitor_connection(conn, backend_pid)
                 else:
                     log.debug(
                         "scheduler_standby",
@@ -122,7 +127,9 @@ class SchedulerLeader:
             if await self._wait(self._poll_interval):
                 return
 
-    async def _monitor_connection(self, conn: AsyncConnection) -> None:
+    async def _monitor_connection(
+        self, conn: AsyncConnection, expected_backend_pid: int
+    ) -> None:
         """Keep the lock connection healthy; exit on shutdown, raise on loss."""
         while not self._stop_event.is_set():
             try:
@@ -134,11 +141,20 @@ class SchedulerLeader:
                 # A connection failure triggers scheduler shutdown and election
                 # retry. Other workers can acquire the lock after this session
                 # disappears, providing automatic failover.
-                async def _ping() -> None:
-                    await conn.execute(text("SELECT 1"))
+                async def _ping() -> int:
+                    result = await conn.execute(text("SELECT pg_backend_pid()"))
+                    pid = int(result.scalar_one())
                     await conn.commit()
+                    return pid
 
-                await asyncio.wait_for(_ping(), timeout=self._health_interval)
+                current_pid = await asyncio.wait_for(
+                    _ping(), timeout=self._health_interval
+                )
+                if current_pid != expected_backend_pid:
+                    raise RuntimeError(
+                        "scheduler leader connection was replaced; advisory lock "
+                        "belongs to the previous PostgreSQL session"
+                    )
 
     async def _wait(self, seconds: float) -> bool:
         try:
