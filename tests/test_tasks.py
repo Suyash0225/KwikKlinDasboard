@@ -1045,3 +1045,30 @@ async def test_duplicate_open_customer_task_reuses_existing_task(worker, sent) -
             await db.execute(delete(Task).where(Task.customer_id == customer_id))
             await db.execute(delete(Customer).where(Customer.id == customer_id))
             await db.commit()
+
+
+
+@pytest.mark.parametrize("kind", ["packing", "custom"])
+async def test_dashboard_supports_packing_and_custom_task_kinds(client, worker, kind) -> None:
+    """The API and model must accept every task kind exposed in the dashboard."""
+    response = await client.post(
+        "/admin/api/tasks",
+        headers=H,
+        json={
+            "title": f"{kind.title()} regression task",
+            "staff": "Taskram",
+            "kind": kind,
+            "urgent": False,
+        },
+    )
+    assert response.status_code == 201, response.text
+    code = response.json()["code"]
+    try:
+        async with async_session_factory() as db:
+            task = await task_service.get_by_code(db, code)
+            assert task is not None
+            assert task.kind == kind
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.code == code))
+            await db.commit()
