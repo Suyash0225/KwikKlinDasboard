@@ -98,7 +98,7 @@ Rules:
 # Generic pronouns ("I", "mujhe") are not sufficient; they also appear in sales
 # pitches, so they must be paired with a concrete Kwik Klin customer intent.
 _LEAD_INTENT_RE = re.compile(
-    r"\\b(?:how much|kitna (?:lagega|hoga|padega)|rate kya|price kya|"
+    r"\b(?:how much|kitna (?:lagega|hoga|padega)|rate kya|price kya|"
     r"service chahiye|laundry service chahiye|dry ?clean(?:ing)? karwana|"
     r"dry ?clean(?:ing)? karwani|kapde (?:dhul|press|iron)|pickup chahiye|"
     r"pickup karwana|book (?:a )?pickup|schedule (?:a )?pickup|"
@@ -106,14 +106,14 @@ _LEAD_INTENT_RE = re.compile(
     r"hume(?:in)? (?:kapde|kapda|laundry|dry ?clean|dhulai|press|pickup)|"
     r"i (?:need|want) (?:laundry|dry ?clean|pickup|clothes cleaned)|"
     r"looking for (?:laundry|dry ?clean|pickup)|can you clean|do you clean|"
-    r"karwana hai|karwani hai|rate batao|rates kya|price list)\\b",
+    r"karwana hai|karwani hai|rate batao|rates kya|price list)\b",
     re.IGNORECASE,
 )
 
 _SERVICE_INTENT_RE = re.compile(
-    r"\\b(?:mera order|my order|order status|where is my order|delivery kab|"
+    r"\b(?:mera order|my order|order status|where is my order|delivery kab|"
     r"bill bhej|payment link|already paid|refund|shikayat|complaint|"
-    r"order kahan|order kaha|payment status)\\b",
+    r"order kahan|order kaha|payment status)\b",
     re.IGNORECASE,
 )
 
@@ -136,11 +136,11 @@ def _classify_clear_intent(text: str) -> dict[str, Any] | None:
 
 
 _HARD_PROMO_RE = re.compile(
-    r"\\b(?:digital marketing|seo services|website development|bulk sms|"
+    r"\b(?:digital marketing|seo services|website development|bulk sms|"
     r"bulk whatsapp|lead generation services|recruitment agency|software "
     r"development agency|grow your business|boost your sales|rank your website|"
     r"marketing agency|we provide (?:marketing|seo|website|software)|"
-    r"our (?:agency|company) (?:provides|offers))\\b",
+    r"our (?:agency|company) (?:provides|offers))\b",
     re.IGNORECASE,
 )
 
