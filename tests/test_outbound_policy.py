@@ -117,6 +117,7 @@ async def test_restart_retry_job_emits_mock_message_once() -> None:
     assert sends == ["mocked WhatsApp send"]
 
 
+@pytest.mark.requires_independent_sessions
 async def test_concurrent_referral_code_issuance_reuses_one_coupon() -> None:
     """Two delivery workers racing for one customer must converge on one code."""
     import asyncio
@@ -297,7 +298,7 @@ async def test_duplicate_delivery_event_sends_one_referral_share(monkeypatch) ->
 
 
 async def test_promotional_daily_cap_is_shared_per_tenant(monkeypatch) -> None:
-    from app.models import Customer, Tenant
+    from app.models import Customer, OutboundThrottle
     from app.services import tenant_context, app_settings, outbound_policy
     from app.services.whatsapp import SendError
 
@@ -319,6 +320,10 @@ async def test_promotional_daily_cap_is_shared_per_tenant(monkeypatch) -> None:
 
     async with tenant_context.as_tenant(tenant_id):
         async with async_session_factory() as db:
+            # Start from a clean tenant limiter row; other test cases may have
+            # exercised promotional sends for the shared home tenant.
+            await db.execute(delete(OutboundThrottle).where(OutboundThrottle.tenant_id == tenant_id))
+            await db.commit()
             customer = Customer(phone=f"+91996{uuid.uuid4().int % 10**7:07d}", name="Cap Test")
             db.add(customer)
             await db.flush()
