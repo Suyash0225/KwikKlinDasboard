@@ -663,6 +663,7 @@ async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)
             buttons=customer_payment_buttons(),
             list_button="Payment",
             list_title="Kwik Klin",
+            intent="transactional", outbound_kind="payment_reminder",
         )
         sent = True
     except SendError as exc:
