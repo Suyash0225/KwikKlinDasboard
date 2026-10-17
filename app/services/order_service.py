@@ -593,6 +593,103 @@ async def send_bill_to_customer(
     return True
 
 
+async def add_billing_adjustment(
+    db: AsyncSession,
+    order_number: str,
+    *,
+    label: str,
+    amount: Decimal,
+    kind: str = "extra_charge",
+    note: str | None = None,
+    changed_by: str = "dashboard",
+) -> Order:
+    """Append a traceable bill adjustment and recalculate payment status atomically."""
+    label = " ".join(label.split())
+    if not label or len(label) > 100:
+        raise OrderError("adjustment label must be 1-100 characters")
+    if kind not in {"extra_charge", "due_charge"}:
+        raise OrderError("invalid billing adjustment kind")
+    amount = Decimal(amount).quantize(Decimal("0.01"))
+    if not amount.is_finite() or amount <= 0 or amount > Decimal("1000000.00"):
+        raise OrderError("adjustment amount must be between 0.01 and 1000000.00")
+
+    try:
+        order = (
+            await db.execute(
+                select(Order)
+                .where(Order.order_number == order_number.upper())
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if order is None:
+            raise OrderNotFoundError(f"no order {order_number!r}")
+        from uuid import uuid4
+        adjustment = {
+            "id": str(uuid4()),
+            "type": label,
+            "qty": 1,
+            "amount": str(amount),
+            "kind": kind,
+            "label": label,
+            "note": (note or "").strip()[:300] or None,
+            "changed_by": (changed_by or "dashboard")[:80],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        order.items = [*(order.items or []), adjustment]
+        order.total_amount = ((order.total_amount or Decimal("0")) + amount).quantize(Decimal("0.01"))
+        order.recalculate_payment_status()
+        await db.commit()
+        await db.refresh(order)
+        return order
+    except Exception:
+        await db.rollback()
+        raise
+
+
+async def remove_billing_adjustment(
+    db: AsyncSession,
+    order_number: str,
+    adjustment_id: str,
+) -> Order:
+    """Remove only a known adjustment; lock row to avoid concurrent lost updates."""
+    try:
+        order = (
+            await db.execute(
+                select(Order)
+                .where(Order.order_number == order_number.upper())
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if order is None:
+            raise OrderNotFoundError(f"no order {order_number!r}")
+        items = list(order.items or [])
+        match = next(
+            (item for item in items if isinstance(item, dict)
+             and item.get("id") == adjustment_id
+             and item.get("kind") in {"extra_charge", "due_charge"}),
+            None,
+        )
+        if match is None:
+            raise OrderError("billing adjustment not found")
+        try:
+            amount = Decimal(str(match.get("amount", "0")))
+        except Exception as exc:
+            raise OrderError("stored billing adjustment amount is invalid") from exc
+        if not amount.is_finite() or amount <= 0:
+            raise OrderError("stored billing adjustment amount is invalid")
+        order.items = [item for item in items if item is not match]
+        order.total_amount = max(
+            (order.total_amount or Decimal("0")) - amount, Decimal("0")
+        ).quantize(Decimal("0.01"))
+        order.recalculate_payment_status()
+        await db.commit()
+        await db.refresh(order)
+        return order
+    except Exception:
+        await db.rollback()
+        raise
+
+
 async def record_payment(
     db: AsyncSession,
     order: Order,
