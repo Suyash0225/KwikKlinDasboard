@@ -76,14 +76,18 @@ async def run_backup() -> str | None:
     BACKUP_DIR.mkdir(exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out = BACKUP_DIR / f"kwikklin-{stamp}.dump"
-    env = {**os.environ, "PGPASSWORD": info["pw"]}
+    env = {
+        **os.environ,
+        "PGPASSWORD": info["pw"],
+        # This is a dedicated one-shot trusted backup process, not the app pool.
+        "PGOPTIONS": "-c app.system_context=on",
+    }
     proc = await asyncio.create_subprocess_exec(
         exe,
         "-h", info["host"], "-p", info["port"], "-U", info["user"],
-        # RLS is FORCED on tenant tables (data isolation); without this flag
-        # pg_dump refuses to run. The backup session has no app.tenant_id
-        # set, so the policies' system-context arm exposes every row and the
-        # dump stays complete.
+        # RLS is FORCED on tenant tables. The trusted backup subprocess opts
+        # into system access through its isolated PGOPTIONS; the application
+        # connection pool never inherits this setting.
         "--enable-row-security",
         "-Fc", "-f", str(out), info["db"],
         env=env,
