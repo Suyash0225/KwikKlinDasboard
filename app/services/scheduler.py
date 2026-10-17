@@ -1242,6 +1242,7 @@ async def run_payment_reminders() -> int:
                     list_button="Payment",
                     list_title="Kwik Klin",
                     intent="transactional", outbound_kind=kind,
+                    enqueue_on_fail=False,
                 )
                 sends += 1
             except WindowClosedError:
@@ -1252,6 +1253,7 @@ async def run_payment_reminders() -> int:
                         template_params=[f"{due}", o.order_number, "Please clear the pending amount."],
                         template_url_param=bill_link.make(o.tenant_id, o.id) if o.tenant_id else None,
                         intent="transactional", outbound_kind=kind,
+                        enqueue_on_fail=False,
                     )
                     sends += 1
                 except SendError:
