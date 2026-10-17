@@ -120,6 +120,7 @@ async def _handle_payment_action(
                 db,
                 to_phone=phone,
                 text="✅ Aapka koi outstanding bill nahi mila. Dhanyawad!",
+                intent="transactional", outbound_kind="bill",
             )
             return
 
@@ -133,12 +134,14 @@ async def _handle_payment_action(
                     db,
                     to_phone=phone,
                     text="⚠️ Payment link abhi available nahi hai. Kripya thodi der baad try karein.",
+                    intent="transactional", outbound_kind="bill",
                 )
                 return
             await send_message(
                 db,
                 to_phone=phone,
                 text=f"💰 Apne outstanding bills dekhkar payment karne ke liye yahan tap karein:\n{link}",
+                intent="transactional", outbound_kind="bill",
             )
             return
 
@@ -147,6 +150,7 @@ async def _handle_payment_action(
                 db,
                 to_phone=phone,
                 text="👍 Theek hai, aapne payment kar diya hai. Hum outstanding payment verify karke update kar denge. Dhanyawad! 🙏",
+                intent="transactional", outbound_kind="bill",
             )
             try:
                 await send_message(
@@ -167,7 +171,11 @@ async def _handle_payment_action(
         )
     ).scalar_one_or_none()
     if order is None:
-        await send_message(db, to_phone=phone, text="⚠️ Ye bill ab available nahi hai. Kripya message karke batayein.")
+        await send_message(
+            db, to_phone=phone,
+            text="⚠️ Ye bill ab available nahi hai. Kripya message karke batayein.",
+            intent="transactional", outbound_kind="bill",
+        )
         return
 
     if action == "pay":
@@ -177,17 +185,22 @@ async def _handle_payment_action(
             db,
             to_phone=phone,
             text=f"💰 Payment ke liye yahan tap karein:\n{link}",
+            intent="transactional", outbound_kind="bill",
         )
         return
 
     if order.payment_status is PaymentStatus.PAID:
-        await send_message(db, to_phone=phone, text="✅ Haan, payment already receive ho chuka hai. Dhanyawad! 🙏")
+        await send_message(
+            db, to_phone=phone, text="✅ Haan, payment already receive ho chuka hai. Dhanyawad! 🙏",
+            intent="transactional", outbound_kind="bill",
+        )
         return
 
     await send_message(
         db,
         to_phone=phone,
         text="👍 Theek hai, aapne payment kar diya hai. Hum payment verify karke update kar denge. Dhanyawad! 🙏",
+        intent="transactional", outbound_kind="bill",
     )
     try:
         await send_message(
@@ -1336,6 +1349,8 @@ async def _handle_inbound_message(
         # The first complaint acknowledgement must still reach the customer;
         # subsequent messages stay silent while the human takeover is active.
         was_agent_paused = customer.agent_paused
+        reply_intent = "transactional" if ORDER_NUMBER_RE.search(spoken) else None
+        reply_kind = "order_status" if reply_intent else None
         reply = None
         try:
             if ORDER_NUMBER_RE.search(spoken):
@@ -1362,6 +1377,8 @@ async def _handle_inbound_message(
                 phone,
                 reply,
                 allow_paused_once=(not was_agent_paused and customer.agent_paused),
+                intent=reply_intent,
+                outbound_kind=reply_kind,
             )
 
 
@@ -1427,6 +1444,8 @@ async def _send_customer_agent_reply(
     reply: str,
     *,
     allow_paused_once: bool = False,
+    intent: str | None = None,
+    outbound_kind: str | None = None,
 ) -> bool:
     """Final service-agent gate immediately before WhatsApp send.
 
@@ -1486,7 +1505,10 @@ async def _send_customer_agent_reply(
         reply = await _avoid_repeated_welcome(db, customer, reply)
 
         try:
-            await send_message(db, to_phone=phone, text=reply, sent_by="ai")
+            await send_message(
+                db, to_phone=phone, text=reply, sent_by="ai",
+                intent=intent, outbound_kind=outbound_kind,
+            )
             return True
         except SendError:
             log.exception("reply_send_failed", phone=phone)
