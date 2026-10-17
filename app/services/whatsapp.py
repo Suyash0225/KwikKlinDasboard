@@ -506,6 +506,12 @@ async def send_image(
 
     customer, staff = await _find_recipient(db, to_phone)
 
+    if customer is not None and intent is None and sent_by not in {"manager", "human"}:
+        raise SendError(
+            "customer-facing automated media send requires explicit outbound intent",
+            transient=False,
+        )
+
     if intent is not None and (customer is not None or staff is None):
         from app.services.outbound_policy import enforce_outbound_policy
 
