@@ -110,7 +110,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             + " — run: python -m scripts.secure_setup"
         )
 
-    scheduler.start()
+    from app.services.scheduler_leader import SchedulerLeader
+
+    scheduler_leader = SchedulerLeader(
+        engine,
+        start_scheduler=scheduler.start,
+        shutdown_scheduler=scheduler.shutdown,
+    )
+    await scheduler_leader.start()
     # owner's edited message formats survive restarts
     try:
         from app.database import async_session_factory
@@ -122,7 +129,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         log.exception("message_overrides_load_failed")
     yield
-    scheduler.shutdown()
+    await scheduler_leader.stop()
     await engine.dispose()
     log.info("shutdown")
 
