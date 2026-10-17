@@ -148,6 +148,23 @@ async def _reply_one(db: AsyncSession, customer: Customer, inbound: Conversation
             await _unclaim(key)
             return False
 
+        # The AI stop switch, customer pause, or opt-out may have changed
+        # while the model was generating. Re-check every stop condition at
+        # the last possible moment before sending the takeover reply.
+        if (
+            customer.agent_paused
+            or customer.opted_out
+            or not await _customer_agent_enabled(db, customer)
+        ):
+            await _unclaim(key)
+            log.info(
+                "human_handoff_cancelled_by_stop",
+                phone=customer.phone,
+                agent_paused=customer.agent_paused,
+                opted_out=customer.opted_out,
+            )
+            return False
+
         try:
             await send_message(db, to_phone=customer.phone, text=reply, sent_by="ai")
         except SendError as exc:
