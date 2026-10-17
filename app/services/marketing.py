@@ -8,8 +8,6 @@ Compliance is CODE, not convention — every send passes eligible():
 - monthly message budget (Settings) -> sends stop when hit
 """
 
-import asyncio
-import random
 import hashlib
 import secrets
 import uuid
