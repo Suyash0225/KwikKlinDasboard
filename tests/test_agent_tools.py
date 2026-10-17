@@ -59,6 +59,49 @@ async def test_order_detail_reports_money_and_status(sample_order) -> None:
     assert "PARTIAL" in out
 
 
+async def test_billing_adjustment_tool_adds_and_removes_real_charge(sample_order) -> None:
+    async with async_session_factory() as db:
+        added = await at.run_tool(
+            db, "billing_adjustment",
+            f"add | {sample_order} | Pickup pytest | 50 | extra_charge | regression test",
+        )
+    assert "extra charge laga diya" in added
+    assert "₹450" in added
+
+    async with async_session_factory() as db:
+        order = await order_service.get_order(db, sample_order)
+        adjustment = next(
+            item for item in order.items
+            if isinstance(item, dict) and item.get("kind") == "extra_charge"
+            and item.get("label") == "Pickup pytest"
+        )
+        adjustment_id = adjustment["id"]
+        assert order.total_amount == Decimal("450.00")
+        detail = await at.run_tool(db, "order_detail", sample_order)
+    assert "Billing adjustments:" in detail
+    assert "Pickup pytest" in detail
+    assert adjustment_id in detail
+
+    async with async_session_factory() as db:
+        removed = await at.run_tool(
+            db, "billing_adjustment", f"remove | {sample_order} | {adjustment_id}"
+        )
+    assert "hata diya" in removed
+    assert "₹400" in removed
+    async with async_session_factory() as db:
+        order = await order_service.get_order(db, sample_order)
+        assert order.total_amount == Decimal("400.00")
+        assert not any(
+            isinstance(item, dict) and item.get("id") == adjustment_id
+            for item in order.items
+        )
+
+
+def test_billing_adjustment_is_marked_as_a_write_tool() -> None:
+    assert "billing_adjustment" in at.WRITE_TOOLS
+    assert any(tool["name"] == "billing_adjustment" for tool in at.TOOL_SPECS)
+
+
 async def test_customer_detail_lists_orders(sample_order) -> None:
     async with async_session_factory() as db:
         out = await at.run_tool(db, "customer_detail", "Toolwala")
