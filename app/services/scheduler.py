@@ -804,7 +804,9 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
             if task_rows:
                 for t in task_rows:
                     flag = " 🔴 URGENT" if t.urgent else ""
-                    lines.append(f"• {t.code} — {t.title[:180]}{flag}")
+                    linked_order = await db.get(Order, t.order_id) if t.order_id else None
+                    order_tag = f"{linked_order.order_number} — " if linked_order else ""
+                    lines.append(f"• {t.code} — {order_tag}{t.title[:150]}{flag}")
 
             if orders:
                 lines.append("")
