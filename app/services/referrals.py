@@ -78,7 +78,7 @@ async def _get_or_create_referral_code(
     valid_days = max(1, min(365, int(await app_settings.get(db, "referral_coupon_valid_days") or 90)))
     friend_discount = max(Decimal("1"), min(friend_discount, Decimal("500")))
     min_order = max(Decimal("0"), min(min_order, Decimal("100000")))
-    valid_to = date.today() + timedelta(days=valid_days)
+    valid_to = today_ist() + timedelta(days=valid_days)
 
     for _ in range(5):
         code = await _code()
@@ -110,7 +110,7 @@ async def _get_or_create_referral_code(
         discount_type="flat",
         value=friend_discount,
         min_order=min_order,
-        valid_from=date.today(),
+        valid_from=today_ist(),
         valid_to=valid_to,
         per_customer_limit=1,
         total_limit=1000,
@@ -283,7 +283,7 @@ async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> Non
     valid_days = max(1, min(365, int(await app_settings.get(db, "referral_reward_valid_days") or 30)))
     reward_value = max(Decimal("1"), min(reward_value, Decimal("1000")))
     min_order = max(Decimal("0"), min(min_order, Decimal("100000")))
-    valid_to = date.today() + timedelta(days=valid_days)
+    valid_to = today_ist() + timedelta(days=valid_days)
 
     for _ in range(5):
         reward_code = "RR-" + secrets.token_hex(4).upper()
@@ -310,7 +310,7 @@ async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> Non
         discount_type="flat",
         value=reward_value,
         min_order=min_order,
-        valid_from=date.today(),
+        valid_from=today_ist(),
         valid_to=valid_to,
         per_customer_limit=1,
         total_limit=1,
