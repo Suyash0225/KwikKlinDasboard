@@ -673,12 +673,30 @@ async def _journal_event(
     """Persist the raw event before any processing. None = already journaled
     (an exact redelivery), so the caller must skip processing."""
     key = hashlib.sha256(body).hexdigest()
+    import copy
     from app.services.tenant_context import current_tenant_id
 
-    stored_payload = dict(payload)
+    stored_payload = copy.deepcopy(payload)
     tenant_id = current_tenant_id.get()
     if tenant_id is not None:
         stored_payload["tenant_id"] = str(tenant_id)
+
+    # Persist the resolved tenant beside each Meta change before journaling.
+    # Retry workers must not guess the home tenant if the mapping is absent.
+    if source == "meta":
+        for entry in stored_payload.get("entry", []) or []:
+            for change in entry.get("changes", []) or []:
+                value = change.get("value") or {}
+                metadata = value.get("metadata") or {}
+                pnid = str(metadata.get("phone_number_id") or "")
+                resolved_id, known = await _resolve_wa_tenant(
+                    db, pnid, allow_home_fallback=False
+                )
+                if not known and tenant_id is not None:
+                    resolved_id, known = tenant_id, True
+                if known and resolved_id is not None:
+                    value["_tenant_id"] = str(resolved_id)
+                    change["value"] = value
     event = WebhookEvent(source=source, event_key=key, payload=stored_payload)
     db.add(event)
     try:
@@ -836,9 +854,18 @@ async def _process_payload(
         for change in entry.get("changes", []):
             value = change.get("value", {})
             pnid = str((value.get("metadata") or {}).get("phone_number_id") or "")
-            tid, known = await _resolve_wa_tenant(
-                db, pnid, allow_home_fallback=not require_explicit_tenant
-            )
+            explicit_tid = value.get("_tenant_id") or payload.get("tenant_id")
+            tid = None
+            known = False
+            if explicit_tid:
+                try:
+                    tid = uuid.UUID(str(explicit_tid))
+                    known = True
+                except (ValueError, TypeError, AttributeError):
+                    if require_explicit_tenant:
+                        raise ValueError("webhook retry has invalid tenant identity")
+            if not known and not require_explicit_tenant:
+                tid, known = await _resolve_wa_tenant(db, pnid)
             if not known:
                 log.warning(
                     "webhook_unknown_phone_number_id",
