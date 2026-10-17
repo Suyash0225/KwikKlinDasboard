@@ -1168,21 +1168,53 @@ async def _handle_inbound_message(
             except SendError:
                 log.exception("start_confirm_send_failed", phone=phone)
             return
-        # Suppress obvious vendor/competitor spam before lead capture, but
-        # do not couple lead capture to whether the AI is allowed to reply.
-        # Genuine inbound enquiries must survive agent OFF, human takeover,
-        # and per-customer pause so a paid lead pipeline does not lose them.
-        from app.services.inbound_guard import should_suppress_inbound
+        # Classify once before lead capture and AI reply. Only confirmed
+        # customer intent enters the sales-lead pipeline; ambiguous messages
+        # can still receive support without becoming sales leads.
+        from app.services.inbound_guard import (
+            classify_inbound_message,
+            is_customer_lead,
+            is_suppressed_classification,
+            looks_like_automated_agent,
+        )
 
-        if await should_suppress_inbound(spoken):
+        if looks_like_automated_agent(spoken or text or ""):
+            inbound_classification = {
+                "classification": "GENERAL_MESSAGE",
+                "confidence": 0.99,
+                "reason": "automated-agent message; defer to thread pause guard",
+            }
+        else:
+            inbound_classification = await classify_inbound_message(spoken or text or "")
+
+        if is_suppressed_classification(inbound_classification):
+            log.info(
+                "inbound_non_lead_suppressed",
+                phone=phone,
+                classification=inbound_classification.get("classification"),
+                confidence=inbound_classification.get("confidence"),
+                reason=inbound_classification.get("reason"),
+            )
             return
-        if not customer.opted_out and not customer.marketing_opt_out:
+
+        if (
+            is_customer_lead(inbound_classification)
+            and not customer.opted_out
+            and not customer.marketing_opt_out
+        ):
             try:
                 from app.services.leads import note_inquiry
 
                 await note_inquiry(db, customer, spoken or text or "")
             except Exception:
                 log.exception("lead_capture_failed", phone=phone)
+        else:
+            log.info(
+                "inbound_not_captured_as_lead",
+                phone=phone,
+                classification=inbound_classification.get("classification"),
+                confidence=inbound_classification.get("confidence"),
+            )
 
         # Human phone reply gets a short, per-message grace period.
         # During it the customer can continue talking without AI talking over
