@@ -93,6 +93,54 @@ async def test_inbound_lead_is_captured_when_agent_is_disabled(client, sent, mon
     assert all("dry clean" not in (m["text"] or "").lower() for m in sent), "agent OFF must not send an automated customer reply"
 
 
+async def test_non_lead_inbound_is_not_captured_as_sales_lead(client, sent, monkeypatch) -> None:
+    """Ads and vague greetings are stored, but neither creates a sales lead."""
+    import app.routers.webhook as wh
+    import app.services.leads as leads_service
+    from app.services import inbound_guard
+
+    captured = []
+
+    async def fake_classify(text):
+        if "grow your business" in text.lower():
+            return {
+                "classification": "BUSINESS_ADVERTISEMENT",
+                "confidence": 0.97,
+                "reason": "Unsolicited business promotion",
+            }
+        return {
+            "classification": "GENERAL_MESSAGE",
+            "confidence": 0.99,
+            "reason": "No concrete Kwik Klin service request",
+        }
+
+    async def fake_note_inquiry(db, customer, text):
+        captured.append((customer.phone, text))
+
+    async def agent_disabled(db, customer):
+        return False
+
+    monkeypatch.setattr(inbound_guard, "classify_inbound_message", fake_classify)
+    monkeypatch.setattr(leads_service, "note_inquiry", fake_note_inquiry)
+    monkeypatch.setattr(wh, "_customer_agent_enabled", agent_disabled)
+
+    await _inbound_from(
+        client,
+        "Hello sir, we can help you grow your business and get more customers.",
+        "Marketing Sender",
+        "wamid.TEST-nonlead-ad",
+    )
+    await _inbound_from(
+        client,
+        "Hello there",
+        "Greeting Sender",
+        "wamid.TEST-nonlead-greeting",
+    )
+
+    assert captured == [], f"non-lead messages entered the lead pipeline: {captured}"
+    assert sent == [], "ads/greetings must not trigger automated customer replies"
+
+
 async def test_opted_out_customer_is_not_recreated_as_lead(client, sent, monkeypatch) -> None:
     import app.routers.webhook as wh
     import app.services.leads as leads_service
