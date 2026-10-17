@@ -1570,6 +1570,7 @@ async def edit_task_api(code: str, body: TaskEditIn, db: AsyncSession = Depends(
     task = await task_service.get_by_code(db, code)
     if task is None:
         raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    previous_staff_id = task.assigned_staff_id
 
     staff = await task_service.find_staff(db, body.staff or "") if body.staff else None
     if body.staff and staff is None:
@@ -1613,6 +1614,23 @@ async def edit_task_api(code: str, body: TaskEditIn, db: AsyncSession = Depends(
     db.add(task)
     await db.commit()
     await db.refresh(task)
+
+    if previous_staff_id != task.assigned_staff_id:
+        notified = False
+        if staff is not None and task.status == "OPEN":
+            notified = await task_service.send_task_to(db, task, staff)
+        previous_staff = await db.get(_S, previous_staff_id) if previous_staff_id else None
+        await audit.record(
+            actor_role="admin",
+            actor="dashboard",
+            action="task_reassigned",
+            args={
+                "code": task.code,
+                "from_staff": previous_staff.name if previous_staff else None,
+                "to_staff": staff.name if staff else None,
+            },
+            result="notification sent" if notified else "assignment saved; notification not delivered",
+        )
     return {"ok": True, "code": task.code}
 
 
