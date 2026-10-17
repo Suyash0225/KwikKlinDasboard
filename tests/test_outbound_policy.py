@@ -75,3 +75,70 @@ async def test_repeated_claimed_job_sends_once(monkeypatch) -> None:
             if await _claim(key):
                 sent.append("mocked message")
     assert sent == ["mocked message"]
+
+
+@pytest.mark.requires_independent_sessions
+async def test_concurrent_referral_code_issuance_reuses_one_coupon() -> None:
+    """Two delivery workers racing for one customer must converge on one code."""
+    import asyncio
+    from sqlalchemy import delete, text
+    from app.models import Campaign, Coupon, Customer, Tenant
+    from app.services import tenant_context
+    from app.services.referrals import _get_or_create_referral_code
+
+    async with async_session_factory() as db:
+        async with tenant_context.system_context(db):
+            tenant = (
+                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
+            ).scalar_one()
+            tenant_id = tenant.id
+
+    phone = f"+91997{uuid.uuid4().int % 10**7:07d}"
+    async with tenant_context.as_tenant(tenant_id):
+        async with async_session_factory() as db:
+            customer = Customer(phone=phone, name="Referral Concurrency Test")
+            db.add(customer)
+            await db.commit()
+            customer_id = customer.id
+
+    async def issue():
+        async with tenant_context.as_tenant(tenant_id):
+            async with async_session_factory() as db:
+                customer = await db.get(Customer, customer_id)
+                return await _get_or_create_referral_code(db, customer)
+
+    try:
+        results = await asyncio.gather(issue(), issue())
+        assert results[0][1].code == results[1][1].code
+        async with tenant_context.as_tenant(tenant_id):
+            async with async_session_factory() as db:
+                campaigns = (
+                    await db.execute(
+                        select(Campaign).where(
+                            Campaign.referral_owner_customer_id == customer_id
+                        )
+                    )
+                ).scalars().all()
+                assert len(campaigns) == 1
+                coupons = (
+                    await db.execute(
+                        select(Coupon).where(Coupon.campaign_id == campaigns[0].id)
+                    )
+                ).scalars().all()
+                assert len(coupons) == 1
+    finally:
+        async with async_session_factory() as db:
+            async with tenant_context.system_context(db):
+                await db.execute(
+                    text("DELETE FROM coupons WHERE campaign_id IN (SELECT id FROM campaigns WHERE referral_owner_customer_id = :cid)"),
+                    {"cid": customer_id},
+                )
+                await db.execute(
+                    delete(Campaign).where(Campaign.referral_owner_customer_id == customer_id)
+                )
+                await db.execute(
+                    text("DELETE FROM audit_log WHERE args->>'customer_id' = :cid"),
+                    {"cid": str(customer_id)},
+                )
+                await db.execute(delete(Customer).where(Customer.id == customer_id))
+                await db.commit()
