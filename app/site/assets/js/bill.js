@@ -42,3 +42,39 @@
     document.addEventListener("visibilitychange", function () { if (!document.hidden) check(); });
   }
 })();
+
+
+// Razorpay checkout is opt-in (button click only). The server creates a
+// signed, order-specific payment link; the payment is reconciled by webhook.
+(function () {
+  var button = document.getElementById("razorpay-pay");
+  if (!button) return;
+  button.addEventListener("click", function () {
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = "Creating secure payment link…";
+    var error = document.getElementById("razorpay-error");
+    if (error) error.hidden = true;
+    fetch("/b/" + encodeURIComponent(button.getAttribute("data-token")) + "/razorpay-link", {
+      method: "POST",
+      headers: { "Accept": "application/json" },
+      credentials: "same-origin",
+      cache: "no-store"
+    }).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) throw new Error(data.detail || "Online payment is unavailable.");
+        return data;
+      });
+    }).then(function (data) {
+      if (!data.url || !/^https:\/\//i.test(data.url)) throw new Error("Payment provider returned an invalid link.");
+      location.href = data.url;
+    }).catch(function (err) {
+      button.disabled = false;
+      button.textContent = "🔒 Pay securely online";
+      if (error) {
+        error.textContent = err.message || "Could not start payment. Please try again.";
+        error.hidden = false;
+      }
+    });
+  });
+})();
