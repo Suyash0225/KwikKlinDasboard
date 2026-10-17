@@ -89,6 +89,35 @@ async def test_invalid_admin_key_does_not_get_home_tenant(monkeypatch) -> None:
         tenant_context.current_tenant_id.reset(tenant_token)
 
 
+async def test_valid_admin_key_on_public_root_does_not_set_middleware_tenant(monkeypatch) -> None:
+    tenant_token = tenant_context.current_tenant_id.set(None)
+    system_token = tenant_context.current_system_context.set(False)
+    monkeypatch.setattr(main, "_rate_limited", lambda *_: False)
+
+    async def unexpected_home_lookup():
+        raise AssertionError("public routes must not inherit the home tenant")
+
+    monkeypatch.setattr(tenant_context, "get_home_tenant_id", unexpected_home_lookup)
+
+    async def call_next(_request):
+        assert tenant_context.current_tenant_id.get() is None
+        assert tenant_context.current_system_context.get() is False
+        return Response("ok")
+
+    try:
+        response = await main.tenant_scope(
+            _request("/", [
+                (b"host", b"testserver"),
+                (b"x-api-key", settings.ADMIN_API_KEY.encode("utf-8")),
+            ]),
+            call_next,
+        )
+        assert response.status_code == 200
+    finally:
+        tenant_context.current_system_context.reset(system_token)
+        tenant_context.current_tenant_id.reset(tenant_token)
+
+
 async def test_valid_admin_api_key_gets_home_tenant_only_on_protected_api(monkeypatch) -> None:
     home_id = uuid.uuid4()
     tenant_token = tenant_context.current_tenant_id.set(None)
