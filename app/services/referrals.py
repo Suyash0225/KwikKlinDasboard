@@ -14,6 +14,7 @@ from decimal import Decimal
 
 import structlog
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -118,7 +119,33 @@ async def _get_or_create_referral_code(
         active=True,
     )
     db.add(coupon)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # A concurrent delivery event for this same customer won the unique
+        # referral-owner constraint. Reuse its code instead of issuing a second.
+        await db.rollback()
+        existing_campaign = (
+            await db.execute(
+                select(Campaign).where(
+                    Campaign.tenant_id == customer.tenant_id,
+                    Campaign.referral_owner_customer_id == customer.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_campaign is None:
+            raise
+        existing_coupon = (
+            await db.execute(
+                select(Coupon).where(
+                    Coupon.campaign_id == existing_campaign.id,
+                    Coupon.active.is_(True),
+                ).order_by(Coupon.created_at.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing_coupon is None:
+            raise
+        return existing_campaign, existing_coupon
     await audit.record(
         actor_role="system",
         actor="referrals",
