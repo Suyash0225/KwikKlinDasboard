@@ -77,3 +77,30 @@ async def test_classifier_failure_allows_normal_customer_flow(monkeypatch):
     assert not await inbound_guard.should_suppress_inbound(
         "Mujhe laundry service chahiye."
     )
+
+
+@pytest.mark.asyncio
+async def test_clear_customer_enquiry_is_a_lead_without_llm(monkeypatch):
+    async def fail_if_called(**kwargs):
+        raise AssertionError("clear customer enquiry should use the deterministic fast path")
+    monkeypatch.setattr(inbound_guard.llm_client, "ask_json", fail_if_called)
+    result = await inbound_guard.classify_inbound_message("Mujhe laundry service chahiye.")
+    assert result["classification"] == "CUSTOMER_LEAD"
+    assert inbound_guard.is_customer_lead(result)
+
+
+@pytest.mark.asyncio
+async def test_greeting_and_classifier_failure_never_become_leads(monkeypatch):
+    async def fail_classifier(**kwargs):
+        raise RuntimeError("classifier unavailable")
+    monkeypatch.setattr(inbound_guard.llm_client, "ask_json", fail_classifier)
+    greeting = await inbound_guard.classify_inbound_message("Hello, are you available?")
+    assert greeting["classification"] == "GENERAL_MESSAGE"
+    assert not inbound_guard.is_customer_lead(greeting)
+
+
+@pytest.mark.asyncio
+async def test_order_support_is_not_a_new_sales_lead():
+    result = await inbound_guard.classify_inbound_message("Mera order kahan hai?")
+    assert result["classification"] == "CUSTOMER_SERVICE"
+    assert not inbound_guard.is_customer_lead(result)
