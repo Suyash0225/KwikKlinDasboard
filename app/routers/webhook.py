@@ -1234,7 +1234,7 @@ async def _handle_inbound_message(
             try:
                 await send_message(
                     db, to_phone=phone, text=get_message("stop_confirmed"),
-                    intent="transactional", outbound_kind="opt_out_confirmation",
+                    intent="transactional", outbound_kind="opt_out_confirmation", urgent=True,
                 )
             except SendError:
                 log.exception("stop_confirm_send_failed", phone=phone)
