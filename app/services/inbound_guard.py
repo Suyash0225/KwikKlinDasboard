@@ -99,7 +99,7 @@ _CLEAR_CUSTOMER_INTENT_RE = re.compile(
     r"pickup karwana|book (?:a )?pickup|schedule (?:a )?pickup|pick up my|"
     r"order status|mera order|my order|where is my order|delivery kab|"
     r"bill bhej|payment link|refund chahiye|shikayat|complaint|rate batao|"
-    r"rates kya|price list)\\b",
+    r"rates kya|price list)\b",
     re.IGNORECASE,
 )
 
@@ -113,7 +113,7 @@ _HARD_PROMO_RE = re.compile(
     r"bulk whatsapp|lead generation services|recruitment agency|software "
     r"development agency|grow your business|boost your sales|rank your website|"
     r"marketing agency|we provide (?:marketing|seo|website|software)|"
-    r"our (?:agency|company) (?:provides|offers))\\b",
+    r"our (?:agency|company) (?:provides|offers))\b",
     re.IGNORECASE,
 )
 
