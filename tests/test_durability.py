@@ -101,9 +101,17 @@ async def test_failed_event_is_replayed(client, sent, monkeypatch) -> None:
             ).scalar_one()
             tenant.wa_phone_number_id = phone_number_id
             await s.commit()
-    r = await client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
-    )
+    from app.services import tenant_context
+    tenant_id = await tenant_context.get_home_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("durability replay test requires a seeded tenant")
+    token = tenant_context.current_tenant_id.set(tenant_id)
+    try:
+        r = await client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
+        )
+    finally:
+        tenant_context.current_tenant_id.reset(token)
     assert r.status_code == 200, "Meta must still get 200 — journal owns the retry"
     # restore ONLY the crash patch — the fake send_message must stay patched
     monkeypatch.setattr(webhook_module, "_process_payload", real_process)
