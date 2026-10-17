@@ -1052,7 +1052,7 @@ async function composeMessage(num, kind) {
   try { r = await api(`/orders/${encodeURIComponent(num)}/message?kind=${kind}`); }
   catch (e) { toast(e.message, true); return; }
   const label = (MSG_KINDS.find((x) => x[0] === kind) || [])[2] || "Message";
-  SHARE_TEXT = r.text; MSG_TARGET = r.phone;
+  SHARE_TEXT = r.text; MSG_TARGET = r.phone; MSG_KIND = kind;
   const wa = waConnected();
   openModal(`<h3>${esc(label)}</h3>
     <p class="muted">To ${esc(displayName(r.name, r.phone))}</p>
@@ -1065,10 +1065,14 @@ async function composeMessage(num, kind) {
     </div>`);
 }
 let MSG_TARGET = "";
+let MSG_KIND = "order_status";
 async function sendComposed(btn) {
   await busy(btn, async () => {
     try {
-      await api("/admin/api/inbox/send", { method: "POST", body: { phone: MSG_TARGET, text: SHARE_TEXT } });
+      await api("/admin/api/inbox/send", {
+        method: "POST",
+        body: { phone: MSG_TARGET, text: SHARE_TEXT, intent: "transactional", outbound_kind: MSG_KIND || "order_status" },
+      });
       closeModal(); toast(T.sent);
     } catch (e) {
       // 24h window band / API nahi — apna WhatsApp hamesha hai
@@ -2144,7 +2148,9 @@ async function waBill(number) {
   try { r = await billReceipt(number); } catch (e) { toast(e.message, true); return; }
   if (!waConnected()) { shareBillModal(r); return; }   // API hai hi nahi — seedha share
   try {
-    await api("/admin/api/inbox/send", { method: "POST", body: { phone: r.phone, text: r.text } });
+    await api("/admin/api/inbox/send", {
+      method: "POST", body: { phone: r.phone, text: r.text, intent: "transactional", outbound_kind: "bill" },
+    });
     toast(T.sent);
   } catch (e) {
     // API connect nahi hai / window band hai / send fail — kaam ruke nahi.
@@ -5392,17 +5398,19 @@ async function sendChat() {
   const text = input.value.trim();
   if (!text || !OPEN_PHONE) return;
   const replyTo = REPLY_TO;
+  const intent = $("chat-intent")?.value || null;
+  const outboundKind = intent === "promotional" ? "manual_marketing" : intent === "transactional" ? "order_status" : null;
   input.value = "";              // clear input
   cancelReply();
   closePickers();                // emoji panel closes on send
   if (!navigator.onLine) {
-    saveOutbox([...outbox(), { phone: OPEN_PHONE, text, reply_to: replyTo }]);
+    saveOutbox([...outbox(), { phone: OPEN_PHONE, text, reply_to: replyTo, intent, outbound_kind: outboundKind }]);
     toast("Offline — message is queued, it will send once you're back online");
     return;
   }
   try {
     await api("/admin/api/inbox/send", {
-      method: "POST", body: { phone: OPEN_PHONE, text, reply_to: replyTo },
+      method: "POST", body: { phone: OPEN_PHONE, text, reply_to: replyTo, intent, outbound_kind: outboundKind },
     });
     // show it instantly — no full-thread rebuild; the 12s poll reconciles
     appendBubble({ direction: "OUTBOUND", text, at: nowIso(), sent_by: "you", status: "sent", reply_to: replyTo });
@@ -5464,8 +5472,12 @@ async function tplSendModal() {
     const params = [];
     for (let i = 1; i <= n; i++) params.push($("tps-p" + i).value.trim());
     if (params.some((p) => !p)) throw new Error("Fill in all the variables");
+    const templateCategory = String(t.category || "").toLowerCase();
+    const intent = templateCategory.includes("marketing") ? "promotional" : "transactional";
+    const outboundKind = t.name.toLowerCase().includes("payment") ? "payment_reminder"
+      : t.name.toLowerCase().includes("bill") ? "bill" : "order_status";
     await api("/admin/api/inbox/send-template", { method: "POST",
-      body: { phone: OPEN_PHONE, template_name: t.name, params } });
+      body: { phone: OPEN_PHONE, template_name: t.name, params, intent, outbound_kind: outboundKind } });
     closeModal(); closePickers(); toast(T.sent);
     // show the sent template bubble immediately (oneBubble renders the marker)
     appendBubble({ direction: "OUTBOUND", at: nowIso(), sent_by: "you", status: "sent",
@@ -5578,6 +5590,11 @@ async function sendMedia(input) {
   fd.append("phone", OPEN_PHONE);
   fd.append("file", file);
   fd.append("caption", "");
+  const intent = $("chat-intent")?.value || "";
+  if (intent) {
+    fd.append("intent", intent);
+    fd.append("outbound_kind", intent === "promotional" ? "manual_marketing" : "order_status");
+  }
   // local preview URL so the image shows the moment it uploads
   const preview = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
   try {
