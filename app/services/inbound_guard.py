@@ -106,7 +106,7 @@ _LEAD_INTENT_RE = re.compile(
     r"hume(?:in)? (?:kapde|kapda|laundry|dry ?clean|dhulai|press|pickup)|"
     r"i (?:need|want) (?:laundry|dry ?clean|pickup|clothes cleaned)|"
     r"looking for (?:laundry|dry ?clean|pickup)|can you clean|do you clean|"
-    r"karwana hai|karwani hai|rate batao|rates kya|price list)\b",
+    r"rate batao|rates kya)\b",
     re.IGNORECASE,
 )
 
@@ -117,9 +117,22 @@ _SERVICE_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_SIMPLE_GENERAL_RE = re.compile(
+    r"^(?:hi|hello|hey|namaste|namaskar|thanks|thank you|thankyou|ok|okay|"
+    r"thik hai|theek hai|acha|achha|good morning|good afternoon|good evening)"
+    r"[!. ,🙏😊🙂]*$",
+    re.IGNORECASE,
+)
+
 
 def _classify_clear_intent(text: str) -> dict[str, Any] | None:
     message = " ".join((text or "").split())
+    if _SIMPLE_GENERAL_RE.fullmatch(message):
+        return {
+            "classification": "GENERAL_MESSAGE",
+            "confidence": 0.99,
+            "reason": "generic greeting or acknowledgement",
+        }
     if _LEAD_INTENT_RE.search(message):
         return {
             "classification": "CUSTOMER_LEAD",
