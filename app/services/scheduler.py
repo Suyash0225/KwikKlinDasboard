@@ -333,6 +333,15 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
                         await _unclaim(f"mktreport:{now_ist.strftime('%Y-%m')}")
     except Exception:
         log.exception("lead_jobs_failed")
+    # Complaint SLA: second owner alert only after the case has waited beyond
+    # the configured threshold. Each tenant's cases are queried in its context.
+    try:
+        from app.services.escalation import remind_overdue_escalations
+        async with async_session_factory() as db:
+            await remind_overdue_escalations(db)
+    except Exception:
+        log.exception("escalation_sla_reminder_job_failed")
+
     # Do not send separate stale-order/task reminder messages. Staff have
     # been asked to track work in the web app; the 10:00/18:00 summaries
     # already list their pending work. New assignments and urgent alerts
