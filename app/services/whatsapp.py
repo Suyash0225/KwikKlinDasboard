@@ -37,7 +37,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Conversation, Customer, Direction, Staff
+from app.models import Conversation, Customer, Direction, Lead, Staff
 from app.services import dotpe
 from app.services.templates import TEMPLATES, build_template
 
@@ -280,10 +280,15 @@ async def send_message(
         raise SendError(str(exc), transient=False) from exc
 
     customer, staff = await _find_recipient(db, to_phone)
+    lead = None
+    if customer is None and staff is None and effective_intent == "promotional":
+        lead = (
+            await db.execute(select(Lead).where(Lead.phone == to_phone).limit(1))
+        ).scalar_one_or_none()
 
     # Validate transport payload first, then fail closed for valid automated
-    # customer sends whose caller forgot to classify intent.
-    if customer is not None and effective_intent is None and sent_by not in {"manager", "human"}:
+    # customer/lead sends whose caller forgot to classify intent.
+    if (customer is not None or lead is not None) and effective_intent is None and sent_by not in {"manager", "human"}:
         raise SendError(
             "customer-facing automated send requires explicit outbound intent",
             transient=False,
@@ -294,7 +299,7 @@ async def send_message(
 
         await enforce_outbound_policy(
             db, customer=customer, phone=to_phone, intent=effective_intent,
-            kind=outbound_kind, urgent=urgent,
+            lead=lead, kind=outbound_kind, urgent=urgent,
         )
 
     if text:
@@ -504,8 +509,13 @@ async def send_image(
         raise SendError("automated send blocked for test recipient", transient=False)
 
     customer, staff = await _find_recipient(db, to_phone)
+    lead = None
+    if customer is None and staff is None and intent == "promotional":
+        lead = (
+            await db.execute(select(Lead).where(Lead.phone == to_phone).limit(1))
+        ).scalar_one_or_none()
 
-    if customer is not None and intent is None and sent_by not in {"manager", "human"}:
+    if (customer is not None or lead is not None) and intent is None and sent_by not in {"manager", "human"}:
         raise SendError(
             "customer-facing automated media send requires explicit outbound intent",
             transient=False,
@@ -516,7 +526,7 @@ async def send_image(
 
         await enforce_outbound_policy(
             db, customer=customer, phone=to_phone, intent=intent,
-            kind=outbound_kind, urgent=urgent,
+            lead=lead, kind=outbound_kind, urgent=urgent,
         )
 
     if settings.WHATSAPP_PROVIDER == "waha":
