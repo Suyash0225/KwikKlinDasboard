@@ -232,8 +232,7 @@ async def test_service_agent_final_kill_switch_blocks_customer_send(monkeypatch)
 async def test_human_reply_during_ai_generation_cancels_pending_reply(monkeypatch) -> None:
     """A human reply recorded while AI is thinking wins before the final send."""
     from datetime import datetime, timezone
-    import uuid
-
+    from tests.conftest import TEST_CUSTOMER_PHONE
     from app.models import Conversation, Customer, Direction
     from app.routers import webhook
     from app.services import app_settings, tenant_context
@@ -254,7 +253,7 @@ async def test_human_reply_during_ai_generation_cancels_pending_reply(monkeypatc
     monkeypatch.setattr(webhook, "send_message", fake_send)
     monkeypatch.setattr(app_settings, "get", fake_get)
 
-    phone = f"+91997{uuid.uuid4().int % 10**7:07d}"
+    phone = TEST_CUSTOMER_PHONE
     async with async_session_factory() as db:
         customer = Customer(
             phone=phone,
