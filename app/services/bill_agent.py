@@ -1457,8 +1457,13 @@ async def handle_staff_message(
     if followup is not None:
         return followup
 
-    # Typed "done T-..." / "done KK-..." is intentionally not an action;
-    # use the explicit task/order action buttons instead.
+    # Typed task completion (done T-...) is intentionally disabled: task
+    # status changes require an explicit interactive task button. Order
+    # completion (done KK-...) is a separate order workflow and remains valid.
+    if text:
+        m_done = re.match(r"^\\s*done\\s+(KK-\\S+)\\s*$", text, re.I)
+        if m_done and sender_label != "manager":
+            return await _apply_done(db, sender_phone, sender_label, m_done.group(1).upper())
 
     # Pickup conversation: their tap on Yes/No, and their answer to
     # "kab tak?". Both are deterministic — no LLM, no ambiguity.
