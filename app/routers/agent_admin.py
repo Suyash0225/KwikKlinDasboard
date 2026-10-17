@@ -2198,3 +2198,60 @@ async def trigger_standup() -> dict:
 
     sends = await run_standup(force=True)
     return {"sent_to": sends}
+
+# ---------------------------------------------------------------------------
+# Task Control Room — explicit reassignment
+# ---------------------------------------------------------------------------
+
+class TaskAssignIn(BaseModel):
+    staff: str = Field(min_length=1, max_length=120)
+
+
+@router.post("/tasks/{code}/assign")
+async def assign_task_api(
+    code: str, body: TaskAssignIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Reassign an open task to an active staff member and notify the new owner."""
+    from app.models import TASK_OPEN, Staff as _Staff
+    from app.services import tasks as task_service
+
+    task = await task_service.get_by_code(db, code)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"{code} nahi mila")
+    if task.status != TASK_OPEN:
+        raise HTTPException(status_code=409, detail="Only open tasks can be reassigned")
+
+    staff = await task_service.find_staff(db, body.staff)
+    if staff is None or not staff.is_active:
+        raise HTTPException(status_code=404, detail="Active staff member not found")
+
+    previous_staff_id = task.assigned_staff_id
+    if previous_staff_id == staff.id:
+        return {"ok": True, "code": task.code, "assigned_staff_id": str(staff.id), "unchanged": True}
+
+    task.assigned_staff_id = staff.id
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+
+    # Persist assignment first; notification failure must not roll back ownership.
+    notified = await task_service.send_task_to(db, task, staff)
+    previous_staff = await db.get(_Staff, previous_staff_id) if previous_staff_id else None
+    await audit.record(
+        actor_role="admin",
+        actor="dashboard",
+        action="task_reassigned",
+        args={
+            "code": task.code,
+            "from_staff": previous_staff.name if previous_staff else None,
+            "to_staff": staff.name,
+        },
+        result="notification sent" if notified else "assignment saved; notification not delivered",
+    )
+    return {
+        "ok": True,
+        "code": task.code,
+        "assigned_staff_id": str(staff.id),
+        "assigned_staff": staff.name,
+        "notified": notified,
+    }
