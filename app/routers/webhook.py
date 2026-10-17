@@ -460,6 +460,7 @@ async def _record_waha_manual_outbound(db: AsyncSession, payload: dict) -> None:
             wa_message_id=wa_message_id,
             sent_by="human",
             status="sent",
+            created_at=sent_at,
         )
     )
     await db.commit()
