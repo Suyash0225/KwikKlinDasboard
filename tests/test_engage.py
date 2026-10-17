@@ -32,6 +32,18 @@ def _no_quiet_hours(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+async def _tenant_scoped_run(_clean, _autonomous_marketing):
+    """Direct service calls mirror the scheduler's explicit tenant context."""
+    from app.services import tenant_context
+
+    tenant_id = await tenant_context.get_home_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("engage tests require a seeded tenant")
+    async with tenant_context.as_tenant(tenant_id):
+        yield
+
+
+@pytest.fixture(autouse=True)
 async def _autonomous_marketing():
     """Nudge tests must explicitly opt into autonomous marketing."""
     async with async_session_factory() as db:
