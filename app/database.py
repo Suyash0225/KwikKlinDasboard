@@ -83,7 +83,11 @@ def _rls_set_tenant(conn) -> None:
     hai. SET LOCAL transaction-scoped hai — commit/rollback par khud reset,
     isliye pooled connections ke beech kabhi leak nahi hota."""
     tid = tenant_context.current_tenant_id.get()
-    system_access = tenant_context.current_system_context.get()
+    # A selected tenant always takes precedence over a system grant. This
+    # also prevents a nested/test context from accidentally bypassing RLS.
+    system_access = (
+        tenant_context.current_system_context.get() and tid is None
+    )
     conn.exec_driver_sql(
         "SET LOCAL app.system_context = 'on'"
         if system_access
