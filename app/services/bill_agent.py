@@ -603,6 +603,39 @@ async def _handle_work_pick(
         if task.urgent:
             body += "\n🔴 URGENT"
         body += f"\n\nKya status hai? Ya likh dijiye: done {task.code}"
+
+        # A task picked from the daily briefing must use the same stage-aware
+        # menu as the original task assignment. Generic Done can close a wash
+        # task without advancing its linked order through wash -> dry -> iron.
+        if task.order_id is not None and task.kind in {"wash", "dry", "iron"}:
+            from app.services.work_orders import task_status_menu
+
+            rows = await task_status_menu(db, task.code)
+            if rows:
+                try:
+                    await send_message(
+                        db,
+                        to_phone=sender_phone,
+                        text=body,
+                        list_rows=rows,
+                        list_button="Status chuniye",
+                        list_title="Task status",
+                    )
+                    return ""
+                except (WindowClosedError, SendError) as exc:
+                    log.warning(
+                        "task_stage_menu_failed",
+                        to=sender_phone,
+                        task=task.code,
+                        error=str(exc)[:120],
+                    )
+                    # Never fall back to generic Done: it is unsafe for a
+                    # stage-linked task. Ask the staff to use the dashboard.
+                    return (
+                        f"{body}\n\nStatus menu nahi khul saka. "
+                        "Dashboard se task ka current status update karein."
+                    )
+
         from app.services.work_orders import task_buttons
 
         return await _send_with_buttons(

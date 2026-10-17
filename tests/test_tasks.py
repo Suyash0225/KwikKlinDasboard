@@ -492,6 +492,49 @@ async def test_task_status_menu_enforces_sequential_wash_dry_iron_ready(client, 
         await purge_phones(phone, delivery_phone)
 
 
+async def test_daily_briefing_pick_uses_stage_menu_for_linked_wash_task(worker, sent) -> None:
+    """Picking a wash task from standup must not expose generic Done."""
+    phone = f"+919996{uuid.uuid4().int % 1_000_000:06d}"
+    async with async_session_factory() as db:
+        order = await create_order(
+            db,
+            customer_phone=phone,
+            customer_name="Briefing Menu Test",
+            created_by="test",
+            items=[{"type": "Shirt", "qty": 1}],
+        )
+        task = await _mk(
+            db, worker, title="Briefing menu wash", order=order, kind="wash"
+        )
+        code, order_id = task.code, order.id
+
+    sent.clear()
+    try:
+        async with async_session_factory() as db:
+            reply = await bill_agent._handle_work_pick(
+                db, TASK_STAFF_PHONE, "Taskram", f"[button:pick:t:{code}]"
+            )
+
+        assert reply == ""
+        menus = [message for message in sent if message.get("list_rows")]
+        assert menus, "selecting a briefing task should send an interactive stage menu"
+        rows = menus[-1]["list_rows"]
+        ids = [row.id for row in rows]
+        assert ids == [f"task:{code}:wash", f"task:{code}:pending"]
+        assert f"task:{code}:done" not in ids
+
+        async with async_session_factory() as db:
+            current_order = await db.get(type(order), order_id)
+            current_task = await task_service.get_by_code(db, code)
+            assert current_order.status is OrderStatus.RECEIVED
+            assert current_task.status == TASK_OPEN
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.order_id == order_id))
+            await db.commit()
+        await purge_phones(phone)
+
+
 async def test_delivery_done_requires_two_confirmations(worker, sent) -> None:
     """First Done means out for delivery; only a second Done confirms delivery."""
     from app.models import Customer
