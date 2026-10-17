@@ -798,6 +798,66 @@ async def drain_outbound_queue() -> int:
                 log.warning("outbound_stale_dead_lettered", to=to_phone, age_hours=round((now - created_at).total_seconds() / 3600, 1))
                 continue
 
+            # AI replies can be queued after a transient WhatsApp outage.
+            # Re-check the kill switch and human takeover at retry time so a
+            # Stop action or a manager reply cannot be bypassed by the queue.
+            if (p.get("sent_by") or "bot") == "ai":
+                allow_ai_retry = False
+                try:
+                    recipient = (
+                        await db.execute(
+                            select(Customer).where(Customer.phone == to_phone).limit(1)
+                        )
+                    ).scalars().first()
+                    if recipient is not None and not recipient.agent_paused and not recipient.opted_out:
+                        from app.routers.webhook import _customer_agent_enabled
+                        allow_ai_retry = await _customer_agent_enabled(db, recipient)
+                        if allow_ai_retry:
+                            from app.services import app_settings as _app_settings
+                            latest_human = (
+                                await db.execute(
+                                    select(Conversation)
+                                    .where(
+                                        Conversation.customer_id == recipient.id,
+                                        Conversation.direction == Direction.OUTBOUND,
+                                        Conversation.sent_by.in_(("human", "manager")),
+                                    )
+                                    .order_by(Conversation.created_at.desc())
+                                    .limit(1)
+                                )
+                            ).scalars().first()
+                            grace_minutes = int(
+                                await _app_settings.get(db, "human_handoff_grace_minutes") or 15
+                            )
+                            if latest_human is not None and (
+                                (created_at and latest_human.created_at >= created_at)
+                                or (
+                                    grace_minutes > 0
+                                    and now - latest_human.created_at < timedelta(minutes=grace_minutes)
+                                )
+                            ):
+                                allow_ai_retry = False
+                except Exception:
+                    # Fail closed: never send an AI reply if its live safety
+                    # state cannot be verified at retry time.
+                    log.exception("outbound_ai_retry_gate_failed", to=to_phone)
+                    allow_ai_retry = False
+
+                if not allow_ai_retry:
+                    await db.rollback()
+                    await db.execute(
+                        update(OutboundMessage)
+                        .where(OutboundMessage.id == row_id)
+                        .values(
+                            status="dead",
+                            last_error="AI retry suppressed: agent stopped, customer paused, or human takeover active",
+                            next_attempt_at=now,
+                        )
+                    )
+                    await db.commit()
+                    log.info("outbound_ai_retry_suppressed", to=to_phone)
+                    continue
+
             try:
                 await send_message(
                     db,
