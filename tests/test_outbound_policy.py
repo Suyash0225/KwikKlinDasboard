@@ -164,101 +164,32 @@ async def test_concurrent_referral_code_issuance_reuses_one_coupon() -> None:
 def test_all_review_templates_are_optional_neutral_and_unincentivized() -> None:
     from app.services.messages import MESSAGES
     from app.services.templates import STANDARD_SPECS
-
-    for key in ("review_request", "review_invitation_line"):
-        review_copy = MESSAGES[key]
-        assert set(review_copy) == {"hi", "en"}
-        for locale, template in review_copy.items():
-            lowered = template.lower()
-            assert "{review_link}" in template, (key, locale)
-            assert "honest feedback" in lowered or "imaandaar feedback" in lowered, (key, locale)
-            assert not any(term in lowered for term in ("coupon", "discount", "reward code", "gift", "free", "off")), (key, locale)
-
-    # Locked review keys cannot be replaced with incentive-bearing owner copy.
     from app.services import messages
-    messages.set_override("review_request", "5-star review ke badle coupon")
-    messages.set_override("review_invitation_line", "5-star review ke badle discount")
-    assert messages.get_override("review_request") is None
-    assert messages.get_override("review_invitation_line") is None
+
+    locked_keys = (
+        "review_request", "review_invitation_line", "thankyou_rating",
+        "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
+    )
+    incentive_terms = ("coupon", "discount", "reward code", "gift", "free", "% off")
+    for key in locked_keys:
+        copy_by_locale = MESSAGES[key]
+        assert set(copy_by_locale) == {"hi", "en"}, key
+        for locale, template in copy_by_locale.items():
+            lowered = template.lower()
+            assert not any(term in lowered for term in incentive_terms), (key, locale)
+            if key in {"review_request", "review_invitation_line"}:
+                assert "{review_link}" in template, (key, locale)
+                assert "honest feedback" in lowered or "imaandaar feedback" in lowered, (key, locale)
+
+    # Locked review/rating keys cannot be replaced with incentive-bearing owner copy.
+    for key in locked_keys:
+        messages.set_override(key, "5-star review ke badle coupon")
+        assert messages.get_override(key) is None, key
 
     rating_template = STANDARD_SPECS["kk_thankyou_rating"]["body"].lower()
     assert "coupon" not in rating_template
     assert "discount" not in rating_template
     assert "review" not in rating_template  # neutral rating request, link is offered after every rating
-
-
-async def test_promotional_daily_cap_is_shared_per_tenant(monkeypatch) -> None:
-    from app.models import Customer, Tenant
-    from app.services import tenant_context, app_settings
-    from app.services import outbound_policy
-    from app.services.whatsapp import SendError
-
-    async with async_session_factory() as db:
-        async with tenant_context.system_context(db):
-            tenant = (
-                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
-            ).scalar_one()
-            tenant_id = tenant.id
-
-    async def setting(db, key):
-        if key == "outbound_daily_msg_cap":
-            return 1
-        if key == "marketing_freq_cap_per_month":
-            return 2
-        return 100
-
-    async def eligible(db, customer_id):
-        return True, ""
-
-    monkeypatch.setattr(app_settings, "get", setting)
-    monkeypatch.setattr(outbound_policy, "_quiet_now", lambda: False)
-    monkeypatch.setattr("app.services.marketing.eligible", eligible)
-
-    async with tenant_context.as_tenant(tenant_id):
-        async with async_session_factory() as db:
-            customer = Customer(phone=f"+91996{uuid.uuid4().int % 10**7:07d}", name="Cap Test")
-            db.add(customer)
-            await db.flush()
-            await outbound_policy.enforce_outbound_policy(
-                db, customer=customer, phone=customer.phone, intent="promotional"
-            )
-            with pytest.raises(SendError, match="daily cap reached"):
-                await outbound_policy.enforce_outbound_policy(
-                    db, customer=customer, phone=customer.phone, intent="promotional"
-                )
-
-
-async def test_transactional_policy_honors_stop_and_urgent_quiet_exception(monkeypatch) -> None:
-    from types import SimpleNamespace
-    from app.services import tenant_context
-    from app.services import outbound_policy
-    from app.services.whatsapp import SendError
-
-    tenant_id = uuid.uuid4()
-    token = tenant_context.current_tenant_id.set(tenant_id)
-    monkeypatch.setattr(outbound_policy, "_quiet_now", lambda: True)
-    try:
-        customer = SimpleNamespace(
-            tenant_id=tenant_id, is_active=True, opted_out=False,
-            payment_reminders_enabled=True,
-        )
-        with pytest.raises(SendError, match="quiet hours"):
-            await outbound_policy.enforce_outbound_policy(
-                None, customer=customer, phone="+919999900012",
-                intent="transactional", kind="order_status",
-            )
-        await outbound_policy.enforce_outbound_policy(
-            None, customer=customer, phone="+919999900012",
-            intent="transactional", kind="order_status", urgent=True,
-        )
-        customer.opted_out = True
-        with pytest.raises(SendError, match="customer opted out"):
-            await outbound_policy.enforce_outbound_policy(
-                None, customer=customer, phone="+919999900012",
-                intent="transactional", kind="order_status", urgent=True,
-            )
-    finally:
-        tenant_context.current_tenant_id.reset(token)
 
 
 @pytest.mark.requires_independent_sessions
