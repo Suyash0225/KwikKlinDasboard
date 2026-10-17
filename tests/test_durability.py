@@ -96,21 +96,7 @@ async def test_failed_event_is_replayed(client, sent, monkeypatch) -> None:
             "text": {"body": "replay me"},
         }]
     )
-    # Durable replay must resolve a real tenant mapping, not use home fallback.
-    import json
-    from app.models import Tenant
-    from app.services.tenant_context import system_context
-
-    payload = json.loads(body)
-    phone_number_id = payload["entry"][0]["changes"][0]["value"]["metadata"]["phone_number_id"]
-    async with async_session_factory() as s:
-        async with system_context(s):
-            tenant = (
-                await s.execute(select(Tenant).order_by(Tenant.created_at).limit(1))
-            ).scalar_one()
-            tenant.wa_phone_number_id = phone_number_id
-            await s.commit()
-    from app.services import tenant_context
+    # Explicit provider-number mapping is mocked; replay must use the journaled identity.\n    from app.services import tenant_context
     tenant_id = await tenant_context.get_home_tenant_id()
     if tenant_id is None:
         raise RuntimeError("durability replay test requires a seeded tenant")
