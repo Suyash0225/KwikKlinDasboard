@@ -125,7 +125,6 @@ async def two_shops():
     # Cleanup must run in trusted system context even if a test leaves a tenant ContextVar set.
     async with async_session_factory() as db:
         async with tenant_context.system_context(db):
-      async with async_session_factory() as db:
             for phone in (A_PHONE, A_MGR_PHONE, A_DEL_PHONE, B_PHONE):
                 await db.execute(
                     sqltext(
