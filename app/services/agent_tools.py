@@ -66,6 +66,11 @@ TOOL_SPECS = [
         "args": "period (today|week|month)",
     },
     {
+        "name": "billing_adjustment",
+        "when": "owner explicitly asks to add or remove an extra charge/additional due on a specific bill",
+        "args": "add | order_number | label | amount | extra_charge|due_charge | note(optional); remove | order_number | adjustment_id",
+    },
+    {
         "name": "ping_staff",
         "when": "owner asks to message/remind/ask a staff member (haan ping karo, pucho, bol do)",
         "args": "name + message (message ko seedhe unse baat karte hue likho)",
@@ -108,6 +113,7 @@ TOOL_SPECS = [
 # one of these actually ran — see bill_agent's unbacked-claim check.
 WRITE_TOOLS = {
     "add_expense", "add_customer", "set_shop_info", "assign_task", "ping_staff",
+    "billing_adjustment",
 }
 
 
@@ -122,7 +128,11 @@ def _money_fmt(v) -> str:
 
 
 def _items_line(items: list | None) -> str:
-    parts = [f"{i.get('qty', 1)}x {i.get('type', '?')}" for i in (items or [])]
+    parts = [
+        f"{i.get('qty', 1)}x {i.get('type', '?')}"
+        for i in (items or [])
+        if isinstance(i, dict) and i.get("kind") not in {"extra_charge", "due_charge"}
+    ]
     return ", ".join(parts) or "-"
 
 
@@ -173,6 +183,19 @@ async def _order_detail(db: AsyncSession, args: str) -> str:
         f"{o.expected_delivery.strftime('%d %b') if o.expected_delivery else 'set nahi'}"
         + (f" | Deliver hua: {_ist(o.actual_delivery)}" if o.actual_delivery else ""),
     ]
+    adjustments = [
+        item for item in (o.items or [])
+        if isinstance(item, dict) and item.get("id")
+        and item.get("kind") in {"extra_charge", "due_charge"}
+    ]
+    if adjustments:
+        lines.append("Billing adjustments:")
+        for item in adjustments:
+            label = item.get("label") or item.get("type") or "Additional charge"
+            lines.append(
+                f"  {label} | {item.get('kind')} | {_money_fmt(item.get('amount'))} "
+                f"| id={item.get('id')}"
+            )
     if o.notes:
         lines.append(f"Internal note: {o.notes[:200]}")
 
@@ -448,8 +471,77 @@ def _money_fmt(v) -> str:
 
 
 # --------------------------------------------------------------------------
-# action tool
+# billing adjustment action
 # --------------------------------------------------------------------------
+
+
+async def _billing_adjustment(db: AsyncSession, args: str) -> str:
+    """Add/remove a bill adjustment after the owner explicitly asks."""
+    import re
+
+    from app.services.order_service import (
+        OrderError,
+        OrderNotFoundError,
+        add_billing_adjustment,
+        get_order,
+        remove_billing_adjustment,
+    )
+
+    parts = [part.strip() for part in (args or "").split("|")]
+    if not parts:
+        return "Format: add | KK-... | Pickup charge | 50 | extra_charge"
+    action = parts[0].lower()
+
+    if action == "remove":
+        if len(parts) != 3 or not all(parts[1:]):
+            return "Format: remove | KK-... | adjustment_id"
+        order_number, adjustment_id = parts[1], parts[2]
+        try:
+            order = await get_order(db, order_number)
+            await remove_billing_adjustment(db, order.order_number, adjustment_id)
+        except (OrderError, OrderNotFoundError) as exc:
+            return f"Charge remove nahi hua: {str(exc)[:120]}"
+        return (
+            f"Billing adjustment hata diya: {order.order_number}. "
+            f"Naya total {_money_fmt(order.total_amount)}; baaki payment automatically recalculate hua."
+        )
+
+    if action == "add":
+        parts = parts[1:]
+    # Accept the earlier shorthand too: order | label | amount | kind.
+    if len(parts) < 3 or not all(parts[:3]):
+        return "Format: add | KK-... | Pickup charge | 50 | extra_charge (or due_charge)"
+    order_number, label, raw_amount = parts[:3]
+    kind = (parts[3] if len(parts) > 3 and parts[3] else "extra_charge").lower()
+    note = parts[4] if len(parts) > 4 else ""
+    if len(parts) > 5:
+        return "Note ko ek hi field mein rakho; format mein extra '|' mat use karo."
+    if kind not in {"extra_charge", "due_charge"}:
+        return "Kind sirf extra_charge ya due_charge ho sakta hai."
+    raw_amount = re.sub(r"(?i)\b(rs\.?|inr|rupees?)\b|[₹,]", "", raw_amount).strip()
+    try:
+        amount = Decimal(raw_amount)
+    except Exception:
+        return "Amount valid nahi hai. Example: 50."
+    if not amount.is_finite() or amount <= 0 or amount > Decimal("1000000"):
+        return "Amount ₹0.01 se ₹10,00,000 ke beech hona chahiye."
+    if not label.strip() or len(label.strip()) > 100:
+        return "Charge ka naam 1-100 characters ka hona chahiye."
+    try:
+        order = await get_order(db, order_number)
+        await add_billing_adjustment(
+            db, order.order_number, label=label, amount=amount, kind=kind,
+            note=note or None, changed_by="AI",
+        )
+        # Re-read after the write so the reply uses the committed total.
+        order = await get_order(db, order.order_number)
+    except (OrderError, OrderNotFoundError) as exc:
+        return f"Charge nahi laga: {str(exc)[:120]}"
+    word = "extra charge" if kind == "extra_charge" else "additional due"
+    return (
+        f"{word} laga diya: {order.order_number} — {label} {_money_fmt(amount)}. "
+        f"Naya total {_money_fmt(order.total_amount)}; baaki payment automatically recalculate hua."
+    )
 
 
 async def _ping_staff(db: AsyncSession, args: str) -> str:
@@ -995,5 +1087,6 @@ _TOOLS = {
     "search_orders": _search_orders,
     "staff_chat": _staff_chat,
     "money": _money_report,
+    "billing_adjustment": _billing_adjustment,
     "ping_staff": _ping_staff,
 }
