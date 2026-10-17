@@ -66,7 +66,14 @@ DEFAULTS: dict[str, Any] = {
     "marketing_freq_cap_per_month": 2,
     "marketing_monthly_msg_budget": 300,
     "marketing_max_discount_percent": 15,
-    "marketing_autonomy": "suggest",  # suggest | auto | off
+    "marketing_autonomy": "suggest",
+    # Referral rewards reuse the existing Campaign/Coupon/CustomerReward tables.
+    "referral_program_enabled": True,
+    "referral_friend_discount": 50,
+    "referral_referrer_reward": 100,
+    "referral_min_order": 300,
+    "referral_coupon_valid_days": 90,
+    "referral_reward_valid_days": 30,  # suggest | auto | off
     "attribution_window_days": 7,
     # Holdout ("control group"): itne % eligible customers ko JAAN-BOOJH kar
     # message NAHI bheja jata, taaki baad mein pata chale ki campaign se
