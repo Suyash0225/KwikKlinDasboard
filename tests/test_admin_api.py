@@ -283,3 +283,47 @@ async def test_bulk_delete_validates_all_customers_before_deleting_any(client) -
     listed = await client.get("/admin/api/customers", headers=AUTH)
     assert listed.status_code == 200, listed.text
     assert PHONE in {row["phone"] for row in listed.json()}
+
+
+async def test_business_manager_briefing_is_read_only_and_flags_overdue_and_unpaid(client, sent) -> None:
+    from datetime import date, timedelta
+    from decimal import Decimal
+
+    from app.database import async_session_factory
+    from app.services import order_service
+    from tests.conftest import purge_phones
+
+    phone = "+919999900781"
+    async with async_session_factory() as db:
+        order = await order_service.create_order(
+            db,
+            customer_phone=phone,
+            customer_name="Briefing Test Customer",
+            items=[{"type": "shirt", "qty": 1}],
+            total_amount=Decimal("250.00"),
+            expected_delivery=date.today() - timedelta(days=2),
+            notes="INTERNAL NOTE MUST NOT LEAK",
+            created_by="test",
+        )
+        number = order.order_number
+
+    try:
+        response = await client.get("/admin/api/business-manager/briefing", headers=AUTH)
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["read_only"] is True
+        assert data["summary"]["overdue_orders"] >= 1
+        assert data["summary"]["pending_payment_orders"] >= 1
+        overdue = next(row for row in data["overdue_orders"] if row["order_number"] == number)
+        assert overdue["customer"] == "Briefing Test Customer"
+        assert overdue["amount_due"] == 250.0
+        assert "notes" not in overdue
+        assert "phone" not in overdue
+        assert data["summary"]["pending_payment_balance"] >= 250.0
+    finally:
+        await purge_phones(phone)
+
+
+async def test_business_manager_briefing_requires_admin_auth(client) -> None:
+    response = await client.get("/admin/api/business-manager/briefing")
+    assert response.status_code == 401

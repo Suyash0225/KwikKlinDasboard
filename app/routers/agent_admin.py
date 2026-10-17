@@ -29,6 +29,9 @@ from app.models import (
     OpenQuestion,
     CampaignRecipient,
     Rate,
+    Order,
+    OrderStatus,
+    PaymentStatus,
 )
 from app.routers.orders import require_admin_owner, require_feature
 from app.services import app_settings, audit, wa_templates
@@ -39,11 +42,121 @@ from app.services.marketing import (
     send_campaign,
 )
 from app.utils.phone import normalize_phone
+from app.utils.dates import IST
 
 router = APIRouter(
     prefix="/admin/api", tags=["agent-admin"], dependencies=[Depends(require_admin_owner)]
 )
 log = structlog.get_logger()
+
+
+# ---------------------------------------------------------------------------
+# AI Business Manager — read-only daily operating brief
+# ---------------------------------------------------------------------------
+
+
+@router.get("/business-manager/briefing")
+async def business_manager_briefing(db: AsyncSession = Depends(get_db)) -> dict:
+    """Return a deterministic, DB-grounded manager brief; never sends messages.
+
+    Keep this endpoint read-only and avoid exposing Order.notes, phone numbers,
+    or internal staff identifiers. Dates use the shop's India-local calendar.
+    """
+    today = datetime.now(IST).date()
+    rows = (
+        await db.execute(
+            select(Order, Customer)
+            .join(Customer, Customer.id == Order.customer_id)
+            .order_by(Order.expected_delivery.asc().nullslast(), Order.created_at.asc())
+        )
+    ).all()
+
+    active_statuses = {OrderStatus.RECEIVED, OrderStatus.PICKUP_ASSIGNED,
+                       OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
+                       OrderStatus.IN_DRY, OrderStatus.IN_IRON,
+                       OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY,
+                       OrderStatus.ON_HOLD}
+    overdue = []
+    due_today = []
+    unpaid = []
+    active_count = 0
+    overdue_value = Decimal("0")
+    unpaid_balance = Decimal("0")
+
+    def order_summary(order: Order, customer: Customer) -> dict:
+        total = Decimal(str(order.total_amount or 0))
+        paid = Decimal(str(order.amount_paid or 0))
+        return {
+            "order_number": order.order_number,
+            "customer": customer.name or "Customer",
+            "status": order.status.name if order.status else "UNKNOWN",
+            "expected_delivery": order.expected_delivery.isoformat() if order.expected_delivery else None,
+            "amount_due": float(max(Decimal("0"), total - paid)),
+            "priority": order.priority or "normal",
+        }
+
+    for order, customer in rows:
+        status = order.status
+        total = Decimal(str(order.total_amount or 0))
+        paid = Decimal(str(order.amount_paid or 0))
+        balance = max(Decimal("0"), total - paid)
+        if status in active_statuses:
+            active_count += 1
+        if (status in active_statuses and order.expected_delivery
+                and order.expected_delivery < today):
+            overdue.append(order_summary(order, customer))
+            overdue_value += balance
+        elif (status in active_statuses and order.expected_delivery == today):
+            due_today.append(order_summary(order, customer))
+        if order.payment_status in (PaymentStatus.UNPAID, PaymentStatus.PARTIAL) and balance > 0:
+            unpaid.append(order_summary(order, customer))
+            unpaid_balance += balance
+
+    overdue.sort(key=lambda item: (item["expected_delivery"] or "", item["priority"] != "urgent"))
+    unpaid.sort(key=lambda item: item["amount_due"], reverse=True)
+    priorities = []
+    if overdue:
+        priorities.append({
+            "key": "overdue_orders",
+            "count": len(overdue),
+            "message": f"{len(overdue)} order(s) overdue; delivery commitments need review.",
+        })
+    if unpaid:
+        priorities.append({
+            "key": "pending_payments",
+            "count": len(unpaid),
+            "message": f"{len(unpaid)} bill(s) have pending balance.",
+        })
+    if due_today:
+        priorities.append({
+            "key": "due_today",
+            "count": len(due_today),
+            "message": f"{len(due_today)} order(s) are due for delivery today.",
+        })
+    if not priorities:
+        priorities.append({
+            "key": "all_clear",
+            "count": 0,
+            "message": "No overdue orders or pending balances were found.",
+        })
+
+    return {
+        "date": today.isoformat(),
+        "generated_at": datetime.now(IST).isoformat(),
+        "summary": {
+            "active_orders": active_count,
+            "overdue_orders": len(overdue),
+            "due_today": len(due_today),
+            "pending_payment_orders": len(unpaid),
+            "overdue_balance": float(overdue_value),
+            "pending_payment_balance": float(unpaid_balance),
+        },
+        "priorities": priorities,
+        "overdue_orders": overdue[:10],
+        "due_today_orders": due_today[:10],
+        "pending_payments": unpaid[:10],
+        "read_only": True,
+    }
 
 
 # ---------------------------------------------------------------------------
