@@ -155,3 +155,75 @@ async def test_human_handoff_waits_after_manager_inbox_reply(monkeypatch):
 
     monkeypatch.setattr(app_settings, "get", fake_get)
     assert await webhook._human_handoff_waiting(FakeDB(), customer, inbound) is True
+
+
+@pytest.mark.asyncio
+async def test_human_handoff_rechecks_ai_stop_after_model_generation(monkeypatch):
+    """A stop switch flipped while the model generates must block the send."""
+    from types import SimpleNamespace
+
+    from app.routers import webhook
+    from app.services import human_handoff, scheduler
+
+    now = datetime.now(timezone.utc)
+    customer = SimpleNamespace(
+        id=101,
+        phone="+919876543210",
+        agent_paused=False,
+        opted_out=False,
+    )
+    inbound = SimpleNamespace(
+        id=202,
+        wa_message_id="test-human-handoff-stop",
+        message_text="Where is my order?",
+        created_at=now,
+    )
+    old_human = SimpleNamespace(created_at=now - timedelta(minutes=20))
+    sent = []
+    unclaimed = []
+    enabled_checks = 0
+
+    async def latest_human(_db, _customer_id):
+        return old_human
+
+    async def latest_outbound(_db, _customer_id):
+        return None
+
+    async def latest_inbound(_db, _customer_id):
+        return inbound
+
+    async def agent_enabled(_db, _customer):
+        nonlocal enabled_checks
+        enabled_checks += 1
+        # Agent is on before generation, then switched off while the model runs.
+        return enabled_checks == 1
+
+    async def claim(_key):
+        return True
+
+    async def unclaim(key):
+        unclaimed.append(key)
+
+    async def build_ai_reply(*_args, **_kwargs):
+        return "Your order is being processed."
+
+    async def send_message(*_args, **kwargs):
+        sent.append(kwargs)
+
+    monkeypatch.setattr(human_handoff, "_latest_human", latest_human)
+    monkeypatch.setattr(human_handoff, "_latest_outbound", latest_outbound)
+    monkeypatch.setattr(human_handoff, "_latest_inbound", latest_inbound)
+    monkeypatch.setattr(webhook, "_customer_agent_enabled", agent_enabled)
+    monkeypatch.setattr(human_handoff, "send_message", send_message)
+    monkeypatch.setattr(scheduler, "_claim", claim)
+    monkeypatch.setattr(scheduler, "_unclaim", unclaim)
+    monkeypatch.setattr("app.services.ai_agent.build_ai_reply", build_ai_reply)
+
+    result = await human_handoff._reply_one(
+        db=object(), customer=customer, inbound=inbound, grace_minutes=15
+    )
+
+    assert result is False
+    assert sent == []
+    assert enabled_checks == 2
+    assert len(unclaimed) == 1
