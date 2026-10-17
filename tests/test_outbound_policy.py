@@ -398,3 +398,46 @@ async def test_dotpe_webhook_retry_without_tenant_is_dead_lettered(monkeypatch) 
         ).scalar_one()
         assert row.status == "dead"
         assert "tenant_id" in (row.error or "")
+
+
+async def test_promotional_daily_cap_zero_blocks_all_sends(monkeypatch) -> None:
+    from app.models import Customer, OutboundThrottle
+    from app.services import tenant_context, app_settings, outbound_policy
+    from app.services.whatsapp import SendError
+
+    tenant_id = await _test_tenant_id()
+
+    async def setting(db, key):
+        if key == "outbound_daily_msg_cap":
+            return 0
+        if key == "marketing_freq_cap_per_month":
+            return 2
+        return 100
+
+    async def eligible(db, customer_id):
+        return True, ""
+
+    monkeypatch.setattr(app_settings, "get", setting)
+    monkeypatch.setattr(outbound_policy, "_quiet_now", lambda: False)
+    monkeypatch.setattr("app.services.marketing.eligible", eligible)
+
+    phone = f"+91994{uuid.uuid4().int % 10**7:07d}"
+    async with tenant_context.as_tenant(tenant_id):
+        async with async_session_factory() as db:
+            await db.execute(delete(OutboundThrottle).where(OutboundThrottle.tenant_id == tenant_id))
+            customer = Customer(phone=phone, name="Zero Cap Test")
+            db.add(customer)
+            await db.flush()
+            with pytest.raises(SendError, match="daily cap reached \(0\)"):
+                await outbound_policy.enforce_outbound_policy(
+                    db, customer=customer, phone=phone, intent="promotional"
+                )
+            customer_id = customer.id
+            await db.rollback()
+
+    async with async_session_factory() as db:
+        from app.services import tenant_context
+        async with tenant_context.system_context(db):
+            await db.execute(delete(OutboundThrottle).where(OutboundThrottle.tenant_id == tenant_id))
+            await db.execute(delete(Customer).where(Customer.id == customer_id))
+            await db.commit()
