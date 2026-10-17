@@ -40,6 +40,8 @@ class Escalation(Base, TenantScoped):
         DateTime(timezone=True), server_default=func.now()
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Owner's second alert after the response SLA expires; NULL means not sent.
+    owner_reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     def __repr__(self) -> str:
         return f"<Escalation {self.status.name}: {self.question[:40]!r}>"
