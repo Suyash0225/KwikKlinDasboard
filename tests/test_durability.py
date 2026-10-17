@@ -172,7 +172,7 @@ async def test_transient_send_failure_lands_in_queue(_window_open_customer, monk
         with pytest.raises(SendError):
             await send_message(
                 db, to_phone=TEST_CUSTOMER_PHONE, text="kal ready hoga",
-                intent="transactional", outbound_kind="order_status",
+                intent="transactional", outbound_kind="order_status", urgent=True,
             )
 
     async with async_session_factory() as s:
@@ -194,7 +194,7 @@ async def test_drain_sends_queued_message(_window_open_customer, monkeypatch) ->
         s.add(
             OutboundMessage(
                 to_phone=TEST_CUSTOMER_PHONE,
-                payload={"text": "queued msg", "sent_by": "bot", "tenant_id": str(_window_open_customer), "intent": "transactional", "outbound_kind": "order_status"},
+                payload={"text": "queued msg", "sent_by": "bot", "tenant_id": str(_window_open_customer), "intent": "transactional", "outbound_kind": "order_status", "urgent": True},
             )
         )
         await s.commit()
