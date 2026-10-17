@@ -480,6 +480,18 @@ async def send_campaign(campaign_id) -> None:
                         reason=rec.detail,
                     )
                     continue
+                # Claim each recipient before creating any per-send coupon or
+                # contacting WhatsApp. A resumed worker must not duplicate a send
+                # whose transport succeeded just before a process crash.
+                from app.services.scheduler import _claim, _unclaim
+
+                campaign_send_claim = f"campaign-send:{campaign.id}:{cust.id}"
+                if not await _claim(campaign_send_claim):
+                    rec.status = "skipped"
+                    rec.detail = "duplicate_send_claim_suppressed"
+                    await db.commit()
+                    continue
+
                 winback_coupon = None
                 if winback_personalized:
                     rhythm = rhythm_by_customer.get(cust.id, {})
@@ -539,10 +551,14 @@ async def send_campaign(campaign_id) -> None:
                     sent_now += 1
                     spent += 1
                 except SendError as exc:
-                    # window closed & no approved marketing template -> honest fail
+                    # A transient text-send failure is queued by send_message;
+                    # keep the claim so a resumed campaign cannot race that retry.
+                    # Permanent failures did not queue and may be explicitly retried.
+                    if not exc.transient:
+                        await _unclaim(campaign_send_claim)
                     rec.status = "failed"
                     rec.detail = str(exc)[:200]
-                    if winback_coupon is not None:
+                    if winback_coupon is not None and not exc.transient:
                         winback_coupon.active = False
                 await db.commit()
                 # Delay is enforced immediately before the next actual send,
