@@ -254,22 +254,28 @@ async def test_system_context_still_sees_everything(two_tenants) -> None:
 
 
 async def test_rls_unset_tenant_returns_no_rows(two_tenants) -> None:
-    """No tenant and no explicit system grant must fail closed at PostgreSQL."""
+    """No tenant and no explicit system grant must fail closed in ORM and PostgreSQL."""
     async with async_session_factory() as db:
-        rows = (
+        orm_rows = (
+            await db.execute(
+                select(Customer.phone).where(Customer.phone.in_((HOME_PHONE, B_PHONE)))
+            )
+        ).scalars().all()
+        raw_rows = (
             await db.execute(
                 sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
                 {"p1": HOME_PHONE, "p2": B_PHONE},
             )
         ).scalars().all()
-    assert rows == []
+    assert orm_rows == []
+    assert raw_rows == []
 
 
 async def test_rls_context_does_not_leak_on_reused_connection(two_tenants) -> None:
     """The same checked-out connection must not retain a prior tenant GUC."""
     from app.database import engine
 
-    home_id, _b_id = two_tenants
+    home_id, b_id = two_tenants
     async with engine.connect() as conn:
         async with conn.begin():
             rows = (await conn.execute(
@@ -286,6 +292,17 @@ async def test_rls_context_does_not_leak_on_reused_connection(two_tenants) -> No
                     {"p1": HOME_PHONE, "p2": B_PHONE},
                 )).scalars().all()
                 assert rows == [HOME_PHONE]
+        finally:
+            tenant_context.current_tenant_id.reset(token)
+
+        token = tenant_context.current_tenant_id.set(b_id)
+        try:
+            async with conn.begin():
+                rows = (await conn.execute(
+                    sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                    {"p1": HOME_PHONE, "p2": B_PHONE},
+                )).scalars().all()
+                assert rows == [B_PHONE]
         finally:
             tenant_context.current_tenant_id.reset(token)
 
