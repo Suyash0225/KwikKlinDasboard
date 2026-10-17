@@ -213,14 +213,14 @@ Recommended production setup:
    so FORCE RLS does not silently omit/reject tenant rows:
 
    ```bash
-   createdb -h localhost -U postgres kwikklin_restore_drill
+   sudo -u postgres createdb kwikklin_restore_drill
    PGPASSWORD='<db-password>' PGOPTIONS='-c app.system_context=on' \
      pg_restore --exit-on-error --no-owner -h localhost -U laundry \
      -d kwikklin_restore_drill backups/<dump-file>.dump
    PGPASSWORD='<db-password>' PGOPTIONS='-c app.system_context=on' \
      psql -h localhost -U laundry -d kwikklin_restore_drill \
      -c "SELECT count(*) FROM orders;"
-   dropdb -h localhost -U postgres kwikklin_restore_drill
+   sudo -u postgres dropdb kwikklin_restore_drill
    ```
 
 3. Record the restore time and row-count check. Never run `pg_restore --clean`

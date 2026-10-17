@@ -61,5 +61,5 @@ async def test_offsite_upload_failure_alerts_owner(monkeypatch) -> None:
 
     assert result is None
     assert len(alerts) == 1
-    assert "off-site backup upload FAIL" in alerts[0]
+    assert "Off-site backup upload FAIL" in alerts[0]
     assert "kwikklin-test.dump" in alerts[0]
