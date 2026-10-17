@@ -1045,3 +1045,37 @@ async def test_duplicate_open_customer_task_reuses_existing_task(worker, sent) -
             await db.execute(delete(Task).where(Task.customer_id == customer_id))
             await db.execute(delete(Customer).where(Customer.id == customer_id))
             await db.commit()
+
+
+@pytest.mark.parametrize("kind", ["packing", "custom"])
+async def test_dashboard_accepts_packing_and_custom_task_kinds(client, kind) -> None:
+    """Both task creation and editing must accept every advertised task kind."""
+    created_code = None
+    try:
+        response = await client.post(
+            "/admin/api/tasks",
+            headers=H,
+            json={"title": f"Phase 2 {kind} task", "kind": kind},
+        )
+        assert response.status_code == 201, response.text
+        payload = response.json()
+        assert payload["kind"] == kind
+        created_code = payload["code"]
+
+        edited = await client.put(
+            f"/admin/api/tasks/{created_code}",
+            headers=H,
+            json={"title": f"Edited Phase 2 {kind} task", "kind": kind},
+        )
+        assert edited.status_code == 200, edited.text
+
+        async with async_session_factory() as db:
+            saved = await task_service.get_by_code(db, created_code)
+            assert saved is not None
+            assert saved.kind == kind
+            assert saved.title == f"Edited Phase 2 {kind} task"
+    finally:
+        if created_code:
+            async with async_session_factory() as db:
+                await db.execute(delete(Task).where(Task.code == created_code))
+                await db.commit()
