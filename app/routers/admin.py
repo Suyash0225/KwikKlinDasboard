@@ -2157,8 +2157,8 @@ class InboxSendIn(BaseModel):
     phone: str
     text: str = Field(min_length=1, max_length=4000)
     # Optional explicit policy classification; omitted preserves human free-form behavior.
-    intent: str | None = Field(default=None, pattern="^(promotional|transactional)$")
-    outbound_kind: str | None = Field(default=None, max_length=40)
+    intent: str = Field(default="transactional", pattern="^(promotional|transactional)$")
+    outbound_kind: str = Field(default="order_status", max_length=40)
     # wamid being quoted — WhatsApp shows it above the reply
     reply_to: str | None = Field(default=None, max_length=120)
 
@@ -2527,8 +2527,8 @@ async def customers_import_file(
 async def inbox_send_media(
     phone: str = Form(...),
     caption: str = Form(default=""),
-    intent: str | None = Form(default=None),
-    outbound_kind: str | None = Form(default=None),
+    intent: str = Form(default="transactional"),
+    outbound_kind: str = Form(default="order_status"),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
