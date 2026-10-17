@@ -320,5 +320,9 @@ async def test_duplicate_delivery_event_sends_one_referral_share(monkeypatch) ->
                 await db.execute(
                     delete(Campaign).where(Campaign.referral_owner_customer_id == customer_id)
                 )
+                await db.execute(
+                    text("DELETE FROM audit_log WHERE args->>'customer_id' = :cid"),
+                    {"cid": str(customer_id)},
+                )
                 await db.execute(delete(Customer).where(Customer.id == customer_id))
                 await db.commit()
