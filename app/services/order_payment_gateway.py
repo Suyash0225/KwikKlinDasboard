@@ -116,12 +116,10 @@ async def handle_payment_link_paid(event: dict) -> dict:
 
     async with tenant_context.as_tenant(tenant_id):
         async with async_session_factory() as db:
-            existing = (
-                await db.execute(select(Payment).where(Payment.provider_reference == link_id))
-            ).scalar_one_or_none()
-            if existing is not None:
-                return {"status": "duplicate", "payment_id": str(existing.id)}
-
+            # Serialize webhook retries for the same order before checking the
+            # provider reference. Otherwise two concurrent deliveries can both
+            # miss the ledger row and the second can be misclassified as a
+            # balance mismatch after the first one commits.
             order = (
                 await db.execute(
                     select(Order).where(Order.id == order_id, Order.tenant_id == tenant_id).with_for_update()
@@ -129,6 +127,11 @@ async def handle_payment_link_paid(event: dict) -> dict:
             ).scalar_one_or_none()
             if order is None:
                 return {"status": "ignored", "reason": "order not found"}
+            existing = (
+                await db.execute(select(Payment).where(Payment.provider_reference == link_id))
+            ).scalar_one_or_none()
+            if existing is not None:
+                return {"status": "duplicate", "payment_id": str(existing.id)}
             due = (Decimal(str(order.total_amount or 0)) - Decimal(str(order.amount_paid or 0))).quantize(Decimal("0.01"))
             if due != amount:
                 customer = await db.get(Customer, order.customer_id)
