@@ -356,7 +356,8 @@ async def run_daily_social(force: bool = False) -> str:
     async with async_session_factory() as db:
         if not await app_settings.get(db, "social_daily_enabled"):
             return "disabled"
-        if not force and not await _claim(f"social:{day_key}"):
+        claim_key = f"social-force:{day_key}" if force else f"social:{day_key}"
+        if not await _claim(claim_key):
             return "already_done"
 
         theme_title, headline, subline = THEMES[now.weekday()]
