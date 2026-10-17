@@ -370,7 +370,11 @@ async def test_review_request_is_neutral_for_every_rating_and_locale(monkeypatch
     assert "⭐⭐⭐⭐⭐" not in message
     assert "🎁" not in message
     lowered = message.lower()
-    assert "coupon" not in lowered and "discount" not in lowered and "reward code" not in lowered
+    assert not any(term in lowered for term in ("coupon", "discount", "reward code", "gift", "% off"))
+    if lang == "en":
+        assert "honest feedback" in lowered
+    else:
+        assert "imaandaar feedback" in lowered
     if kind == "bad":
         assert any(m["to"] == "+919999000001" for m in sent_messages)
 
