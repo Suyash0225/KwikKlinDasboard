@@ -557,12 +557,13 @@ async def bill_page(token: str):
     masked, noindex, aur koi galti ho to sab ek jaisa 404.
     """
     from decimal import Decimal
+    from urllib.parse import quote as _quote
 
     from fastapi.responses import Response as _Resp
 
     from app.models import Customer, Order
     from app.models.tenant import Tenant
-    from app.services import app_settings, bill_link, integrations, receipt
+    from app.services import app_settings, bill_link, customer_messages, integrations, receipt
 
     def _fail() -> _Resp:
         return _Resp(
@@ -590,6 +591,13 @@ async def bill_page(token: str):
         prev = await customer_balance.previous(db, cust.id, exclude_order_id=order.id) if cust else {"due": 0, "bills": 0, "clothes": [], "clothes_total": 0}
         rw = await _rw.for_bill_page(db, cust.id) if cust else {"available": [], "progress": []}
         statement_link = f"/b/c/{bill_link.make_customer(tid, cust.id)}" if cust else ""
+        # Delivered customers get the same neutral review invitation plus a
+        # one-tap way to request another pickup. Never gate Google review links
+        # on rating: all customers must be free to leave honest feedback.
+        review_link = (
+            await customer_messages.short_review_link(db, tenant)
+            if cust and order.status.name == "DELIVERED" else ""
+        )
 
     e = _esc
     shop = (tenant.shop_name if tenant else "") or "Laundry"
@@ -668,10 +676,38 @@ async def bill_page(token: str):
         terms = ("<section class='card'><details class='terms'><summary>Terms &amp; conditions</summary><ol>"
                  + "".join(f"<li>{e(t)}</li>" for t in r["terms"]) + "</ol></details></section>")
     digits = "".join(ch for ch in r["phone"] if ch.isdigit())
+    wa = digits if digits.startswith("91") or len(digits) != 10 else "91" + digits
     contact_btn = ""
     if digits:
-        wa = digits if digits.startswith("91") or len(digits) != 10 else "91" + digits
         contact_btn = f"<a class='contact-btn' href='https://wa.me/{wa}'>💬 WhatsApp the shop</a>"
+
+    delivery_actions = ""
+    if order.status.name == "DELIVERED":
+        actions = []
+        if digits:
+            feedback_text = _quote(f"Hi {shop}, feedback for order {order.order_number}: ")
+            reorder_text = _quote(
+                f"Hi {shop}, please arrange another pickup. Previous order: {order.order_number}."
+            )
+            actions.append(
+                f"<a class='contact-btn' href='https://wa.me/{wa}?text={feedback_text}'>"
+                "💬 Share feedback</a>"
+            )
+            actions.append(
+                f"<a class='contact-btn' href='https://wa.me/{wa}?text={reorder_text}'>"
+                "🧺 Book another pickup</a>"
+            )
+        if review_link:
+            actions.append(
+                f"<a class='contact-btn' href='{e(review_link)}' rel='noopener noreferrer'>"
+                "⭐ Share an honest Google review</a>"
+            )
+        if actions:
+            delivery_actions = (
+                "<section class='card delivery-actions'><h2>After delivery</h2>"
+                "<p class='note'>Your order link still works. Share feedback or ask us to arrange another pickup.</p>"
+                + "".join(actions) + "</section>"
+            )
 
     # ---- mood: paid (sparkle) / due / happy (delivered on time) / info ----
     st = order.status.name
@@ -740,6 +776,7 @@ async def bill_page(token: str):
         "{{STATUS_CLASS}}": status_cls, "{{STATUS}}": e(status_word),
         "{{PAY_BLOCK}}": pay_block + delivery_card + earlier_card + rewards_card, "{{ITEMS}}": "".join(items), "{{TOTALS}}": totals,
         "{{TERMS}}": terms, "{{CONTACT_BTN}}": contact_btn,
+        "{{DELIVERY_ACTIONS}}": delivery_actions,
         "{{MOOD}}": mood, "{{THEME}}": theme, "{{HERO_ART}}": art, "{{HERO_EMOJI}}": emoji,
         "{{HERO_TITLE}}": e(title), "{{HERO_SUB}}": e(sub), "{{HERO_BADGE}}": badge, "{{PROGRESS}}": progress,
         "{{ASSET_V}}": _SITE_ASSET_V, "{{SHOP}}": e(shop),
