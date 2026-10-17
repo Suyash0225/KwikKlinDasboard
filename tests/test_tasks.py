@@ -385,12 +385,8 @@ async def test_api_rejects_unknown_staff(client) -> None:
 
 # ---------------------------------------------------- task buttons -------
 
-async def test_task_status_menu_is_role_specific_and_updates_the_task(client, sent, worker) -> None:
-    """Staff gets a list menu instead of typing status commands.
-
-    Washer/supervisor: Wash, Iron, Ready, Pending.
-    Delivery: Done, Pending for both pickup and delivery.
-    """
+async def test_task_status_menu_enforces_sequential_wash_dry_iron_ready(client, sent, worker) -> None:
+    """WhatsApp must only allow the next legal processing stage."""
     import uuid as _uuid
     from tests.conftest import meta_payload, sign_body
 
@@ -414,38 +410,76 @@ async def test_task_status_menu_is_role_specific_and_updates_the_task(client, se
             created_by="test",
             items=[{"type": "Shirt", "qty": 2}],
         )
-        st = await db.get(Staff, worker)
-        task = await _mk(
-            db, worker, title="Sharma ji ka wash",
-            order=order, kind="wash",
-        )
-        code = task.code
+        task = await _mk(db, worker, title="Sharma ji ka wash", order=order, kind="wash")
+        code, order_id = task.code, order.id
 
-    menu_messages = [c for c in sent if c.get("list_rows")]
-    assert menu_messages, "task assignment must contain a list menu"
-    rows = menu_messages[-1]["list_rows"]
-    ids = [row.id for row in rows]
-    assert ids == [
-        f"task:{code}:wash",
-        f"task:{code}:iron",
-        f"task:{code}:ready",
-        f"task:{code}:pending",
-    ]
-    assert [row.title for row in rows] == [
-        "🧼 Wash", "👔 Iron", "✅ Ready", "⏳ Pending"
-    ]
+    try:
+        menu_messages = [c for c in sent if c.get("list_rows")]
+        assert menu_messages, "task assignment must contain a list menu"
+        rows = menu_messages[-1]["list_rows"]
+        assert [row.id for row in rows] == [
+            f"task:{code}:wash",
+            f"task:{code}:pending",
+        ]
 
-    sent.clear()
-    assert (await post(f"[button:task:{code}:ready] Ready")).status_code == 200
-    async with async_session_factory() as db:
-        updated = await task_service.get_by_code(db, code)
-        order_after = await db.get(type(order), order.id)
-    assert order_after.status.name == "READY"
-    assert updated.status == TASK_DONE
-    assert any(code in (c.get("text") or "") and "Ready" in (c.get("text") or "") for c in sent)
+        # A stale card must not jump directly from RECEIVED to READY.
+        await post(f"[button:task:{code}:ready] Ready")
+        async with async_session_factory() as db:
+            current = await db.get(type(order), order_id)
+            assert current.status is OrderStatus.RECEIVED
 
-    from tests.conftest import purge_phones
-    await purge_phones(phone)
+        # Start washing, then explicitly move the same wash task into drying.
+        await post(f"[button:task:{code}:wash] Wash")
+        async with async_session_factory() as db:
+            current = await db.get(type(order), order_id)
+            assert current.status is OrderStatus.IN_WASH
+            current_task = await task_service.get_by_code(db, code)
+            assert current_task.status == TASK_OPEN
+
+        await post(f"[button:task:{code}:dry] Washing done")
+        async with async_session_factory() as db:
+            current = await db.get(type(order), order_id)
+            assert current.status is OrderStatus.IN_DRY
+            completed_wash = await task_service.get_by_code(db, code)
+            assert completed_wash.status == TASK_DONE
+            dry_task = (await db.execute(
+                select(Task).where(
+                    Task.order_id == order_id, Task.kind == "dry", Task.status == TASK_OPEN
+                ).order_by(Task.created_at.desc())
+            )).scalars().first()
+            assert dry_task is not None, "IN_DRY must create the drying-stage task"
+            dry_code = dry_task.code
+
+        await post(f"[button:task:{dry_code}:iron] Drying done")
+        async with async_session_factory() as db:
+            current = await db.get(type(order), order_id)
+            assert current.status is OrderStatus.IN_IRON
+            iron_task = (await db.execute(
+                select(Task).where(
+                    Task.order_id == order_id, Task.kind == "iron", Task.status == TASK_OPEN
+                ).order_by(Task.created_at.desc())
+            )).scalars().first()
+            assert iron_task is not None, "IN_IRON must create the ironing-stage task"
+            iron_code = iron_task.code
+
+        await post(f"[button:task:{iron_code}:ready] Ironing done")
+        async with async_session_factory() as db:
+            current = await db.get(type(order), order_id)
+            assert current.status is OrderStatus.READY
+            completed_iron = await task_service.get_by_code(db, iron_code)
+            assert completed_iron.status == TASK_DONE
+            delivery_task = (await db.execute(
+                select(Task).where(
+                    Task.order_id == order_id, Task.kind == "delivery", Task.status == TASK_OPEN
+                )
+            )).scalars().first()
+            assert delivery_task is not None, "READY must create the delivery task"
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.order_id == order_id))
+            await db.commit()
+        from tests.conftest import purge_phones
+        await purge_phones(phone)
 
 
 async def test_delivery_done_requires_two_confirmations(worker, sent) -> None:
