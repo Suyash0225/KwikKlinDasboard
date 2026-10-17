@@ -14,6 +14,7 @@ from decimal import Decimal
 
 import structlog
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -27,6 +28,7 @@ from app.models import (
 )
 from app.services import app_settings, audit
 from app.services.whatsapp import SendError, send_message
+from app.utils.dates import today_ist
 
 log = structlog.get_logger()
 
@@ -53,6 +55,8 @@ async def _code() -> str:
 async def _get_or_create_referral_code(
     db: AsyncSession, customer: Customer
 ) -> tuple[Campaign, Coupon]:
+    customer_id = customer.id
+    tenant_id = customer.tenant_id
     campaigns = (
         await db.execute(
             select(Campaign).where(Campaign.segment == "referral").order_by(Campaign.created_at.desc())
@@ -68,7 +72,7 @@ async def _get_or_create_referral_code(
                 .order_by(Coupon.created_at.desc()).limit(1)
             )
         ).scalar_one_or_none()
-        if coupon and (coupon.valid_to is None or coupon.valid_to >= date.today()):
+        if coupon and (coupon.valid_to is None or coupon.valid_to >= today_ist()):
             return campaign, coupon
 
     friend_discount = Decimal(str(await app_settings.get(db, "referral_friend_discount") or 50))
@@ -76,7 +80,7 @@ async def _get_or_create_referral_code(
     valid_days = max(1, min(365, int(await app_settings.get(db, "referral_coupon_valid_days") or 90)))
     friend_discount = max(Decimal("1"), min(friend_discount, Decimal("500")))
     min_order = max(Decimal("0"), min(min_order, Decimal("100000")))
-    valid_to = date.today() + timedelta(days=valid_days)
+    valid_to = today_ist() + timedelta(days=valid_days)
 
     for _ in range(5):
         code = await _code()
@@ -99,24 +103,51 @@ async def _get_or_create_referral_code(
             "referrer_customer_id": str(customer.id),
             "reward_model": "friend_discount_then_referrer_reward",
         },
+        referral_owner_customer_id=customer.id,
     )
-    db.add(campaign)
-    await db.flush()
-    coupon = Coupon(
-        code=code,
-        discount_type="flat",
-        value=friend_discount,
-        min_order=min_order,
-        valid_from=date.today(),
-        valid_to=valid_to,
-        per_customer_limit=1,
-        total_limit=1000,
-        campaign_id=campaign.id,
-        customer_id=None,
-        active=True,
-    )
-    db.add(coupon)
-    await db.commit()
+    try:
+        db.add(campaign)
+        await db.flush()
+        coupon = Coupon(
+            code=code,
+            discount_type="flat",
+            value=friend_discount,
+            min_order=min_order,
+            valid_from=today_ist(),
+            valid_to=valid_to,
+            per_customer_limit=1,
+            total_limit=1000,
+            campaign_id=campaign.id,
+            customer_id=None,
+            active=True,
+        )
+        db.add(coupon)
+        await db.commit()
+    except IntegrityError:
+        # A concurrent delivery event for this same customer won the unique
+        # referral-owner constraint. Reuse its code instead of issuing a second.
+        await db.rollback()
+        existing_campaign = (
+            await db.execute(
+                select(Campaign).where(
+                    Campaign.tenant_id == tenant_id,
+                    Campaign.referral_owner_customer_id == customer_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_campaign is None:
+            raise
+        existing_coupon = (
+            await db.execute(
+                select(Coupon).where(
+                    Coupon.campaign_id == existing_campaign.id,
+                    Coupon.active.is_(True),
+                ).order_by(Coupon.created_at.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing_coupon is None:
+            raise
+        return existing_campaign, existing_coupon
     await audit.record(
         actor_role="system",
         actor="referrals",
@@ -150,33 +181,59 @@ async def _issue_share_code_after_delivery(db: AsyncSession, order: Order) -> No
             result=reason,
         )
         return
-    campaign, coupon = await _get_or_create_referral_code(db, customer)
-    friend_discount = f"₹{coupon.value:.0f}"
-    minimum = f"₹{coupon.min_order:.0f}" if coupon.min_order is not None else "no minimum"
-    valid_to = coupon.valid_to.strftime("%d %b %Y") if coupon.valid_to else "until further notice"
-    message = (
-        f"Namaste {customer.name or 'ji'}! 🙏\n"
-        f"Aapka order {order.order_number} deliver ho gaya. Doston ko Kwik Klin recommend karein.\n"
-        f"Unke pehle order par {friend_discount} off (minimum {minimum}).\n"
-        f"Referral code: {coupon.code}\nValid till: {valid_to}.\n"
-        "Aapko bhi unka pehla order deliver hone par referral reward milega. 🧺"
-    )
+
+    # Claim before code/coupon creation and before the WhatsApp side effect.
+    # The tenant prefix is applied by scheduler._claim; duplicate delivery
+    # events and concurrent webhook retries therefore cannot issue/send twice.
+    from app.services.scheduler import _claim, _unclaim
+
+    claim_key = f"referral-share:{order.id}"
+    if not await _claim(claim_key):
+        return
+    send_succeeded = False
     try:
-        await send_message(db, to_phone=customer.phone, text=message, sent_by="bot")
-        customer.last_marketing_at = datetime.now(timezone.utc)
-        await db.commit()
-        await audit.record(
-            actor_role="system", actor="referrals", action="referral_share_code_sent",
-            args={"customer_id": str(customer.id), "campaign_id": str(campaign.id)},
-            result="sent",
+        campaign, coupon = await _get_or_create_referral_code(db, customer)
+        friend_discount = f"₹{coupon.value:.0f}"
+        minimum = f"₹{coupon.min_order:.0f}" if coupon.min_order is not None else "no minimum"
+        valid_to = coupon.valid_to.strftime("%d %b %Y") if coupon.valid_to else "until further notice"
+        message = (
+            f"Namaste {customer.name or 'ji'}! 🙏\n"
+            f"Aapka order {order.order_number} deliver ho gaya. Doston ko Kwik Klin recommend karein.\n"
+            f"Unke pehle order par {friend_discount} off (minimum {minimum}).\n"
+            f"Referral code: {coupon.code}\nValid till: {valid_to}.\n"
+            "Aapko bhi unka pehla order deliver hone par referral reward milega. 🧺"
         )
-    except SendError as exc:
-        log.info("referral_share_code_send_failed", reason=str(exc)[:100])
-        await audit.record(
-            actor_role="system", actor="referrals", action="referral_share_code_send_failed",
-            args={"customer_id": str(customer.id), "campaign_id": str(campaign.id)},
-            result=str(exc)[:160], ok=False,
-        )
+        try:
+            await send_message(
+                db, to_phone=customer.phone, text=message, sent_by="bot",
+                intent="promotional", enqueue_on_fail=False,
+            )
+            send_succeeded = True
+            customer.last_marketing_at = datetime.now(timezone.utc)
+            await db.commit()
+            await audit.record(
+                actor_role="system", actor="referrals", action="referral_share_code_sent",
+                args={"customer_id": str(customer.id), "campaign_id": str(campaign.id)},
+                result="sent",
+            )
+        except SendError as exc:
+            # A transient transport failure can be ambiguous (provider may have
+            # accepted the message). Keep the claim to prevent duplicate shares;
+            # permanent policy/provider rejections are safe to retry later.
+            if not exc.transient:
+                await _unclaim(claim_key)
+            log.info("referral_share_code_send_failed", reason=str(exc)[:100])
+            await audit.record(
+                actor_role="system", actor="referrals", action="referral_share_code_send_failed",
+                args={"customer_id": str(customer.id), "campaign_id": str(campaign.id)},
+                result=str(exc)[:160], ok=False,
+            )
+    except Exception:
+        # Release only when no send succeeded; audit/commit failures after a
+        # successful transport must not make a duplicate delivery send again.
+        if not send_succeeded:
+            await _unclaim(claim_key)
+        raise
 
 
 async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> None:
@@ -236,7 +293,7 @@ async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> Non
     valid_days = max(1, min(365, int(await app_settings.get(db, "referral_reward_valid_days") or 30)))
     reward_value = max(Decimal("1"), min(reward_value, Decimal("1000")))
     min_order = max(Decimal("0"), min(min_order, Decimal("100000")))
-    valid_to = date.today() + timedelta(days=valid_days)
+    valid_to = today_ist() + timedelta(days=valid_days)
 
     for _ in range(5):
         reward_code = "RR-" + secrets.token_hex(4).upper()
@@ -263,7 +320,7 @@ async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> Non
         discount_type="flat",
         value=reward_value,
         min_order=min_order,
-        valid_from=date.today(),
+        valid_from=today_ist(),
         valid_to=valid_to,
         per_customer_limit=1,
         total_limit=1,
@@ -285,6 +342,14 @@ async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> Non
     ok, reason = await eligible(db, referrer.id)
     if not ok or referrer.opted_out or referrer.marketing_opt_out:
         return
+
+    # The reward row is unique per referred customer; the notification needs its
+    # own claim so duplicate delivery webhooks cannot send the same reward twice.
+    from app.services.scheduler import _claim, _unclaim
+
+    notice_claim = f"referral-reward-notice:{order.id}"
+    if not await _claim(notice_claim):
+        return
     try:
         await send_message(
             db,
@@ -296,6 +361,7 @@ async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> Non
                 "Kwik Klin ko recommend karne ke liye dhanyavaad!"
             ),
             sent_by="bot",
+            intent="promotional",
         )
         referrer.last_marketing_at = datetime.now(timezone.utc)
         await db.commit()
@@ -305,6 +371,11 @@ async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> Non
             result="sent",
         )
     except SendError as exc:
+        # Transient failures are queued by send_message with tenant identity;
+        # keep the claim while that retry is pending. Permanent failures did
+        # not queue, so release the claim to permit a later safe retry.
+        if not exc.transient:
+            await _unclaim(notice_claim)
         log.info("referral_reward_notice_failed", reason=str(exc)[:100])
         await audit.record(
             actor_role="system", actor="referrals", action="referral_reward_notice_failed",

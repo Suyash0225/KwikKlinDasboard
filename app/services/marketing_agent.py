@@ -11,6 +11,8 @@ import asyncio
 from datetime import date
 from decimal import Decimal
 
+from app.utils.dates import today_ist
+
 import structlog
 from sqlalchemy import case, func, select
 
@@ -469,7 +471,7 @@ async def validate_coupon(
         ).scalar_one()
         if prior_orders:
             return None, Decimal("0"), "referral code sirf pehle order par valid hai"
-    today = date.today()
+    today = today_ist()
     if coupon.valid_from and today < coupon.valid_from:
         return None, Decimal("0"), "coupon abhi shuru nahi hua"
     if coupon.valid_to and today > coupon.valid_to:

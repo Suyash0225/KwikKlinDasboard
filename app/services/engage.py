@@ -167,26 +167,42 @@ async def run_conversation_followups() -> int:
             .all()
         )
 
+        from app.services.scheduler import _claim, _unclaim
+
         for cust in rows:
+            claim_key = None
             try:
                 if await _skip(db, cust, now, gap_h, max_n):
                     continue
                 history = await _history(db, cust)
                 attempt = await _followups_since_reply(db, cust) + 1
                 text = await _compose(db, cust, history, attempt)
-                await send_message(db, to_phone=cust.phone, text=text, sent_by=SENT_BY)
+                last_touch = cust.last_message_at.isoformat() if cust.last_message_at else "none"
+                claim_key = f"conversation-followup:{cust.id}:{last_touch}:{attempt}"
+                if not await _claim(claim_key):
+                    continue
+                await send_message(
+                    db, to_phone=cust.phone, text=text, sent_by=SENT_BY,
+                    intent="promotional", enqueue_on_fail=False,
+                )
                 sent += 1
                 log.info(
                     "engage_followup_sent",
                     phone=cust.phone, attempt=attempt, chars=len(text),
                 )
             except WindowClosedError:
+                if claim_key:
+                    await _unclaim(claim_key)
                 # window shut between the query and the send — that is fine,
                 # a template blast here is exactly what we must NOT do
                 log.info("engage_window_closed", phone=cust.phone)
             except SendError as exc:
+                if claim_key:
+                    await _unclaim(claim_key)
                 log.info("engage_send_failed", phone=cust.phone, error=str(exc)[:80])
             except Exception:
+                if claim_key:
+                    await _unclaim(claim_key)
                 log.exception("engage_followup_failed", phone=cust.phone)
 
     if sent:

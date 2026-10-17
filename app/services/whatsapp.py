@@ -27,6 +27,7 @@ Usage:
 
 import asyncio
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
@@ -36,7 +37,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Conversation, Customer, Direction, Staff
+from app.models import Conversation, Customer, Direction, Lead, Staff
 from app.services import dotpe
 from app.services.templates import TEMPLATES, build_template
 
@@ -243,6 +244,9 @@ async def send_message(
     reply_to: str | None = None,
     category: str | None = None,
     log_as: str | None = None,
+    intent: str | None = None,
+    outbound_kind: str | None = None,
+    urgent: bool = False,
 ) -> str:
     """Single outbound gateway. WAHA is first-class; Meta/DotPe keep legacy behavior.
 
@@ -253,7 +257,8 @@ async def send_message(
     if settings.WHATSAPP_PROVIDER != "waha":
         raise SendError("WAHA/NOWEB is the only enabled WhatsApp provider", transient=False)
 
-    if _blocked_test_recipient(to_phone) and sent_by not in {"manager", "human"}:
+    effective_intent = intent or ("promotional" if category == "marketing" else None)
+    if effective_intent is None and _blocked_test_recipient(to_phone) and sent_by not in {"manager", "human"}:
         log.warning("automated_send_blocked_test_recipient", to=to_phone, sent_by=sent_by)
         raise SendError("automated send blocked for test recipient", transient=False)
 
@@ -275,6 +280,27 @@ async def send_message(
         raise SendError(str(exc), transient=False) from exc
 
     customer, staff = await _find_recipient(db, to_phone)
+    lead = None
+    if customer is None and staff is None:
+        lead = (
+            await db.execute(select(Lead).where(Lead.phone == to_phone).limit(1))
+        ).scalar_one_or_none()
+
+    # Validate transport payload first, then fail closed for valid automated
+    # customer/lead sends whose caller forgot to classify intent.
+    if (customer is not None or lead is not None) and effective_intent is None and sent_by not in {"manager", "human"}:
+        raise SendError(
+            "customer-facing automated send requires explicit outbound intent",
+            transient=False,
+        )
+
+    if effective_intent is not None and (customer is not None or staff is None):
+        from app.services.outbound_policy import enforce_outbound_policy
+
+        await enforce_outbound_policy(
+            db, customer=customer, phone=to_phone, intent=effective_intent,
+            lead=lead, kind=outbound_kind, urgent=urgent,
+        )
 
     if text:
         text = _wa_format(text)
@@ -331,7 +357,8 @@ async def send_message(
                     db, to_phone,
                     {"text": text, "buttons": [[b.id, b.title] for b in buttons] if buttons else None,
                      "list_rows": [[r.id, r.title, r.description] for r in list_rows] if list_rows else None,
-                     "list_button": list_button, "sent_by": sent_by, "reply_to": reply_to, "category": category},
+                     "list_button": list_button, "sent_by": sent_by, "reply_to": reply_to, "category": category,
+                     "intent": effective_intent, "outbound_kind": outbound_kind, "urgent": urgent},
                 )
             raise SendError(str(exc), transient=exc.transient) from exc
         await _record_outbound(
@@ -402,7 +429,8 @@ async def send_message(
         if exc.transient and enqueue_on_fail:
             await _enqueue_outbound(db, to_phone, {"text": text, "buttons": [[b.id, b.title] for b in buttons] if buttons else None,
                 "template_name": template_name, "template_params": template_params,
-                "template_url_param": template_url_param, "sent_by": sent_by})
+                "template_url_param": template_url_param, "sent_by": sent_by, "category": category,
+                "intent": effective_intent, "outbound_kind": outbound_kind, "urgent": urgent})
         raise
     wa_message_id = data["messages"][0]["id"]
     await _record_outbound(
@@ -468,6 +496,9 @@ async def send_image(
     caption: str | None = None,
     local_url: str,
     sent_by: str = "manager",
+    intent: str | None = None,
+    outbound_kind: str | None = None,
+    urgent: bool = False,
 ) -> str:
     """Send media through WAHA when configured; keep Meta/DotPe legacy path."""
     if settings.WHATSAPP_PROVIDER != "waha":
@@ -478,6 +509,25 @@ async def send_image(
         raise SendError("automated send blocked for test recipient", transient=False)
 
     customer, staff = await _find_recipient(db, to_phone)
+    lead = None
+    if customer is None and staff is None:
+        lead = (
+            await db.execute(select(Lead).where(Lead.phone == to_phone).limit(1))
+        ).scalar_one_or_none()
+
+    if (customer is not None or lead is not None) and intent is None and sent_by not in {"manager", "human"}:
+        raise SendError(
+            "customer-facing automated media send requires explicit outbound intent",
+            transient=False,
+        )
+
+    if intent is not None and (customer is not None or staff is None):
+        from app.services.outbound_policy import enforce_outbound_policy
+
+        await enforce_outbound_policy(
+            db, customer=customer, phone=to_phone, intent=intent,
+            lead=lead, kind=outbound_kind, urgent=urgent,
+        )
 
     if settings.WHATSAPP_PROVIDER == "waha":
         from app.services import waha
@@ -710,6 +760,11 @@ async def _enqueue_outbound(db: AsyncSession, to_phone: str, payload: dict) -> N
     from app.models import OutboundMessage
 
     try:
+        from app.services.tenant_context import current_tenant_id
+
+        tenant_id = current_tenant_id.get()
+        if tenant_id is not None:
+            payload = {**payload, "tenant_id": str(tenant_id)}
         await db.rollback()  # the failed send may have left the session dirty
         db.add(OutboundMessage(to_phone=to_phone, payload=payload))
         await db.commit()
@@ -727,224 +782,272 @@ async def drain_outbound_queue() -> int:
     """
     from app.database import async_session_factory
     from app.models import OutboundMessage
+    from app.services.tenant_context import as_system_context, as_tenant
 
     now = _now()
     sent = 0
-    async with async_session_factory() as db:
-        rows = (
-            (
-                await db.execute(
-                    select(OutboundMessage)
-                    .where(
-                        OutboundMessage.status == "queued",
-                        # compare against the DB clock: next_attempt_at is
-                        # written by the DB, and its clock can read a few ms
-                        # ahead of ours — a just-queued row would then look
-                        # "not due yet" and wait a whole tick for nothing
-                        OutboundMessage.next_attempt_at <= func.now(),
-                    )
-                    .order_by(OutboundMessage.created_at)
-                    .limit(30)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        # Snapshot all ORM values before the loop can commit. SQLAlchemy
-        # expires ORM instances after commit, so later iterations must not
-        # access row.payload/row.to_phone/row.created_at lazily.
-        queued_rows = [
-            {
-                "id": row.id,
-                "attempts": int(row.attempts or 0),
-                "created_at": row.created_at,
-                "to_phone": row.to_phone,
-                "payload": row.payload or {},
-            }
-            for row in rows
-        ]
-
-        for queued in queued_rows:
-            row_id = queued["id"]
-            attempts_before = queued["attempts"]
-            created_at = queued["created_at"]
-            to_phone = queued["to_phone"]
-            p = queued["payload"]
-
-            raw_buttons = p.get("buttons") or []
-            buttons = [Button(b[0], b[1]) for b in raw_buttons] or None
-            raw_list_rows = p.get("list_rows") or []
-            list_rows = [
-                ListRow(r[0], r[1], r[2] if len(r) > 2 else "")
-                for r in raw_list_rows
-            ] or None
-
-            # Do not send stale queued messages after a long outage. This is
-            # especially important for reminders: delivering them days later
-            # is worse than dropping them into the dead-letter queue.
-            if created_at and now - created_at > MAX_OUTBOUND_AGE:
-                await db.rollback()
-                await db.execute(
-                    update(OutboundMessage)
-                    .where(OutboundMessage.id == row_id)
-                    .values(
-                        attempts=attempts_before,
-                        status="dead",
-                        last_error="stale queued message expired",
-                        next_attempt_at=now,
-                    )
-                )
-                await db.commit()
-                log.warning("outbound_stale_dead_lettered", to=to_phone, age_hours=round((now - created_at).total_seconds() / 3600, 1))
-                continue
-
-            # AI replies can be queued after a transient WhatsApp outage.
-            # Re-check the kill switch and human takeover at retry time so a
-            # Stop action or a manager reply cannot be bypassed by the queue.
-            if (p.get("sent_by") or "bot") == "ai":
-                allow_ai_retry = False
-                try:
-                    recipient = (
-                        await db.execute(
-                            select(Customer).where(Customer.phone == to_phone).limit(1)
-                        )
-                    ).scalars().first()
-                    if recipient is not None and not recipient.agent_paused and not recipient.opted_out:
-                        from app.routers.webhook import _customer_agent_enabled
-                        allow_ai_retry = await _customer_agent_enabled(db, recipient)
-                        if allow_ai_retry:
-                            from app.services import app_settings as _app_settings
-                            latest_human = (
-                                await db.execute(
-                                    select(Conversation)
-                                    .where(
-                                        Conversation.customer_id == recipient.id,
-                                        Conversation.direction == Direction.OUTBOUND,
-                                        Conversation.sent_by.in_(("human", "manager")),
-                                    )
-                                    .order_by(Conversation.created_at.desc())
-                                    .limit(1)
-                                )
-                            ).scalars().first()
-                            grace_minutes = int(
-                                await _app_settings.get(db, "human_handoff_grace_minutes") or 15
-                            )
-                            if latest_human is not None and (
-                                (created_at and latest_human.created_at >= created_at)
-                                or (
-                                    grace_minutes > 0
-                                    and now - latest_human.created_at < timedelta(minutes=grace_minutes)
-                                )
-                            ):
-                                allow_ai_retry = False
-                except Exception:
-                    # Fail closed: never send an AI reply if its live safety
-                    # state cannot be verified at retry time.
-                    log.exception("outbound_ai_retry_gate_failed", to=to_phone)
-                    allow_ai_retry = False
-
-                if not allow_ai_retry:
-                    await db.rollback()
+    async with as_system_context():
+        async with async_session_factory() as db:
+            rows = (
+                (
                     await db.execute(
-                        update(OutboundMessage)
-                        .where(OutboundMessage.id == row_id)
-                        .values(
+                        select(OutboundMessage)
+                        .where(
+                            OutboundMessage.status == "queued",
+                            # compare against the DB clock: next_attempt_at is
+                            # written by the DB, and its clock can read a few ms
+                            # ahead of ours — a just-queued row would then look
+                            # "not due yet" and wait a whole tick for nothing
+                            OutboundMessage.next_attempt_at <= func.now(),
+                        )
+                        .order_by(OutboundMessage.created_at)
+                        .limit(30)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            # Snapshot all ORM values before the loop can commit. SQLAlchemy
+            # expires ORM instances after commit, so later iterations must not
+            # access row.payload/row.to_phone/row.created_at lazily.
+            queued_rows = [
+                {
+                    "id": row.id,
+                    "attempts": int(row.attempts or 0),
+                    "created_at": row.created_at,
+                    "to_phone": row.to_phone,
+                    "payload": row.payload or {},
+                }
+                for row in rows
+            ]
+
+            await db.commit()  # close system-context read transaction before tenant-scoped processing
+
+            for queued in queued_rows:
+                row_id = queued["id"]
+                attempts_before = queued["attempts"]
+                created_at = queued["created_at"]
+                to_phone = queued["to_phone"]
+                p = queued["payload"]
+                raw_tenant_id = p.get("tenant_id")
+                try:
+                    tenant_id = uuid.UUID(str(raw_tenant_id))
+                except (ValueError, TypeError, AttributeError):
+                    await db.execute(
+                        update(OutboundMessage).where(OutboundMessage.id == row_id).values(
                             status="dead",
-                            last_error="AI retry suppressed: agent stopped, customer paused, or human takeover active",
+                            last_error="missing or invalid tenant_id; retry failed closed",
                             next_attempt_at=now,
                         )
                     )
                     await db.commit()
-                    log.info("outbound_ai_retry_suppressed", to=to_phone)
+                    log.error("outbound_retry_missing_tenant", row_id=str(row_id))
                     continue
+                async with as_tenant(tenant_id):
 
-            try:
-                await send_message(
-                    db,
-                    to_phone=to_phone,
-                    text=p.get("text"),
-                    buttons=buttons,
-                    list_rows=list_rows,
-                    list_button=p.get("list_button") or "Chuniye",
-                    template_name=p.get("template_name"),
-                    template_params=p.get("template_params"),
-                    template_url_param=p.get("template_url_param"),
-                    sent_by=p.get("sent_by") or "bot",
-                    enqueue_on_fail=False,
-                )
-            except WindowClosedError as exc:
-                attempts = attempts_before + 1
-                await db.rollback()
-                status = "dead" if attempts >= MAX_OUTBOUND_ATTEMPTS else "queued"
-                next_attempt = (
-                    now
-                    if status == "dead"
-                    else now + timedelta(seconds=min(900 * attempts, 21_600))
-                )
-                await db.execute(
-                    update(OutboundMessage)
-                    .where(OutboundMessage.id == row_id)
-                    .values(
-                        attempts=attempts,
-                        last_error=f"window closed: {exc}"[:500],
-                        status=status,
-                        next_attempt_at=next_attempt,
-                    )
-                )
-                if status == "dead":
-                    log.info("outbound_dead_window_never_opened", to=p.get("to_phone") or "queued")
-                await db.commit()
-                continue
+                    raw_buttons = p.get("buttons") or []
+                    buttons = [Button(b[0], b[1]) for b in raw_buttons] or None
+                    raw_list_rows = p.get("list_rows") or []
+                    list_rows = [
+                        ListRow(r[0], r[1], r[2] if len(r) > 2 else "")
+                        for r in raw_list_rows
+                    ] or None
 
-            except SendError as exc:
-                attempts = attempts_before + 1
-                await db.rollback()
-                dead = (not exc.transient) or attempts >= MAX_OUTBOUND_ATTEMPTS
-                await db.execute(
-                    update(OutboundMessage)
-                    .where(OutboundMessage.id == row_id)
-                    .values(
-                        attempts=attempts,
-                        last_error=str(exc)[:500],
-                        status="dead" if dead else "queued",
-                        next_attempt_at=(
+                    # Do not send stale queued messages after a long outage. This is
+                    # especially important for reminders: delivering them days later
+                    # is worse than dropping them into the dead-letter queue.
+                    if created_at and now - created_at > MAX_OUTBOUND_AGE:
+                        await db.rollback()
+                        await db.execute(
+                            update(OutboundMessage)
+                            .where(OutboundMessage.id == row_id)
+                            .values(
+                                attempts=attempts_before,
+                                status="dead",
+                                last_error="stale queued message expired",
+                                next_attempt_at=now,
+                            )
+                        )
+                        await db.commit()
+                        log.warning("outbound_stale_dead_lettered", to=to_phone, age_hours=round((now - created_at).total_seconds() / 3600, 1))
+                        continue
+
+                    # AI replies can be queued after a transient WhatsApp outage.
+                    # Re-check the kill switch and human takeover at retry time so a
+                    # Stop action or a manager reply cannot be bypassed by the queue.
+                    if (p.get("sent_by") or "bot") == "ai":
+                        allow_ai_retry = False
+                        try:
+                            recipient = (
+                                await db.execute(
+                                    select(Customer).where(Customer.phone == to_phone).limit(1)
+                                )
+                            ).scalars().first()
+                            if recipient is not None and not recipient.agent_paused and not recipient.opted_out:
+                                from app.routers.webhook import _customer_agent_enabled
+                                allow_ai_retry = await _customer_agent_enabled(db, recipient)
+                                if allow_ai_retry:
+                                    from app.services import app_settings as _app_settings
+                                    latest_human = (
+                                        await db.execute(
+                                            select(Conversation)
+                                            .where(
+                                                Conversation.customer_id == recipient.id,
+                                                Conversation.direction == Direction.OUTBOUND,
+                                                Conversation.sent_by.in_(("human", "manager")),
+                                            )
+                                            .order_by(Conversation.created_at.desc())
+                                            .limit(1)
+                                        )
+                                    ).scalars().first()
+                                    grace_minutes = int(
+                                        await _app_settings.get(db, "human_handoff_grace_minutes") or 15
+                                    )
+                                    if latest_human is not None and (
+                                        (created_at and latest_human.created_at >= created_at)
+                                        or (
+                                            grace_minutes > 0
+                                            and now - latest_human.created_at < timedelta(minutes=grace_minutes)
+                                        )
+                                    ):
+                                        allow_ai_retry = False
+                        except Exception:
+                            # Fail closed: never send an AI reply if its live safety
+                            # state cannot be verified at retry time.
+                            log.exception("outbound_ai_retry_gate_failed", to=to_phone)
+                            allow_ai_retry = False
+
+                        if not allow_ai_retry:
+                            await db.rollback()
+                            await db.execute(
+                                update(OutboundMessage)
+                                .where(OutboundMessage.id == row_id)
+                                .values(
+                                    status="dead",
+                                    last_error="AI retry suppressed: agent stopped, customer paused, or human takeover active",
+                                    next_attempt_at=now,
+                                )
+                            )
+                            await db.commit()
+                            log.info("outbound_ai_retry_suppressed", to=to_phone)
+                            continue
+
+                    # One durable claim per queue-row attempt. The tenant prefix is
+                    # supplied by _claim() from the active as_tenant() context. If a
+                    # process restarted after claiming but before updating the queue row,
+                    # dead-letter rather than risk delivering the same message twice.
+                    from app.services.scheduler import _claim
+
+                    retry_claim = f"outbound-retry:{row_id}:attempt:{attempts_before}"
+                    if not await _claim(retry_claim):
+                        await db.rollback()
+                        await db.execute(
+                            update(OutboundMessage)
+                            .where(
+                                OutboundMessage.id == row_id,
+                                OutboundMessage.status == "queued",
+                                OutboundMessage.attempts == attempts_before,
+                            )
+                            .values(
+                                status="dead",
+                                last_error="duplicate retry claim; send suppressed to prevent duplicate delivery",
+                                next_attempt_at=now,
+                            )
+                        )
+                        await db.commit()
+                        log.warning("outbound_retry_duplicate_suppressed", row_id=str(row_id))
+                        continue
+
+                    try:
+                        await send_message(
+                            db,
+                            to_phone=to_phone,
+                            text=p.get("text"),
+                            buttons=buttons,
+                            list_rows=list_rows,
+                            list_button=p.get("list_button") or "Chuniye",
+                            template_name=p.get("template_name"),
+                            template_params=p.get("template_params"),
+                            template_url_param=p.get("template_url_param"),
+                            sent_by=p.get("sent_by") or "bot",
+                            enqueue_on_fail=False,
+                                    intent=p.get("intent"),
+                                    outbound_kind=p.get("outbound_kind"),
+                                    urgent=bool(p.get("urgent", False)),
+                        )
+                    except WindowClosedError as exc:
+                        attempts = attempts_before + 1
+                        await db.rollback()
+                        status = "dead" if attempts >= MAX_OUTBOUND_ATTEMPTS else "queued"
+                        next_attempt = (
                             now
-                            if dead
-                            else now + timedelta(seconds=min(300 * (2 ** attempts), 21_600))
-                        ),
-                    )
-                )
-                if dead:
-                    log.error(
-                        "outbound_dead_lettered",
-                        to=p.get("to_phone") or "queued",
-                        error=str(exc)[:500],
-                    )
-                await db.commit()
-                continue
+                            if status == "dead"
+                            else now + timedelta(seconds=min(900 * attempts, 21_600))
+                        )
+                        await db.execute(
+                            update(OutboundMessage)
+                            .where(OutboundMessage.id == row_id)
+                            .values(
+                                attempts=attempts,
+                                last_error=f"window closed: {exc}"[:500],
+                                status=status,
+                                next_attempt_at=next_attempt,
+                            )
+                        )
+                        if status == "dead":
+                            log.info("outbound_dead_window_never_opened", to=p.get("to_phone") or "queued")
+                        await db.commit()
+                        continue
 
-            except Exception:
-                attempts = attempts_before + 1
-                await db.rollback()
-                log.exception("outbound_drain_unexpected", to=p.get("to_phone") or "queued")
-                await db.execute(
-                    update(OutboundMessage)
-                    .where(OutboundMessage.id == row_id)
-                    .values(
-                        attempts=attempts,
-                        status="dead" if attempts >= MAX_OUTBOUND_ATTEMPTS else "queued",
-                        next_attempt_at=now + timedelta(seconds=600),
-                    )
-                )
-                await db.commit()
-                continue
+                    except SendError as exc:
+                        attempts = attempts_before + 1
+                        await db.rollback()
+                        dead = (not exc.transient) or attempts >= MAX_OUTBOUND_ATTEMPTS
+                        await db.execute(
+                            update(OutboundMessage)
+                            .where(OutboundMessage.id == row_id)
+                            .values(
+                                attempts=attempts,
+                                last_error=str(exc)[:500],
+                                status="dead" if dead else "queued",
+                                next_attempt_at=(
+                                    now
+                                    if dead
+                                    else now + timedelta(seconds=min(300 * (2 ** attempts), 21_600))
+                                ),
+                            )
+                        )
+                        if dead:
+                            log.error(
+                                "outbound_dead_lettered",
+                                to=p.get("to_phone") or "queued",
+                                error=str(exc)[:500],
+                            )
+                        await db.commit()
+                        continue
 
-            else:
-                await db.execute(
-                    update(OutboundMessage)
-                    .where(OutboundMessage.id == row_id)
-                    .values(status="sent", sent_at=now)
-                )
-                await db.commit()
-                sent += 1
+                    except Exception:
+                        attempts = attempts_before + 1
+                        await db.rollback()
+                        log.exception("outbound_drain_unexpected", to=p.get("to_phone") or "queued")
+                        await db.execute(
+                            update(OutboundMessage)
+                            .where(OutboundMessage.id == row_id)
+                            .values(
+                                attempts=attempts,
+                                status="dead" if attempts >= MAX_OUTBOUND_ATTEMPTS else "queued",
+                                next_attempt_at=now + timedelta(seconds=600),
+                            )
+                        )
+                        await db.commit()
+                        continue
+
+                    else:
+                        await db.execute(
+                            update(OutboundMessage)
+                            .where(OutboundMessage.id == row_id)
+                            .values(status="sent", sent_at=now)
+                        )
+                        await db.commit()
+                        sent += 1
     return sent

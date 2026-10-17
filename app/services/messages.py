@@ -322,6 +322,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste {name} 🙏\nAgar aap chahein, apna imaandaar feedback Google par share kar sakte hain. Har tarah ka feedback hamare liye madadgar hai.\n👉 {review_link}\nDhanyawad!\n— {shop}",
         "en": "Hello {name} 🙏\nIf you wish, you can share your honest feedback on Google. All feedback helps us improve.\n👉 {review_link}\nThank you!\n— {shop}",
     },
+    "review_invitation_line": {
+        "hi": "Agar aap chahein, apna imaandaar feedback Google par share kar sakte hain. Har tarah ka feedback hamare liye madadgar hai.\n{review_link}",
+        "en": "If you wish, you can share your honest feedback on Google. All feedback helps us improve.\n{review_link}",
+    },
     "payment_reminder_firm": {
         "hi": "Namaste, aapke order {order_number} ka ₹{amount} kaafi dino se baaki hai. Kripya jald bhugtaan karein — cash/UPI dono chalega. Dhanyawad 🙏 — {shop}",
         "en": "Hello, ₹{amount} for order {order_number} has been pending for a while. Please clear it soon — cash or UPI. Thank you 🙏 — {shop}",
@@ -452,12 +456,12 @@ _OVERRIDES: dict[str, str] = {}
 
 # Keys the owner may safely rewrite from the UI (customer-facing copy).
 EDITABLE_KEYS = [
-    "order_confirmed_bill", "thankyou_rating", "order_ready",
+    "order_confirmed_bill", "order_ready",
     "order_out_for_delivery", "delay_notice", "payment_reminder",
     "payment_reminder_firm", "ack_received", "complaint_ack",
-    "escalated_ack", "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
+    "escalated_ack",
     "stop_confirmed", "start_confirmed",
-    "payment_thanks", "service_thanks", "review_request", "partial_delivery",
+    "payment_thanks", "service_thanks", "partial_delivery",
     "delivery_update_full", "reward_earned",
 ]
 
@@ -475,7 +479,14 @@ def allowed_placeholders(key: str) -> set[str]:
 
 
 def set_override(key: str, text: str | None) -> None:
-    """Install/remove an owner override in the live cache (hot reload)."""
+    """Install/remove an owner override in the live cache (hot reload).
+
+    Review solicitation copy is deliberately locked: owner overrides must not
+    selectively solicit positive reviews or introduce incentives.
+    """
+    if key not in EDITABLE_KEYS:
+        _OVERRIDES.pop(key, None)
+        return
     if text:
         _OVERRIDES[key] = text
     else:
@@ -484,7 +495,7 @@ def set_override(key: str, text: str | None) -> None:
 
 def load_overrides(data: dict[str, str]) -> None:
     _OVERRIDES.clear()
-    _OVERRIDES.update({k: v for k, v in (data or {}).items() if k in MESSAGES and v})
+    _OVERRIDES.update({k: v for k, v in (data or {}).items() if k in EDITABLE_KEYS and v})
     if _OVERRIDES:
         log.info("message_overrides_loaded", count=len(_OVERRIDES))
 
@@ -505,7 +516,7 @@ CUSTOMER_KEYS = frozenset({
     "status_reply", "status_reply_with_date", "orders_list_header",
     "order_not_found", "complaint_ack", "escalated_ack",
     "payment_reminder", "payment_reminder_firm",
-    "payment_thanks", "service_thanks", "review_request", "partial_delivery",
+    "payment_thanks", "service_thanks", "review_request", "review_invitation_line", "partial_delivery",
     "delivery_update_full", "reward_earned",
     "start_confirmed", "stop_confirmed", "relay_message_customer",
 })

@@ -320,14 +320,18 @@ async def test_a_number_is_not_a_name(client, sent) -> None:
     assert (await _customer()).name is None
 
 
-@pytest.mark.parametrize("kind", ["good", "mid", "bad"])
-async def test_review_request_is_neutral_for_every_rating(monkeypatch, kind) -> None:
+@pytest.mark.parametrize(
+    ("kind", "lang"),
+    [(kind, lang) for kind in ("good", "mid", "bad") for lang in ("hi", "en")],
+)
+async def test_review_request_is_neutral_for_every_rating_and_locale(monkeypatch, kind, lang) -> None:
     """Review links must not be gated on a positive rating or offer incentives."""
     import uuid
     import app.routers.webhook as wh
     from app.database import async_session_factory
     from app.models import Customer
-    from app.services import audit, customer_messages, tenant_context
+    from app.services import audit, customer_messages, tenant_context, messages
+    monkeypatch.setattr(messages, "CUSTOMER_LANG", lang)
 
     sent_messages = []
 
@@ -365,6 +369,12 @@ async def test_review_request_is_neutral_for_every_rating(monkeypatch, kind) -> 
     assert "https://reviews.example/kwikklin" in message
     assert "⭐⭐⭐⭐⭐" not in message
     assert "🎁" not in message
+    lowered = message.lower()
+    assert not any(term in lowered for term in ("coupon", "discount", "reward code", "gift", "% off"))
+    if lang == "en":
+        assert "honest feedback" in lowered
+    else:
+        assert "imaandaar feedback" in lowered
     if kind == "bad":
         assert any(m["to"] == "+919999000001" for m in sent_messages)
 

@@ -79,6 +79,15 @@ async def test_failed_event_is_replayed(client, sent, monkeypatch) -> None:
         raise RuntimeError("simulated crash mid-processing")
 
     monkeypatch.setattr(webhook_module, "_process_payload", _boom)
+    from app.services import tenant_context
+    tenant_id = await tenant_context.get_home_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("durability replay test requires a seeded tenant")
+
+    async def _explicit_tenant(_db, _pnid, *, allow_home_fallback=True):
+        return tenant_id, True
+
+    monkeypatch.setattr(webhook_module, "_resolve_wa_tenant", _explicit_tenant)
     body = meta_payload(
         messages=[{
             "from": TEST_CUSTOMER_PHONE_RAW,
@@ -87,9 +96,17 @@ async def test_failed_event_is_replayed(client, sent, monkeypatch) -> None:
             "text": {"body": "replay me"},
         }]
     )
-    r = await client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
-    )
+    # Explicit provider-number mapping is mocked; replay must use the journaled identity.\n    from app.services import tenant_context
+    tenant_id = await tenant_context.get_home_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("durability replay test requires a seeded tenant")
+    token = tenant_context.current_tenant_id.set(tenant_id)
+    try:
+        r = await client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": sign_body(body)}
+        )
+    finally:
+        tenant_context.current_tenant_id.reset(token)
     assert r.status_code == 200, "Meta must still get 200 — journal owns the retry"
     # restore ONLY the crash patch — the fake send_message must stay patched
     monkeypatch.setattr(webhook_module, "_process_payload", real_process)
@@ -126,16 +143,22 @@ async def test_failed_event_is_replayed(client, sent, monkeypatch) -> None:
 
 @pytest.fixture
 async def _window_open_customer():
-    async with async_session_factory() as s:
-        s.add(
-            Customer(
-                phone=TEST_CUSTOMER_PHONE,
-                name="Test",
-                last_message_at=datetime.now(timezone.utc),
+    from app.services import tenant_context
+
+    tenant_id = await tenant_context.get_home_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("durability test requires a seeded tenant")
+    async with tenant_context.as_tenant(tenant_id):
+        async with async_session_factory() as s:
+            s.add(
+                Customer(
+                    phone=TEST_CUSTOMER_PHONE,
+                    name="Test",
+                    last_message_at=datetime.now(timezone.utc),
+                )
             )
-        )
-        await s.commit()
-    yield
+            await s.commit()
+        yield tenant_id
 
 
 async def test_transient_send_failure_lands_in_queue(_window_open_customer, monkeypatch) -> None:
@@ -147,7 +170,10 @@ async def test_transient_send_failure_lands_in_queue(_window_open_customer, monk
     monkeypatch.setattr(waha, "send_text", _network_down)
     async with async_session_factory() as db:
         with pytest.raises(SendError):
-            await send_message(db, to_phone=TEST_CUSTOMER_PHONE, text="kal ready hoga")
+            await send_message(
+                db, to_phone=TEST_CUSTOMER_PHONE, text="kal ready hoga",
+                intent="transactional", outbound_kind="order_status", urgent=True,
+            )
 
     async with async_session_factory() as s:
         row = (
@@ -168,7 +194,7 @@ async def test_drain_sends_queued_message(_window_open_customer, monkeypatch) ->
         s.add(
             OutboundMessage(
                 to_phone=TEST_CUSTOMER_PHONE,
-                payload={"text": "queued msg", "sent_by": "bot"},
+                payload={"text": "queued msg", "sent_by": "bot", "tenant_id": str(_window_open_customer), "intent": "transactional", "outbound_kind": "order_status", "urgent": True},
             )
         )
         await s.commit()
@@ -210,7 +236,7 @@ async def test_queued_ai_reply_is_suppressed_after_agent_stop(_window_open_custo
     async with async_session_factory() as s:
         s.add(OutboundMessage(
             to_phone=TEST_CUSTOMER_PHONE,
-            payload={"text": "queued AI reply", "sent_by": "ai"},
+            payload={"text": "queued AI reply", "sent_by": "ai", "tenant_id": str(_window_open_customer)},
             created_at=datetime.now(timezone.utc) - timedelta(minutes=1),
         ))
         await s.commit()
@@ -258,7 +284,7 @@ async def test_queued_ai_reply_is_suppressed_after_manager_reply(_window_open_cu
         ))
         s.add(OutboundMessage(
             to_phone=TEST_CUSTOMER_PHONE,
-            payload={"text": "old AI reply", "sent_by": "ai"},
+            payload={"text": "old AI reply", "sent_by": "ai", "tenant_id": str(_window_open_customer)},
             created_at=datetime.now(timezone.utc) - timedelta(minutes=1),
         ))
         await s.commit()

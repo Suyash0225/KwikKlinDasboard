@@ -663,6 +663,7 @@ async def customer_reminder(body: ReminderIn, db: AsyncSession = Depends(get_db)
             buttons=customer_payment_buttons(),
             list_button="Payment",
             list_title="Kwik Klin",
+            intent="transactional", outbound_kind="payment_reminder",
         )
         sent = True
     except SendError as exc:
@@ -2155,6 +2156,9 @@ async def delete_inbox_thread(phone: str = Query(...), db: AsyncSession = Depend
 class InboxSendIn(BaseModel):
     phone: str
     text: str = Field(min_length=1, max_length=4000)
+    # Customer-facing sends are transactional by default; promotional intent is explicit.
+    intent: str = Field(default="transactional", pattern="^(promotional|transactional)$")
+    outbound_kind: str = Field(default="order_status", max_length=40)
     # wamid being quoted — WhatsApp shows it above the reply
     reply_to: str | None = Field(default=None, max_length=120)
 
@@ -2170,6 +2174,7 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
         wa_id = await send_message(
             db, to_phone=to_phone, text=body.text, sent_by="manager",
             reply_to=(body.reply_to or None),
+            intent=body.intent, outbound_kind=body.outbound_kind,
         )
     except WindowClosedError:
         raise HTTPException(
@@ -2183,6 +2188,8 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
 
 class InboxPingIn(BaseModel):
     phone: str
+    intent: str = Field(default="transactional", pattern="^(promotional|transactional)$")
+    outbound_kind: str = Field(default="order_status", max_length=40)
 
 
 @router.post("/api/inbox/ping", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
@@ -2216,7 +2223,10 @@ async def inbox_ping(body: InboxPingIn, db: AsyncSession = Depends(get_db)) -> d
             text = f"🔔 {staff.name}, ek update chahiye tha — kya status hai?"
 
     try:
-        wa_id = await send_message(db, to_phone=to_phone, text=text, sent_by="manager")
+        wa_id = await send_message(
+            db, to_phone=to_phone, text=text, sent_by="manager",
+            intent=body.intent, outbound_kind=body.outbound_kind,
+        )
     except WindowClosedError:
         try:
             wa_id = await send_message(
@@ -2224,6 +2234,7 @@ async def inbox_ping(body: InboxPingIn, db: AsyncSession = Depends(get_db)) -> d
                 template_name="kk_staff_alert",
                 template_params=[" ".join(text.split())[:600]],
                 sent_by="manager",
+                intent=body.intent, outbound_kind=body.outbound_kind,
             )
         except SendError as exc:
             raise HTTPException(
@@ -2239,6 +2250,8 @@ class TemplateSendIn(BaseModel):
     phone: str
     template_name: str = Field(min_length=2)
     params: list[str] = Field(default_factory=list)
+    intent: str = Field(default="transactional", pattern="^(promotional|transactional)$")
+    outbound_kind: str = Field(default="order_status", max_length=40)
 
 
 @router.post("/api/inbox/send-template", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
@@ -2263,6 +2276,7 @@ async def inbox_send_template(
             template_name=body.template_name,
             template_params=[p[:600] for p in body.params],
             sent_by="manager",
+            intent=body.intent, outbound_kind=body.outbound_kind,
         )
     except ValueError as exc:  # unknown template / wrong param count
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2513,6 +2527,8 @@ async def customers_import_file(
 async def inbox_send_media(
     phone: str = Form(...),
     caption: str = Form(default=""),
+    intent: str = Form(default="transactional"),
+    outbound_kind: str = Form(default="order_status"),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -2546,6 +2562,7 @@ async def inbox_send_media(
             caption=caption.strip() or None,
             local_url=f"/admin/media/{name}",
             sent_by="manager",
+            intent=intent, outbound_kind=outbound_kind,
         )
     except WindowClosedError:
         dest.unlink(missing_ok=True)

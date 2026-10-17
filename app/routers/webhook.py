@@ -23,6 +23,7 @@ import hashlib
 import hmac
 import json
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
@@ -119,6 +120,7 @@ async def _handle_payment_action(
                 db,
                 to_phone=phone,
                 text="✅ Aapka koi outstanding bill nahi mila. Dhanyawad!",
+                intent="transactional", outbound_kind="bill",
             )
             return
 
@@ -132,12 +134,14 @@ async def _handle_payment_action(
                     db,
                     to_phone=phone,
                     text="⚠️ Payment link abhi available nahi hai. Kripya thodi der baad try karein.",
+                    intent="transactional", outbound_kind="bill",
                 )
                 return
             await send_message(
                 db,
                 to_phone=phone,
                 text=f"💰 Apne outstanding bills dekhkar payment karne ke liye yahan tap karein:\n{link}",
+                intent="transactional", outbound_kind="bill",
             )
             return
 
@@ -146,6 +150,7 @@ async def _handle_payment_action(
                 db,
                 to_phone=phone,
                 text="👍 Theek hai, aapne payment kar diya hai. Hum outstanding payment verify karke update kar denge. Dhanyawad! 🙏",
+                intent="transactional", outbound_kind="bill",
             )
             try:
                 await send_message(
@@ -166,7 +171,11 @@ async def _handle_payment_action(
         )
     ).scalar_one_or_none()
     if order is None:
-        await send_message(db, to_phone=phone, text="⚠️ Ye bill ab available nahi hai. Kripya message karke batayein.")
+        await send_message(
+            db, to_phone=phone,
+            text="⚠️ Ye bill ab available nahi hai. Kripya message karke batayein.",
+            intent="transactional", outbound_kind="bill",
+        )
         return
 
     if action == "pay":
@@ -176,17 +185,22 @@ async def _handle_payment_action(
             db,
             to_phone=phone,
             text=f"💰 Payment ke liye yahan tap karein:\n{link}",
+            intent="transactional", outbound_kind="bill",
         )
         return
 
     if order.payment_status is PaymentStatus.PAID:
-        await send_message(db, to_phone=phone, text="✅ Haan, payment already receive ho chuka hai. Dhanyawad! 🙏")
+        await send_message(
+            db, to_phone=phone, text="✅ Haan, payment already receive ho chuka hai. Dhanyawad! 🙏",
+            intent="transactional", outbound_kind="bill",
+        )
         return
 
     await send_message(
         db,
         to_phone=phone,
         text="👍 Theek hai, aapne payment kar diya hai. Hum payment verify karke update kar denge. Dhanyawad! 🙏",
+        intent="transactional", outbound_kind="bill",
     )
     try:
         await send_message(
@@ -216,13 +230,12 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
     if links:
         short = await customer_messages.short_review_link(db, tenant)
         link = short if short and short not in links else links[sum(ord(c) for c in phone) % len(links)]
-        reply_text += (
-            "\n\nAgar aap chahein, apna imaandaar feedback Google par share kar sakte hain. "
-            "Har tarah ka feedback hamare liye madadgar hai.\n"
-            f"{link}"
-        )
+        reply_text += "\n\n" + get_message("review_invitation_line", review_link=link)
     try:
-        await send_message(db, to_phone=phone, text=reply_text)
+        await send_message(
+            db, to_phone=phone, text=reply_text,
+            intent="transactional", outbound_kind="review_request",
+        )
     except SendError:
         log.exception("rating_reply_failed", phone=phone)
     if kind == "bad":
@@ -674,7 +687,41 @@ async def _journal_event(
     """Persist the raw event before any processing. None = already journaled
     (an exact redelivery), so the caller must skip processing."""
     key = hashlib.sha256(body).hexdigest()
-    event = WebhookEvent(source=source, event_key=key, payload=payload)
+    import copy
+    from app.services.tenant_context import current_tenant_id
+
+    stored_payload = copy.deepcopy(payload)
+    # Never trust identity-looking fields supplied by the external webhook.
+    stored_payload.pop("tenant_id", None)
+    stored_payload.pop("_tenant_identity_verified", None)
+    tenant_id = current_tenant_id.get()
+    if tenant_id is not None:
+        stored_payload["tenant_id"] = str(tenant_id)
+        stored_payload["_tenant_identity_verified"] = True
+
+    # Persist the resolved tenant beside each Meta change before journaling.
+    # Retry workers must not guess the home tenant if the mapping is absent.
+    if source == "meta":
+        for entry in stored_payload.get("entry", []) or []:
+            for change in entry.get("changes", []) or []:
+                value = change.get("value") or {}
+                value.pop("_tenant_id", None)
+                value.pop("_tenant_verified", None)
+                metadata = value.get("metadata") or {}
+                pnid = str(metadata.get("phone_number_id") or "")
+                resolved_id, known = await _resolve_wa_tenant(
+                    db, pnid, allow_home_fallback=False
+                )
+                if not known and tenant_id is not None:
+                    resolved_id, known = tenant_id, True
+                if known and resolved_id is not None:
+                    value["_tenant_id"] = str(resolved_id)
+                    value["_tenant_verified"] = True
+                    change["value"] = value
+    # The caller's live processing uses this sanitized/annotated copy too.
+    payload.clear()
+    payload.update(copy.deepcopy(stored_payload))
+    event = WebhookEvent(source=source, event_key=key, payload=stored_payload)
     db.add(event)
     try:
         await db.commit()
@@ -715,53 +762,62 @@ _MAX_EVENT_ATTEMPTS = 5
 
 
 async def retry_stuck_webhook_events() -> int:
-    """Scheduler entry: replay journaled events that failed or got stuck.
-
-    'failed'   = processing raised; retry with fresh state.
-    'received' = journaled but never marked — the process crashed mid-handling.
-    After _MAX_EVENT_ATTEMPTS the row is marked 'dead' (visible for forensics).
-    Returns the number of events retried.
-    """
+    """Replay journaled events only under an explicitly resolved tenant."""
     from app.database import async_session_factory
+    from app.services.tenant_context import as_system_context, as_tenant
+    import uuid as _uuid
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
     retried = 0
-    async with async_session_factory() as db:
-        # plain tuples, not ORM instances — the rollback inside _mark_event
-        # would expire instances and async lazy-refresh blows up
-        rows = (
-            await db.execute(
-                select(
-                    WebhookEvent.event_key,
-                    WebhookEvent.attempts,
-                    WebhookEvent.source,
-                    WebhookEvent.payload,
-                    WebhookEvent.error,
+    async with as_system_context():
+        async with async_session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(
+                        WebhookEvent.event_key,
+                        WebhookEvent.attempts,
+                        WebhookEvent.source,
+                        WebhookEvent.payload,
+                        WebhookEvent.error,
+                    )
+                    .where(
+                        WebhookEvent.status.in_(("failed", "received")),
+                        WebhookEvent.received_at <= cutoff,
+                    )
+                    .order_by(WebhookEvent.received_at)
+                    .limit(50)
                 )
-                .where(
-                    WebhookEvent.status.in_(("failed", "received")),
-                    WebhookEvent.received_at <= cutoff,
-                )
-                .order_by(WebhookEvent.received_at)
-                .limit(50)
-            )
-        ).all()
-        for key, attempts, source, payload, error in rows:
-            if (attempts or 0) >= _MAX_EVENT_ATTEMPTS:
-                await _mark_event(db, key, "dead", error=error)
-                continue
-            retried += 1
-            try:
-                if source == "dotpe":
-                    if "message" in payload:
-                        await _handle_inbound_message(_dotpe_to_meta_shape(payload), db)
+            ).all()
+            await db.commit()  # close the global journal read before tenant work
+            for key, attempts, source, payload, error in rows:
+                if (attempts or 0) >= _MAX_EVENT_ATTEMPTS:
+                    await _mark_event(db, key, "dead", error=error)
+                    continue
+                retried += 1
+                try:
+                    if source == "dotpe":
+                        raw_tid = (payload or {}).get("tenant_id")
+                        if not raw_tid:
+                            await _mark_event(
+                                db, key, "dead",
+                                error="missing tenant_id in DotPe retry payload; failed closed",
+                            )
+                            continue
+                        try:
+                            retry_tid = _uuid.UUID(str(raw_tid))
+                        except (ValueError, TypeError, AttributeError):
+                            await _mark_event(db, key, "dead", error="invalid tenant_id in DotPe retry payload")
+                            continue
+                        async with as_tenant(retry_tid):
+                            if "message" in payload:
+                                await _handle_inbound_message(_dotpe_to_meta_shape(payload), db)
+                    else:
+                        await _process_payload(payload, db, require_explicit_tenant=True)
+                except Exception as exc:
+                    log.exception("webhook_event_retry_failed", event_key=key)
+                    await _mark_event(db, key, "failed", error=repr(exc))
                 else:
-                    await _process_payload(payload, db)
-            except Exception as exc:
-                log.exception("webhook_event_retry_failed", event_key=key)
-                await _mark_event(db, key, "failed", error=repr(exc))
-            else:
-                await _mark_event(db, key, "processed")
+                    await _mark_event(db, key, "processed")
     return retried
 
 
@@ -775,7 +831,9 @@ def _signature_valid(body: bytes, header: str | None) -> bool:
     return hmac.compare_digest(expected, header.removeprefix("sha256="))
 
 
-async def _resolve_wa_tenant(db: AsyncSession, phone_number_id: str):
+async def _resolve_wa_tenant(
+    db: AsyncSession, phone_number_id: str, *, allow_home_fallback: bool = True
+):
     """Kis tenant ka number hai ye — multi-tenant routing ka dil.
 
     Returns (tenant_id | None, known: bool). Resolution order:
@@ -797,12 +855,16 @@ async def _resolve_wa_tenant(db: AsyncSession, phone_number_id: str):
         ).scalar_one_or_none()
         if t is not None:
             return t, True
-    if not phone_number_id or phone_number_id == settings.WHATSAPP_PHONE_NUMBER_ID:
+    if allow_home_fallback and phone_number_id and phone_number_id == settings.WHATSAPP_PHONE_NUMBER_ID:
+        return await tenant_context.get_home_tenant_id(), True
+    if not phone_number_id and allow_home_fallback:
         return await tenant_context.get_home_tenant_id(), True
     return None, False
 
 
-async def _process_payload(payload: dict, db: AsyncSession) -> None:
+async def _process_payload(
+    payload: dict, db: AsyncSession, *, require_explicit_tenant: bool = False
+) -> None:
     """Walk Meta's entry/changes structure; handle messages and statuses.
 
     Har change apne bhejne wale number (value.metadata.phone_number_id) ke
@@ -816,36 +878,52 @@ async def _process_payload(payload: dict, db: AsyncSession) -> None:
         for change in entry.get("changes", []):
             value = change.get("value", {})
             pnid = str((value.get("metadata") or {}).get("phone_number_id") or "")
-            tid, known = await _resolve_wa_tenant(db, pnid)
+            tid = None
+            known = False
+            if require_explicit_tenant:
+                explicit_tid = (
+                    value.get("_tenant_id") if value.get("_tenant_verified")
+                    else payload.get("tenant_id") if payload.get("_tenant_identity_verified")
+                    else None
+                )
+                if explicit_tid:
+                    try:
+                        tid = uuid.UUID(str(explicit_tid))
+                        known = True
+                    except (ValueError, TypeError, AttributeError):
+                        raise ValueError("webhook retry has invalid tenant identity")
+            else:
+                # Live requests may use the already-authenticated request
+                # context or the provider-number mapping; never trust raw
+                # tenant-looking fields from the webhook body.
+                tid = tenant_context.current_tenant_id.get()
+                known = tid is not None
+                if not known:
+                    tid, known = await _resolve_wa_tenant(db, pnid)
             if not known:
                 log.warning(
                     "webhook_unknown_phone_number_id",
                     phone_number_id=pnid,
                     hint="kisi tenant ka connected number nahi — skip",
                 )
+                if require_explicit_tenant:
+                    raise ValueError("webhook retry has missing or unmapped tenant identity")
                 continue
             # Transaction boundary ZAROORI hai: RLS ka GUC transaction ke
             # SHURU mein set hota hai (database.py ka begin event). Purani
             # transaction (request-tenant ke GUC wali) yahin band karo taaki
             # agla query is tenant ke GUC ke saath naya transaction khole.
             await db.commit()
-            ctx_token = tenant_context.current_tenant_id.set(tid)
-            try:
-                await _process_change_value(value, db)
-            finally:
+            async with tenant_context.as_tenant(tid):
                 try:
-                    await db.commit()  # tenant ki transaction isi ctx mein band ho
-                except Exception:
-                    # Chupchaap rollback SABSE bura tha: message store ho
-                    # chuka dikhta tha (log mein "inbound_stored"), event
-                    # "processed" ban jaata tha, aur row kahin hoti hi nahi.
-                    # Ab wajah stack ke saath dikhti hai aur event 'failed'
-                    # rehta hai, taaki retry job ise dobara chalaye.
-                    log.exception("webhook_change_commit_failed", tenant=str(tid))
-                    await db.rollback()
-                    tenant_context.current_tenant_id.reset(ctx_token)
-                    raise
-                tenant_context.current_tenant_id.reset(ctx_token)
+                    await _process_change_value(value, db)
+                finally:
+                    try:
+                        await db.commit()  # tenant ki transaction isi ctx mein band ho
+                    except Exception:
+                        log.exception("webhook_change_commit_failed", tenant=str(tid))
+                        await db.rollback()
+                        raise
 
 
 async def _process_change_value(value: dict, db: AsyncSession) -> None:
@@ -1154,7 +1232,10 @@ async def _handle_inbound_message(
                 args={}, result="opted out",
             )
             try:
-                await send_message(db, to_phone=phone, text=get_message("stop_confirmed"))
+                await send_message(
+                    db, to_phone=phone, text=get_message("stop_confirmed"),
+                    intent="transactional", outbound_kind="opt_out_confirmation", urgent=True,
+                )
             except SendError:
                 log.exception("stop_confirm_send_failed", phone=phone)
             return
@@ -1164,7 +1245,10 @@ async def _handle_inbound_message(
             await db.commit()
             log.info("customer_opted_in", phone=phone)
             try:
-                await send_message(db, to_phone=phone, text=get_message("start_confirmed"))
+                await send_message(
+                    db, to_phone=phone, text=get_message("start_confirmed"),
+                    intent="transactional", outbound_kind="service_reply",
+                )
             except SendError:
                 log.exception("start_confirm_send_failed", phone=phone)
             return
@@ -1271,6 +1355,8 @@ async def _handle_inbound_message(
         # The first complaint acknowledgement must still reach the customer;
         # subsequent messages stay silent while the human takeover is active.
         was_agent_paused = customer.agent_paused
+        reply_intent = "transactional" if ORDER_NUMBER_RE.search(spoken) else None
+        reply_kind = "order_status" if reply_intent else None
         reply = None
         try:
             if ORDER_NUMBER_RE.search(spoken):
@@ -1297,6 +1383,8 @@ async def _handle_inbound_message(
                 phone,
                 reply,
                 allow_paused_once=(not was_agent_paused and customer.agent_paused),
+                intent=reply_intent,
+                outbound_kind=reply_kind,
             )
 
 
@@ -1362,6 +1450,8 @@ async def _send_customer_agent_reply(
     reply: str,
     *,
     allow_paused_once: bool = False,
+    intent: str | None = None,
+    outbound_kind: str | None = None,
 ) -> bool:
     """Final service-agent gate immediately before WhatsApp send.
 
@@ -1421,7 +1511,10 @@ async def _send_customer_agent_reply(
         reply = await _avoid_repeated_welcome(db, customer, reply)
 
         try:
-            await send_message(db, to_phone=phone, text=reply, sent_by="ai")
+            await send_message(
+                db, to_phone=phone, text=reply, sent_by="ai",
+                intent=intent, outbound_kind=outbound_kind,
+            )
             return True
         except SendError:
             log.exception("reply_send_failed", phone=phone)

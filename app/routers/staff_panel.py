@@ -1960,6 +1960,7 @@ async def send_payment_reminder(
             buttons=await payment_buttons(db, order),
             list_button="Payment",
             list_title="Kwik Klin",
+            intent="transactional", outbound_kind="payment_reminder",
         )
         sent = True
     except SendError as exc:

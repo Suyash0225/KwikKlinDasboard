@@ -302,13 +302,14 @@ async def active_tenants() -> list[tuple[uuid.UUID, str, str]]:
     from app.models.tenant import WRITABLE_STATUSES, Tenant
 
     async with async_session_factory() as db:
-        rows = (
-            await db.execute(
-                select(Tenant.id, Tenant.slug, Tenant.owner_phone)
-                .where(Tenant.status.in_(WRITABLE_STATUSES))
-                .order_by(Tenant.created_at)
-            )
-        ).all()
+        async with system_context(db):
+            rows = (
+                await db.execute(
+                    select(Tenant.id, Tenant.slug, Tenant.owner_phone)
+                    .where(Tenant.status.in_(WRITABLE_STATUSES))
+                    .order_by(Tenant.created_at)
+                )
+            ).all()
     return [(r[0], r[1], _valid_phone(r[2]) or "") for r in rows]
 
 

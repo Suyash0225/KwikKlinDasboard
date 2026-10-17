@@ -20,12 +20,20 @@ from app.services.whatsapp import SendError, WindowClosedError, send_message
 log = structlog.get_logger()
 
 
-async def _queue_alert(db: AsyncSession, to_phone: str, alert: str) -> bool:
+async def _queue_alert(
+    db: AsyncSession, to_phone: str, alert: str, *,
+    intent: str | None = None, outbound_kind: str | None = None, urgent: bool = False,
+) -> bool:
     """Hold an undeliverable alert in the outbound queue. Never raises."""
     try:
         from app.services.whatsapp import _enqueue_outbound
 
-        await _enqueue_outbound(db, to_phone, {"text": alert, "sent_by": "bot"})
+        await _enqueue_outbound(
+            db, to_phone, {
+                "text": alert, "sent_by": "bot", "intent": intent,
+                "outbound_kind": outbound_kind, "urgent": urgent,
+            },
+        )
         log.info("escalation_alert_queued", to=to_phone)
         return True
     except Exception:
@@ -102,9 +110,15 @@ async def raise_escalation(
             "The AI assistant is paused while the team handles this."
         )
         try:
-            await send_message(db, to_phone=customer.phone, text=acknowledgement, sent_by="bot")
+            await send_message(
+                db, to_phone=customer.phone, text=acknowledgement, sent_by="bot",
+                intent="transactional", outbound_kind="service_ack", urgent=True,
+            )
         except WindowClosedError:
-            await _queue_alert(db, customer.phone, acknowledgement)
+            await _queue_alert(
+                db, customer.phone, acknowledgement,
+                intent="transactional", outbound_kind="service_ack", urgent=True,
+            )
         except SendError:
             log.exception("escalation_customer_ack_failed", customer=customer.phone)
         except Exception:

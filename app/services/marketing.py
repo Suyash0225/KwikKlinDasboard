@@ -8,8 +8,6 @@ Compliance is CODE, not convention — every send passes eligible():
 - monthly message budget (Settings) -> sends stop when hit
 """
 
-import asyncio
-import random
 import hashlib
 import secrets
 import uuid
@@ -374,7 +372,7 @@ def _in_quiet_hours_now() -> bool:
 
 
 async def send_campaign(campaign_id) -> None:
-    """Worker: send to all queued recipients, ~1 msg/sec, budget-capped.
+    """Worker: send queued recipients with shared tenant-wide 15–20s pacing and budget caps.
 
     Idempotent and resumable — only rows still in 'queued' are touched, so
     a crash/restart continues where it stopped (scheduler resumes it).
@@ -397,15 +395,19 @@ async def send_campaign(campaign_id) -> None:
         from app.services import plans as _plans
         from app.services import tenant_context as _tc
 
-        _tid = _tc.current_tenant_id.get() or _tc.cached_home_tenant_id()
-        if _tid is not None:
-            _t = await db.get(_T, _tid)
-            # effective_limits = plan + vendor override, ek hi jagah. Pehle
-            # yahan override ka logic dobara likha tha — do jagah ka hisaab
-            # kabhi na kabhi alag ho jaata hai.
-            _cap = _plans.effective_limits(_t)["max_campaign_msgs_month"]
-            if _cap is not None:
-                budget = min(budget, _cap)
+        _tid = _tc.current_tenant_id.get()
+        if _tid is None:
+            # Campaign workers are tenant-scoped jobs. Never guess the home
+            # shop when a caller lost the request/scheduler tenant context.
+            log.error("campaign_send_missing_tenant_context", campaign=str(campaign_id))
+            return
+        _t = await db.get(_T, _tid)
+        # effective_limits = plan + vendor override, ek hi jagah. Pehle
+        # yahan override ka logic dobara likha tha — do jagah ka hisaab
+        # kabhi na kabhi alag ho jaata.
+        _cap = _plans.effective_limits(_t)["max_campaign_msgs_month"]
+        if _cap is not None:
+            budget = min(budget, _cap)
         # The month's spend is counted ONCE and then tracked locally. It used
         # to be a full COUNT over campaign_recipients before every single
         # message; re-syncing periodically keeps us honest when two
@@ -421,7 +423,6 @@ async def send_campaign(campaign_id) -> None:
 
             rhythm_by_customer = await load_customer_rhythms(db)
         sent_now = 0
-        last_send_at: float | None = None
         while True:
             # Page the queue instead of re-querying one row at a time, and
             # bring each recipient's customer along — 'queued' is still the
@@ -483,6 +484,18 @@ async def send_campaign(campaign_id) -> None:
                         reason=rec.detail,
                     )
                     continue
+                # Claim each recipient before creating any per-send coupon or
+                # contacting WhatsApp. A resumed worker must not duplicate a send
+                # whose transport succeeded just before a process crash.
+                from app.services.scheduler import _claim, _unclaim
+
+                campaign_send_claim = f"campaign-send:{campaign.id}:{cust.id}"
+                if not await _claim(campaign_send_claim):
+                    rec.status = "skipped"
+                    rec.detail = "duplicate_send_claim_suppressed"
+                    await db.commit()
+                    continue
+
                 winback_coupon = None
                 if winback_personalized:
                     rhythm = rhythm_by_customer.get(cust.id, {})
@@ -510,13 +523,8 @@ async def send_campaign(campaign_id) -> None:
                             text += "\n\nJab chahein, apne agle order ke liye message karein."
                 else:
                     text = campaign.message_text.replace("{name}", cust.name or "ji")
-                # Enforce a real server-side gap between outbound sends.
-                # Skipped recipients do not consume the delay; parallel UI
-                # refreshes cannot bypass this worker's pacing.
-                if last_send_at is not None:
-                    remaining = random.uniform(15.0, 20.0) - (asyncio.get_running_loop().time() - last_send_at)
-                    if remaining > 0:
-                        await asyncio.sleep(remaining)
+                # Shared outbound_policy reserves a tenant-wide send slot;
+                # no worker-local sleep can be bypassed by another campaign.
                 try:
                     # One campaign = one approved creative. Send the same
                     # generated image + caption to each eligible customer;
@@ -535,6 +543,7 @@ async def send_campaign(campaign_id) -> None:
                             caption=text,
                             local_url=f"/admin/media/{creative_file}",
                             sent_by="bot",
+                            intent="promotional",
                         )
                     else:
                         wamid = await send_message(
@@ -545,12 +554,15 @@ async def send_campaign(campaign_id) -> None:
                     cust.last_marketing_at = datetime.now(timezone.utc)
                     sent_now += 1
                     spent += 1
-                    last_send_at = asyncio.get_running_loop().time()
                 except SendError as exc:
-                    # window closed & no approved marketing template -> honest fail
+                    # A transient text-send failure is queued by send_message;
+                    # keep the claim so a resumed campaign cannot race that retry.
+                    # Permanent failures did not queue and may be explicitly retried.
+                    if not exc.transient:
+                        await _unclaim(campaign_send_claim)
                     rec.status = "failed"
                     rec.detail = str(exc)[:200]
-                    if winback_coupon is not None:
+                    if winback_coupon is not None and not exc.transient:
                         winback_coupon.active = False
                 await db.commit()
                 # Delay is enforced immediately before the next actual send,
@@ -768,17 +780,18 @@ async def run_customer_cycle_nudges(db: AsyncSession, *, now: datetime | None = 
 
     current = now or datetime.now(timezone.utc)
     now_ist = current.astimezone(ZoneInfo("Asia/Kolkata"))
-    start_h, end_h = settings.QUIET_HOURS_START, settings.QUIET_HOURS_END
-    hour = now_ist.hour
-    if (start_h > end_h and (hour >= start_h or hour < end_h)) or (
-        start_h <= end_h and start_h <= hour < end_h
-    ):
+    from app.services.outbound_policy import _quiet_now
+
+    if _quiet_now(now_ist):
         return 0
     if (await app_settings.get(db, "marketing_autonomy")) != "auto":
         return 0
 
-    tenant_id = tenant_context.current_tenant_id.get() or tenant_context.cached_home_tenant_id()
-    tenant = await db.get(Tenant, tenant_id) if tenant_id is not None else None
+    tenant_id = tenant_context.current_tenant_id.get()
+    if tenant_id is None:
+        log.error("customer_cycle_nudge_missing_tenant_context")
+        return 0
+    tenant = await db.get(Tenant, tenant_id)
     if tenant is None:
         return 0
 
@@ -868,6 +881,7 @@ async def run_customer_cycle_nudges(db: AsyncSession, *, now: datetime | None = 
                 template_name="kk_repeat_pickup",
                 template_params=[(customer.name or "there").split()[0], tenant.shop_name],
                 sent_by="marketing",
+                intent="promotional", enqueue_on_fail=False,
             )
             customer.last_marketing_at = current
             await db.commit()

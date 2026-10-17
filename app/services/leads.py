@@ -240,14 +240,22 @@ async def run_lead_followups(now: datetime | None = None) -> int:
                 await db.commit()
                 log.info("lead_followup_skipped", reason=reason)
                 continue
+            from app.services.scheduler import _claim, _unclaim
+
+            claim_key = f"lead-followup:{lead.id}:{lead.followup_count}"
+            if not await _claim(claim_key):
+                continue
             try:
                 await send_message(
                     db,
                     to_phone=lead.phone,
                     text=get_message(key, name=lead.name or "ji"),
+                    intent="promotional",
+                    enqueue_on_fail=False,
                 )
                 sends += 1
             except SendError:
+                await _unclaim(claim_key)
                 log.info("lead_followup_not_sent", phone=lead.phone)
                 # Do not consume a follow-up attempt when WhatsApp rejected it.
                 lead.next_followup_at = now + timedelta(hours=1)

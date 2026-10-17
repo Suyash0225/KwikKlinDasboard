@@ -8,13 +8,13 @@ Together they guarantee no message is ever lost to a crash:
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 
 
 class WebhookEvent(Base):
@@ -63,3 +63,19 @@ class OutboundMessage(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OutboundThrottle(Base, TenantScoped):
+    """Cross-worker reservation state for promotional send rate limits."""
+
+    __tablename__ = "outbound_throttles"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_outbound_throttles_tenant"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    daily_date: Mapped[date] = mapped_column(Date, nullable=False)
+    daily_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    next_allowed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

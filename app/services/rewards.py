@@ -205,7 +205,10 @@ async def _notify(db: AsyncSession, customer: Customer, cr: CustomerReward, rule
             condition=condition_label(rule),
         )
         try:
-            await _wa.send_message(db, to_phone=customer.phone, text=text)
+            await _wa.send_message(
+                db, to_phone=customer.phone, text=text,
+                intent="transactional", outbound_kind="reward_notice",
+            )
         except _wa.SendError as exc:
             log.info("reward_notify_skipped", reason=str(exc)[:80])
     except Exception:

@@ -587,7 +587,10 @@ async def send_bill_to_customer(
             link = await bill_link.url_for(db, o)
             lines.append("• {} — Due ₹{} — {}".format(o.order_number, due, link))
         try:
-            await send_message(db, to_phone=customer.phone, text="\n".join(lines) + "\n— Kwik Klin")
+            await send_message(
+                db, to_phone=customer.phone, text="\n".join(lines) + "\n— Kwik Klin",
+                intent="transactional", outbound_kind="bill",
+            )
             return True
         except (SendError, WindowClosedError):
             return False
@@ -909,7 +912,9 @@ async def _notify_customer(
         text_body = get_message(message_key, lang=language, order_number=order.order_number, **fmt)
         try:
             await send_message(
-                db, to_phone=customer.phone, text=text_body, buttons=buttons
+                db, to_phone=customer.phone, text=text_body, buttons=buttons,
+                intent="transactional", outbound_kind="order_status",
+                urgent=getattr(order, "priority", "normal") == "urgent",
             )
         except WindowClosedError:
             await send_message(
@@ -918,6 +923,8 @@ async def _notify_customer(
                 template_name=template_name,
                 template_params=template_params,
                 template_url_param=url_param,
+                intent="transactional", outbound_kind="order_status",
+                urgent=getattr(order, "priority", "normal") == "urgent",
             )
             # Delivered already uses the approved rating template. If the
             # 24h window is closed, that legacy template has no bill button,
@@ -936,6 +943,8 @@ async def _notify_customer(
                             str(max((order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0")), Decimal("0"))),
                         ],
                         template_url_param=url_param,
+                        intent="transactional", outbound_kind="bill",
+                        urgent=getattr(order, "priority", "normal") == "urgent",
                     )
                 except SendError:
                     log.info("delivery_bill_template_not_sent", order_number=order.order_number)

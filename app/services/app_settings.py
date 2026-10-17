@@ -64,6 +64,8 @@ DEFAULTS: dict[str, Any] = {
     "default_washer_phone": "",     # unassigned orders go to this staff phone
     # marketing compliance
     "marketing_freq_cap_per_month": 2,
+    # Shared tenant-wide promotional outbound safety budget (0 is not unlimited).
+    "outbound_daily_msg_cap": 100,
     "marketing_monthly_msg_budget": 300,
     "marketing_max_discount_percent": 15,
     "marketing_autonomy": "suggest",

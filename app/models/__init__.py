@@ -25,7 +25,7 @@ from app.models.enums import (
     StaffRole,
 )
 from app.models.escalation import Escalation
-from app.models.event import OutboundMessage, WebhookEvent
+from app.models.event import OutboundMessage, OutboundThrottle, WebhookEvent
 from app.models.expense import Expense
 from app.models.marketing import Campaign, Lead, CampaignRecipient, Coupon, CouponRedemption
 from app.models.rewards import CustomerReward, RewardRule
@@ -88,6 +88,7 @@ __all__ = [
     "OrderStatus",
     "OrderStatusHistory",
     "OutboundMessage",
+    "OutboundThrottle",
     "Payment",
     "PaymentMethod",
     "PaymentStatus",
