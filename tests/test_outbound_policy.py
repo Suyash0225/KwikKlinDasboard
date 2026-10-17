@@ -160,3 +160,77 @@ def test_all_review_templates_are_optional_neutral_and_unincentivized() -> None:
     assert "coupon" not in rating_template
     assert "discount" not in rating_template
     assert "review" not in rating_template  # neutral rating request, link is offered after every rating
+
+
+async def test_promotional_daily_cap_is_shared_per_tenant(monkeypatch) -> None:
+    from app.models import Customer, Tenant
+    from app.services import tenant_context, app_settings
+    from app.services import outbound_policy
+    from app.services.whatsapp import SendError
+
+    async with async_session_factory() as db:
+        async with tenant_context.system_context(db):
+            tenant = (
+                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
+            ).scalar_one()
+            tenant_id = tenant.id
+
+    async def setting(db, key):
+        if key == "outbound_daily_msg_cap":
+            return 1
+        if key == "marketing_freq_cap_per_month":
+            return 2
+        return 100
+
+    async def eligible(db, customer_id):
+        return True, ""
+
+    monkeypatch.setattr(app_settings, "get", setting)
+    monkeypatch.setattr(outbound_policy, "_quiet_now", lambda: False)
+    monkeypatch.setattr("app.services.marketing.eligible", eligible)
+
+    async with tenant_context.as_tenant(tenant_id):
+        async with async_session_factory() as db:
+            customer = Customer(phone=f"+91996{uuid.uuid4().int % 10**7:07d}", name="Cap Test")
+            db.add(customer)
+            await db.flush()
+            await outbound_policy.enforce_outbound_policy(
+                db, customer=customer, phone=customer.phone, intent="promotional"
+            )
+            with pytest.raises(SendError, match="daily cap reached"):
+                await outbound_policy.enforce_outbound_policy(
+                    db, customer=customer, phone=customer.phone, intent="promotional"
+                )
+
+
+async def test_transactional_policy_honors_stop_and_urgent_quiet_exception(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from app.services import tenant_context
+    from app.services import outbound_policy
+    from app.services.whatsapp import SendError
+
+    tenant_id = uuid.uuid4()
+    token = tenant_context.current_tenant_id.set(tenant_id)
+    monkeypatch.setattr(outbound_policy, "_quiet_now", lambda: True)
+    try:
+        customer = SimpleNamespace(
+            tenant_id=tenant_id, is_active=True, opted_out=False,
+            payment_reminders_enabled=True,
+        )
+        with pytest.raises(SendError, match="quiet hours"):
+            await outbound_policy.enforce_outbound_policy(
+                None, customer=customer, phone="+919999900012",
+                intent="transactional", kind="order_status",
+            )
+        await outbound_policy.enforce_outbound_policy(
+            None, customer=customer, phone="+919999900012",
+            intent="transactional", kind="order_status", urgent=True,
+        )
+        customer.opted_out = True
+        with pytest.raises(SendError, match="customer opted out"):
+            await outbound_policy.enforce_outbound_policy(
+                None, customer=customer, phone="+919999900012",
+                intent="transactional", kind="order_status", urgent=True,
+            )
+    finally:
+        tenant_context.current_tenant_id.reset(token)
