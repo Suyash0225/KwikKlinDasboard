@@ -281,7 +281,7 @@ async def send_message(
 
     customer, staff = await _find_recipient(db, to_phone)
     lead = None
-    if customer is None and staff is None and effective_intent == "promotional":
+    if customer is None and staff is None:
         lead = (
             await db.execute(select(Lead).where(Lead.phone == to_phone).limit(1))
         ).scalar_one_or_none()
@@ -510,7 +510,7 @@ async def send_image(
 
     customer, staff = await _find_recipient(db, to_phone)
     lead = None
-    if customer is None and staff is None and intent == "promotional":
+    if customer is None and staff is None:
         lead = (
             await db.execute(select(Lead).where(Lead.phone == to_phone).limit(1))
         ).scalar_one_or_none()
