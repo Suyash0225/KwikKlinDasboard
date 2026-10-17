@@ -62,7 +62,11 @@ async def _customer_stats(db: AsyncSession) -> list[dict]:
                     0,
                 ).label("outstanding"),
             )
-            .outerjoin(Order, Order.customer_id == Customer.id)
+            .outerjoin(
+                Order,
+                (Order.customer_id == Customer.id)
+                & (Order.status != OrderStatus.CANCELLED),
+            )
             .where(Customer.is_active)
             .group_by(Customer.id)
         )
@@ -72,7 +76,7 @@ async def _customer_stats(db: AsyncSession) -> list[dict]:
 
 def _classify(stat: dict, now: datetime, high_value_cutoff: Decimal) -> set[str]:
     segs: set[str] = set()
-    last = stat["last_order_at"]
+    last = stat.get("last_visit_at") or stat["last_order_at"]
     first = stat["first_order_at"]
     age_days = (now - last).days if last else 9999
     if first and (now - first).days <= 30:
