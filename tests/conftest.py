@@ -139,21 +139,20 @@ async def _prime_home_tenant():
 
 
 @pytest.fixture(autouse=True)
-async def _default_home_tenant_scope(_prime_home_tenant):
-    """Direct service/DB tests run as the home tenant unless they opt out.
+def _default_test_system_context():
+    """Legacy direct-service tests are trusted system operations by default.
 
-    Production HTTP middleware normally establishes the tenant context. These
-    tests call services directly, so make that default explicit rather than
-    relying on the old fail-open RLS policy.
+    Production requests establish a tenant through middleware. Dedicated RLS
+    regression tests explicitly turn this flag off to prove unset-tenant
+    access is denied; tests that select a tenant still get tenant-scoped GUCs.
     """
     from app.services import tenant_context
 
-    tid = await tenant_context.get_home_tenant_id()
-    if tid is None:
+    token = tenant_context.current_system_context.set(True)
+    try:
         yield
-        return
-    async with tenant_context.as_tenant(tid):
-        yield
+    finally:
+        tenant_context.current_system_context.reset(token)
 
 
 @pytest.fixture
