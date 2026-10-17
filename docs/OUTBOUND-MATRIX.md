@@ -69,6 +69,6 @@
 
 - Added regression tests in `tests/test_outbound_policy.py` and expanded review-rating coverage in `tests/test_webhook.py`.
 - Pull request: [#205 — Outbound policy, tenant-safe retries, and referral idempotency](https://github.com/Suyash0225/KwikKlinDasboard/pull/205).
-- GitHub Actions run [#440](https://github.com/Suyash0225/KwikKlinDasboard/actions/runs/39063279439) was triggered by the latest code commit and is still running. The newest matrix-only commit does not change code. Do not treat tests as passed until run #440 completes successfully.
+- GitHub Actions run [#443](https://github.com/Suyash0225/KwikKlinDasboard/actions/runs/39063384924) was triggered by the latest code commit and is still running. The newest matrix-only commit does not change code. Do not treat tests as passed until run #443 completes successfully.
 - **Manual admin classification:** inbox text/media has a policy selector; defaults are transactional, while promotional intent must be explicitly selected. Template sends accept the explicit intent field (transactional by default); the inbox selector can mark promotional sends so the shared gate applies. Staff/owner operational messages remain outside customer policy.
 - Migration `20261018_outbound_throttle` and `20261018_referral_idempotency` are code-only until an authorized deployment applies them; neither has been applied to any database.
