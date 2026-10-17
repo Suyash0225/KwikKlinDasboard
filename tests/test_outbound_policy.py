@@ -612,3 +612,39 @@ async def test_campaign_recipient_claim_suppresses_duplicate_after_restart(monke
                     {"key": claim_key},
                 )
                 await db.commit()
+
+
+async def test_scheduled_marketing_jobs_do_not_fall_back_to_home_tenant(monkeypatch) -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app.services import app_settings, tenant_context, marketing
+
+    async def setting(db, key):
+        return "auto" if key == "marketing_autonomy" else 100
+
+    def forbidden_home_fallback():
+        raise AssertionError("scheduler marketing must not resolve a home tenant")
+
+    monkeypatch.setattr(app_settings, "get", setting)
+    monkeypatch.setattr(tenant_context, "cached_home_tenant_id", forbidden_home_fallback)
+    token = tenant_context.current_tenant_id.set(None)
+    try:
+        now = datetime(2026, 10, 18, 12, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+        assert await marketing.run_customer_cycle_nudges(None, now=now) == 0
+    finally:
+        tenant_context.current_tenant_id.reset(token)
+
+
+async def test_gbp_generation_requires_explicit_tenant_context() -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app.services import tenant_context, gbp_auto_post
+
+    token = tenant_context.current_tenant_id.set(None)
+    try:
+        with pytest.raises(RuntimeError, match="explicit tenant context"):
+            await gbp_auto_post._generate_post(
+                None, datetime(2026, 10, 18, 12, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+            )
+    finally:
+        tenant_context.current_tenant_id.reset(token)
