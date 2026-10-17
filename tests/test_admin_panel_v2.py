@@ -285,7 +285,9 @@ async def test_tenant_list_shows_usage_vs_limit(client) -> None:
             )
         ).scalar_one()
     assert u["staff"] == staff_count
-    assert u["staff_limit"] >= u["staff"]
+    # Business/growth is unlimited; None means no cap, not zero capacity.
+    if u["staff_limit"] is not None:
+        assert u["staff_limit"] >= u["staff"]
     assert "trial_warning" in home and home["trial_warning"] is False
 
 

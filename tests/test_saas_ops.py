@@ -46,6 +46,7 @@ async def test_control_tenants_shows_plans_and_status(client) -> None:
 
 # ------------------------------------------------------------------ audit --
 
+@pytest.mark.requires_independent_sessions
 async def test_login_and_failed_login_are_audited(client) -> None:
     await client.post("/api/login", json={"email": "audit-nahi-hai@test.local",
                                           "password": "galat-pass-1"})

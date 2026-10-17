@@ -64,6 +64,7 @@ async def test_threads_list_shows_participant(client) -> None:
     assert mine[0]["window"]["open"] is True
 
 
+@pytest.mark.requires_independent_sessions
 async def test_reply_quotes_the_message_on_whatsapp_and_in_the_thread(client) -> None:
     """Answering one message must reach WhatsApp as a real quoted reply."""
     from app.services import waha
@@ -90,6 +91,7 @@ async def test_reply_quotes_the_message_on_whatsapp_and_in_the_thread(client) ->
     assert last["status"] == "sent" and last["wamid"]
 
 
+@pytest.mark.requires_independent_sessions
 async def test_ping_nudges_the_person(client) -> None:
     await _seed_customer(window_open=True)
     r = await client.post("/admin/api/inbox/ping", headers=AUTH, json={"phone": PHONE})

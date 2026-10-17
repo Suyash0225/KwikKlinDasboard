@@ -104,6 +104,7 @@ async def test_a_closed_window_is_never_chased(sent) -> None:
     assert await _nudges() == []
 
 
+@pytest.mark.requires_independent_sessions
 async def test_the_cap_holds(sent) -> None:
     """Two nudges per conversation, then stop until THEY say something."""
     await _talking_customer(7)

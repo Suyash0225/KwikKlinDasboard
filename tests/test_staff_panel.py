@@ -979,6 +979,7 @@ async def _order_for(tenant_id, staff_id, cust_phone, *, delivery=False, total=0
         tenant_context.current_tenant_id.reset(token)
 
 
+@pytest.mark.requires_independent_sessions
 async def test_call_gives_the_real_number_only_for_your_own_order(
     client, two_shops, sent
 ) -> None:
@@ -1179,6 +1180,7 @@ async def test_panel_bill_is_a_whole_bill_not_half_of_one(client, two_shops, sen
             await db.commit()
 
 
+@pytest.mark.requires_independent_sessions
 async def test_receipt_gives_bill_text_only_for_your_own_order(
     client, two_shops, sent
 ) -> None:
@@ -1399,6 +1401,7 @@ async def test_discount_by_amount_and_by_percent(client, two_shops, sent) -> Non
         await _drop_rate()
 
 
+@pytest.mark.requires_independent_sessions
 async def test_rate_override_prices_the_line_and_leaves_an_audit_trail(
     client, two_shops, sent
 ) -> None:

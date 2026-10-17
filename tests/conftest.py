@@ -70,9 +70,9 @@ TEST_WASHER_NAME = "Qawasher"
 async def test_db_transaction(request):
     """Roll back each test's DB writes; savepoints preserve Session.commit() semantics.
 
-    The order-number concurrency test opts out because it must use independent
-    physical connections. That test still runs only against TEST_DATABASE_URL
-    and its test-specific cleanup removes its rows.
+    A small set of integration tests opts out because application code opens
+    multiple independent sessions and sharing one connection changes behavior.
+    Those tests still use TEST_DATABASE_URL and their existing cleanup fixtures.
     """
     from app.services import tenant_context
 
@@ -93,7 +93,7 @@ async def test_db_transaction(request):
             )
             await setup_db.commit()
 
-        if request.node.get_closest_marker("independent_db_connections"):
+        if request.node.get_closest_marker("requires_independent_sessions"):
             yield None
             return
 
