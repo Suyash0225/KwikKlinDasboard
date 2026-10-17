@@ -66,8 +66,8 @@ TEST_WASHER_PHONE_RAW = "919999900094"
 TEST_WASHER_PHONE = "+919999900094"
 TEST_WASHER_NAME = "Qawasher"
 
-@pytest.fixture(autouse=True)
-async def _isolated_test_transaction():
+@pytest.fixture
+async def test_db_transaction():
     """Use one outer transaction and savepoints; always roll back test writes."""
     from app.services import tenant_context
 
@@ -188,7 +188,7 @@ def _fresh_throttles():
 
 
 @pytest.fixture(autouse=True)
-async def _prime_home_tenant(_isolated_test_transaction):
+async def _prime_home_tenant():
     """Home-tenant cache ko har test se pehle bharo.
 
     Production mein ye lifespan startup par hota hai; tests ka ASGITransport
@@ -201,7 +201,7 @@ async def _prime_home_tenant(_isolated_test_transaction):
 
 
 @pytest.fixture(autouse=True)
-def _default_test_system_context(_isolated_test_transaction):
+def _default_test_system_context():
     """Legacy direct-service tests are trusted system operations by default.
 
     Production requests establish a tenant through middleware. Dedicated RLS
@@ -362,7 +362,7 @@ def _no_live_whatsapp(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-async def _cleanup_test_rows(_isolated_test_transaction):
+async def _cleanup_test_rows():
     """Clean marked test rows before the outer rollback; do not dispose the pool here."""
     from datetime import datetime, timezone
 

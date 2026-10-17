@@ -126,9 +126,11 @@ DATABASE_URL='postgresql+asyncpg://laundry:<password>@localhost:5432/laundry_tes
 .venv/bin/python -m pytest
 ```
 
-Each test runs in an outer transaction; sessions use savepoints, and the outer
-transaction rolls back after the test. CI provisions a fresh PostgreSQL test
-database and sets `TEST_DATABASE_URL` explicitly.
+RLS/data-isolation tests opt into an outer transaction; their sessions use
+savepoints and the transaction rolls back after each test. Tests that exercise
+concurrent/background sessions use the dedicated disposable database plus the
+existing marked-row cleanup, because those paths need independent connections.
+CI provisions a fresh PostgreSQL test database and sets `TEST_DATABASE_URL` explicitly.
 
 ## Webhook (local development)
 

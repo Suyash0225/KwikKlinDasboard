@@ -21,6 +21,8 @@ from app.models import Customer
 from app.models.tenant import Tenant, User
 from app.services import auth, tenant_context
 
+pytestmark = pytest.mark.usefixtures("test_db_transaction")
+
 AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
 
 # Recognizable markers, same convention as the rest of the suite.
