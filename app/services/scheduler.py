@@ -292,9 +292,9 @@ async def _gbp_reviews_tick() -> None:
                 return
             try:
                 await gbp.sync(db)
-            except gbp.GBPError as exc:
+            except Exception as exc:
                 await _unclaim(claim_key)
-                log.warning("gbp_sync_failed", error=str(exc))
+                log.warning("gbp_sync_failed", error=str(exc)[:300])
 
     await _for_each_tenant("gbp-reviews", one)
 
