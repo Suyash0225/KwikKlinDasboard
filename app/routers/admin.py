@@ -2156,7 +2156,7 @@ async def delete_inbox_thread(phone: str = Query(...), db: AsyncSession = Depend
 class InboxSendIn(BaseModel):
     phone: str
     text: str = Field(min_length=1, max_length=4000)
-    # Optional explicit policy classification; omitted preserves human free-form behavior.
+    # Customer-facing sends are transactional by default; promotional intent is explicit.
     intent: str = Field(default="transactional", pattern="^(promotional|transactional)$")
     outbound_kind: str = Field(default="order_status", max_length=40)
     # wamid being quoted — WhatsApp shows it above the reply
@@ -2188,8 +2188,8 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
 
 class InboxPingIn(BaseModel):
     phone: str
-    intent: str | None = Field(default=None, pattern="^(promotional|transactional)$")
-    outbound_kind: str | None = Field(default=None, max_length=40)
+    intent: str = Field(default="transactional", pattern="^(promotional|transactional)$")
+    outbound_kind: str = Field(default="order_status", max_length=40)
 
 
 @router.post("/api/inbox/ping", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
@@ -2250,8 +2250,8 @@ class TemplateSendIn(BaseModel):
     phone: str
     template_name: str = Field(min_length=2)
     params: list[str] = Field(default_factory=list)
-    intent: str | None = Field(default=None, pattern="^(promotional|transactional)$")
-    outbound_kind: str | None = Field(default=None, max_length=40)
+    intent: str = Field(default="transactional", pattern="^(promotional|transactional)$")
+    outbound_kind: str = Field(default="order_status", max_length=40)
 
 
 @router.post("/api/inbox/send-template", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
