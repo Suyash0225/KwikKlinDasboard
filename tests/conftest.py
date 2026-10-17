@@ -66,9 +66,14 @@ TEST_WASHER_PHONE_RAW = "919999900094"
 TEST_WASHER_PHONE = "+919999900094"
 TEST_WASHER_NAME = "Qawasher"
 
-@pytest.fixture
-async def test_db_transaction():
-    """Use one outer transaction and savepoints; always roll back test writes."""
+@pytest.fixture(autouse=True)
+async def test_db_transaction(request):
+    """Roll back each test's DB writes; savepoints preserve Session.commit() semantics.
+
+    The order-number concurrency test opts out because it must use independent
+    physical connections. That test still runs only against TEST_DATABASE_URL
+    and its test-specific cleanup removes its rows.
+    """
     from app.services import tenant_context
 
     system_token = tenant_context.current_system_context.set(True)
@@ -76,6 +81,22 @@ async def test_db_transaction():
     connection = None
     transaction = None
     try:
+        # The existing suite's home-shop tests assume Business/growth as their
+        # starting plan. Keep that baseline in the disposable test DB, outside
+        # the rollback transaction, so one test cannot set up another by accident.
+        async_session_factory.configure(
+            bind=engine, join_transaction_mode="conditional_savepoint"
+        )
+        async with async_session_factory() as setup_db:
+            await setup_db.execute(
+                sqltext("UPDATE tenants SET plan = 'growth' WHERE slug = 'kwik-klin'")
+            )
+            await setup_db.commit()
+
+        if request.node.get_closest_marker("independent_db_connections"):
+            yield None
+            return
+
         connection = await engine.connect()
         transaction = await connection.begin()
         async_session_factory.configure(
@@ -90,9 +111,11 @@ async def test_db_transaction():
         )
         if connection is not None:
             await connection.close()
+        # Dispose after dependent autouse cleanup fixtures have run, so asyncpg
+        # connections are never closed from a different pytest event loop.
+        await engine.dispose()
         tenant_context.current_system_context.reset(system_token)
         tenant_context.current_tenant_id.reset(tenant_token)
-
 
 
 async def purge_phones(*phones: str) -> None:
@@ -187,7 +210,7 @@ def _fresh_throttles():
 
 
 @pytest.fixture(autouse=True)
-async def _prime_home_tenant():
+async def _prime_home_tenant(test_db_transaction):
     """Home-tenant cache ko har test se pehle bharo.
 
     Production mein ye lifespan startup par hota hai; tests ka ASGITransport
@@ -200,7 +223,7 @@ async def _prime_home_tenant():
 
 
 @pytest.fixture(autouse=True)
-def _default_test_system_context():
+def _default_test_system_context(test_db_transaction):
     """Legacy direct-service tests are trusted system operations by default.
 
     Production requests establish a tenant through middleware. Dedicated RLS
@@ -361,7 +384,7 @@ def _no_live_whatsapp(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-async def _cleanup_test_rows():
+async def _cleanup_test_rows(test_db_transaction):
     """Clean marked test rows before the outer rollback; do not dispose the pool here."""
     from datetime import datetime, timezone
 
@@ -413,11 +436,6 @@ async def _cleanup_test_rows():
             )
         )
         await s.commit()
-    # Dispose only after the ordinary per-test cleanup has finished. Disposing
-    # inside test_db_transaction runs before this autouse fixture's teardown,
-    # leaving asyncpg connections bound to a loop that the next fixture does not use.
-    await engine.dispose()
-
 
 # --------------------------------------------------------------------------
 # Test-run ka apna kachra: audit_log
