@@ -836,14 +836,19 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
             # WAHA exposes interactive list rows (not Meta button payloads).
             # Keep the text summary for readability, but make each task/order
             # selectable so replies are bound to the right work item.
-            list_rows = [
-                ListRow(
-                    f"pick:t:{t.code}",
-                    t.code,
-                    (t.title or "Pending task")[:72],
+            list_rows = []
+            for t in task_rows:
+                linked_order = await db.get(Order, t.order_id) if t.order_id else None
+                task_label = (t.title or "Pending task")
+                if linked_order is not None:
+                    task_label = f"{linked_order.order_number} · {task_label}"
+                list_rows.append(
+                    ListRow(
+                        f"pick:t:{t.code}",
+                        t.code,
+                        task_label[:72],
+                    )
                 )
-                for t in task_rows
-            ]
             for o in orders:
                 cust = await db.get(Customer, o.customer_id)
                 cust_label = (cust.name or cust.phone) if cust else "Customer"
