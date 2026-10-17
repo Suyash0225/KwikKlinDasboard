@@ -649,8 +649,9 @@ async def _nightly_tick() -> None:
     try:
         from app.services.kpis import snapshot_today
 
-        async with async_session_factory() as db:
-            await snapshot_today(db)
+        async with tenant_context.as_system_context():
+            async with async_session_factory() as db:
+                await snapshot_today(db)
     except Exception:
         log.exception("kpi_snapshot_failed")
     # Recharge credits ki validity khatam -> balance se kaato (ledger mein
@@ -658,8 +659,9 @@ async def _nightly_tick() -> None:
     try:
         from app.services.credits import expire_due_credits
 
-        async with async_session_factory() as db:
-            cut = await expire_due_credits(db)
+        async with tenant_context.as_system_context():
+            async with async_session_factory() as db:
+                cut = await expire_due_credits(db)
         if cut["ai"] or cut["wa"]:
             log.info("credits_expiry_sweep", **cut)
     except Exception:
@@ -669,8 +671,9 @@ async def _nightly_tick() -> None:
     try:
         from app.services.billing import run_subscription_sweep
 
-        async with async_session_factory() as db:
-            moved = await run_subscription_sweep(db)
+        async with tenant_context.as_system_context():
+            async with async_session_factory() as db:
+                moved = await run_subscription_sweep(db)
         if moved["past_due"] or moved["locked"]:
             log.info("subscription_sweep", **moved)
     except Exception:
