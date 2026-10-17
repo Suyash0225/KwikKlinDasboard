@@ -123,6 +123,11 @@
             <button class="btn ghost sm" onclick="tplSendModal()" title="Send a template (works even when the window is closed)" aria-label="Send a template">📑</button>
             <button class="btn ghost sm" onclick="toggleEmojis()" title="Emoji" aria-label="Emoji picker">😊</button>
             <label class="btn ghost sm" style="cursor:pointer" title="Attach a photo" aria-label="Attach a photo">📎<input type="file" accept="image/*" style="display:none" onchange="sendMedia(this)" aria-label="Photo to send"></label>
+            <select id="chat-intent" aria-label="Message policy" title="Choose the policy for a customer send" style="max-width:130px;font-size:11px">
+              <option value="">Manual / chat</option>
+              <option value="promotional">Promotional</option>
+              <option value="transactional">Service update</option>
+            </select>
             <input type="text" id="chat-input" aria-label="Message" enterkeyhint="send" placeholder="Type a message" onkeydown="if(event.key==='Enter')sendChat()">
             <button class="btn" onclick="sendChat()" title="Send" aria-label="Send">➤</button>
           </div>
