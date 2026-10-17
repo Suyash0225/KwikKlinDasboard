@@ -79,6 +79,15 @@ async def test_failed_event_is_replayed(client, sent, monkeypatch) -> None:
         raise RuntimeError("simulated crash mid-processing")
 
     monkeypatch.setattr(webhook_module, "_process_payload", _boom)
+    from app.services import tenant_context
+    tenant_id = await tenant_context.get_home_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("durability replay test requires a seeded tenant")
+
+    async def _explicit_tenant(_db, _pnid, *, allow_home_fallback=True):
+        return tenant_id, True
+
+    monkeypatch.setattr(webhook_module, "_resolve_wa_tenant", _explicit_tenant)
     body = meta_payload(
         messages=[{
             "from": TEST_CUSTOMER_PHONE_RAW,
