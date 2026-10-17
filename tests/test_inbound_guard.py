@@ -77,3 +77,77 @@ async def test_classifier_failure_allows_normal_customer_flow(monkeypatch):
     assert not await inbound_guard.should_suppress_inbound(
         "Mujhe laundry service chahiye."
     )
+
+
+
+@pytest.mark.asyncio
+async def test_marketing_pitch_without_old_trigger_words_is_classified(monkeypatch):
+    """A sales pitch must be classified even when it has no URL/SEO keyword."""
+    calls = []
+
+    async def fake_ask_json(**kwargs):
+        calls.append(kwargs["user_text"])
+        return {
+            "classification": "BUSINESS_ADVERTISEMENT",
+            "confidence": 0.97,
+            "reason": "Offers business growth services",
+        }
+
+    monkeypatch.setattr(inbound_guard.llm_client, "ask_json", fake_ask_json)
+
+    message = "Hello sir, we can help you grow your business and get more customers."
+    result = await inbound_guard.classify_inbound_message(message)
+
+    assert calls, "non-obvious messages must go through intent classification"
+    assert result["classification"] == "BUSINESS_ADVERTISEMENT"
+    assert inbound_guard.is_suppressed_classification(result)
+    assert not inbound_guard.is_customer_lead(result)
+
+
+@pytest.mark.asyncio
+async def test_generic_greeting_is_not_a_lead(monkeypatch):
+    async def fake_ask_json(**kwargs):
+        return {
+            "classification": "GENERAL_MESSAGE",
+            "confidence": 0.99,
+            "reason": "Greeting without a service request",
+        }
+
+    monkeypatch.setattr(inbound_guard.llm_client, "ask_json", fake_ask_json)
+    result = await inbound_guard.classify_inbound_message("Hello there")
+
+    assert result["classification"] == "GENERAL_MESSAGE"
+    assert not inbound_guard.is_customer_lead(result)
+    assert not inbound_guard.is_suppressed_classification(result)
+
+
+@pytest.mark.asyncio
+async def test_order_support_is_not_a_new_sales_lead():
+    result = await inbound_guard.classify_inbound_message("Mera order kahan hai?")
+
+    assert result["classification"] == "CUSTOMER_SERVICE"
+    assert not inbound_guard.is_customer_lead(result)
+
+
+@pytest.mark.asyncio
+async def test_classifier_failure_does_not_promote_vague_message_to_lead(monkeypatch):
+    async def fake_ask_json(**kwargs):
+        raise RuntimeError("test failure")
+
+    monkeypatch.setattr(inbound_guard.llm_client, "ask_json", fake_ask_json)
+    result = await inbound_guard.classify_inbound_message("Hello, are you available?")
+
+    assert result["classification"] == "GENERAL_MESSAGE"
+    assert not inbound_guard.is_customer_lead(result)
+
+
+@pytest.mark.asyncio
+async def test_classifier_failure_still_suppresses_unmistakable_marketing(monkeypatch):
+    async def fake_ask_json(**kwargs):
+        raise RuntimeError("test failure")
+
+    monkeypatch.setattr(inbound_guard.llm_client, "ask_json", fake_ask_json)
+
+    assert await inbound_guard.should_suppress_inbound(
+        "Hello, we provide digital marketing and SEO services for businesses."
+    )
