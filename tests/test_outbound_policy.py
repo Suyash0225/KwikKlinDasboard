@@ -8,28 +8,12 @@ from sqlalchemy import select
 from app.database import async_session_factory
 
 async def _test_tenant_id():
-    from app.models import Tenant
     from app.services import tenant_context
 
-    async with async_session_factory() as db:
-        async with tenant_context.system_context(db):
-            tenant = (
-                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
-            ).scalar_one_or_none()
-            if tenant is None:
-                tenant = Tenant(
-                    slug="kwik-klin", shop_name="Kwik Klin",
-                    owner_name="Test Owner", owner_phone="+919999000000",
-                    plan="starter", status="active",
-                )
-                db.add(tenant)
-                await db.flush()
-            tenant_id = tenant.id
-            if db.in_transaction():
-                await db.commit()
-            return tenant_id
-
-
+    tenant_id = await tenant_context.get_home_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("outbound policy tests require a seeded tenant")
+    return tenant_id
 
 async def test_outbound_retry_without_tenant_is_dead_lettered_without_send(monkeypatch) -> None:
     """Legacy/malformed retry payloads must never fall back to the home shop."""
