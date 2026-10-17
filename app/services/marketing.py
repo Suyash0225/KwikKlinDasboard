@@ -494,7 +494,7 @@ async def send_campaign(campaign_id) -> None:
                     age_days = max(0.0, (now_utc - last_visit).total_seconds() / 86400) if last_visit else 0.0
                     usual_items = ", ".join(rhythm.get("usual_items") or []) or "kapde"
                     text = (
-                        f"Namaste {cust.name or 'ji'} ji! Pichhli baar aapne {usual_items} diye the. "
+                        f"Namaste {cust.name or 'aap'} ji! Pichhli baar aapne {usual_items} diye the. "
                         "Jab laundry ki zarurat ho, Kwik Klin yaad rakhein. "
                     )
                     if _is_winback_offer_due(age_days, average_gap):
