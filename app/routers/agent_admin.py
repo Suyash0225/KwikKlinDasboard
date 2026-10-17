@@ -1324,7 +1324,7 @@ class TaskIn(BaseModel):
     staff: str | None = None
     order_number: str | None = None
     customer_id: str | None = None
-    kind: str = Field(default="general", pattern="^(general|pickup|wash|dry|iron|delivery)$")
+    kind: str = Field(default="general", pattern="^(general|pickup|wash|dry|iron|delivery|packing|custom)$")
     due_at: datetime | None = None
     urgent: bool = False
 
@@ -1554,7 +1554,7 @@ class TaskEditIn(BaseModel):
     title: str = Field(min_length=2, max_length=2000)
     staff: str | None = None
     order_number: str | None = None
-    kind: str = Field(default="general", pattern="^(general|pickup|wash|dry|iron|delivery)$")
+    kind: str = Field(default="general", pattern="^(general|pickup|wash|dry|iron|delivery|packing|custom)$")
     due_at: datetime | None = None
     priority: str = Field(default="normal", pattern="^(normal|urgent)$")
     customer_name: str | None = Field(default=None, max_length=120)
