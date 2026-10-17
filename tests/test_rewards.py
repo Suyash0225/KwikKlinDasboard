@@ -178,6 +178,17 @@ async def test_referral_code_discount_and_referrer_reward_after_delivery(client,
     from app.models import Coupon, CustomerReward
     from sqlalchemy import select
 
+    # The referral service binds send_message at import time, unlike the
+    # order service; patch its bound function so this integration test never
+    # attempts a real WhatsApp send.
+    import app.services.referrals as referral_service
+
+    async def fake_send(db, *, to_phone, text=None, **kw):
+        sent.append({"to": to_phone, "text": text, **kw})
+        return "wamid.referral-test"
+
+    monkeypatch.setattr(referral_service, "send_message", fake_send)
+
     async with async_session_factory() as db:
         old_autonomy = await app_settings.get(db, "marketing_autonomy")
         await app_settings.set_value(db, "marketing_autonomy", "auto")
