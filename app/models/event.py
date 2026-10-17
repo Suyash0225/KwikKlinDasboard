@@ -8,13 +8,13 @@ Together they guarantee no message is ever lost to a crash:
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import Date, DateTime, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TenantScoped
 
 
 class WebhookEvent(Base):
@@ -76,6 +76,6 @@ class OutboundThrottle(Base, TenantScoped):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    daily_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    daily_date: Mapped[date] = mapped_column(Date, nullable=False)
     daily_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     next_allowed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
