@@ -401,7 +401,17 @@ async def test_task_status_menu_enforces_sequential_wash_dry_iron_ready(client, 
         )
 
     phone = f"+919999{uuid.uuid4().int % 1_000_000:06d}"
+    delivery_phone = f"+919997{uuid.uuid4().int % 1_000_000:06d}"
     async with async_session_factory() as db:
+        delivery_staff = Staff(
+            phone=delivery_phone,
+            name="Sequential Flow Delivery",
+            role=StaffRole.DELIVERY,
+            is_active=True,
+            last_message_at=datetime.now(timezone.utc),
+        )
+        db.add(delivery_staff)
+        await db.flush()
         from app.services.order_service import create_order
         order = await create_order(
             db,
@@ -479,7 +489,7 @@ async def test_task_status_menu_enforces_sequential_wash_dry_iron_ready(client, 
             await db.execute(delete(Task).where(Task.order_id == order_id))
             await db.commit()
         from tests.conftest import purge_phones
-        await purge_phones(phone)
+        await purge_phones(phone, delivery_phone)
 
 
 async def test_delivery_done_requires_two_confirmations(worker, sent) -> None:
@@ -782,8 +792,7 @@ async def test_task_reminder_repeats_the_status_menu(sent, worker, awake) -> Non
         ping = next(c for c in sent if c["to"] == TASK_STAFF_PHONE)
         assert "reminder" in ping["text"].lower()
         assert [row.id for row in (ping.get("list_rows") or [])] == [
-            f"task:{code}:wash", f"task:{code}:iron",
-            f"task:{code}:ready", f"task:{code}:pending",
+            f"task:{code}:wash", f"task:{code}:pending",
         ]
     finally:
         await purge_phones(customer_phone)
