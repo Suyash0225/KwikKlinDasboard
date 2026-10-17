@@ -33,6 +33,7 @@ nano .env
 | `SITE_URL` | `https://kwikklin.online` |
 | `APP_BASE_URL` | `https://kwikklin.online` |
 | `RATE_LIMIT_PER_MIN` | jaisa hai |
+| `TRUSTED_PROXIES` | `127.0.0.1` (nginx ka direct peer; exact trusted proxy IP/CIDR only) |
 
 WhatsApp/Razorpay/Google/Gemini keys laptop wali hi chalengi.
 
@@ -62,7 +63,7 @@ WorkingDirectory=/opt/kwikklin
 EnvironmentFile=/opt/kwikklin/.env
 # 1 worker: scheduler app ke andar chalta hai; kai workers = kai scheduler.
 # Load badhe to workers badhao aur scheduler ek alag process mein le jao.
-ExecStart=/opt/kwikklin/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips="*"
+ExecStart=/opt/kwikklin/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=always
 RestartSec=3
 
@@ -78,6 +79,11 @@ curl -s http://127.0.0.1:8000/health      # {"status":"ok","db":"connected"}
 
 ### nginx + HTTPS
 
+Uvicorn ke `--proxy-headers` ko enable mat karo. `TrustedProxyMiddleware` original peer IP ko
+check karta hai, aur `X-Forwarded-For` / `X-Forwarded-Proto` sirf `TRUSTED_PROXIES`
+mein listed proxy se accept karta hai. Is single-host setup mein nginx ka peer `127.0.0.1` hai;
+agar proxy topology badle to `.env` mein exact proxy IP/CIDR update karo—`*` kabhi mat use karo.
+
 `/etc/nginx/sites-available/kwikklin`:
 
 ```nginx
@@ -89,6 +95,8 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
+        # Overwrite client-supplied forwarding headers; app trusts this only from TRUSTED_PROXIES.
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_read_timeout 300;
         proxy_buffering off;          # dashboard ki live (SSE) updates

@@ -168,6 +168,8 @@ class Settings(BaseSettings):
     # dashboard use isse bahut neeche rehta hai, par loop mein fansi script
     # ab sach mein rukti hai.
     RATE_LIMIT_PER_MIN: int = 600
+    # Comma-separated trusted reverse-proxy IPs/CIDRs. Empty means trust none.
+    TRUSTED_PROXIES: str = ""
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
 
