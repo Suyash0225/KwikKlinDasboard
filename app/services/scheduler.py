@@ -239,37 +239,64 @@ async def _for_each_tenant(job_name: str, fn) -> None:
 
 
 async def _gbp_daily_post_tick() -> None:
-    """Publish one AI-generated Google Business Profile post per connected tenant."""
+    """Publish at most one daily GBP post per tenant; claim before publishing."""
     from app.services import gbp_auto_post
+    from app.services import tenant_context
 
     if not gbp_auto_post.gbp.enabled():
         return
 
     async def one(now_ist: datetime) -> None:
+        from app.services.tenant_context import current_tenant_id
+        from app.services.scheduler import _claim, _unclaim
+
+        day_key = now_ist.strftime("%Y-%m-%d")
+        claim_key = f"gbp-daily-post:{day_key}"
+        if current_tenant_id.get() is None or not await _claim(claim_key):
+            return
         async with async_session_factory() as db:
             try:
-                await gbp_auto_post.auto_post_daily(db, now_ist)
+                result = await gbp_auto_post.auto_post_daily(db, now_ist)
+                if result.get("skipped"):
+                    await _unclaim(claim_key)
             except Exception as exc:
+                # Generation failures leave no attempt in history and may retry.
+                # If Google recorded an attempt, retain the claim to avoid a
+                # duplicate post after an ambiguous publish/network failure.
+                try:
+                    await db.rollback()
+                    state = await gbp_auto_post.status(db)
+                    last = state.get("last") or {}
+                    if last.get("date") != day_key:
+                        await _unclaim(claim_key)
+                except Exception:
+                    log.exception("gbp_daily_post_claim_recovery_failed")
                 log.warning("gbp_daily_post_failed", error=str(exc)[:300])
 
     await _for_each_tenant("gbp-daily-post", one)
 
 
 async def _gbp_reviews_tick() -> None:
-    """Jin dukaanon ne Google jodi hai, unke reviews taaza karo."""
+    """Refresh Google reviews at most once per scheduled window per tenant."""
     from app.services import google_business as gbp
+    from app.services.scheduler import _claim, _unclaim
 
     if not gbp.enabled():
         return
 
-    async def one(_now_ist: datetime) -> None:
+    async def one(now_ist: datetime) -> None:
         async with async_session_factory() as db:
             conn = await gbp.get_connection(db)
             if not (conn.get("refresh_token") and conn.get("location")):
                 return
+            window = now_ist.strftime("%Y-%m-%d-%H")
+            claim_key = f"gbp-reviews:{window}"
+            if not await _claim(claim_key):
+                return
             try:
                 await gbp.sync(db)
             except gbp.GBPError as exc:
+                await _unclaim(claim_key)
                 log.warning("gbp_sync_failed", error=str(exc))
 
     await _for_each_tenant("gbp-reviews", one)
