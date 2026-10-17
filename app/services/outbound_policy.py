@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Customer, OutboundThrottle
+from app.models import Customer, Lead, OutboundThrottle
 from app.services import app_settings
 from app.services.tenant_context import current_tenant_id
 from app.services.whatsapp import SendError, _blocked_test_recipient
@@ -84,6 +84,7 @@ async def enforce_outbound_policy(
     customer: Customer | None,
     phone: str,
     intent: str,
+    lead: Lead | None = None,
     kind: str | None = None,
     urgent: bool = False,
 ) -> None:
@@ -102,30 +103,45 @@ async def enforce_outbound_policy(
         raise SendError("outbound blocked: tenant context missing", transient=False)
     if _blocked_test_recipient(phone):
         raise SendError("automated send blocked for test recipient", transient=False)
-    if customer is None:
-        raise SendError("outbound blocked: recipient is not a tenant customer", transient=False)
-    if customer.tenant_id != tenant_id:
+    if customer is None and lead is None:
+        raise SendError("outbound blocked: recipient is not a tenant customer or lead", transient=False)
+    if customer is not None and customer.tenant_id != tenant_id:
         raise SendError("outbound blocked: recipient tenant mismatch", transient=False)
+    if lead is not None and lead.tenant_id != tenant_id:
+        raise SendError("outbound blocked: lead tenant mismatch", transient=False)
     if intent == PROMOTIONAL:
-        if not customer.is_active:
-            raise SendError("promotional send blocked: customer inactive", transient=False)
-        from app.services.marketing import eligible
+        if customer is not None:
+            if not customer.is_active:
+                raise SendError("promotional send blocked: customer inactive", transient=False)
+            from app.services.marketing import eligible
 
-        ok, reason = await eligible(db, customer.id)
-        if not ok:
-            raise SendError(f"promotional send blocked: {reason}", transient=False)
+            ok, reason = await eligible(db, customer.id)
+            if not ok:
+                raise SendError(f"promotional send blocked: {reason}", transient=False)
+        else:
+            # A lead who initiated an enquiry may receive only the bounded
+            # follow-up ladder; terminal stages are never contacted.
+            if str(lead.stage).upper() in {"CONVERTED", "LOST", "DORMANT"}:
+                raise SendError("promotional send blocked: lead is no longer eligible", transient=False)
         if _quiet_now():
             raise SendError("promotional send blocked: quiet hours", transient=False)
         await _reserve_promotional_slot(db, tenant_id, datetime.now(IST))
-        # A queued slot may wait 15–20 seconds. Re-read consent and quiet
-        # hours after that wait so an opt-out during pacing still wins.
-        await db.refresh(customer)
+        # Re-check eligibility after pacing so an opt-out or stage change wins.
+        if customer is not None:
+            await db.refresh(customer)
+            ok, reason = await eligible(db, customer.id)
+            if not ok:
+                raise SendError(f"promotional send blocked: {reason}", transient=False)
+        else:
+            await db.refresh(lead)
+            if str(lead.stage).upper() in {"CONVERTED", "LOST", "DORMANT"}:
+                raise SendError("promotional send blocked: lead is no longer eligible", transient=False)
         if _quiet_now():
             raise SendError("promotional send blocked: quiet hours", transient=False)
-        ok, reason = await eligible(db, customer.id)
-        if not ok:
-            raise SendError(f"promotional send blocked: {reason}", transient=False)
         return
+
+    if customer is None:
+        raise SendError("transactional send blocked: recipient is not a customer", transient=False)
 
     # STOP is global and always wins; a marketing-only opt-out does not
     # suppress a legitimate utility update.
