@@ -188,6 +188,7 @@ async def _issue_share_code_after_delivery(db: AsyncSession, order: Order) -> No
     claim_key = f"referral-share:{order.id}"
     if not await _claim(claim_key):
         return
+    send_succeeded = False
     try:
         campaign, coupon = await _get_or_create_referral_code(db, customer)
         friend_discount = f"₹{coupon.value:.0f}"
@@ -205,6 +206,7 @@ async def _issue_share_code_after_delivery(db: AsyncSession, order: Order) -> No
                 db, to_phone=customer.phone, text=message, sent_by="bot",
                 intent="promotional", enqueue_on_fail=False,
             )
+            send_succeeded = True
             customer.last_marketing_at = datetime.now(timezone.utc)
             await db.commit()
             await audit.record(
@@ -221,8 +223,10 @@ async def _issue_share_code_after_delivery(db: AsyncSession, order: Order) -> No
                 result=str(exc)[:160], ok=False,
             )
     except Exception:
-        # Unexpected failures before the send succeeded must remain retryable.
-        await _unclaim(claim_key)
+        # Release only when no send succeeded; audit/commit failures after a
+        # successful transport must not make a duplicate delivery send again.
+        if not send_succeeded:
+            await _unclaim(claim_key)
         raise
 
 
