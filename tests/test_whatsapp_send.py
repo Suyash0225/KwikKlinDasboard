@@ -13,7 +13,7 @@ from app.database import async_session_factory
 from sqlalchemy import select
 from app.models import Customer, Conversation
 from app.services import waha
-from app.services.whatsapp import Button, ListRow, send_message
+from app.services.whatsapp import Button, ListRow, SendError, send_message
 from tests.conftest import TEST_CUSTOMER_PHONE
 
 
@@ -48,12 +48,19 @@ async def _capture(monkeypatch) -> list[dict]:
     return seen
 
 
+async def test_automated_customer_send_requires_explicit_intent(open_window) -> None:
+    async with async_session_factory() as db:
+        with pytest.raises(SendError, match="requires explicit outbound intent"):
+            await send_message(db, to_phone=TEST_CUSTOMER_PHONE, text="automated reply")
+
+
 async def test_list_payload_matches_waha_shape(open_window, monkeypatch) -> None:
     seen = await _capture(monkeypatch)
     async with async_session_factory() as db:
         await send_message(
             db,
             to_phone=TEST_CUSTOMER_PHONE,
+            sent_by="manager",
             text="Aaj ka kaam",
             list_rows=ROWS,
             list_button="Kaam chuniye",
@@ -78,6 +85,7 @@ async def test_button_input_is_translated_to_a_waha_list(open_window, monkeypatc
         await send_message(
             db,
             to_phone=TEST_CUSTOMER_PHONE,
+            sent_by="manager",
             text="Confirm karo",
             buttons=[Button("order:123:done", "Haan, ho gayi")],
             list_title="Task status",
@@ -96,6 +104,7 @@ async def test_empty_description_is_kept_as_a_safe_waha_value(open_window, monke
         await send_message(
             db,
             to_phone=TEST_CUSTOMER_PHONE,
+            sent_by="manager",
             text="Chuniye",
             list_rows=[ListRow(id="pick:t:T-1", title="T-1")],
         )
@@ -111,15 +120,18 @@ async def test_list_row_limit_is_refused_before_transport(open_window, monkeypat
             await send_message(
                 db,
                 to_phone=TEST_CUSTOMER_PHONE,
+            sent_by="manager",
                 text="x",
                 list_rows=[ListRow(id=f"r{i}", title=f"row {i}") for i in range(11)],
             )
         with pytest.raises(ValueError, match="buttons/list need a text body"):
-            await send_message(db, to_phone=TEST_CUSTOMER_PHONE, list_rows=ROWS)
+            await send_message(db, to_phone=TEST_CUSTOMER_PHONE,
+            sent_by="manager", list_rows=ROWS)
         with pytest.raises(ValueError, match="either buttons or a list"):
             await send_message(
                 db,
                 to_phone=TEST_CUSTOMER_PHONE,
+            sent_by="manager",
                 text="x",
                 buttons=[Button("a", "A")],
                 list_rows=ROWS,
@@ -133,6 +145,7 @@ async def test_the_inbox_records_what_the_list_offered(open_window, monkeypatch)
         await send_message(
             db,
             to_phone=TEST_CUSTOMER_PHONE,
+            sent_by="manager",
             text="Aaj ka kaam",
             list_rows=ROWS,
         )
