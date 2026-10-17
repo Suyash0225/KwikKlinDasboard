@@ -281,7 +281,7 @@ async def send_message(
 
     customer, staff = await _find_recipient(db, to_phone)
 
-    if effective_intent is not None:
+    if effective_intent is not None and (customer is not None or staff is None):
         from app.services.outbound_policy import enforce_outbound_policy
 
         await enforce_outbound_policy(
@@ -497,7 +497,7 @@ async def send_image(
 
     customer, staff = await _find_recipient(db, to_phone)
 
-    if intent is not None:
+    if intent is not None and (customer is not None or staff is None):
         from app.services.outbound_policy import enforce_outbound_policy
 
         await enforce_outbound_policy(
