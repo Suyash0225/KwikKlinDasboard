@@ -99,48 +99,46 @@ async def test_owner_saying_bol_do_creates_a_tracked_task(worker, sent, monkeypa
     assert any(c["to"] == TASK_STAFF_PHONE for c in sent)
 
 
-async def test_staff_reports_wet_clothes_issue_on_unique_open_task(worker, sent) -> None:
+async def test_staff_free_text_issue_does_not_update_task(worker, sent) -> None:
+    """Free text may not attach an issue note or mutate a task."""
     async with async_session_factory() as db:
         task = await _mk(db, worker, title="Customer pickup")
         code = task.code
     sent.clear()
 
     async with async_session_factory() as db:
-        reply = await bill_agent.handle_staff_message(
+        await bill_agent.handle_staff_message(
             db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
             text="Kapde geele hain, pickup nahi ho payega",
         )
-    assert reply and code in reply and "OPEN" in reply
 
     async with async_session_factory() as db:
         task = await task_service.get_by_code(db, code)
     assert task.status == TASK_OPEN
-    assert "geele" in (task.reply or "").lower()
-    assert any("Task issue" in (message["text"] or "") for message in sent)
+    assert task.reply is None
+    assert task.completed_at is None
+    assert not any("Task issue" in (message["text"] or "") for message in sent)
 
 
 # --- completing ---
 
-async def test_staff_closes_task_with_done_code(worker, sent) -> None:
+async def test_typed_done_code_does_not_close_task(worker, sent) -> None:
+    """A typed task code is not a substitute for an explicit task button."""
     async with async_session_factory() as db:
         task = await _mk(db, worker)
         code = task.code
 
     async with async_session_factory() as db:
-        reply = await bill_agent.handle_staff_message(
+        await bill_agent.handle_staff_message(
             db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
             text=f"done {code}",
         )
-    assert reply and code in reply
 
     async with async_session_factory() as db:
         task = await task_service.get_by_code(db, code)
-        assert task.status == TASK_DONE
-        assert task.completed_at is not None
-    # the configured primary admin hears about it without asking
-    async with async_session_factory() as db:
-        owner_phone = await team.primary_admin_phone(db)
-    assert any(c["to"] == owner_phone for c in sent)
+        assert task.status == TASK_OPEN
+        assert task.completed_at is None
+        assert task.reply is None
 
 
 async def test_unknown_code_is_not_a_crash(worker, sent) -> None:
@@ -841,7 +839,7 @@ async def test_task_reminder_repeats_the_status_menu(sent, worker, awake) -> Non
         await purge_phones(customer_phone)
 
 async def test_operational_team_shares_queue_and_first_completion_wins(worker, sent) -> None:
-    """Any active washer can update the shared queue; duplicate completion is harmless."""
+    """Any active washer can complete a shared task using its explicit button."""
     second_phone = "+919999900089"
     async with async_session_factory() as db:
         second = Staff(
@@ -862,19 +860,19 @@ async def test_operational_team_shares_queue_and_first_completion_wins(worker, s
         async with async_session_factory() as db:
             reply = await bill_agent.handle_staff_message(
                 db, sender_phone=second_phone, sender_label="Taskram Two",
-                text=f"done {code}",
+                text=f"[button:task:{code}:done] Done",
             )
             assert "closed" in (reply or "").lower() or code in (reply or "")
 
         async with async_session_factory() as db:
             done = await task_service.get_by_code(db, code)
             assert done.status == TASK_DONE
-            assert done.reply is None or done.reply == "done"
+            assert done.reply is None or "done" in (done.reply or "").lower()
 
         async with async_session_factory() as db:
             duplicate = await bill_agent.handle_staff_message(
                 db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
-                text=f"done {code}",
+                text=f"[button:task:{code}:done] Done",
             )
             assert "already complete" in (duplicate or "").lower()
     finally:

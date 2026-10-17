@@ -451,14 +451,18 @@ async def _handle_task_button(
 
     role = staff.role.name if staff is not None else "manager"
 
-    # Delivery staff: the same Done/Pending menu is used for both pickup and delivery.
+    # Explicit Done is role-scoped by task type: pickup/delivery work belongs
+    # to delivery staff, while washing/custom operational tasks can be closed
+    # by the active washer/supervisor team that shares that queue.
     if action == "done":
-        if role not in {"DELIVERY", "ADMIN", "MANAGER"}:
-            return "This task is assigned to a different role."
         if task.kind in {"pickup", "delivery"}:
+            if role not in {"DELIVERY", "ADMIN", "MANAGER"}:
+                return "This task is assigned to a different role."
             return await task_service.confirm_pickup(
                 db, task, done=True, by=staff.name if staff else sender_label
             )
+        if role not in {"WASHER", "SUPERVISOR", "ADMIN", "MANAGER"}:
+            return "This task is assigned to a different role."
         return await _close_task_by_code(db, sender_phone, sender_label, code)
 
     if action == "pending":
@@ -1500,14 +1504,7 @@ async def handle_staff_message(
     btn_reply = await _handle_task_button(db, sender_phone, sender_label, text or "")
     if btn_reply is not None:
         return btn_reply
-    # WAHA/NOWEB can deliver a list selection as its visible title/description
-    # without the row id. Resolve that text against the staff's open tasks
-    # before the generic AI path; status changes remain zero-LLM and deterministic.
-    display_reply = await _handle_task_menu_display_text(
-        db, sender_phone, sender_label, text or ""
-    )
-    if display_reply is not None:
-        return display_reply
+    # Task status changes require an explicit interactive button ID.
     ord_reply = await _handle_order_button(db, sender_phone, sender_label, text or "")
     if ord_reply is not None:
         return ord_reply
@@ -1521,15 +1518,13 @@ async def handle_staff_message(
     if followup is not None:
         return followup
 
-    # "done KK-20260803-01" — staff quick-confirm, zero LLM (owner's spec)
+    # Typed task completion (done T-...) is intentionally disabled: task
+    # status changes require an explicit interactive task button. Order
+    # completion (done KK-...) is a separate order workflow and remains valid.
     if text:
         m_done = re.match(r"^\s*done\s+(KK-\S+)\s*$", text, re.I)
         if m_done and sender_label != "manager":
             return await _apply_done(db, sender_phone, sender_label, m_done.group(1).upper())
-        # "done T-14" — closes an assigned task, also zero LLM
-        m_task = re.match(r"^\s*done\s+(T-?\d+)\s*$", text, re.I)
-        if m_task:
-            return await _close_task_by_code(db, sender_phone, sender_label, m_task.group(1))
 
     # Pickup conversation: their tap on Yes/No, and their answer to
     # "kab tak?". Both are deterministic — no LLM, no ambiguity.
@@ -1537,43 +1532,7 @@ async def handle_staff_message(
     if pickup_reply is not None:
         return pickup_reply
 
-    # Operational issue reports must attach to the one unambiguous open task.
-    # Common blockers should not depend on an order number or LLM classification.
-    if sender_label != "manager" and text and not text.startswith("["):
-        issue_text = " ".join(text.casefold().split())
-        issue_terms = (
-            "geela", "geele", "geeli", "wet clothes", "kapde wet",
-            "pickup nahi", "pickup nhi", "pickup nahi ho", "pickup nhi ho",
-            "nahi ho payega", "nhi ho payega", "nahi ho paega", "nhi ho paega",
-            "not possible", "cannot pick", "can't pick", "machine kharab",
-            "kapde nahi sookhe", "kapde nahi sukhe", "dry nahi hue",
-        )
-        if any(term in issue_text for term in issue_terms):
-            from app.services import tasks as task_service, team
-            issue_staff = (
-                await db.execute(select(Staff).where(Staff.phone == sender_phone))
-            ).scalar_one_or_none()
-            if issue_staff is not None and issue_staff.is_active:
-                open_issue_tasks = await task_service.open_tasks_for_staff(db, issue_staff.id)
-                if len(open_issue_tasks) == 1:
-                    issue_task = open_issue_tasks[0]
-                    await task_service.note_reply(
-                        db, issue_staff.id, text, by=issue_staff.name,
-                        task_code=issue_task.code,
-                    )
-                    await team.notify_admins(
-                        db,
-                        f"⚠️ *Task issue — {issue_task.code}*\n"
-                        f"Staff: {issue_staff.name}\n"
-                        f"Task: {issue_task.title}\n"
-                        f"Issue: {text.strip()[:400]}\n"
-                        "Task remains OPEN until a manager resolves/reassigns it.",
-                        skip_phone=issue_staff.phone,
-                    )
-                    return (
-                        f"⚠️ *{issue_task.code}* par issue record kar diya aur manager ko bata diya. "
-                        "Task abhi OPEN hai; bina confirmation ke complete nahi kiya."
-                    )
+    # Free-text issue reports do not mutate or annotate tasks.
 
     # Order par dikkat — LLM se pehle, kyunki ye khone wali baat nahi hai.
     problem = await _handle_order_problem(db, sender_phone, sender_label, text or "")
@@ -1595,11 +1554,7 @@ async def handle_staff_message(
     if worklist is not None:
         return worklist
 
-    # Natural-language reply to the latest assigned task — task context first,
-    # so staff does not need to repeat the task code.
-    task_reply = await _handle_open_task_reply(db, sender_phone, sender_label, text or "")
-    if task_reply is not None:
-        return task_reply
+    # Natural-language staff messages are not task actions.
 
     # Campaign approvals are deterministic commands, no LLM needed.
     if sender_label == "manager" and text:
@@ -1697,22 +1652,8 @@ async def handle_staff_message(
         reply = await _apply_note(db, sender_label, extracted, sender_phone)
     elif action == "record_payment":
         reply = await _stage_payment(db, sender_phone, sender_label, extracted)
-    elif action == "standup_reply" and sender_label != "manager":
-        reply = await _apply_standup_reply(db, sender_phone, sender_label, extracted)
-
-    # Whatever a staff member says while they owe us an answer belongs on
-    # the task — the owner should see their words, not just "no reply yet".
-    if sender_label != "manager" and text and not text.startswith("["):
-        try:
-            from app.services import tasks as task_service
-
-            staff = (
-                await db.execute(select(Staff).where(Staff.phone == sender_phone))
-            ).scalar_one_or_none()
-            if staff is not None:
-                await task_service.note_reply(db, staff.id, text)
-        except Exception:
-            log.exception("task_note_reply_failed")
+    # Standup replies are not task actions. Task mutations are handled
+    # only by the explicit interactive-button handlers above.
     if reply is not None:
         await audit.record(
             actor_role="admin" if sender_label == "manager" else "staff",
