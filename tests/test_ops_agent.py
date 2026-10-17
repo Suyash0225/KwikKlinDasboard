@@ -283,3 +283,32 @@ async def test_dashboard_and_order_detail_carry_tracking_and_bill_time(client, s
         tracked = await turnaround.track_many(db, [await db.get(Order, o.id)])
     t = tracked[o.id]
     assert t["stage"] == "RECEIVED" and t["bill_seconds"] == 75 and len(t["milestones"]) == 1
+
+
+async def test_duplicate_order_stage_request_reuses_open_task_without_second_ping(shop, sent) -> None:
+    """Retrying a wash-stage request for one order must not notify twice."""
+    o = await _order()
+    initial = await _tasks(o.id)
+    assert len([t for t in initial if t.kind == "wash" and t.status == "OPEN"]) == 1
+    original_code = next(t.code for t in initial if t.kind == "wash" and t.status == "OPEN")
+    sends_before = len(sent)
+
+    async with async_session_factory() as db:
+        order = await db.get(Order, o.id)
+        staff = await db.get(Staff, order.assigned_washer_id)
+        from app.models import Customer
+        customer = await db.get(Customer, order.customer_id)
+        duplicate = await task_service.create_task(
+            db,
+            title="Retry wash-stage task",
+            staff=staff,
+            order=order,
+            customer=customer,
+            kind="wash",
+            notify=True,
+        )
+
+    assert duplicate.code == original_code
+    assert len(sent) == sends_before
+    final = await _tasks(o.id)
+    assert len([t for t in final if t.kind == "wash" and t.status == "OPEN"]) == 1
