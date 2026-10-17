@@ -343,7 +343,8 @@ async def send_message(
                     db, to_phone,
                     {"text": text, "buttons": [[b.id, b.title] for b in buttons] if buttons else None,
                      "list_rows": [[r.id, r.title, r.description] for r in list_rows] if list_rows else None,
-                     "list_button": list_button, "sent_by": sent_by, "reply_to": reply_to, "category": category},
+                     "list_button": list_button, "sent_by": sent_by, "reply_to": reply_to, "category": category,
+                     "intent": effective_intent, "outbound_kind": outbound_kind, "urgent": urgent},
                 )
             raise SendError(str(exc), transient=exc.transient) from exc
         await _record_outbound(
@@ -414,7 +415,8 @@ async def send_message(
         if exc.transient and enqueue_on_fail:
             await _enqueue_outbound(db, to_phone, {"text": text, "buttons": [[b.id, b.title] for b in buttons] if buttons else None,
                 "template_name": template_name, "template_params": template_params,
-                "template_url_param": template_url_param, "sent_by": sent_by})
+                "template_url_param": template_url_param, "sent_by": sent_by, "category": category,
+                "intent": effective_intent, "outbound_kind": outbound_kind, "urgent": urgent})
         raise
     wa_message_id = data["messages"][0]["id"]
     await _record_outbound(
@@ -733,6 +735,11 @@ async def _enqueue_outbound(db: AsyncSession, to_phone: str, payload: dict) -> N
     from app.models import OutboundMessage
 
     try:
+        from app.services.tenant_context import current_tenant_id
+
+        tenant_id = current_tenant_id.get()
+        if tenant_id is not None:
+            payload = {**payload, "tenant_id": str(tenant_id)}
         await db.rollback()  # the failed send may have left the session dirty
         db.add(OutboundMessage(to_phone=to_phone, payload=payload))
         await db.commit()
