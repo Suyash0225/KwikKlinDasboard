@@ -45,6 +45,7 @@
       <div class="navsec">Growth</div>
       <div data-s="campaigns" onclick="go('campaigns')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-campaign"/></svg>Campaigns</div>
       <div class="navsec">Agent</div>
+      <div data-s="business" onclick="go('business')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-dashboard"/></svg>Business Manager</div>
       <div data-s="tasks" onclick="go('tasks')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-task"/></svg>Tasks</div>
       <div data-s="agents" onclick="go('agents')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-agent"/></svg>Agents</div>
       <div data-s="usage" onclick="go('usage')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-usage"/></svg>AI usage</div>
@@ -468,6 +469,32 @@
           <div id="corr-list" style="margin-top:8px"></div>
         </div>
       </div>
+    </section>
+
+    <!-- Business Manager: read-only operational priorities based on existing dashboard data -->
+    <section id="sec-business" style="display:none">
+      <div class="pagehead">
+        <div><h2>Business Manager</h2><p>Daily priorities from your live orders and payment records — recommendations only, no automatic messages or changes.</p></div>
+        <div class="actions"><button class="btn ghost" onclick="loadBusinessManager()">↻ Refresh</button></div>
+      </div>
+      <div class="grid kpis" id="business-kpis"></div>
+      <div class="split2" style="margin-top:14px">
+        <div class="card">
+          <b>🚨 Needs attention</b>
+          <p class="muted" style="margin:4px 0 10px">Orders marked late by the existing delivery tracker.</p>
+          <div id="business-delayed"></div>
+        </div>
+        <div class="card">
+          <b>💰 Collect payment</b>
+          <p class="muted" style="margin:4px 0 10px">Delivered orders with an outstanding balance.</p>
+          <div id="business-dues"></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <b>✅ Suggested next steps</b>
+        <div id="business-actions" style="margin-top:8px"></div>
+      </div>
+      <p class="muted" style="margin-top:10px">This first version is deterministic and read-only. It uses existing records; it does not call an LLM, send WhatsApp messages, assign staff, or modify orders.</p>
     </section>
 
     <!-- AI usage -->

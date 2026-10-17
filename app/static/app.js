@@ -245,6 +245,7 @@ function liveSeen() { LIVE_SEEN = Date.now(); }
 function refreshCurrentSection() {
   // Sirf khuli hui screen — background mein baaki sab maangna bekaar hai
   if (CURRENT === "dashboard") loadDashboard();
+  else if (CURRENT === "business") loadBusinessManager();
   else if (CURRENT === "tasks") loadTasks();
   else if (CURRENT === "bills") loadBills();
   else if (CURRENT === "inbox") loadThreads();
@@ -504,7 +505,7 @@ const renderBillsDeb = debounce(() => reloadBills(), 300);
 const custSearchDeb = debounce(() => { CUST_SHOWN = 30; renderCustomers(); }, 300);
 
 /* ============================= router ============================= */
-const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "tasks", "agents", "usage", "training", "activity", "settings"];
+const SECTIONS = ["dashboard", "inbox", "newbill", "bills", "customers", "expenses", "reports", "campaigns", "business", "tasks", "agents", "usage", "training", "activity", "settings"];
 const TITLES = {
   dashboard: ["Dashboard", "Today at a glance"],
   inbox: ["Inbox", "WhatsApp — see and reply yourself"],
@@ -514,6 +515,7 @@ const TITLES = {
   expenses: ["Expenses", "Daily spend and categories"],
   reports: ["Reports", "Revenue, expenses and profit"],
   campaigns: ["Campaigns", "Segments, offers and results"],
+  business: ["Business Manager", "Daily priorities from live business records"],
   tasks: ["Tasks", "Who was given what — pending, done, and replies"],
   agents: ["Agents", "Your AI employees — health and controls"],
   usage: ["AI usage", "How much AI was used and what it cost"],
@@ -544,7 +546,7 @@ function go(sec, push = true) {
   }
   ({ dashboard: loadDashboard, inbox: loadThreads, newbill: initNewBill, bills: loadBills,
      customers: loadCustomers, expenses: loadExpenses, reports: loadReports,
-     campaigns: loadCampaigns, tasks: loadTasks, agents: loadAgents, usage: loadUsage, training: loadTraining,
+     campaigns: loadCampaigns, business: loadBusinessManager, tasks: loadTasks, agents: loadAgents, usage: loadUsage, training: loadTraining,
      activity: loadActivity, settings: loadSettings }[sec] || (() => {}))();
 }
 
@@ -686,6 +688,66 @@ async function loadGrowthAnalytics() {
       ${attributionCard}`;
   } catch (e) {
     box.innerHTML = `<span class="muted">Growth analytics unavailable: ${esc(e.message)}</span>`;
+  }
+}
+
+async function loadBusinessManager() {
+  const kpis = $("business-kpis");
+  const delayedBox = $("business-delayed");
+  const duesBox = $("business-dues");
+  const actionsBox = $("business-actions");
+  if (!kpis || !delayedBox || !duesBox || !actionsBox) return;
+  kpis.innerHTML = skeleton(4);
+  delayedBox.innerHTML = skeleton(2);
+  duesBox.innerHTML = skeleton(2);
+  actionsBox.innerHTML = '<span class="muted">Checking live records…</span>';
+  try {
+    const d = await api("/admin/api/dashboard");
+    const c = d.counts || {};
+    const orders = d.active_orders || [];
+    const late = orders.filter((o) => o.tracking && o.tracking.promise_late);
+    const dues = d.unpaid_orders || [];
+    const outstanding = dues.reduce((sum, o) =>
+      sum + Math.max(0, Number(o.total_amount || 0) - Number(o.amount_paid || 0)), 0);
+    const tile = (label, value, note, icon) =>
+      '<div class="card"><div class="muted">' + icon + ' ' + esc(label) + '</div>' +
+      '<div style="font-size:26px;font-weight:700;margin-top:5px">' + esc(String(value)) + '</div>' +
+      '<small class="muted">' + esc(note) + '</small></div>';
+    kpis.innerHTML =
+      tile("New orders today", Number(c.today_new || 0), "Created since the day boundary used by the dashboard", "🧾") +
+      tile("Active orders", Number(c.active_total || 0), "Currently in progress", "🧺") +
+      tile("Late deliveries", late.length, "Flagged by the delivery tracker", "⏰") +
+      tile("Outstanding on delivered orders", money(outstanding), dues.length + " orders awaiting collection", "💰");
+    const orderLine = (o, extra) =>
+      '<div style="padding:9px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><b>' +
+      esc(o.order_number || "Order") + '</b><span class="pill ' + (extra === "late" ? "UNPAID" : "PARTIAL") + '">' +
+      (extra === "late" ? "Late" : "Payment due") + '</span></div>' +
+      '<div class="muted" style="margin-top:3px">' + esc(o.customer || "Customer") + ' · ' +
+      esc(statusName(o.status)) + '</div>' +
+      (extra === "due" ? '<div style="margin-top:3px"><b>' +
+        money(Math.max(0, Number(o.total_amount || 0) - Number(o.amount_paid || 0))) +
+        '</b> outstanding</div>' : '') + '</div>';
+    delayedBox.innerHTML = late.length
+      ? late.slice(0, 8).map((o) => orderLine(o, "late")).join("")
+      : emptyBox("No late deliveries flagged.", "✅");
+    duesBox.innerHTML = dues.length
+      ? dues.slice(0, 8).map((o) => orderLine(o, "due")).join("")
+      : emptyBox("No delivered orders have a balance due.", "✅");
+    const steps = [];
+    if (late.length) steps.push("Review " + late.length + " late order(s) and confirm the next delivery step.");
+    if (dues.length) steps.push("Follow up on " + dues.length + " delivered bill(s) with outstanding payment.");
+    if (Number(c.due_today || 0)) steps.push(Number(c.due_today) + " active order(s) are due today; check staff progress.");
+    if (!steps.length) steps.push("No urgent action is flagged by the current records. Keep order statuses and payments up to date.");
+    actionsBox.innerHTML = '<ul style="margin:0;padding-left:20px">' +
+      steps.map((s) => '<li style="padding:5px 0">' + esc(s) + '</li>').join("") + '</ul>' +
+      '<div class="filters" style="margin-top:10px"><button class="btn sm ghost" onclick="go(\'bills\')">Open bill history</button>' +
+      '<button class="btn sm ghost" onclick="go(\'tasks\')">Open staff tasks</button></div>';
+  } catch (e) {
+    kpis.innerHTML = errBox(e.message, "loadBusinessManager");
+    delayedBox.innerHTML = "";
+    duesBox.innerHTML = "";
+    actionsBox.innerHTML = "";
   }
 }
 
