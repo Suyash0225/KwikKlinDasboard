@@ -200,17 +200,18 @@ async def test_api_scopes_other_tenants_session_to_own_data(client, two_tenants)
     byte bhi nahi (RLS + ctx middleware ka proof, poora HTTP raasta)."""
     home_id, b_id = two_tenants
     async with async_session_factory() as db:
-        user_b = User(
-            tenant_id=b_id,
-            name="B Owner",
-            email=B_EMAIL,
-            password_hash=auth.hash_password("isolation-test-pw"),
-            role="OWNER",
-        )
-        db.add(user_b)
-        await db.commit()
-        raw_token = await auth.start_session(db, user_b, ip="127.0.0.1", user_agent="pytest")
-        await db.commit()
+        async with tenant_context.system_context(db):
+            user_b = User(
+                tenant_id=b_id,
+                name="B Owner",
+                email=B_EMAIL,
+                password_hash=auth.hash_password("isolation-test-pw"),
+                role="OWNER",
+            )
+            db.add(user_b)
+            await db.commit()
+            raw_token = await auth.start_session(db, user_b, ip="127.0.0.1", user_agent="pytest")
+            await db.commit()
 
     client.cookies.set("kk_session", raw_token)
     try:
@@ -453,13 +454,14 @@ async def test_rls_is_actually_in_force_not_just_configured(client) -> None:
 
     a, b = await _fresh("rls-live-a", "customers"), await _fresh("rls-live-b", "customers")
     async with async_session_factory() as db:
-        for tid, name in ((a, "A ka grahak"), (b, "B ka grahak")):
-            await db.execute(
-                sqltext("INSERT INTO customers (id, tenant_id, phone, name) "
-                        "VALUES (gen_random_uuid(), :t, :p, :n)"),
-                {"t": tid, "p": f"+9190{str(tid)[:8]}", "n": name},
-            )
-        await db.commit()
+        async with tenant_context.system_context(db):
+            for tid, name in ((a, "A ka grahak"), (b, "B ka grahak")):
+                await db.execute(
+                    sqltext("INSERT INTO customers (id, tenant_id, phone, name) "
+                            "VALUES (gen_random_uuid(), :t, :p, :n)"),
+                    {"t": tid, "p": f"+9190{str(tid)[:8]}", "n": name},
+                )
+            await db.commit()
 
     # RAW SQL — jaan-boojh kar. ORM ka filter yahan lagta hi nahi, isliye
     # jo bhi rokta hai wo sirf RLS hai. Yahi is test ka poora maqsad hai.
