@@ -41,8 +41,6 @@ async def _reserve_promotional_slot(db: AsyncSession, tenant_id, now: datetime) 
     before waiting/sending so concurrent workers cannot take the same slot.
     Failed sends still consume a slot, which is conservative and avoids bursts.
     """
-    from app.models.event import OutboundThrottle
-
     cap = max(1, int(await app_settings.get(db, "outbound_daily_msg_cap") or 100))
     today = now.astimezone(IST).date()
     await db.execute(
@@ -92,8 +90,8 @@ async def enforce_outbound_policy(
 
     Promotional: marketing.eligible + quiet hours + tenant daily cap + shared
     15–20s pacing + hard test-number block.
-    Transactional: active/customer STOP opt-out + opt-in for kind-specific
-    reminders + test-number block + quiet hours unless explicitly urgent.
+    Transactional: customer STOP opt-out + opt-in for kind-specific reminders
+    + test-number block + quiet hours unless explicitly urgent.
     """
     if intent not in {PROMOTIONAL, TRANSACTIONAL}:
         raise SendError("outbound intent must be promotional or transactional", transient=False)
