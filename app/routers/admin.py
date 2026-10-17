@@ -2155,6 +2155,9 @@ async def delete_inbox_thread(phone: str = Query(...), db: AsyncSession = Depend
 class InboxSendIn(BaseModel):
     phone: str
     text: str = Field(min_length=1, max_length=4000)
+    # Optional explicit policy classification; omitted preserves human free-form behavior.
+    intent: str | None = Field(default=None, pattern="^(promotional|transactional)$")
+    outbound_kind: str | None = Field(default=None, max_length=40)
     # wamid being quoted — WhatsApp shows it above the reply
     reply_to: str | None = Field(default=None, max_length=120)
 
@@ -2170,6 +2173,7 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
         wa_id = await send_message(
             db, to_phone=to_phone, text=body.text, sent_by="manager",
             reply_to=(body.reply_to or None),
+            intent=body.intent, outbound_kind=body.outbound_kind,
         )
     except WindowClosedError:
         raise HTTPException(
@@ -2183,6 +2187,8 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
 
 class InboxPingIn(BaseModel):
     phone: str
+    intent: str | None = Field(default=None, pattern="^(promotional|transactional)$")
+    outbound_kind: str | None = Field(default=None, max_length=40)
 
 
 @router.post("/api/inbox/ping", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
@@ -2216,7 +2222,10 @@ async def inbox_ping(body: InboxPingIn, db: AsyncSession = Depends(get_db)) -> d
             text = f"🔔 {staff.name}, ek update chahiye tha — kya status hai?"
 
     try:
-        wa_id = await send_message(db, to_phone=to_phone, text=text, sent_by="manager")
+        wa_id = await send_message(
+            db, to_phone=to_phone, text=text, sent_by="manager",
+            intent=body.intent, outbound_kind=body.outbound_kind,
+        )
     except WindowClosedError:
         try:
             wa_id = await send_message(
@@ -2224,6 +2233,7 @@ async def inbox_ping(body: InboxPingIn, db: AsyncSession = Depends(get_db)) -> d
                 template_name="kk_staff_alert",
                 template_params=[" ".join(text.split())[:600]],
                 sent_by="manager",
+                intent=body.intent, outbound_kind=body.outbound_kind,
             )
         except SendError as exc:
             raise HTTPException(
@@ -2513,6 +2523,8 @@ async def customers_import_file(
 async def inbox_send_media(
     phone: str = Form(...),
     caption: str = Form(default=""),
+    intent: str | None = Form(default=None),
+    outbound_kind: str | None = Form(default=None),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -2546,6 +2558,7 @@ async def inbox_send_media(
             caption=caption.strip() or None,
             local_url=f"/admin/media/{name}",
             sent_by="manager",
+            intent=intent, outbound_kind=outbound_kind,
         )
     except WindowClosedError:
         dest.unlink(missing_ok=True)
