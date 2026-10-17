@@ -1461,7 +1461,7 @@ async def handle_staff_message(
     # status changes require an explicit interactive task button. Order
     # completion (done KK-...) is a separate order workflow and remains valid.
     if text:
-        m_done = re.match(r"^\\s*done\\s+(KK-\\S+)\\s*$", text, re.I)
+        m_done = re.match(r"^\s*done\s+(KK-\S+)\s*$", text, re.I)
         if m_done and sender_label != "manager":
             return await _apply_done(db, sender_phone, sender_label, m_done.group(1).upper())
 
