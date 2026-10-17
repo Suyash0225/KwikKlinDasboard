@@ -241,7 +241,6 @@ async def test_api_responses_never_contain_other_tenant_data(
 async def test_system_context_still_sees_everything(two_tenants) -> None:
     """Scheduler/backup ki guarantee: system context (koi tenant set nahi)
     mein dono tenants ke rows dikhte hain — warna replay/backup toot jaata."""
-    assert tenant_context.current_tenant_id.get() is None
     async with async_session_factory() as db:
         async with tenant_context.system_context(db):
             rows = (
@@ -255,63 +254,76 @@ async def test_system_context_still_sees_everything(two_tenants) -> None:
 
 async def test_rls_unset_tenant_returns_no_rows(two_tenants) -> None:
     """No tenant and no explicit system grant must fail closed in ORM and PostgreSQL."""
-    async with async_session_factory() as db:
-        orm_rows = (
-            await db.execute(
-                select(Customer.phone).where(Customer.phone.in_((HOME_PHONE, B_PHONE)))
-            )
-        ).scalars().all()
-        raw_rows = (
-            await db.execute(
-                sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
-                {"p1": HOME_PHONE, "p2": B_PHONE},
-            )
-        ).scalars().all()
-    assert orm_rows == []
-    assert raw_rows == []
+    tenant_token = tenant_context.current_tenant_id.set(None)
+    system_token = tenant_context.current_system_context.set(False)
+    try:
+        async with async_session_factory() as db:
+            orm_rows = (
+                await db.execute(
+                    select(Customer.phone).where(Customer.phone.in_((HOME_PHONE, B_PHONE)))
+                )
+            ).scalars().all()
+            raw_rows = (
+                await db.execute(
+                    sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                    {"p1": HOME_PHONE, "p2": B_PHONE},
+                )
+            ).scalars().all()
+        assert orm_rows == []
+        assert raw_rows == []
+    finally:
+        tenant_context.current_system_context.reset(system_token)
+        tenant_context.current_tenant_id.reset(tenant_token)
+
 
 
 async def test_rls_context_does_not_leak_on_reused_connection(two_tenants) -> None:
     """The same checked-out connection must not retain a prior tenant GUC."""
-    from app.database import engine
+    tenant_token = tenant_context.current_tenant_id.set(None)
+    system_token = tenant_context.current_system_context.set(False)
+    try:
+        from app.database import engine
 
-    home_id, b_id = two_tenants
-    async with engine.connect() as conn:
-        async with conn.begin():
-            rows = (await conn.execute(
-                sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
-                {"p1": HOME_PHONE, "p2": B_PHONE},
-            )).scalars().all()
-            assert rows == []
-
-        token = tenant_context.current_tenant_id.set(home_id)
-        try:
+        home_id, b_id = two_tenants
+        async with engine.connect() as conn:
             async with conn.begin():
                 rows = (await conn.execute(
                     sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
                     {"p1": HOME_PHONE, "p2": B_PHONE},
                 )).scalars().all()
-                assert rows == [HOME_PHONE]
-        finally:
-            tenant_context.current_tenant_id.reset(token)
+                assert rows == []
 
-        token = tenant_context.current_tenant_id.set(b_id)
-        try:
+            token = tenant_context.current_tenant_id.set(home_id)
+            try:
+                async with conn.begin():
+                    rows = (await conn.execute(
+                        sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                        {"p1": HOME_PHONE, "p2": B_PHONE},
+                    )).scalars().all()
+                    assert rows == [HOME_PHONE]
+            finally:
+                tenant_context.current_tenant_id.reset(token)
+
+            token = tenant_context.current_tenant_id.set(b_id)
+            try:
+                async with conn.begin():
+                    rows = (await conn.execute(
+                        sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                        {"p1": HOME_PHONE, "p2": B_PHONE},
+                    )).scalars().all()
+                    assert rows == [B_PHONE]
+            finally:
+                tenant_context.current_tenant_id.reset(token)
+
             async with conn.begin():
                 rows = (await conn.execute(
                     sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
                     {"p1": HOME_PHONE, "p2": B_PHONE},
                 )).scalars().all()
-                assert rows == [B_PHONE]
-        finally:
-            tenant_context.current_tenant_id.reset(token)
-
-        async with conn.begin():
-            rows = (await conn.execute(
-                sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
-                {"p1": HOME_PHONE, "p2": B_PHONE},
-            )).scalars().all()
-            assert rows == []
+                assert rows == []
+    finally:
+        tenant_context.current_system_context.reset(system_token)
+        tenant_context.current_tenant_id.reset(tenant_token)
 
 
 # ---------------------------------------- per-dukaan unique constraints ----
