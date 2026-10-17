@@ -325,7 +325,7 @@ async def test_repeated_welcome_is_replaced_after_first_welcome():
         async def execute(self, *_args, **_kwargs):
             return FakeResult()
 
-    customer = type("Customer", (), {"id": 1, "phone": "+919999999999})()
+    customer = type("Customer", (), {"id": 1, "phone": "+919999999999"})()
     result = await _avoid_repeated_welcome(
         FakeDB(), customer,
         "Welcome to Kwik Klin 😊 May I know your name, please?",
