@@ -478,7 +478,7 @@ async def _human_handoff_waiting(
             .where(
                 Conversation.customer_id == customer.id,
                 Conversation.direction == Direction.OUTBOUND,
-                Conversation.sent_by == "human",
+                Conversation.sent_by.in_(("human", "manager")),
             )
             .order_by(Conversation.created_at.desc())
             .limit(1)
@@ -1300,7 +1300,7 @@ async def _send_customer_agent_reply(
                 .where(
                     Conversation.customer_id == customer.id,
                     Conversation.direction == Direction.OUTBOUND,
-                    Conversation.sent_by == "human",
+                    Conversation.sent_by.in_(("human", "manager")),
                 )
                 .order_by(Conversation.created_at.desc())
                 .limit(1)

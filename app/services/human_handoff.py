@@ -1,7 +1,7 @@
 """Human handoff: let the owner/staff answer from the real WhatsApp phone first.
 
 Flow:
-1. Phone sends an outbound message -> webhook records sent_by="human".
+1. Phone sends an outbound message or the dashboard Inbox sends sent_by="manager"; both count as human takeover.
 2. Customer sends a new inbound -> normal AI reply is held.
 3. If no human outbound follows that inbound for the configured grace period,
    this worker lets the Service Agent take over.
@@ -56,7 +56,7 @@ async def _latest_human(db: AsyncSession, customer_id):
             .where(
                 Conversation.customer_id == customer_id,
                 Conversation.direction == Direction.OUTBOUND,
-                Conversation.sent_by == "human",
+                Conversation.sent_by.in_(("human", "manager")),
             )
             .order_by(Conversation.created_at.desc())
             .limit(1)
@@ -104,7 +104,7 @@ async def _reply_one(db: AsyncSession, customer: Customer, inbound: Conversation
         if (
             current_outbound is not None
             and current_outbound.created_at > inbound.created_at
-            and current_outbound.sent_by != "human"
+            and current_outbound.sent_by not in {"human", "manager"}
         ):
             await _unclaim(key)
             return False
@@ -132,7 +132,7 @@ async def _reply_one(db: AsyncSession, customer: Customer, inbound: Conversation
         if (
             current_outbound is not None
             and current_outbound.created_at > inbound.created_at
-            and current_outbound.sent_by != "human"
+            and current_outbound.sent_by not in {"human", "manager"}
         ):
             await _unclaim(key)
             return False
