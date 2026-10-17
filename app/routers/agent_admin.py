@@ -634,6 +634,20 @@ async def approve_campaign(campaign_id: str, db: AsyncSession = Depends(get_db))
     c.status = "approved"
     await db.commit()
     queued = await queue_campaign(db, c)
+    if queued <= 0:
+        # Do not start a worker that can mark an empty campaign as sent.
+        # The dashboard gets an actionable result instead of a false success.
+        c.status = "failed"
+        await db.commit()
+        await audit.record(
+            actor_role="admin", actor="dashboard", action="campaign_approval_blocked",
+            args={"campaign": c.name}, result="no eligible recipients",
+        )
+        return {
+            "queued": 0,
+            "status": "failed",
+            "message": "No eligible recipients. Check segment, opt-outs, frequency caps, and active orders.",
+        }
     asyncio.create_task(send_campaign(c.id))
     await audit.record(
         actor_role="admin", actor="dashboard", action="campaign_approved",
