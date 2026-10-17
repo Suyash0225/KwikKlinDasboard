@@ -882,4 +882,12 @@ async def test_personalized_winback_creates_customer_locked_coupon_and_caps_30_d
             await db.delete(coupon)
             await db.commit()
     finally:
-        pass
+        async with async_session_factory() as cleanup_db:
+            await cleanup_db.execute(
+                sqltext(
+                    "DELETE FROM coupons WHERE customer_id = "
+                    "(SELECT id FROM customers WHERE phone = :phone)"
+                ),
+                {"phone": PHONE},
+            )
+            await cleanup_db.commit()
