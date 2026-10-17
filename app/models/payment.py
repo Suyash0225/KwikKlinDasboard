@@ -33,6 +33,9 @@ class Payment(Base, TenantScoped):
     # 'manager', staff name, 'agent', 'dashboard' — who recorded it
     recorded_by: Mapped[str] = mapped_column(String(80), default="dashboard")
     note: Mapped[str | None] = mapped_column(String(200))
+    # Unique provider reference makes webhook retries idempotent. Null for
+    # manual cash/UPI entries; payment-link ID for Razorpay-reconciled entries.
+    provider_reference: Mapped[str | None] = mapped_column(String(100), unique=True)
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
