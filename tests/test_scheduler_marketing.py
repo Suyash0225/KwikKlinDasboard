@@ -15,7 +15,7 @@ import app.services.marketing_agent as magent_module
 import app.services.scheduler as sched_module
 from app.database import async_session_factory
 from app.models import Campaign, CampaignRecipient, Coupon, Customer, Order, OrderStatus
-from app.services import app_settings, outbound_policy
+from app.services import app_settings, outbound_policy, tenant_context
 from app.services.marketing import (
     _classify,
     compute_segments,
@@ -41,6 +41,11 @@ async def _setup_cleanup(monkeypatch):
     # aur layer chadha deta tha.
     async with async_session_factory() as s:
         prior = await app_settings.get(s, "default_washer_phone")
+    # These tests exercise tenant-scoped scheduler and campaign behavior.
+    # Establish the tenant explicitly instead of relying on production fallback.
+    tenant_id = await tenant_context.get_home_tenant_id()
+    assert tenant_id is not None, "test database must seed a tenant"
+    tenant_token = tenant_context.current_tenant_id.set(tenant_id)
     yield
     from tests.conftest import purge_phones
 
@@ -56,6 +61,7 @@ async def _setup_cleanup(monkeypatch):
     if prior:
         async with async_session_factory() as s:
             await app_settings.set_value(s, "default_washer_phone", prior)
+    tenant_context.current_tenant_id.reset(tenant_token)
 
 
 @pytest.fixture
