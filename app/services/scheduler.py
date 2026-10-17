@@ -286,6 +286,9 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
     try:
         if now_ist.hour == 10:
             await run_standup()
+            from app.services.marketing import run_customer_cycle_nudges
+            async with async_session_factory() as db:
+                await run_customer_cycle_nudges(db)
     except Exception:
         log.exception("standup_job_failed")
     try:
