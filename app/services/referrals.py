@@ -217,7 +217,11 @@ async def _issue_share_code_after_delivery(db: AsyncSession, order: Order) -> No
                 result="sent",
             )
         except SendError as exc:
-            await _unclaim(claim_key)
+            # A transient transport failure can be ambiguous (provider may have
+            # accepted the message). Keep the claim to prevent duplicate shares;
+            # permanent policy/provider rejections are safe to retry later.
+            if not exc.transient:
+                await _unclaim(claim_key)
             log.info("referral_share_code_send_failed", reason=str(exc)[:100])
             await audit.record(
                 actor_role="system", actor="referrals", action="referral_share_code_send_failed",
