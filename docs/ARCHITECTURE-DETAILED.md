@@ -33,7 +33,7 @@ Security (see ARCHITECTURE.md §5).
 | Messaging | **Meta WhatsApp Cloud API** (webhooks in, Graph API out) | `app/routers/webhook.py`, `app/services/whatsapp.py` |
 | POS integration | DotPe webhook → normalised into the same pipeline | `app/routers/webhook.py`, `services/dotpe.py` |
 | Frontend | Vanilla HTML/CSS/JS single-page dashboard (PWA + service worker), no framework, no build step (only minification) | `app/static/` |
-| Ingress | **cloudflared tunnel** → local uvicorn (Windows machine) | `scripts/keepalive.ps1` |
+| Ingress | Production: **HTTPS → nginx → uvicorn on Ubuntu EC2**; local development may use cloudflared | `docs/DEPLOY.md`, `README.md` |
 | Tests | **pytest** (asyncio), ~700 tests across ~80 files | `tests/` |
 | Logging | structlog (structured JSON logs) | `app/utils/logger.py` |
 
@@ -48,24 +48,25 @@ flowchart LR
         BROWSER[Owner's browser<br/>dashboard PWA]
     end
 
-    subgraph machine [Windows machine - one instance per laundry]
-        TUNNEL[cloudflared tunnel]
+    subgraph prod [AWS EC2 - Ubuntu production]
+        NGINX[nginx HTTPS reverse proxy]
         subgraph api [FastAPI - uvicorn]
             WH["/webhook<br/>signature check + journal"]
-            ADMIN["/admin/* API<br/>X-API-Key"]
+            ADMIN["/admin/* API<br/>authenticated"]
             ACC["/join, /welcome<br/>signup & login"]
             CTRL["/control panel<br/>operator only"]
             STATIC["/admin/static<br/>dashboard HTML/JS/CSS"]
         end
-        SCHED[APScheduler<br/>5-min / hourly / nightly jobs]
-        DB[(PostgreSQL 15<br/>single source of truth)]
+        ELECT[Scheduler leader election<br/>PostgreSQL advisory lock]
+        SCHED[APScheduler<br/>leader worker only]
+        DB[(PostgreSQL<br/>single source of truth)]
         LLM[LLM client<br/>Gemini]
     end
 
-    CUST -->|messages| META -->|POST webhook| TUNNEL --> WH
-    DOTPE -->|order events| TUNNEL
-    BROWSER --> TUNNEL --> STATIC
-    BROWSER -->|JSON + X-API-Key| ADMIN
+    CUST -->|messages| META -->|HTTPS webhook| NGINX --> WH
+    DOTPE -->|order events| NGINX
+    BROWSER -->|HTTPS| NGINX --> STATIC
+    BROWSER -->|JSON + session/API key| NGINX --> ADMIN
     WH --> DB
     WH --> LLM
     ADMIN --> DB
@@ -205,13 +206,15 @@ Browser ── GET /admin/static/dashboard.html (public shell, no data)
 | Cadence | Job | What it does |
 |---|---|---|
 | Every 5 min | durability tick | replay stuck `webhook_events`, drain `outbound_queue` |
-| Every 5 min | tunnel guard | check cloudflared, restart the tunnel if dead |
+| Every 5 min (local dev only) | tunnel guard | check cloudflared only when no production `SITE_URL` is configured |
 | Hourly | hourly tick | follow-up pings, delivery nudges, payment reminders, escalation checks (quiet hours respected) |
 | Daily 21:00 | daily summary | owner gets a WhatsApp business summary |
 | Daily 21:30 | nightly tick | `pg_dump -Fc` backup → `backups/` (14-day retention), marketing/social jobs |
 | Morning | standup | staff task lists over WhatsApp |
 
-All scheduled sends are idempotent via `sent_events`.
+All scheduled sends are idempotent via `sent_events`. Each web worker participates
+in PostgreSQL `pg_try_advisory_lock` leader election; only the lock holder starts
+APScheduler, and another worker can take over when the leader connection is lost.
 
 ## 6. Data model (main tables)
 
@@ -253,6 +256,8 @@ native Postgres ENUM types (`app/models/enums.py`).
 | Every response | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` (stops `?key=` media-URL leak), HSTS |
 | Secrets | `.env` only, never in git; tokens masked as `••••••••` in API responses; saving a mask back never overwrites the real token |
 | Prod hardening | `/docs` and `/redoc` disabled outside development |
+| Tenant isolation | ORM scoping plus PostgreSQL FORCE RLS. RLS permits a matching non-empty `app.tenant_id` or explicit trusted `app.system_context='on'`; otherwise tenant-scoped access fails closed. |
+| Proxy IPs | Forwarded client IP is trusted only when the direct peer matches `TRUSTED_PROXIES`; nginx overwrites forwarding headers. |
 | `/social/{name}` | strict filename allow-list (`social-*.png` only) — no path traversal |
 | Audit | `audit_log` records who did what |
 
@@ -265,10 +270,11 @@ Layered, each independent — full detail in [ARCHITECTURE.md](ARCHITECTURE.md) 
 3. **Atomic transitions** — status + history + SLA in one commit
 4. **Idempotency keys** — no double-sends
 5. **Nightly `pg_dump`** — 14-day retention, restore drill documented
-6. **Keepalive script** — Postgres → `alembic upgrade head` → uvicorn →
-   cloudflared, health-checked every 5 min; survives reboots
-7. **`/health`** — liveness + DB check; 503 means DB down (keepalive restarts
-   the Postgres service, not the app)
+6. **Process supervision** — production uses systemd for uvicorn and nginx for
+   HTTPS ingress; deployment steps are in [docs/DEPLOY.md](DEPLOY.md). The
+   cloudflared keepalive path is a local-development convenience only.
+7. **`/health`** — liveness + DB check; 503 means the DB is unreachable and
+   should be investigated separately from application process supervision.
 
 ---
 
