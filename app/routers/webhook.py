@@ -1155,9 +1155,19 @@ async def _handle_inbound_message(
             classify_inbound_message,
             is_customer_lead,
             is_suppressed_classification,
+            looks_like_automated_agent,
         )
 
-        inbound_classification = await classify_inbound_message(spoken or text or "")
+        # Preserve the existing bot-to-bot safety behavior: this message must
+        # reach build_ai_reply, which pauses the thread, but it is never a lead.
+        if looks_like_automated_agent(spoken or text or ""):
+            inbound_classification = {
+                "classification": "GENERAL_MESSAGE",
+                "confidence": 0.99,
+                "reason": "automated-agent message; defer to thread pause guard",
+            }
+        else:
+            inbound_classification = await classify_inbound_message(spoken or text or "")
         if is_suppressed_classification(inbound_classification):
             log.info(
                 "inbound_non_lead_suppressed",
