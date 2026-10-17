@@ -128,12 +128,34 @@ async def task_status_menu(db: AsyncSession, code: str) -> list[ListRow]:
     staff = await db.get(Staff, task.assigned_staff_id) if task.assigned_staff_id else None
     role = staff.role.name if staff is not None else ""
     if role in {"WASHER", "SUPERVISOR"} and task.kind in {"wash", "dry", "iron"}:
-        return [
-            ListRow(f"task:{code}:wash", "🧼 Wash", "Washing is in progress"),
-            ListRow(f"task:{code}:iron", "👔 Iron", "Move to ironing"),
-            ListRow(f"task:{code}:ready", "✅ Ready", "Order is ready"),
-            ListRow(f"task:{code}:pending", "⏳ Pending", "Still in progress"),
-        ]
+        # Expose only the next legal stage. Stale/old WhatsApp cards are also
+        # rejected by bill_agent, so a delayed tap cannot skip drying/ironing.
+        order = await db.get(Order, task.order_id) if task.order_id else None
+        from app.models import OrderStatus
+        next_step = None
+        if order is not None:
+            stage = {
+                OrderStatus.RECEIVED: ("wash", "🧼 Start washing", "Order received; washing starts now"),
+                OrderStatus.PICKED_UP: ("wash", "🧼 Start washing", "Pickup complete; washing starts now"),
+                OrderStatus.IN_WASH: ("dry", "💨 Washing done", "Move washed clothes to drying"),
+                OrderStatus.IN_DRY: ("iron", "👔 Drying done", "Move dry clothes to ironing"),
+                OrderStatus.IN_IRON: ("ready", "✅ Ironing done", "Mark order ready for delivery"),
+            }.get(order.status)
+            expected_kind = {
+                OrderStatus.RECEIVED: "wash",
+                OrderStatus.PICKED_UP: "wash",
+                OrderStatus.IN_WASH: "wash",
+                OrderStatus.IN_DRY: "dry",
+                OrderStatus.IN_IRON: "iron",
+            }.get(order.status)
+            if stage and task.kind == expected_kind:
+                next_step = stage
+        rows = []
+        if next_step:
+            action, title, description = next_step
+            rows.append(ListRow(f"task:{code}:{action}", title, description))
+        rows.append(ListRow(f"task:{code}:pending", "⏳ Pending", "Still in progress"))
+        return rows
     if role == "DELIVERY" and task.kind in {"pickup", "delivery"}:
         # A delivery task has two separate milestones. The button must say
         # what the tap actually does; a vague "Done" previously looked like

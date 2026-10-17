@@ -88,6 +88,9 @@ async def test_standup_lists_pending_and_is_idempotent(sched_sent, sent, test_wa
     assert n1 >= 1
     washer_msgs = [c for c in sched_sent if c["to"] == TEST_WASHER_PHONE]
     assert washer_msgs and order.order_number in washer_msgs[0]["text"]
+    assert washer_msgs[0]["text"].count(order.order_number) == 1, (
+        "a linked order must appear once, not in both task and order sections"
+    )
     # same day again -> claimed keys block resend
     before = len(sched_sent)
     n2 = await run_standup(force=True)
@@ -547,8 +550,10 @@ async def test_standup_goes_out_as_a_tappable_list(sched_sent, sent, test_washer
 
     msg = next(c for c in sched_sent if c["to"] == TEST_WASHER_PHONE)
     rows = msg.get("list_rows") or []
-    assert any(r.id == f"pick:o:{order.order_number}" for r in rows), \
-        "standup list mein order tappable hona chahiye"
+    assert any(
+        r.id.startswith("pick:t:") and order.order_number in (r.description or "")
+        for r in rows
+    ), "linked order must remain visible and tappable through its task row"
     assert msg.get("list_button") == "Kaam chuniye"
 
 

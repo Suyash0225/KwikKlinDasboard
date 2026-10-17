@@ -786,6 +786,11 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
                 )
             ).scalars().all()
 
+            # A linked open task already represents this order in the task
+            # section. Do not repeat the same order in the second section.
+            task_order_ids = {t.order_id for t in task_rows if t.order_id is not None}
+            orders = [o for o in orders if o.id not in task_order_ids]
+
             if not orders and not task_rows:
                 continue
             if not await _claim(f"{key_prefix}:{today_key}:worker:{st.phone}"):
@@ -799,7 +804,9 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
             if task_rows:
                 for t in task_rows:
                     flag = " 🔴 URGENT" if t.urgent else ""
-                    lines.append(f"• {t.code} — {t.title[:180]}{flag}")
+                    linked_order = await db.get(Order, t.order_id) if t.order_id else None
+                    order_tag = f"{linked_order.order_number} — " if linked_order else ""
+                    lines.append(f"• {t.code} — {order_tag}{t.title[:150]}{flag}")
 
             if orders:
                 lines.append("")
@@ -829,14 +836,19 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
             # WAHA exposes interactive list rows (not Meta button payloads).
             # Keep the text summary for readability, but make each task/order
             # selectable so replies are bound to the right work item.
-            list_rows = [
-                ListRow(
-                    f"pick:t:{t.code}",
-                    t.code,
-                    (t.title or "Pending task")[:72],
+            list_rows = []
+            for t in task_rows:
+                linked_order = await db.get(Order, t.order_id) if t.order_id else None
+                task_label = (t.title or "Pending task")
+                if linked_order is not None:
+                    task_label = f"{linked_order.order_number} · {task_label}"
+                list_rows.append(
+                    ListRow(
+                        f"pick:t:{t.code}",
+                        t.code,
+                        task_label[:72],
+                    )
                 )
-                for t in task_rows
-            ]
             for o in orders:
                 cust = await db.get(Customer, o.customer_id)
                 cust_label = (cust.name or cust.phone) if cust else "Customer"
@@ -904,6 +916,14 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
                 .limit(30)
             )
         ).all()
+
+        # Manager briefing should not list one order once as an open task
+        # and again as a due order. The task row remains the actionable item.
+        task_order_ids = {
+            task.order_id for task, _assignee, _order, _customer in open_tasks
+            if task.order_id is not None
+        }
+        today_orders = [(o, c) for o, c in today_orders if o.id not in task_order_ids]
 
         if managers:
             manager_text = [

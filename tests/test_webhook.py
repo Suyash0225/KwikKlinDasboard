@@ -710,3 +710,28 @@ async def test_waha_outbound_webhook_distinguishes_human_from_api(
         assert row.created_at.replace(tzinfo=timezone.utc).timestamp() == pytest.approx(
             sent_timestamp, abs=1
         )
+
+
+
+def test_waha_to_meta_shape_extracts_nested_list_selection() -> None:
+    """WAHA NOWEB stores the chosen list row under _data.message."""
+    from app.routers.webhook import _waha_to_meta_shape
+
+    payload = {
+        "id": "false_495339000000@c.us_AC462TEST",
+        "from": "919336393612@c.us",
+        "body": "Washing is in progress",
+        "_data": {
+            "message": {
+                "listResponseMessage": {
+                    "singleSelectReply": {"selectedRowId": "task:T-150:wash"}
+                }
+            }
+        },
+    }
+
+    normalized = _waha_to_meta_shape(payload)
+
+    assert normalized["type"] == "button"
+    assert normalized["button"]["payload"] == "task:T-150:wash"
+    assert normalized["button"]["text"] == "Washing is in progress"
