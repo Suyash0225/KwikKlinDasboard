@@ -95,6 +95,31 @@ async def test_repeated_claimed_job_sends_once(monkeypatch) -> None:
 
 
 @pytest.mark.requires_independent_sessions
+async def test_restart_retry_job_emits_mock_message_once() -> None:
+    """A scheduler retry repeats the job key; the mocked send remains one-shot."""
+    from app.models import Tenant
+    from app.services import tenant_context
+    from app.services.scheduler import _claim
+
+    async with async_session_factory() as db:
+        async with tenant_context.system_context(db):
+            tenant = (
+                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
+            ).scalar_one()
+            tenant_id = tenant.id
+
+    sends = []
+    key = f"restart-send-regression:{uuid.uuid4().hex}"
+    async def job():
+        async with tenant_context.as_tenant(tenant_id):
+            if await _claim(key):
+                sends.append("mocked WhatsApp send")
+
+    await job()
+    await job()
+    assert sends == ["mocked WhatsApp send"]
+
+
 async def test_concurrent_referral_code_issuance_reuses_one_coupon() -> None:
     """Two delivery workers racing for one customer must converge on one code."""
     import asyncio
