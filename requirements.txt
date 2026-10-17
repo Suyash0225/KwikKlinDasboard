@@ -23,6 +23,9 @@ cryptography==46.0.6
 # --- Scheduler (daily staff check-ins, follow-ups — Phase 5) ---
 apscheduler==3.11.3
 
+# --- Optional off-host backup storage (AWS S3 / S3-compatible) ---
+boto3==1.40.61
+
 # --- Logging ---
 structlog==26.1.0
 

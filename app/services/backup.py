@@ -57,6 +57,63 @@ def _parse_db_url(url: str) -> dict | None:
     return m.groupdict() if m else None
 
 
+def _make_s3_client():
+    """Build an S3 client only when off-host backups are configured."""
+    import boto3
+    from botocore.config import Config
+
+    access_key = settings.BACKUP_S3_ACCESS_KEY_ID.strip()
+    secret_key = settings.BACKUP_S3_SECRET_ACCESS_KEY.strip()
+    session_token = settings.BACKUP_S3_SESSION_TOKEN.strip()
+    if bool(access_key) != bool(secret_key):
+        raise ValueError("Both BACKUP_S3_ACCESS_KEY_ID and BACKUP_S3_SECRET_ACCESS_KEY are required")
+    if session_token and not access_key:
+        raise ValueError("BACKUP_S3_SESSION_TOKEN requires explicit S3 access and secret keys")
+
+    kwargs = {
+        "region_name": settings.BACKUP_S3_REGION,
+        "config": Config(
+            s3={"addressing_style": settings.BACKUP_S3_ADDRESSING_STYLE}
+        ),
+    }
+    endpoint = settings.BACKUP_S3_ENDPOINT_URL.strip()
+    if endpoint:
+        kwargs["endpoint_url"] = endpoint
+    if access_key:
+        kwargs["aws_access_key_id"] = access_key
+        kwargs["aws_secret_access_key"] = secret_key
+    if session_token:
+        kwargs["aws_session_token"] = session_token
+    # If explicit credentials are omitted, boto3 uses the standard provider
+    # chain (prefer an EC2 instance role over static keys).
+    return boto3.client("s3", **kwargs)
+
+
+async def upload_offsite_backup(path: Path) -> str | None:
+    """Upload a verified dump; off-site storage is optional, never a hard dependency."""
+    bucket = settings.BACKUP_S3_BUCKET.strip()
+    if not bucket:
+        log.warning("backup_offsite_not_configured", local_only=True)
+        return None
+
+    prefix = settings.BACKUP_S3_PREFIX.strip("/")
+    key = f"{prefix}/{path.name}" if prefix else path.name
+    try:
+        client = _make_s3_client()
+        await asyncio.to_thread(client.upload_file, str(path), bucket, key)
+    except Exception:
+        log.exception("backup_offsite_upload_failed", bucket=bucket, key=key)
+        await _tell_the_owner(
+            f"🚨 Off-site backup upload FAIL hua: {path.name}\n"
+            "Local verified backup available hai, lekin off-site copy update nahi hui. "
+            "S3 bucket, endpoint aur credentials check karein."
+        )
+        return None
+
+    log.info("backup_offsite_upload_ok", bucket=bucket, key=key)
+    return key
+
+
 async def run_backup() -> str | None:
     """Dump the database. Returns the file path, or None on failure (logged)."""
     info = _parse_db_url(settings.DATABASE_URL)
@@ -113,12 +170,20 @@ async def run_backup() -> str | None:
 
     # Restore-test: jo backup restore nahi ho sakta wo backup hai hi nahi.
     verified = await verify_backup(str(out))
+    offsite_key = await upload_offsite_backup(out) if verified else None
     from app.services import audit
 
     await audit.record(
         actor_role="system", actor="nightly-backup",
         action="backup_ok" if verified else "backup_unverified",
-        args={"file": out.name, "bytes": out.stat().st_size, "verified": verified},
+        args={
+            "file": out.name,
+            "bytes": out.stat().st_size,
+            "verified": verified,
+            "offsite_enabled": bool(settings.BACKUP_S3_BUCKET.strip()),
+            "offsite_uploaded": offsite_key is not None,
+            "offsite_key": offsite_key,
+        },
         ok=verified,
     )
     log.info("backup_ok", file=out.name, bytes=out.stat().st_size, verified=verified)

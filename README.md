@@ -185,6 +185,47 @@ campaigns/coupons, open_questions, faq/corrections, settings_kv).
 **Tests**: `.venv\Scripts\python -m pytest` — all LLM/WhatsApp mocked. Suite runs
 against the local DB; seed demo data makes a few count-based tests fail.
 
+## Off-host backups and restore drill
+
+Nightly `pg_dump` files are kept locally for 14 days. Off-host upload is optional:
+set `BACKUP_S3_BUCKET` to enable it. A dump is uploaded only after its local
+archive passes `pg_restore --list` verification. If the bucket is blank, the
+app keeps the local backup and logs a warning; it does not crash. If upload
+fails, the local copy remains and the owner/admin receives a WhatsApp alert.
+
+Recommended production setup:
+- Use a private S3 bucket with public access blocked, server-side encryption, and a lifecycle/retention rule.
+- On EC2, prefer an instance role with write access only to the backup prefix; leave the explicit access-key fields blank.
+- For MinIO or another S3-compatible service, set `BACKUP_S3_ENDPOINT_URL` and, if needed, `BACKUP_S3_ADDRESSING_STYLE=path`.
+- `BACKUP_S3_PREFIX` defaults to `kwikklin/backups`; uploaded objects retain the timestamped dump filename.
+
+**Monthly restore drill (never restore over production):**
+
+1. Download a recent off-site object into the local `backups/` folder:
+
+   ```bash
+   aws s3 ls s3://<bucket>/<prefix>/
+   aws s3 cp s3://<bucket>/<prefix>/<dump-file>.dump backups/
+   pg_restore --list backups/<dump-file>.dump
+   ```
+
+2. Restore it into a disposable database, using the trusted system-context GUC
+   so FORCE RLS does not silently omit/reject tenant rows:
+
+   ```bash
+   createdb -h localhost -U postgres kwikklin_restore_drill
+   PGPASSWORD='<db-password>' PGOPTIONS='-c app.system_context=on' \
+     pg_restore --exit-on-error --no-owner -h localhost -U laundry \
+     -d kwikklin_restore_drill backups/<dump-file>.dump
+   PGPASSWORD='<db-password>' PGOPTIONS='-c app.system_context=on' \
+     psql -h localhost -U laundry -d kwikklin_restore_drill \
+     -c "SELECT count(*) FROM orders;"
+   dropdb -h localhost -U postgres kwikklin_restore_drill
+   ```
+
+3. Record the restore time and row-count check. Never run `pg_restore --clean`
+   against the live `laundry` database during a drill.
+
 ## Deploy (server)
 
 Poora kram (EC2, systemd, nginx, HTTPS): [docs/DEPLOY.md](docs/DEPLOY.md).

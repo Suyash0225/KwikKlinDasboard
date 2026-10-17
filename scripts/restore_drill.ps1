@@ -22,6 +22,8 @@ $scratch = "laundry_restore_drill"
 & "$bin\psql.exe" -h localhost -U postgres -c "CREATE DATABASE $scratch OWNER laundry"
 
 $env:PGPASSWORD = "laundry"
+# FORCE RLS is enabled on tenant tables; this trusted one-shot restore uses the system GUC.
+$env:PGOPTIONS = "-c app.system_context=on"
 & "$bin\pg_restore.exe" -h localhost -U laundry -d $scratch --no-owner $latest.FullName
 if ($LASTEXITCODE -ne 0) { Write-Warning "pg_restore ne warnings di (aksar harmless: extensions)" }
 
@@ -34,4 +36,5 @@ foreach ($t in @("customers","orders","conversations","payments","tenants","invo
 }
 
 & "$bin\psql.exe" -h localhost -U postgres -c "DROP DATABASE $scratch"
+Remove-Item Env:PGOPTIONS -ErrorAction SilentlyContinue
 Write-Host "`nDrill complete — scratch DB removed."

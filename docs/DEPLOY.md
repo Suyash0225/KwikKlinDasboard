@@ -171,5 +171,5 @@ ls -la /opt/kwikklin/backups/             # nightly pg_dump (14 din)
 ## Naya server / disaster
 
 Naye EC2 par "Pehli baar" wala kram, `.env` backup se copy, aur DB
-`pg_restore -d laundry backups/kwikklin-<latest>.dump`. Tokens tabhi
+`PGOPTIONS='-c app.system_context=on' pg_restore --exit-on-error --no-owner -d laundry backups/kwikklin-<latest>.dump`. Tokens tabhi
 khulenge jab `.env` ki `TOKEN_ENCRYPTION_KEY` wahi ho.
