@@ -919,7 +919,11 @@ async def drain_outbound_queue() -> int:
                         await db.rollback()
                         await db.execute(
                             update(OutboundMessage)
-                            .where(OutboundMessage.id == row_id)
+                            .where(
+                                OutboundMessage.id == row_id,
+                                OutboundMessage.status == "queued",
+                                OutboundMessage.attempts == attempts_before,
+                            )
                             .values(
                                 status="dead",
                                 last_error="duplicate retry claim; send suppressed to prevent duplicate delivery",
