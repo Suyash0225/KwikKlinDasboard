@@ -1,15 +1,20 @@
 """Google Business Profile daily AI posting."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import ipaddress
+import re
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+
+from sqlalchemy import func, select
 
 import httpx
 import structlog
 
 from app.config import settings
+from app.models import Lead, Order
 from app.models.tenant import Tenant
-from app.services import app_settings, google_business as gbp, llm_client
+from app.services import app_settings, audit, google_business as gbp, llm_client
 from app.services.tenant_context import current_tenant_id, get_home_tenant_id
 
 log = structlog.get_logger()
@@ -56,24 +61,171 @@ async def _api_post(refresh_token: str, account: str, location: str, payload: di
         raise gbp.GBPError(gbp._explain(r))
     return r.json() or {}
 
-def _cta_url() -> str:
+_TOPICS = (
+    ("stain-care", "a practical stain-removal tip"),
+    ("everyday-freshness", "how regular washing helps keep everyday clothes fresh"),
+    ("pickup-convenience", "the convenience of doorstep laundry pickup and delivery"),
+    ("garment-longevity", "a simple garment-care tip that helps clothes last longer"),
+    ("family-laundry", "a useful laundry tip for busy families"),
+    ("weekend-care", "a practical weekend laundry-care idea"),
+    ("weekly-planning", "planning laundry and garment care for the coming week"),
+)
+
+_DEFAULT_SEASONS = [
+    {"name": "winter-care", "start": "11-15", "end": "02-15",
+     "focus": "winter garment care, blanket care, and safe storage"},
+    {"name": "monsoon-care", "start": "06-15", "end": "09-15",
+     "focus": "monsoon drying, damp-odor prevention, and fabric care"},
+    {"name": "festive-care", "start": "10-01", "end": "11-15",
+     "focus": "festive garment care for sarees and occasion wear"},
+]
+
+def _campaign_marker(day: str, topic_key: str) -> str:
+    safe_topic = re.sub(r"[^a-z0-9-]", "", str(topic_key).lower())[:32] or "laundry-care"
+    return f"gbp_daily_{day.replace('-', '')}_{safe_topic}"[:100]
+
+def _cta_url(now_ist: datetime, topic_key: str, source_tag: str = "") -> str:
     base = (getattr(settings, "SITE_URL", "") or "https://kwikklin.online").rstrip("/")
     parts = urlsplit(base)
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    query.update({"utm_source": "google", "utm_medium": "gbp", "utm_campaign": "daily_post"})
+    query.update({
+        "utm_source": "google",
+        "utm_medium": "gbp",
+        "utm_campaign": _campaign_marker(now_ist.strftime("%Y-%m-%d"), topic_key),
+        "utm_content": re.sub(r"[^a-z0-9-]", "", str(topic_key).lower())[:40],
+    })
+    if source_tag:
+        query["utm_term"] = re.sub(r"[^a-z0-9-]", "", source_tag.lower())[:40]
+    else:
+        query.pop("utm_term", None)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 def _topic(day: int) -> str:
-    topics = (
-        "a practical stain-removal tip",
-        "how regular washing helps keep everyday clothes fresh",
-        "the convenience of doorstep laundry pickup and delivery",
-        "a simple garment-care tip that helps clothes last longer",
-        "a useful laundry tip for busy families",
-        "a practical weekend laundry-care idea",
-        "planning laundry and garment care for the coming week",
-    )
-    return topics[day % len(topics)]
+    return _TOPICS[day % len(_TOPICS)][1]
+
+def _topic_key(day: int) -> str:
+    return _TOPICS[day % len(_TOPICS)][0]
+
+def _calendar_focus(now_ist: datetime, calendar: list) -> tuple[str, str] | None:
+    """Return the editable seasonal calendar match as (key, focus)."""
+    today = now_ist.strftime("%m-%d")
+    for item in calendar if isinstance(calendar, list) else []:
+        if not isinstance(item, dict):
+            continue
+        start, end = str(item.get("start") or ""), str(item.get("end") or "")
+        focus = str(item.get("focus") or "").strip()[:180]
+        key = re.sub(r"[^a-z0-9-]", "", str(item.get("name") or "seasonal").lower())[:32]
+        if not re.fullmatch(r"\d{2}-\d{2}", start) or not re.fullmatch(r"\d{2}-\d{2}", end) or not focus:
+            continue
+        in_range = start <= today <= end if start <= end else (today >= start or today <= end)
+        if in_range:
+            return key or "seasonal", focus
+    return None
+
+def _choose_topic(performance: dict[str, dict], fallback_key: str, recent_keys: list[str]) -> str:
+    """Prefer attributed leads/revenue when evidence exists; avoid immediate repeats."""
+    candidates = [key for key, _ in _TOPICS if key not in recent_keys]
+    if not candidates:
+        candidates = [key for key, _ in _TOPICS]
+    measured = {
+        key: (int(performance.get(key, {}).get("leads", 0)) * 10
+              + int(performance.get(key, {}).get("orders", 0)) * 20
+              + float(performance.get(key, {}).get("collected_revenue", 0)) / 1000)
+        for key in candidates
+        if key in performance and (
+            int(performance[key].get("leads", 0)) > 0
+            or int(performance[key].get("orders", 0)) > 0
+            or float(performance[key].get("collected_revenue", 0)) > 0
+        )
+    }
+    if measured:
+        return max(measured, key=lambda key: (measured[key], key))
+    return fallback_key if fallback_key in candidates else candidates[0]
+
+def _public_poster_url(value: object) -> str | None:
+    """Accept only HTTPS public-looking poster URLs; never attach local URLs."""
+    raw = str(value or "").strip()
+    try:
+        parts = urlsplit(raw)
+        host = (parts.hostname or "").lower().rstrip(".")
+        if parts.scheme != "https" or not host or parts.username or parts.password:
+            return None
+        if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+            return None
+        try:
+            address = ipaddress.ip_address(host)
+            if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
+                return None
+        except ValueError:
+            pass
+        return raw if parts.path and parts.path != "/" else raw
+    except Exception:
+        return None
+
+async def _topic_performance(db, now_ist: datetime) -> dict[str, dict]:
+    """Last 28 days of post-attributed leads, orders, and collected revenue."""
+    since = now_ist.astimezone(timezone.utc) - timedelta(days=28)
+    lead_rows = (await db.execute(
+        select(Lead.source_campaign, func.count(Lead.id))
+        .where(Lead.created_at >= since, Lead.source_campaign.like("gbp_daily_%"))
+        .group_by(Lead.source_campaign)
+    )).all()
+    order_rows = (await db.execute(
+        select(Order.acquisition_campaign, func.count(Order.id), func.coalesce(func.sum(Order.amount_paid), 0))
+        .where(Order.created_at >= since, Order.acquisition_campaign.like("gbp_daily_%"))
+        .group_by(Order.acquisition_campaign)
+    )).all()
+    performance: dict[str, dict] = {}
+    for campaign, count in lead_rows:
+        match = re.fullmatch(r"gbp_daily_\d{8}_([a-z0-9-]+)", str(campaign or ""))
+        if match:
+            performance.setdefault(match.group(1), {"leads": 0, "orders": 0, "collected_revenue": 0.0})
+            performance[match.group(1)]["leads"] += int(count or 0)
+    for campaign, count, revenue in order_rows:
+        match = re.fullmatch(r"gbp_daily_\d{8}_([a-z0-9-]+)", str(campaign or ""))
+        if match:
+            performance.setdefault(match.group(1), {"leads": 0, "orders": 0, "collected_revenue": 0.0})
+            performance[match.group(1)]["orders"] += int(count or 0)
+            performance[match.group(1)]["collected_revenue"] += float(revenue or 0)
+    return performance
+
+async def _post_strategy(db, now_ist: datetime) -> dict:
+    performance = await _topic_performance(db, now_ist)
+    history = list(await app_settings.get(db, _POSTS_KEY) or [])
+    recent_keys = [
+        str(item.get("topic_key")) for item in history[-2:]
+        if item.get("status") == "published" and item.get("topic_key")
+    ]
+    calendar = await app_settings.get(db, "gbp_seasonal_calendar")
+    season = _calendar_focus(now_ist, calendar or _DEFAULT_SEASONS)
+    # Compare recent order volume by weekday; PostgreSQL DOW uses Sunday=0.
+    since = now_ist.astimezone(timezone.utc) - timedelta(days=28)
+    dow_rows = (await db.execute(
+        select(func.extract("dow", Order.created_at), func.count(Order.id))
+        .where(Order.created_at >= since)
+        .group_by(func.extract("dow", Order.created_at))
+    )).all()
+    weekday_counts = {int(day): int(count) for day, count in dow_rows if day is not None}
+    current_dow = (now_ist.weekday() + 1) % 7
+    baseline = (sum(weekday_counts.values()) / len(weekday_counts)) if weekday_counts else 0
+    slow_day = bool(baseline and weekday_counts.get(current_dow, 0) < baseline)
+    if season:
+        topic_key, focus = season
+        source_tag = "seasonal" + ("-slow-day" if slow_day else "")
+    elif slow_day:
+        topic_key, focus, source_tag = "pickup-convenience", (
+            "a helpful, low-pressure reminder about convenient laundry pickup and delivery"
+        ), "slow-day"
+    else:
+        fallback_key = _topic_key(now_ist.weekday())
+        topic_key = _choose_topic(performance, fallback_key, recent_keys)
+        focus = dict(_TOPICS).get(topic_key, _topic(now_ist.weekday()))
+        source_tag = "data-driven" if topic_key in performance else ""
+    return {
+        "topic_key": topic_key, "focus": focus, "source_tag": source_tag,
+        "performance": performance.get(topic_key, {"leads": 0, "orders": 0, "collected_revenue": 0.0}),
+        "performance_window_days": 28,
+    }
 
 async def _generate_post(db, now_ist: datetime) -> dict:
     tenant_id = current_tenant_id.get() or await get_home_tenant_id()
@@ -84,11 +236,16 @@ async def _generate_post(db, now_ist: datetime) -> dict:
     if tenant and tenant.shop_name:
         cfg = {"shop_name": tenant.shop_name, **cfg}
     facts = "\n".join(f"- {k}: {v}" for k, v in cfg.items() if v not in (None, ""))
+    strategy = await _post_strategy(db, now_ist)
     prompt = (
         f"FACTS:\n{facts or '- Kwik Klin is an online laundry service in Varanasi.'}\n\n"
         f"TODAY: {now_ist.strftime('%A, %d %B %Y')}\n"
-        f"FOCUS: {_topic(now_ist.weekday())}\n"
-        "Create one post. If no real offer is present in FACTS, use STANDARD."
+        f"FOCUS: {strategy['focus']}\n"
+        f"TOPIC KEY: {strategy['topic_key']}\n"
+        f"LAST 28-DAY ATTRIBUTED PERFORMANCE FOR THIS TOPIC: {strategy['performance']}\n"
+        "Use the focus and performance as guidance, not as claims for the public post. "
+        "Never state performance numbers or invent a deal. Create one post. "
+        "If no real offer is present in FACTS, use STANDARD."
     )
     with llm_client.track("gbp_post"):
         out = await llm_client.ask_json(system=_SYSTEM, user_text=prompt, schema=_POST_SCHEMA,
@@ -99,7 +256,7 @@ async def _generate_post(db, now_ist: datetime) -> dict:
     topic_type = out.get("topic_type") if out.get("topic_type") in {"STANDARD", "OFFER"} else "STANDARD"
     if topic_type == "OFFER" and "offer" not in facts.lower():
         topic_type = "STANDARD"
-    return {"summary": summary[:700], "topic_type": topic_type}
+    return {"summary": summary[:700], "topic_type": topic_type, **strategy}
 
 async def auto_post_daily(db, now_ist: datetime) -> dict:
     """Publish at most one post per IST calendar day for this tenant."""
@@ -118,26 +275,46 @@ async def auto_post_daily(db, now_ist: datetime) -> dict:
         return {"ok": True, "skipped": True, "reason": "already_published", "date": day}
 
     post = await _generate_post(db, now_ist)
+    topic_key = str(post.get("topic_key") or _topic_key(now_ist.weekday()))
+    campaign = _campaign_marker(day, topic_key)
+    source_tag = str(post.get("source_tag") or "")
+    cta_url = _cta_url(now_ist, topic_key, source_tag)
     payload = {
         "languageCode": "en-IN",
         "summary": post["summary"],
         "topicType": "STANDARD",
-        "callToAction": {"actionType": "LEARN_MORE", "url": _cta_url()},
+        "callToAction": {"actionType": "LEARN_MORE", "url": cta_url},
     }
+    poster_url = _public_poster_url(await app_settings.get(db, "gbp_public_poster_url"))
+    if poster_url:
+        payload["media"] = [{"mediaFormat": "PHOTO", "sourceUrl": poster_url}]
     try:
         created = await _api_post(conn["refresh_token"], conn["account"], conn["location"], payload)
     except Exception as exc:
         history.append({"date": day, "status": "failed", "error": str(exc)[:300],
+                        "topic_key": topic_key, "campaign": campaign,
                         "attempted_at": datetime.now(timezone.utc).isoformat()})
         await app_settings.set_value(db, _POSTS_KEY, history[-_MAX_HISTORY:])
+        await audit.record(actor_role="system", actor="gbp_auto_post", action="gbp_daily_post_failed",
+                           args={"date": day, "topic_key": topic_key, "campaign": campaign},
+                           result=str(exc)[:300], ok=False)
         raise
 
-    entry = {"date": day, "status": "published", "post_name": created.get("name", ""),
-             "summary": post["summary"], "published_at": datetime.now(timezone.utc).isoformat()}
+    entry = {
+        "date": day, "status": "published", "post_name": created.get("name", ""),
+        "summary": post["summary"], "topic_key": topic_key, "campaign": campaign,
+        "source_tag": source_tag, "cta_url": cta_url,
+        "performance_28d": post.get("performance", {"leads": 0, "orders": 0, "collected_revenue": 0.0}),
+        "published_at": datetime.now(timezone.utc).isoformat(),
+    }
     history.append(entry)
     await app_settings.set_value(db, _POSTS_KEY, history[-_MAX_HISTORY:])
     await app_settings.set_value(db, _ENABLED_KEY, True)
-    log.info("gbp_daily_post_published", date=day, post_name=entry["post_name"])
+    await audit.record(actor_role="system", actor="gbp_auto_post", action="gbp_daily_post_published",
+                       args={"date": day, "topic_key": topic_key, "campaign": campaign,
+                             "post_name": entry["post_name"]},
+                       result="published")
+    log.info("gbp_daily_post_published", date=day, post_name=entry["post_name"], topic_key=topic_key)
     return {"ok": True, "published": True, **entry}
 
 async def status(db) -> dict:
