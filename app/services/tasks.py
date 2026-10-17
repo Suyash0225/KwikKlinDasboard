@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import structlog
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -213,7 +214,35 @@ async def create_task(
         due_at=due_at,
     )
     db.add(task)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Two workers/requests can pass the preflight lookup simultaneously.
+        # The partial unique index is the arbiter; recover by returning the
+        # canonical open task instead of surfacing a duplicate to the caller.
+        await db.rollback()
+        duplicate_query = select(Task).where(
+            Task.status == TASK_OPEN,
+            Task.kind == kind,
+        )
+        if order is not None:
+            duplicate_query = duplicate_query.where(Task.order_id == order.id)
+        elif customer is not None:
+            duplicate_query = duplicate_query.where(
+                Task.customer_id == customer.id,
+                Task.order_id.is_(None),
+            )
+        else:
+            raise
+        duplicate = (
+            await db.execute(
+                duplicate_query.order_by(Task.created_at.asc()).limit(1)
+            )
+        ).scalar_one_or_none()
+        if duplicate is None:
+            raise
+        log.info("task_duplicate_race_reused", code=duplicate.code, kind=kind)
+        return duplicate
 
     if notify and staff is not None:
         sent = await _send_to_assignee(db, task, staff, first=True)
