@@ -44,6 +44,7 @@ _NON_LEAD_SCHEMA = {
             "type": "string",
             "enum": [
                 "CUSTOMER_LEAD",
+                "CUSTOMER_SERVICE",
                 "GENERAL_MESSAGE",
                 "BUSINESS_ADVERTISEMENT",
                 "SPAM",
@@ -66,6 +67,9 @@ CUSTOMER_LEAD:
 - A concrete service request or question about using Kwik Klin.
 - Existing-customer service questions also belong here; the backend separately prevents existing orders from being re-created as new leads.
 
+CUSTOMER_SERVICE:
+- An existing-order, bill, payment, delivery-status, complaint, or support question that is not a new purchase enquiry.
+
 GENERAL_MESSAGE:
 - Greetings, thanks, casual chat, vague "hello", unclear messages, or messages with no clear request to use Kwik Klin.
 - Do not turn a sender into a sales lead merely because they sent any message.
@@ -84,36 +88,59 @@ Rules:
 - Judge the intent of the complete message, not individual keywords.
 - Do NOT classify a genuine Kwik Klin service enquiry as an advertisement just because it contains words such as service, business, offer, price, or company.
 - Do NOT classify a vague greeting or an unclear message as CUSTOMER_LEAD. Use GENERAL_MESSAGE unless there is clear evidence of intent to use Kwik Klin.
+- Use CUSTOMER_SERVICE for support/order questions that should receive help but should not create a new sales lead.
 - If the sender is selling their own service/product, use BUSINESS_ADVERTISEMENT or VENDOR_OR_PARTNER even if the pitch is polite and contains no link.
 - Do not invent context that is not present in the message.
 - Keep the reason short and factual.
 """
 
-# Fast-path only messages that clearly express customer intent. Everything
-# else is classified by the cheap model so marketing pitches without a URL or
-# familiar keywords don't automatically become leads.
-_CLEAR_CUSTOMER_INTENT_RE = re.compile(
-    r"\b(?:mujhe|hume|humein|hamen|i need|i want|looking for|can you "
-    r"clean|do you clean|how much|kitna|rate kya|price kya|service chahiye|"
-    r"karwana hai|karwani hai|dry ?clean kar|kapde dhul|pickup chahiye|"
-    r"pickup karwana|book (?:a )?pickup|schedule (?:a )?pickup|pick up my|"
-    r"order status|mera order|my order|where is my order|delivery kab|"
-    r"bill bhej|payment link|refund chahiye|shikayat|complaint|rate batao|"
-    r"rates kya|price list)\b",
+# Fast-path only unmistakable purchase enquiries and service/support requests.
+# Generic pronouns ("I", "mujhe") are not sufficient; they also appear in sales
+# pitches, so they must be paired with a concrete Kwik Klin customer intent.
+_LEAD_INTENT_RE = re.compile(
+    r"\\b(?:how much|kitna (?:lagega|hoga|padega)|rate kya|price kya|"
+    r"service chahiye|laundry service chahiye|dry ?clean(?:ing)? karwana|"
+    r"dry ?clean(?:ing)? karwani|kapde (?:dhul|press|iron)|pickup chahiye|"
+    r"pickup karwana|book (?:a )?pickup|schedule (?:a )?pickup|"
+    r"mujhe (?:kapde|kapda|laundry|dry ?clean|dhulai|press|pickup)|"
+    r"hume(?:in)? (?:kapde|kapda|laundry|dry ?clean|dhulai|press|pickup)|"
+    r"i (?:need|want) (?:laundry|dry ?clean|pickup|clothes cleaned)|"
+    r"looking for (?:laundry|dry ?clean|pickup)|can you clean|do you clean|"
+    r"karwana hai|karwani hai|rate batao|rates kya|price list)\\b",
+    re.IGNORECASE,
+)
+
+_SERVICE_INTENT_RE = re.compile(
+    r"\\b(?:mera order|my order|order status|where is my order|delivery kab|"
+    r"bill bhej|payment link|already paid|refund|shikayat|complaint|"
+    r"order kahan|order kaha|payment status)\\b",
     re.IGNORECASE,
 )
 
 
-def _has_clear_customer_intent(text: str) -> bool:
-    return bool(_CLEAR_CUSTOMER_INTENT_RE.search(" ".join((text or "").split())))
+def _classify_clear_intent(text: str) -> dict[str, Any] | None:
+    message = " ".join((text or "").split())
+    if _LEAD_INTENT_RE.search(message):
+        return {
+            "classification": "CUSTOMER_LEAD",
+            "confidence": 0.99,
+            "reason": "clear new-service or purchase intent",
+        }
+    if _SERVICE_INTENT_RE.search(message):
+        return {
+            "classification": "CUSTOMER_SERVICE",
+            "confidence": 0.99,
+            "reason": "clear order or customer-support intent",
+        }
+    return None
 
 
 _HARD_PROMO_RE = re.compile(
-    r"\b(?:digital marketing|seo services|website development|bulk sms|"
+    r"\\b(?:digital marketing|seo services|website development|bulk sms|"
     r"bulk whatsapp|lead generation services|recruitment agency|software "
     r"development agency|grow your business|boost your sales|rank your website|"
     r"marketing agency|we provide (?:marketing|seo|website|software)|"
-    r"our (?:agency|company) (?:provides|offers))\b",
+    r"our (?:agency|company) (?:provides|offers))\\b",
     re.IGNORECASE,
 )
 
@@ -127,20 +154,17 @@ async def classify_inbound_message(text: str) -> dict[str, Any]:
     message = (text or "").strip()
     if not message:
         return {
-            "classification": "CUSTOMER_LEAD",
+            "classification": "GENERAL_MESSAGE",
             "confidence": 0.0,
             "reason": "empty message",
         }
 
-    # Concrete enquiries are safe to capture without an extra model call.
-    # Crucially, the inverse is NOT true: absence of suspicious keywords does
-    # not prove that a message is a lead.
-    if _has_clear_customer_intent(message):
-        return {
-            "classification": "CUSTOMER_LEAD",
-            "confidence": 0.99,
-            "reason": "clear customer service intent",
-        }
+    # Only clear purchase requests become leads without model classification.
+    # Order/support requests are recognized separately and never enter the
+    # new-sales-lead path.
+    clear_intent = _classify_clear_intent(message)
+    if clear_intent is not None:
+        return clear_intent
 
     try:
         with llm_client.track("inbound_non_lead_classifier"):
@@ -155,13 +179,14 @@ async def classify_inbound_message(text: str) -> dict[str, Any]:
         classification = out.get("classification")
         if classification not in {
             "CUSTOMER_LEAD",
+            "CUSTOMER_SERVICE",
             "GENERAL_MESSAGE",
             "BUSINESS_ADVERTISEMENT",
             "SPAM",
             "VENDOR_OR_PARTNER",
         }:
             return {
-                "classification": "CUSTOMER_LEAD",
+                "classification": "GENERAL_MESSAGE",
                 "confidence": 0.0,
                 "reason": "invalid classifier result",
             }
