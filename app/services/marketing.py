@@ -58,7 +58,7 @@ async def _customer_stats(db: AsyncSession) -> list[dict]:
                     0,
                 ).label("outstanding"),
             )
-            .join(Order, Order.customer_id == Customer.id)
+            .outerjoin(Order, Order.customer_id == Customer.id)
             .where(Customer.is_active)
             .group_by(Customer.id)
         )
@@ -226,7 +226,16 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
 
     # THE single gate: opt-out, cap, complaints, active order, bad rating —
     # for the whole segment in a fixed number of queries.
-    verdicts = await check_marketing_eligible_bulk(db, [st["id"] for st in targets])
+    # Broad-reach campaigns should not suppress a customer just because
+    # they currently have an order in progress. Keep opt-out, frequency,
+    # complaint and negative-rating gates unchanged. Targeted win-back
+    # segments still exclude active orders.
+    allow_active_orders = campaign.segment in ("selected", "all_active")
+    verdicts = await check_marketing_eligible_bulk(
+        db,
+        [st["id"] for st in targets],
+        allow_active_orders=allow_active_orders,
+    )
     eligible_ids = [st["id"] for st in targets if verdicts.get(st["id"], (False, ""))[0]]
 
     # Broad-reach (all_active) and owner-picked campaigns express an explicit
@@ -352,7 +361,11 @@ async def send_campaign(campaign_id) -> None:
                     # Re-run the broader segment gate too: active orders and
                     # rating-based exclusions can change after queue creation.
                     from app.services.leads import check_marketing_eligible_bulk
-                    verdicts = await check_marketing_eligible_bulk(db, [cust.id])
+                    verdicts = await check_marketing_eligible_bulk(
+                        db,
+                        [cust.id],
+                        allow_active_orders=campaign.segment in ("selected", "all_active"),
+                    )
                     still_eligible, skip_reason = verdicts.get(
                         cust.id, (False, "not_eligible")
                     )
