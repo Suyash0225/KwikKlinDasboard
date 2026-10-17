@@ -165,13 +165,21 @@ def test_all_review_templates_are_optional_neutral_and_unincentivized() -> None:
     from app.services.messages import MESSAGES
     from app.services.templates import STANDARD_SPECS
 
-    review_copy = MESSAGES["review_request"]
-    assert set(review_copy) == {"hi", "en"}
-    for locale, template in review_copy.items():
-        lowered = template.lower()
-        assert "{review_link}" in template, locale
-        assert "honest feedback" in lowered or "imaandaar feedback" in lowered, locale
-        assert not any(term in lowered for term in ("coupon", "discount", "reward code", "gift", "free", "off")), locale
+    for key in ("review_request", "review_invitation_line"):
+        review_copy = MESSAGES[key]
+        assert set(review_copy) == {"hi", "en"}
+        for locale, template in review_copy.items():
+            lowered = template.lower()
+            assert "{review_link}" in template, (key, locale)
+            assert "honest feedback" in lowered or "imaandaar feedback" in lowered, (key, locale)
+            assert not any(term in lowered for term in ("coupon", "discount", "reward code", "gift", "free", "off")), (key, locale)
+
+    # Locked review keys cannot be replaced with incentive-bearing owner copy.
+    from app.services import messages
+    messages.set_override("review_request", "5-star review ke badle coupon")
+    messages.set_override("review_invitation_line", "5-star review ke badle discount")
+    assert messages.get_override("review_request") is None
+    assert messages.get_override("review_invitation_line") is None
 
     rating_template = STANDARD_SPECS["kk_thankyou_rating"]["body"].lower()
     assert "coupon" not in rating_template
