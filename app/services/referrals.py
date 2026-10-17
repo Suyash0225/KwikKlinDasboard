@@ -103,23 +103,23 @@ async def _get_or_create_referral_code(
         },
         referral_owner_customer_id=customer.id,
     )
-    db.add(campaign)
-    await db.flush()
-    coupon = Coupon(
-        code=code,
-        discount_type="flat",
-        value=friend_discount,
-        min_order=min_order,
-        valid_from=today_ist(),
-        valid_to=valid_to,
-        per_customer_limit=1,
-        total_limit=1000,
-        campaign_id=campaign.id,
-        customer_id=None,
-        active=True,
-    )
-    db.add(coupon)
     try:
+        db.add(campaign)
+        await db.flush()
+        coupon = Coupon(
+            code=code,
+            discount_type="flat",
+            value=friend_discount,
+            min_order=min_order,
+            valid_from=today_ist(),
+            valid_to=valid_to,
+            per_customer_limit=1,
+            total_limit=1000,
+            campaign_id=campaign.id,
+            customer_id=None,
+            active=True,
+        )
+        db.add(coupon)
         await db.commit()
     except IntegrityError:
         # A concurrent delivery event for this same customer won the unique
