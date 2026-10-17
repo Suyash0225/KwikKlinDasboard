@@ -1251,6 +1251,7 @@ async def run_payment_reminders() -> int:
                         template_name="kk_payment_reminder",
                         template_params=[f"{due}", o.order_number, "Please clear the pending amount."],
                         template_url_param=bill_link.make(o.tenant_id, o.id) if o.tenant_id else None,
+                        intent="transactional", outbound_kind=kind,
                     )
                     sends += 1
                 except SendError:
