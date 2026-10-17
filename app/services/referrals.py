@@ -157,7 +157,7 @@ async def _issue_share_code_after_delivery(db: AsyncSession, order: Order) -> No
     message = (
         f"Namaste {customer.name or 'ji'}! 🙏\n"
         f"Aapka order {order.order_number} deliver ho gaya. Doston ko Kwik Klin recommend karein.\n"
-        f"Unke pehle order par {friend_discount} off (minimum {minimum).\n"
+        f"Unke pehle order par {friend_discount} off (minimum {minimum}).\n"
         f"Referral code: {coupon.code}\nValid till: {valid_to}.\n"
         "Aapko bhi unka pehla order deliver hone par referral reward milega. 🧺"
     )
