@@ -584,6 +584,7 @@ async def _send_with_buttons(
     try:
         await send_message(
             db, to_phone=to_phone, text=text, buttons=buttons,
+            intent="transactional", outbound_kind="service_reply",
         )
         return None
     except (WindowClosedError, SendError) as exc:
@@ -626,6 +627,7 @@ async def _handle_work_pick(
                         list_rows=rows,
                         list_button="Status chuniye",
                         list_title="Task status",
+                        intent="transactional", outbound_kind="service_reply",
                     )
                     return ""
                 except (WindowClosedError, SendError) as exc:
