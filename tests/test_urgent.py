@@ -10,6 +10,7 @@ from app.config import settings
 from app.database import async_session_factory
 from app.services import urgent as urgent_svc
 from app.services.work_orders import items_summary
+from app.utils.dates import today_ist
 from tests.conftest import purge_phones
 from tests.test_expenses_and_rates import _cleanup_tenant_rows
 from tests.test_staff_panel import A_DEL_PHONE, _login, two_shops  # noqa: F401
@@ -58,7 +59,7 @@ async def test_staff_urgent_bill_gets_default_charge_date_and_flag(client, two_s
         assert r.json()["total"] == 240
         row = await _order_row(r.json()["order_number"], "+919999900204")
         assert row["priority"] == "urgent"
-        assert row["expected_delivery"] == date.today() + timedelta(days=1)
+        assert row["expected_delivery"] == today_ist() + timedelta(days=1)
         charge = [i for i in row["items"] if i.get("kind") == "urgent_charge"]
         assert charge and charge[0]["amount"] == 80
         receipt = (await client.get(f"/staff/api/orders/{r.json()['order_number']}/receipt")).json()

@@ -15,7 +15,7 @@ import structlog
 from sqlalchemy import case, func, select
 
 from app.database import async_session_factory
-from app.models import Campaign, CampaignRecipient, Coupon, CouponRedemption, Order
+from app.models import Campaign, CampaignRecipient, Coupon, CouponRedemption, Order, OrderStatus
 from app.services import app_settings, audit, llm_client
 from app.services.llm_client import LLMError
 from app.services.marketing import compute_segments, queue_campaign, send_campaign
@@ -450,6 +450,25 @@ async def validate_coupon(
     # Reward coupon kisi ek grahak ka hai — doosre par lage to inaam ka matlab nahi
     if coupon.customer_id is not None and coupon.customer_id != customer_id:
         return None, Decimal("0"), "ye coupon kisi aur grahak ke naam ka hai"
+    referral_campaign = None
+    if coupon.campaign_id:
+        candidate = await db.get(Campaign, coupon.campaign_id)
+        if candidate and isinstance(candidate.stats, dict) and candidate.stats.get("referral_program") is True:
+            referral_campaign = candidate
+    if referral_campaign:
+        referrer_id = str((referral_campaign.stats or {}).get("referrer_customer_id") or "")
+        if referrer_id == str(customer_id):
+            return None, Decimal("0"), "apna referral code khud use nahi kar sakte"
+        prior_orders = (
+            await db.execute(
+                select(func.count()).select_from(Order).where(
+                    Order.customer_id == customer_id,
+                    Order.status != OrderStatus.CANCELLED,
+                )
+            )
+        ).scalar_one()
+        if prior_orders:
+            return None, Decimal("0"), "referral code sirf pehle order par valid hai"
     today = date.today()
     if coupon.valid_from and today < coupon.valid_from:
         return None, Decimal("0"), "coupon abhi shuru nahi hua"

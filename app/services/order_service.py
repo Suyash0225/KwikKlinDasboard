@@ -194,8 +194,10 @@ async def create_order(
     # total ke saath chala jaata tha, aur galat coupon par 400 aata tha
     # jabki bill ban chuka hota tha.
     coupon, coupon_discount = None, Decimal("0")
+    referral_campaign = None
     if coupon_code:
         from app.services.marketing_agent import validate_coupon
+        from app.services.referrals import referral_campaign_for_coupon
 
         coupon, coupon_discount, err = await validate_coupon(
             db, coupon_code, customer.id, total_amount or Decimal("0")
@@ -203,6 +205,7 @@ async def create_order(
         if err:
             await db.rollback()
             raise OrderError(f"coupon: {err}")
+        referral_campaign = await referral_campaign_for_coupon(db, coupon)
         total_amount = (total_amount or Decimal("0")) - coupon_discount
         discount_amount = (discount_amount or Decimal("0")) + coupon_discount
 
@@ -211,6 +214,8 @@ async def create_order(
     order = Order(
         order_number=order_number,
         customer_id=customer.id,
+        acquisition_source="referral" if referral_campaign else None,
+        acquisition_campaign=referral_campaign.name if referral_campaign else None,
         status=OrderStatus.PICKUP_ASSIGNED if needs_pickup else OrderStatus.RECEIVED,
         items=items,
         total_amount=total_amount,
@@ -457,6 +462,15 @@ async def update_status(
     from app.services import ops_agent
 
     await ops_agent.on_status_change(db, order, new_status, changed_by)
+
+    # Referral conversion rewards are triggered only by a completed delivery.
+    # This hook is best-effort and never rolls back the committed order status.
+    if new_status is OrderStatus.DELIVERED:
+        try:
+            from app.services import referrals
+            await referrals.on_order_delivered(db, order)
+        except Exception:
+            log.exception("referral_delivery_hook_failed", order_number=order.order_number)
 
     # Kapde taiyar = ab delivery ka sawaal. Owner's rule (06 Aug): delivery
     # boy se turant pucho "kab tak?", jawab DB mein rakho, owner ko batao.
