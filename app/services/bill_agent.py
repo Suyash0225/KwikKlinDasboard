@@ -334,7 +334,7 @@ _EXTRACT_SYSTEM = (
 # hone par bhi kaunsa kaam hai ye kabhi galat nahi hota. Jise likhna hai wo
 # likh sakta hai; ye sirf sabse aam jawab ka shortcut hai.
 _TASK_BTN_RE = re.compile(
-    r"^\s*\[button:task:(T-?\d+):(done|later|problem|wash|iron|ready|pending)\]",
+    r"^\s*\[button:task:(T-?\d+):(done|later|problem|wash|dry|iron|ready|pending)\]",
     re.I,
 )
 # WAHA list menus use row IDs rather than Meta button IDs.
@@ -480,7 +480,7 @@ async def _handle_task_button(
         return f"⏳ *{task.code}* — Pending status recorded. Please update again when the task is completed."
 
     # Washer/supervisor menu: update the order stage deterministically.
-    if action in {"wash", "iron", "ready"}:
+    if action in {"wash", "dry", "iron", "ready"}:
         if role not in {"WASHER", "SUPERVISOR", "ADMIN", "MANAGER"}:
             return "Ye status option sirf washing staff ke liye hai."
         if task.order_id is None:
@@ -490,8 +490,25 @@ async def _handle_task_button(
         if order is None:
             return get_message("order_not_found_staff", order_number="linked order")
 
+        # Do not trust an old WhatsApp list card: only the next legal
+        # processing step can be selected, even though the general order
+        # state machine permits skipping stages for manager corrections.
+        next_action = {
+            OrderStatus.RECEIVED: "wash",
+            OrderStatus.PICKED_UP: "wash",
+            OrderStatus.IN_WASH: "dry",
+            OrderStatus.IN_DRY: "iron",
+            OrderStatus.IN_IRON: "ready",
+        }.get(order.status)
+        if action != next_action:
+            return (
+                f"⚠️ *{order.order_number}* abhi {status_label(order.status)} stage par hai. "
+                "Purana menu use na karein; task dobara khol kar current next step chunein."
+            )
+
         target = {
             "wash": OrderStatus.IN_WASH,
+            "dry": OrderStatus.IN_DRY,
             "iron": OrderStatus.IN_IRON,
             "ready": OrderStatus.READY,
         }[action]
@@ -508,6 +525,7 @@ async def _handle_task_button(
 
         label = {
             "wash": "In Wash",
+            "dry": "In Dry",
             "iron": "In Iron",
             "ready": "Ready",
         }[action]
