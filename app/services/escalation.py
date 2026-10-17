@@ -59,23 +59,6 @@ async def raise_escalation(
         customer=customer.phone if customer else None,
     )
 
-    if customer is not None:
-        # Tell the customer a human has the case; do not leave them wondering
-        # whether the complaint reached anyone. This is a best-effort message.
-        acknowledgement = (
-            f"Hi {customer.name or 'there'}, your message has been passed to the shop owner. "
-            f"We aim to reply within {settings.ESCALATION_SLA_HOURS} hours. "
-            "The AI assistant is paused while the team handles this."
-        )
-        try:
-            await send_message(db, to_phone=customer.phone, text=acknowledgement, sent_by="bot")
-        except WindowClosedError:
-            await _queue_alert(db, customer.phone, acknowledgement)
-        except SendError:
-            log.exception("escalation_customer_ack_failed", customer=customer.phone)
-        except Exception:
-            log.exception("escalation_customer_ack_unexpected", customer=customer.phone)
-
     alert = get_message(
         "escalation_alert",
         customer_name=(customer.name if customer and customer.name else "naam nahi pata"),
@@ -110,8 +93,24 @@ async def raise_escalation(
             await _queue_alert(db, to_phone, alert)
         except Exception:
             log.exception("escalation_alert_failed", to=to_phone)
-    return esc
+    if customer is not None:
+        # Tell the customer a human has the case; do not leave them wondering
+        # whether the complaint reached anyone. This is a best-effort message.
+        acknowledgement = (
+            f"Hi {customer.name or 'there'}, your message has been passed to the shop owner. "
+            f"We aim to reply within {settings.ESCALATION_SLA_HOURS} hours. "
+            "The AI assistant is paused while the team handles this."
+        )
+        try:
+            await send_message(db, to_phone=customer.phone, text=acknowledgement, sent_by="bot")
+        except WindowClosedError:
+            await _queue_alert(db, customer.phone, acknowledgement)
+        except SendError:
+            log.exception("escalation_customer_ack_failed", customer=customer.phone)
+        except Exception:
+            log.exception("escalation_customer_ack_unexpected", customer=customer.phone)
 
+    return esc
 
 
 async def remind_overdue_escalations(
