@@ -2600,6 +2600,30 @@ async function loadUsage() {
   const budgetNote = u.monthly_budget_usd
     ? `budget ${usd(u.monthly_budget_usd)}` : "no budget set";
 
+  // A forecast warning is more useful than showing a budget number alone.
+  // Use the backend's same-month projection; never label estimated token
+  // pricing as an exact Google invoice.
+  const budget = Number(u.monthly_budget_usd || 0);
+  const projectedUsd = Number(u.projected_month_usd || 0);
+  const monthUsd = Number(u.month?.cost_usd || 0);
+  const budgetPct = budget > 0 ? Math.round((projectedUsd / budget) * 100) : null;
+  const budgetTone = budgetPct === null ? "muted"
+    : budgetPct >= 100 ? "var(--danger)"
+    : budgetPct >= 80 ? "var(--warn)" : "var(--ok)";
+  const budgetTitle = budgetPct === null ? "AI spend alert is not configured"
+    : budgetPct >= 100 ? "Projected AI spend is over budget"
+    : budgetPct >= 80 ? "AI budget warning" : "AI spend is within budget";
+  const budgetDetail = budgetPct === null
+    ? "Set a monthly AI budget in Settings to enable forecast warnings."
+    : `Recorded this month: ${usd(monthUsd)} · projected: ${usd(projectedUsd)} / ${usd(budget)} (${budgetPct}%). Forecast is an estimate, not an invoice.`;
+  $("usage-budget-alert").innerHTML = `<div class="card" style="border-left:4px solid ${budgetTone};margin-bottom:14px">
+    <b style="color:${budgetTone}">${esc(budgetTitle)}</b>
+    <p class="muted" style="margin-top:5px">${esc(budgetDetail)}</p>
+    ${budgetPct !== null ? `<div style="height:7px;background:var(--n100);border-radius:5px;overflow:hidden;margin-top:10px">
+      <div style="height:100%;width:${Math.min(100, Math.max(0, budgetPct))}%;background:${budgetTone};border-radius:5px"></div>
+    </div>` : ""}
+  </div>`;
+
   $("usage-kpis").innerHTML =
     kpi("AI calls today", u.today.calls, capNote, "", "⚡", "orange") +
     kpi("Tokens today", kTok(u.today.input_tokens + u.today.output_tokens),
