@@ -24,6 +24,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.utils.client_ip import get_client_ip
 from app.models import (
     PaymentStatus,
     TASK_CANCELLED,
@@ -161,7 +162,7 @@ async def staff_login_api(
 ) -> dict:
     from app.utils.phone import normalize_phone
 
-    ip = request.client.host if request.client else "?"
+    ip = get_client_ip(request) or "?"
     token, staff = await staff_login(
         db, phone=normalize_phone(body.phone), password=body.password, ip=ip,
         user_agent=request.headers.get("user-agent", ""),

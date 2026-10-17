@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.database import engine
+from app.utils.client_ip import TrustedProxyMiddleware, get_client_ip
 from app.routers.admin import router as admin_router
 from app.routers.agent_admin import router as agent_admin_router
 from app.routers.orders import _key_matches, router as orders_router
@@ -232,7 +233,7 @@ async def tenant_scope(request: Request, call_next):
             tid = await tenant_context.get_home_tenant_id()
 
     rate_key = f"tenant:{tid}" if tid is not None else (
-        f"ip:{request.client.host if request.client else 'unknown'}"
+        f"ip:{get_client_ip(request) or 'unknown'}"
     )
     if _rate_limited(rate_key, request.url.path):
         return JSONResponse(
@@ -301,6 +302,9 @@ async def security_headers(request: Request, call_next):
     )
     return response
 
+
+# Resolve forwarded client IP and HTTPS scheme only after checking the direct peer.
+app.add_middleware(TrustedProxyMiddleware)
 
 app.include_router(webhook_router)
 app.include_router(orders_router)

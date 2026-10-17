@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.utils.client_ip import get_client_ip
 from app.models import (
     ROLE_OWNER,
     TENANT_ACTIVE,
@@ -431,7 +432,7 @@ async def create_tenant(
         action="tenant_created", tenant_id=t.id,
         args={"tenant": slug, "plan": t.plan, "cycle": body.cycle,
               "trial_days": trial_days,
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     # Best-effort WhatsApp invite (window/creds na hon to chup-chaap skip —
     # link response mein hai hi, operator khud bhej dega)
@@ -635,7 +636,7 @@ async def reset_owner_password(
     await audit.record(
         actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
         action="owner_password_reset", tenant_id=t.id,
-        args={"tenant": slug, "ip": request.client.host if request.client else None},
+        args={"tenant": slug, "ip": get_client_ip(request)},
     )
     return {"email": user.email, "reset_path": invite_path}
 
@@ -675,7 +676,7 @@ async def delete_tenant(
             status_code=400,
             detail="Ye is deployment ki apni dukaan hai — delete nahi ho sakti.",
         )
-    ip = request.client.host if request.client else None
+    ip = get_client_ip(request)
     from app.services import audit
 
     users = (await db.execute(select(U).where(U.tenant_id == t.id))).scalars().all()
@@ -760,7 +761,7 @@ async def restore_tenant(
     await audit.record(
         actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
         action="tenant_restored", tenant_id=t.id,
-        args={"tenant": slug, "ip": request.client.host if request.client else None},
+        args={"tenant": slug, "ip": get_client_ip(request)},
     )
     return _out(t)
 
@@ -921,7 +922,7 @@ async def tenant_user_invite(
         actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
         action="user_invited", tenant_id=t.id,
         args={"tenant": slug, "email": body.email.lower(), "role": body.role,
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     return {"email": body.email.lower(), "role": body.role, "invite_path": invite_path}
 
@@ -957,7 +958,7 @@ async def tenant_user_revoke(
         actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
         action="user_revoked", tenant_id=t.id,
         args={"tenant": slug, "email": u.email,
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     return {"revoked": u.email}
 
@@ -1021,7 +1022,7 @@ async def admin_keys_create(
         actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
         action="admin_key_created",
         args={"label": body.label, "level": body.level,
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     return {"label": body.label, "level": body.level, "key": raw}
 
@@ -1045,7 +1046,7 @@ async def admin_keys_revoke(
         actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
         action="admin_key_revoked",
         args={"label": k.label,
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     return {"revoked": k.label}
 
@@ -1281,7 +1282,7 @@ async def tenant_export(
         actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
         action="tenant_exported", tenant_id=t.id,
         args={"tenant": slug, "format": format, "business": include_business,
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
     if format == "csv":
@@ -1398,7 +1399,7 @@ async def tenant_import(
         actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
         action="tenant_imported", tenant_id=t.id,
         args={"tenant": slug, "users": len(invite_paths),
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     return {"tenant": _out(t, len(invite_paths)), "invites": invite_paths}
 
@@ -1429,7 +1430,7 @@ async def impersonate_tenant(
     if user is None:
         raise HTTPException(status_code=404, detail="Active owner user nahi mila")
     token = await auth.start_session(
-        db, user, ip=request.client.host if request.client else "",
+        db, user, ip=get_client_ip(request) or "",
         user_agent="impersonation", minutes=30,
     )
     from app.services import audit
@@ -1438,7 +1439,7 @@ async def impersonate_tenant(
         actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
         action="impersonation", tenant_id=t.id,
         args={"tenant": slug, "as_user": user.email, "ttl_min": 30,
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     return {"adopt_path": f"/api/session/adopt/{token}", "expires_in_min": 30,
             "as_user": user.email}
@@ -1720,7 +1721,7 @@ async def set_tenant_setting(
         actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
         action="tenant_setting_changed", tenant_id=t.id,
         args={"tenant": slug, "key": body.key, "value": body.value,
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     return {"key": body.key, "value": new_val}
 
@@ -1762,7 +1763,7 @@ async def set_tenant_limits(
         actor_role="admin", actor=getattr(request.state, "vendor_label", "control"),
         action="limits_overridden", tenant_id=t.id,
         args={"tenant": slug, "overrides": t.limit_overrides,
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     return {"limit_overrides": t.limit_overrides,
             "effective": plans.effective_limits(t)}
@@ -1801,7 +1802,7 @@ async def open_vendor_session(
         mint_vendor_token,
     )
 
-    ip = request.client.host if request.client else "?"
+    ip = get_client_ip(request) or "?"
     if _auth_throttled(ip):
         raise HTTPException(
             status_code=429, detail="too many failed attempts — wait 10 minutes"
@@ -1949,7 +1950,7 @@ async def set_owner_password(
         action="owner_password_set", tenant_id=t.id,
         # NOTE: password kabhi args mein nahi jaata.
         args={"tenant": slug, "email": user.email, "by": "control-panel",
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     log.info("owner_password_set", slug=slug, email=user.email)
     return {"ok": True, "email": user.email,
@@ -2007,7 +2008,7 @@ async def recharge_tenant(
         actor_role="admin", actor=who, action="credits_recharged", tenant_id=t.id,
         args={"tenant": slug, "kind": body.kind, "amount": after - before,
               "balance": after, "reason": body.reason.strip() or None,
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     log.info("credits_recharged", tenant=slug, kind=body.kind, amount=after - before,
              balance=after)
@@ -2124,7 +2125,7 @@ async def decide_recharge_request(
         tenant_id=t.id,
         args={"tenant": t.slug, "pack": r.pack, "units": r.units,
               "amount_inr": r.amount_inr, "balance": balance,
-              "ip": request.client.host if request.client else None},
+              "ip": get_client_ip(request)},
     )
     log.info("recharge_decided", tenant=t.slug, pack=r.pack, approve=body.approve)
     return {"ok": True, "status": r.status, "balance": balance}

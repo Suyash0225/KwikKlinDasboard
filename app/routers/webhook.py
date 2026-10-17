@@ -46,6 +46,7 @@ from app.services.order_service import (
 from app.services.whatsapp import SendError, send_message
 from app.services import waha
 from app.utils.phone import normalize_phone
+from app.utils.client_ip import get_client_ip
 from app.services.tenant_context import manager_phone
 
 router = APIRouter()
@@ -268,7 +269,7 @@ async def receive_webhook(
     body = await request.body()
 
     if not _signature_valid(body, request.headers.get("X-Hub-Signature-256")):
-        log.warning("webhook_bad_signature", client=request.client.host if request.client else "?")
+        log.warning("webhook_bad_signature", client=get_client_ip(request) or "?")
         return JSONResponse({"error": "invalid signature"}, status_code=403)
 
     try:

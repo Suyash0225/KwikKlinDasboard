@@ -96,6 +96,8 @@ jobs:
           add_if_present tests/test_staff_panel.py test_manager_status_update_uses_customer_notifications_only_at_delivery_milestones
           add_if_present tests/test_rls_billing.py test_a_shop_sees_only_its_own_invoices
           add_if_present tests/test_rls_billing.py test_a_shop_cannot_write_another_shops_invoice
+          add_if_present tests/test_client_ip.py test_untrusted_peer_cannot_spoof_forwarded_ip
+          add_if_present tests/test_client_ip.py test_trusted_proxy_can_forward_client_ip
 
           if (( ${#focused[@]} )); then
             pytest -q "${focused[@]}"

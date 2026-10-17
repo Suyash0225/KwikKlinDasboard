@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.utils.client_ip import get_client_ip
 from app.models import (
     CouponRedemption,
     Customer,
@@ -109,7 +110,7 @@ async def require_admin_key(
     if request.url.path == "/control/api/google-business/callback":
         return
 
-    ip = request.client.host if request.client else "?"
+    ip = get_client_ip(request) or "?"
     if _auth_throttled(ip):
         log.warning("admin_api_throttled", ip=ip)
         raise HTTPException(status_code=429, detail="too many failed attempts — wait 10 minutes")
@@ -346,7 +347,7 @@ async def require_vendor_key(
     Method-level enforcement yahin: read key se koi mutation nahi.
     Danger-only routes par upar se Depends(require_vendor_danger) lagta hai.
     """
-    ip = request.client.host if request.client else "?"
+    ip = get_client_ip(request) or "?"
     if _auth_throttled(ip):
         log.warning("vendor_api_throttled", ip=ip)
         raise HTTPException(status_code=429, detail="too many failed attempts — wait 10 minutes")

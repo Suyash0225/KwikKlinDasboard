@@ -42,6 +42,7 @@ from app.models import (
 from app.models.tenant import GRACE_DAYS, TENANT_LOCKED, TENANT_PAST_DUE, WRITABLE_STATUSES
 from app.services import auth, billing, google_auth, plans, tenant_context
 from app.utils.phone import normalize_phone
+from app.utils.client_ip import get_client_ip
 
 log = structlog.get_logger()
 
@@ -343,7 +344,7 @@ def _dashboard_url(tenant: Tenant | None, is_home: bool) -> str:
 async def login(
     body: LoginIn, request: Request, response: Response, db: AsyncSession = Depends(get_db)
 ) -> dict:
-    ip = request.client.host if request.client else "?"
+    ip = get_client_ip(request) or "?"
     if auth.throttled(ip):
         raise HTTPException(
             status_code=429, detail="Too many wrong attempts — try again in 10 minutes"
@@ -602,7 +603,7 @@ async def _invite_accept_inner(body, request, response, db) -> dict:
         user = await invites.accept_invite(db, token=body.token, password=body.password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    ip = request.client.host if request.client else ""
+    ip = get_client_ip(request) or ""
     token = await auth.start_session(
         db, user, ip=ip, user_agent=request.headers.get("user-agent", "")
     )
@@ -693,7 +694,7 @@ async def change_password(
     # har purani jagah se logout — chori hui session bachni nahi chahiye
     await auth.end_all_sessions(db, p.user.id)
     token = await auth.start_session(
-        db, p.user, ip=request.client.host if request.client else "",
+        db, p.user, ip=get_client_ip(request) or "",
         user_agent=request.headers.get("user-agent", ""),
     )
     _set_cookie(response, token, secure=request.url.scheme == "https")
@@ -791,7 +792,7 @@ async def _google_callback_inner(request, code, state, error, db) -> Response:
         if not user.is_active:
             return _fail("Ye account band hai")
         token = await auth.start_session(
-            db, user, ip=request.client.host if request.client else "",
+            db, user, ip=get_client_ip(request) or "",
             user_agent=request.headers.get("user-agent", ""),
         )
         is_home = await auth.is_home_user(db, user)
@@ -880,7 +881,7 @@ async def _signup_google_inner(body, request, response, db) -> dict:
         auth_provider="google", google_sub=sub,
     )
     token = await auth.start_session(
-        db, user, ip=request.client.host if request.client else "",
+        db, user, ip=get_client_ip(request) or "",
         user_agent=request.headers.get("user-agent", ""),
     )
     _set_cookie(response, token, secure=request.url.scheme == "https")
