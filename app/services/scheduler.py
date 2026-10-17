@@ -241,14 +241,12 @@ async def _for_each_tenant(job_name: str, fn) -> None:
 async def _gbp_daily_post_tick() -> None:
     """Publish at most one daily GBP post per tenant; claim before publishing."""
     from app.services import gbp_auto_post
-    from app.services import tenant_context
 
     if not gbp_auto_post.gbp.enabled():
         return
 
     async def one(now_ist: datetime) -> None:
         from app.services.tenant_context import current_tenant_id
-        from app.services.scheduler import _claim, _unclaim
 
         day_key = now_ist.strftime("%Y-%m-%d")
         claim_key = f"gbp-daily-post:{day_key}"
@@ -279,7 +277,6 @@ async def _gbp_daily_post_tick() -> None:
 async def _gbp_reviews_tick() -> None:
     """Refresh Google reviews at most once per scheduled window per tenant."""
     from app.services import google_business as gbp
-    from app.services.scheduler import _claim, _unclaim
 
     if not gbp.enabled():
         return
