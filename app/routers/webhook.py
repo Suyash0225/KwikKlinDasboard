@@ -222,7 +222,10 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
             f"{link}"
         )
     try:
-        await send_message(db, to_phone=phone, text=reply_text)
+        await send_message(
+            db, to_phone=phone, text=reply_text,
+            intent="transactional", outbound_kind="review_request",
+        )
     except SendError:
         log.exception("rating_reply_failed", phone=phone)
     if kind == "bad":
