@@ -395,15 +395,19 @@ async def send_campaign(campaign_id) -> None:
         from app.services import plans as _plans
         from app.services import tenant_context as _tc
 
-        _tid = _tc.current_tenant_id.get() or _tc.cached_home_tenant_id()
-        if _tid is not None:
-            _t = await db.get(_T, _tid)
-            # effective_limits = plan + vendor override, ek hi jagah. Pehle
-            # yahan override ka logic dobara likha tha — do jagah ka hisaab
-            # kabhi na kabhi alag ho jaata hai.
-            _cap = _plans.effective_limits(_t)["max_campaign_msgs_month"]
-            if _cap is not None:
-                budget = min(budget, _cap)
+        _tid = _tc.current_tenant_id.get()
+        if _tid is None:
+            # Campaign workers are tenant-scoped jobs. Never guess the home
+            # shop when a caller lost the request/scheduler tenant context.
+            log.error("campaign_send_missing_tenant_context", campaign=str(campaign_id))
+            return
+        _t = await db.get(_T, _tid)
+        # effective_limits = plan + vendor override, ek hi jagah. Pehle
+        # yahan override ka logic dobara likha tha — do jagah ka hisaab
+        # kabhi na kabhi alag ho jaata.
+        _cap = _plans.effective_limits(_t)["max_campaign_msgs_month"]
+        if _cap is not None:
+            budget = min(budget, _cap)
         # The month's spend is counted ONCE and then tracked locally. It used
         # to be a full COUNT over campaign_recipients before every single
         # message; re-syncing periodically keeps us honest when two
@@ -785,8 +789,11 @@ async def run_customer_cycle_nudges(db: AsyncSession, *, now: datetime | None = 
     if (await app_settings.get(db, "marketing_autonomy")) != "auto":
         return 0
 
-    tenant_id = tenant_context.current_tenant_id.get() or tenant_context.cached_home_tenant_id()
-    tenant = await db.get(Tenant, tenant_id) if tenant_id is not None else None
+    tenant_id = tenant_context.current_tenant_id.get()
+    if tenant_id is None:
+        log.error("customer_cycle_nudge_missing_tenant_context")
+        return 0
+    tenant = await db.get(Tenant, tenant_id)
     if tenant is None:
         return 0
 
