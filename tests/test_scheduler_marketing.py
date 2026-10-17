@@ -778,3 +778,116 @@ def test_repeat_order_segment_is_paid_up_and_waits_15_days() -> None:
     overdue_segments = _classify(overdue_at_risk, now, Decimal("500"))
     assert "at_risk" not in overdue_segments
     assert "outstanding_dues" in overdue_segments
+
+
+def test_winback_offer_only_at_25x_customer_gap() -> None:
+    from app.services.marketing import _is_winback_offer_due
+
+    assert not _is_winback_offer_due(49.9, 20)
+    assert _is_winback_offer_due(50, 20)
+    assert not _is_winback_offer_due(100, 0)
+    assert not _is_winback_offer_due(100, None)
+
+
+@pytest.mark.requires_independent_sessions
+async def test_personalized_winback_creates_customer_locked_coupon_and_caps_30_days(
+    sched_sent, sent, monkeypatch
+) -> None:
+    import asyncio as aio
+
+    real_sleep = aio.sleep
+    monkeypatch.setattr(marketing_module.asyncio, "sleep", lambda _: real_sleep(0))
+    now = datetime.now(timezone.utc)
+    orders = []
+    try:
+        # Three visits 20 days apart; last visit 55 days ago = 2.75x usual gap.
+        for days_ago in (95, 75, 55):
+            order = await _seed_order(total_amount=Decimal("800"))
+            orders.append(order.order_number)
+            async with async_session_factory() as db:
+                row = (
+                    await db.execute(
+                        select(Order).where(Order.order_number == order.order_number)
+                    )
+                ).scalar_one()
+                row.created_at = now - timedelta(days=days_ago)
+                row.status = OrderStatus.DELIVERED
+                row.actual_delivery = now - timedelta(days=days_ago - 1)
+                row.amount_paid = row.total_amount
+                await db.commit()
+
+        async with async_session_factory() as db:
+            campaign = Campaign(
+                name="test-normal-late-winback",
+                segment="normal_late",
+                message_text="template fallback",
+                status="approved",
+                created_by="test",
+                stats={"winback_personalized": True, "offer_threshold_multiple": 2.5},
+            )
+            db.add(campaign)
+            await db.commit()
+            campaign_id = campaign.id
+            queued = await queue_campaign(db, campaign)
+        assert queued >= 1
+
+        await send_campaign(campaign_id)
+        sent_to_customer = [c for c in sched_sent if c["to"] == PHONE]
+        assert sent_to_customer
+        message = sent_to_customer[-1]["text"]
+        assert "Sched Grahak" in message
+        assert "Kurta" in message
+        assert "15% off" in message
+        assert "₹700" in message
+        assert "Code: WB" in message
+
+        async with async_session_factory() as db:
+            customer = (
+                await db.execute(select(Customer).where(Customer.phone == PHONE))
+            ).scalar_one()
+            coupon = (
+                await db.execute(select(Coupon).where(Coupon.customer_id == customer.id))
+            ).scalar_one()
+            assert coupon.active is True
+            assert coupon.total_limit == 1
+            assert coupon.per_customer_limit == 1
+            assert coupon.min_order == Decimal("700")
+            assert coupon.code in message
+
+            # Same customer cannot be put into another win-back campaign for 30 days.
+            second = Campaign(
+                name="test-normal-late-winback-second",
+                segment="normal_late",
+                message_text="template fallback",
+                status="approved",
+                created_by="test",
+                stats={"winback_personalized": True, "offer_threshold_multiple": 2.5},
+            )
+            db.add(second)
+            await db.commit()
+            second_id = second.id
+            await queue_campaign(db, second)
+            rec = (
+                await db.execute(
+                    select(CampaignRecipient).where(
+                        CampaignRecipient.campaign_id == second_id,
+                        CampaignRecipient.customer_id == customer.id,
+                    )
+                )
+            ).scalar_one()
+            assert rec.status == "skipped"
+            assert rec.detail == "winback_30_day_cap"
+
+            # Clean only this test's coupon; fixture removes test-* campaigns/orders.
+            await db.delete(coupon)
+            await db.commit()
+    finally:
+        async with async_session_factory() as cleanup_db:
+            await cleanup_db.execute(
+                sqltext(
+                    "DELETE FROM coupons WHERE customer_id = "
+                    "(SELECT id FROM customers WHERE phone = :phone)"
+                ),
+                {"phone": PHONE},
+            )
+            await cleanup_db.commit()

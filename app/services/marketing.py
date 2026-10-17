@@ -11,6 +11,7 @@ Compliance is CODE, not convention — every send passes eligible():
 import asyncio
 import random
 import hashlib
+import secrets
 import uuid
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
@@ -25,6 +26,7 @@ from app.database import async_session_factory
 from app.models import (
     Campaign,
     CampaignRecipient,
+    Coupon,
     Customer,
     Escalation,
     Order,
@@ -218,6 +220,48 @@ def _is_holdout(campaign_id, customer_id, percent: int) -> bool:
     return (int.from_bytes(digest[:4], "big") % 100) < percent
 
 
+def _is_winback_offer_due(age_days: float, average_gap_days: float | None) -> bool:
+    """Offer only when a customer is at least 2.5x past their own usual gap."""
+    return (
+        average_gap_days is not None
+        and average_gap_days > 0
+        and age_days >= average_gap_days * 2.5
+    )
+
+
+async def _create_winback_coupon(db: AsyncSession, customer: Customer, percent: int) -> Coupon:
+    """Create a real, customer-locked, single-use coupon through the existing coupon table."""
+    for _ in range(8):
+        code = "WB" + secrets.token_hex(3).upper()
+        exists = (
+            await db.execute(select(func.count()).select_from(Coupon).where(Coupon.code == code))
+        ).scalar_one()
+        if exists:
+            continue
+        today = date.today()
+        coupon = Coupon(
+            code=code,
+            discount_type="percent",
+            value=Decimal(percent),
+            min_order=Decimal("700"),
+            valid_from=today,
+            valid_to=today + timedelta(days=7),
+            per_customer_limit=1,
+            total_limit=1,
+            customer_id=customer.id,
+            active=True,
+        )
+        db.add(coupon)
+        await db.commit()
+        await audit.record(
+            actor_role="system", actor="marketing", action="winback_coupon_created",
+            args={"customer_id": str(customer.id), "percent": percent, "min_order": 700},
+            result=code,
+        )
+        return coupon
+    raise RuntimeError("could not allocate a unique win-back coupon code")
+
+
 async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
     """Create recipient rows for the campaign's segment. Returns queued count.
 
@@ -249,6 +293,25 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
     else:
         segs = await compute_segments(db)
         targets = segs.get(campaign.segment, [])
+    winback_recent_ids: set = set()
+    if campaign.segment == "normal_late" and (campaign.stats or {}).get("winback_personalized"):
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        recent_rows = (
+            await db.execute(
+                select(CampaignRecipient.customer_id, Campaign.stats)
+                .join(Campaign, Campaign.id == CampaignRecipient.campaign_id)
+                .where(
+                    Campaign.segment == "normal_late",
+                    CampaignRecipient.updated_at >= cutoff,
+                    CampaignRecipient.status.in_(("queued", "sent", "delivered", "read", "replied")),
+                )
+            )
+        ).all()
+        winback_recent_ids = {
+            customer_id
+            for customer_id, prior_stats in recent_rows
+            if (prior_stats or {}).get("winback_personalized")
+        }
     if not targets:
         return 0
     from app.services.leads import check_marketing_eligible_bulk
@@ -265,6 +328,9 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
         [st["id"] for st in targets],
         allow_active_orders=allow_active_orders,
     )
+    for st in targets:
+        if st["id"] in winback_recent_ids:
+            verdicts[st["id"]] = (False, "winback_30_day_cap")
     eligible_ids = [st["id"] for st in targets if verdicts.get(st["id"], (False, ""))[0]]
 
     # Broad-reach (all_active) and owner-picked campaigns express an explicit
@@ -345,6 +411,15 @@ async def send_campaign(campaign_id) -> None:
         # message; re-syncing periodically keeps us honest when two
         # campaigns run at the same time, at 1/25th the cost.
         spent = await month_send_count(db)
+        winback_personalized = (
+            campaign.segment == "normal_late"
+            and bool((campaign.stats or {}).get("winback_personalized"))
+        )
+        rhythm_by_customer = {}
+        if winback_personalized:
+            from app.services.customer_rhythm import load_customer_rhythms
+
+            rhythm_by_customer = await load_customer_rhythms(db)
         sent_now = 0
         last_send_at: float | None = None
         while True:
@@ -408,7 +483,33 @@ async def send_campaign(campaign_id) -> None:
                         reason=rec.detail,
                     )
                     continue
-                text = campaign.message_text.replace("{name}", cust.name or "ji")
+                winback_coupon = None
+                if winback_personalized:
+                    rhythm = rhythm_by_customer.get(cust.id, {})
+                    average_gap = rhythm.get("average_visit_gap_days")
+                    last_visit = rhythm.get("last_visit_at")
+                    now_utc = datetime.now(timezone.utc)
+                    if last_visit is not None and last_visit.tzinfo is None:
+                        last_visit = last_visit.replace(tzinfo=timezone.utc)
+                    age_days = max(0.0, (now_utc - last_visit).total_seconds() / 86400) if last_visit else 0.0
+                    usual_items = ", ".join(rhythm.get("usual_items") or []) or "kapde"
+                    text = (
+                        f"Namaste {cust.name or 'aap'} ji! Pichhli baar aapne {usual_items} diye the. "
+                        "Jab laundry ki zarurat ho, Kwik Klin yaad rakhein. "
+                    )
+                    if _is_winback_offer_due(age_days, average_gap):
+                        configured_cap = int(await app_settings.get(db, "marketing_max_discount_percent"))
+                        offer_percent = min(15, max(0, configured_cap))
+                        if offer_percent > 0:
+                            winback_coupon = await _create_winback_coupon(db, cust, offer_percent)
+                            text += (
+                                f"\n\nAapke liye {offer_percent}% off hai ₹700 ya usse zyada ke order par. "
+                                f"Code: {winback_coupon.code}. Yeh {winback_coupon.valid_to.strftime('%d %b %Y')} tak valid hai."
+                            )
+                        else:
+                            text += "\n\nJab chahein, apne agle order ke liye message karein."
+                else:
+                    text = campaign.message_text.replace("{name}", cust.name or "ji")
                 # Enforce a real server-side gap between outbound sends.
                 # Skipped recipients do not consume the delay; parallel UI
                 # refreshes cannot bypass this worker's pacing.
@@ -449,6 +550,8 @@ async def send_campaign(campaign_id) -> None:
                     # window closed & no approved marketing template -> honest fail
                     rec.status = "failed"
                     rec.detail = str(exc)[:200]
+                    if winback_coupon is not None:
+                        winback_coupon.active = False
                 await db.commit()
                 # Delay is enforced immediately before the next actual send,
                 # so the final recipient does not add an unnecessary wait.
@@ -470,6 +573,9 @@ async def send_campaign(campaign_id) -> None:
             final_stats["selected_customer_ids"] = list(
                 prior_stats.get("selected_customer_ids") or []
             )
+        for key in ("winback_personalized", "offer_threshold_multiple"):
+            if key in prior_stats:
+                final_stats[key] = prior_stats[key]
         campaign.stats = final_stats
         await db.commit()
         await audit.record(

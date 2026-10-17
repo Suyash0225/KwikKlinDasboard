@@ -37,6 +37,11 @@ _PLAYBOOK: dict[str, tuple[float, str, str]] = {
         "regular customer ko 15–30 din baad agla laundry pickup book karne ki friendly yaad-dihani",
         "Repeat-order reminder — no discount; invite the customer to schedule their next pickup",
     ),
+    "normal_late": (
+        1.05,
+        "customer apne usual visit gap se late hai; naam aur aam items ke saath personal win-back",
+        "No offer at 1.5× late; only at 2.5× the customer's usual gap, a customer-locked single-use coupon may be offered",
+    ),
     "lapsed": (
         1.00,
         "60+ din se koi order nahi — win-back offer se wapas laao",
@@ -215,7 +220,16 @@ async def weekly_suggestion() -> None:
 
         target_seg, offer = pick["segment"], pick["offer"]
         season = _SEASONS.get(date.today().month, "")
-        copy = await _draft_copy(f"{target_seg} ({season})" if season else target_seg, offer)
+        is_winback = target_seg == "normal_late"
+        if is_winback:
+            # Deterministic template: no LLM call, so budget exhaustion cannot
+            # degrade into a paid call and no invented discount is sent.
+            copy = (
+                "Namaste {name} ji! Pichhli baar aapne {usual_items} diye the. "
+                "Jab laundry ki zarurat ho, Kwik Klin yaad rakhein."
+            )
+        else:
+            copy = await _draft_copy(f"{target_seg} ({season})" if season else target_seg, offer)
 
         campaign = Campaign(
             name=f"{target_seg}-{date.today().isoformat()}",
@@ -224,11 +238,20 @@ async def weekly_suggestion() -> None:
             status="suggested",
             rationale=_rationale(pick),
             created_by="agent",
+            stats=(
+                {"winback_personalized": True, "offer_threshold_multiple": 2.5}
+                if is_winback else None
+            ),
         )
         db.add(campaign)
         await db.commit()
 
         reach = pick["reach"]
+        target_list = (
+            "\n\nWin-back shortlist (offer only at 2.5× usual gap):\n"
+            + _winback_target_list(pick)
+            if is_winback else ""
+        )
         if autonomy == "auto":
             # Full autopilot: approve + send now; TELL the owner, don't ask.
             campaign.status = "approved"
@@ -239,7 +262,7 @@ async def weekly_suggestion() -> None:
                 f"🚀 Maine campaign bhej diya (autopilot ON):\n"
                 f"{campaign.rationale}\n\nMessage:\n{copy}\n\n"
                 f"{queued} eligible customers ko ja raha hai (opted-out/"
-                f"complaint wale auto-skip). Report: dashboard → Campaigns. "
+                f"complaint wale auto-skip).{target_list}\n\nReport: dashboard → Campaigns. "
                 f"Rokna ho to: 'campaign nahi'."
             )
             await audit.record(
@@ -251,6 +274,7 @@ async def weekly_suggestion() -> None:
                 f"📣 Marketing idea:\n{campaign.rationale}\n\nMessage draft:\n"
                 f"{copy}\n\nBhejun? Reply 'campaign yes' → send hoga (sirf "
                 f"opted-in customers ko, quiet hours ke bahar). 'campaign nahi' → skip."
+                f"{target_list}"
             )
             await audit.record(
                 actor_role="system", actor="marketing", action="campaign_suggested",
@@ -260,6 +284,33 @@ async def weekly_suggestion() -> None:
             await send_message(db, to_phone=manager_phone(), text=text)
         except SendError:
             log.warning("weekly_suggestion_not_sent")  # dashboard still shows it
+
+
+def _winback_target_list(pick: dict, limit: int = 20) -> str:
+    """Owner-facing shortlist for suggest mode; never includes customer phone numbers."""
+    members = pick.get("members") or []
+    now = datetime.now().astimezone()
+    lines = []
+    for member in members[:limit]:
+        name = str(member.get("name") or "Customer").strip()[:80]
+        items = ", ".join(member.get("usual_items") or []) or "items not recorded"
+        gap = member.get("average_visit_gap_days")
+        last = member.get("last_visit_at") or member.get("last_order_at")
+        age_days = None
+        if last is not None:
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=now.tzinfo)
+            age_days = max(0, (now - last.astimezone(now.tzinfo)).days)
+        offer_due = bool(gap and float(gap) > 0 and age_days is not None and age_days >= float(gap) * 2.5)
+        late = f"{age_days}d since last visit" if age_days is not None else "last visit unknown"
+        gap_text = f"usual gap ~{float(gap):g}d" if gap else "usual gap not established"
+        lines.append(
+            f"• {name} — {items}; {late}; {gap_text}; offer {'eligible' if offer_due else 'not eligible'}"
+        )
+    remaining = max(0, len(members) - len(lines))
+    if remaining:
+        lines.append(f"…plus {remaining} more customer(s)")
+    return "\n".join(lines) if lines else "No customer list available."
 
 
 def _rationale(pick: dict) -> str:
@@ -320,7 +371,14 @@ async def preview_suggestion(db) -> str:
             f"Koi segment {_MIN_SEGMENT_SIZE}+ customers ka nahi — is hafte "
             "campaign nahi banta. Jaise hi customers badhenge, Monday ko khud bhejunga."
         )
-    copy = await _draft_copy(pick["segment"], pick["offer"])
+    if pick["segment"] == "normal_late":
+        copy = (
+            "Namaste {name} ji! Pichhli baar aapne {usual_items} diye the. "
+            "Jab laundry ki zarurat ho, Kwik Klin yaad rakhein. "
+            "Offer sirf tab jab aap apne usual gap ke 2.5× late hon."
+        )
+    else:
+        copy = await _draft_copy(pick["segment"], pick["offer"])
     return (
         f"🧪 Marketing preview (kuch bheja NAHI gaya):\n"
         f"Segments: {counts}\n\n"
