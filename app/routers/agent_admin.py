@@ -74,7 +74,8 @@ async def business_manager_briefing(db: AsyncSession = Depends(get_db)) -> dict:
     active_statuses = {OrderStatus.RECEIVED, OrderStatus.PICKUP_ASSIGNED,
                        OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
                        OrderStatus.IN_DRY, OrderStatus.IN_IRON,
-                       OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY}
+                       OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY,
+                       OrderStatus.ON_HOLD}
     overdue = []
     due_today = []
     unpaid = []
