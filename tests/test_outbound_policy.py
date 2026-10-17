@@ -487,3 +487,47 @@ async def test_outbound_retry_claim_prevents_duplicate_after_restart(monkeypatch
                     )
                 )
                 await db.commit()
+
+
+@pytest.mark.requires_independent_sessions
+async def test_gbp_daily_post_tick_claims_before_publish_and_runs_once(monkeypatch) -> None:
+    """The daily publish side effect is mocked; two scheduler invocations publish once."""
+    from datetime import datetime
+    from sqlalchemy import delete
+    from app.models import SentEvent
+    from app.services import tenant_context, gbp_auto_post
+    from app.services.scheduler import IST, _gbp_daily_post_tick
+    import app.services.scheduler as scheduler
+
+    tenant_id = await _test_tenant_id()
+    now_ist = datetime.now(IST).replace(hour=10, minute=0, second=0, microsecond=0)
+    claim_key = f"t{tenant_id.hex[:8]}:gbp-daily-post:{now_ist.strftime('%Y-%m-%d')}"
+
+    async with async_session_factory() as db:
+        async with tenant_context.system_context(db):
+            await db.execute(delete(SentEvent).where(SentEvent.event_key == claim_key))
+            await db.commit()
+
+    publishes = []
+
+    async def fake_for_each(job_name, fn):
+        async with tenant_context.as_tenant(tenant_id):
+            await fn(now_ist)
+
+    async def fake_publish(db, now):
+        publishes.append(now.date().isoformat())
+        return {"ok": True, "published": True}
+
+    monkeypatch.setattr(scheduler, "_for_each_tenant", fake_for_each)
+    monkeypatch.setattr(gbp_auto_post.gbp, "enabled", lambda: True)
+    monkeypatch.setattr(gbp_auto_post, "auto_post_daily", fake_publish)
+
+    try:
+        await _gbp_daily_post_tick()
+        await _gbp_daily_post_tick()
+        assert publishes == [now_ist.date().isoformat()]
+    finally:
+        async with async_session_factory() as db:
+            async with tenant_context.system_context(db):
+                await db.execute(delete(SentEvent).where(SentEvent.event_key == claim_key))
+                await db.commit()
