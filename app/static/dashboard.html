@@ -752,6 +752,21 @@
       </div>
 
       <div class="card" style="margin-bottom:14px">
+        <b>🤖 AI usage limits</b>
+        <p class="muted" style="margin-top:4px">Set the monthly AI spend budget in USD. This is separate from the marketing message budget.</p>
+        <div class="setgrid">
+          <div class="setfield">
+            <label for="set-ai-budget">Monthly AI budget (USD)</label>
+            <input id="set-ai-budget" type="number" min="0" step="0.01" inputmode="decimal">
+            <small>Set 0 to leave the AI budget unset. Forecast warnings use this value.</small>
+          </div>
+        </div>
+        <div class="act" style="margin-top:12px">
+          <button class="btn" onclick="saveAiBudget(this)">Save AI budget</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
         <b>📣 Marketing limits</b>
         <div class="setgrid">
           <div class="setfield">
