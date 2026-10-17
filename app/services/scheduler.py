@@ -1214,6 +1214,7 @@ async def run_payment_reminders() -> int:
                     buttons=await payment_buttons(db, o),
                     list_button="Payment",
                     list_title="Kwik Klin",
+                    intent="transactional", outbound_kind=kind,
                 )
                 sends += 1
             except WindowClosedError:
