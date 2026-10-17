@@ -14,6 +14,14 @@ AUTH = {"X-API-Key": settings.ADMIN_API_KEY}
 
 
 @pytest.fixture(autouse=True)
+def _outbound_policy_open(monkeypatch):
+    """Inbox behavior tests are independent of wall-clock quiet hours."""
+    from app.services import outbound_policy
+
+    monkeypatch.setattr(outbound_policy, "_quiet_now", lambda: False)
+
+
+@pytest.fixture(autouse=True)
 async def _cleanup():
     yield
     async with async_session_factory() as s:
