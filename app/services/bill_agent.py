@@ -451,14 +451,18 @@ async def _handle_task_button(
 
     role = staff.role.name if staff is not None else "manager"
 
-    # Delivery staff: the same Done/Pending menu is used for both pickup and delivery.
+    # Explicit Done is role-scoped by task type: pickup/delivery work belongs
+    # to delivery staff, while washing/custom operational tasks can be closed
+    # by the active washer/supervisor team that shares that queue.
     if action == "done":
-        if role not in {"DELIVERY", "ADMIN", "MANAGER"}:
-            return "This task is assigned to a different role."
         if task.kind in {"pickup", "delivery"}:
+            if role not in {"DELIVERY", "ADMIN", "MANAGER"}:
+                return "This task is assigned to a different role."
             return await task_service.confirm_pickup(
                 db, task, done=True, by=staff.name if staff else sender_label
             )
+        if role not in {"WASHER", "SUPERVISOR", "ADMIN", "MANAGER"}:
+            return "This task is assigned to a different role."
         return await _close_task_by_code(db, sender_phone, sender_label, code)
 
     if action == "pending":
