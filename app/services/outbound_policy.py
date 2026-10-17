@@ -107,10 +107,9 @@ async def enforce_outbound_policy(
         raise SendError("outbound blocked: recipient is not a tenant customer", transient=False)
     if customer.tenant_id != tenant_id:
         raise SendError("outbound blocked: recipient tenant mismatch", transient=False)
-    if not customer.is_active:
-        raise SendError("outbound blocked: customer inactive", transient=False)
-
     if intent == PROMOTIONAL:
+        if not customer.is_active:
+            raise SendError("promotional send blocked: customer inactive", transient=False)
         from app.services.marketing import eligible
 
         ok, reason = await eligible(db, customer.id)
