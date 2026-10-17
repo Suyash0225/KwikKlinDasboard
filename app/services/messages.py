@@ -322,6 +322,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste {name} 🙏\nAgar aap chahein, apna imaandaar feedback Google par share kar sakte hain. Har tarah ka feedback hamare liye madadgar hai.\n👉 {review_link}\nDhanyawad!\n— {shop}",
         "en": "Hello {name} 🙏\nIf you wish, you can share your honest feedback on Google. All feedback helps us improve.\n👉 {review_link}\nThank you!\n— {shop}",
     },
+    "review_invitation_line": {
+        "hi": "Agar aap chahein, apna imaandaar feedback Google par share kar sakte hain. Har tarah ka feedback hamare liye madadgar hai.\n{review_link}",
+        "en": "If you wish, you can share your honest feedback on Google. All feedback helps us improve.\n{review_link}",
+    },
     "payment_reminder_firm": {
         "hi": "Namaste, aapke order {order_number} ka ₹{amount} kaafi dino se baaki hai. Kripya jald bhugtaan karein — cash/UPI dono chalega. Dhanyawad 🙏 — {shop}",
         "en": "Hello, ₹{amount} for order {order_number} has been pending for a while. Please clear it soon — cash or UPI. Thank you 🙏 — {shop}",
@@ -457,7 +461,7 @@ EDITABLE_KEYS = [
     "payment_reminder_firm", "ack_received", "complaint_ack",
     "escalated_ack", "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
     "stop_confirmed", "start_confirmed",
-    "payment_thanks", "service_thanks", "review_request", "partial_delivery",
+    "payment_thanks", "service_thanks", "review_request", "review_invitation_line", "partial_delivery",
     "delivery_update_full", "reward_earned",
 ]
 
