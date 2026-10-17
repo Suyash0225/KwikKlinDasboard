@@ -257,7 +257,8 @@ async def send_message(
     if settings.WHATSAPP_PROVIDER != "waha":
         raise SendError("WAHA/NOWEB is the only enabled WhatsApp provider", transient=False)
 
-    if _blocked_test_recipient(to_phone) and sent_by not in {"manager", "human"}:
+    effective_intent = intent or ("promotional" if category == "marketing" else None)
+    if effective_intent is None and _blocked_test_recipient(to_phone) and sent_by not in {"manager", "human"}:
         log.warning("automated_send_blocked_test_recipient", to=to_phone, sent_by=sent_by)
         raise SendError("automated send blocked for test recipient", transient=False)
 
@@ -280,7 +281,6 @@ async def send_message(
 
     customer, staff = await _find_recipient(db, to_phone)
 
-    effective_intent = intent or ("promotional" if category == "marketing" else None)
     if effective_intent is not None:
         from app.services.outbound_policy import enforce_outbound_policy
 
