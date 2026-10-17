@@ -33,26 +33,30 @@ async def record(
         # par girta — vendor actions system context mein likhte hain.
         from app.services import tenant_context
 
-        ctx = (
-            tenant_context.current_tenant_id.set(None)
-            if tenant_id is not None else None
-        )
-        try:
-            async with async_session_factory() as s:
-                row = AuditLog(
-                    actor_role=actor_role,
-                    actor=(actor or "")[:80] or None,
-                    action=action[:60],
-                    args=args,
-                    result=(result or "")[:2000] or None,
-                    ok=ok,
-                )
-                if tenant_id is not None:
-                    row.tenant_id = tenant_id
+        async with async_session_factory() as s:
+            row = AuditLog(
+                actor_role=actor_role,
+                actor=(actor or "")[:80] or None,
+                action=action[:60],
+                args=args,
+                result=(result or "")[:2000] or None,
+                ok=ok,
+            )
+            if tenant_id is not None:
+                row.tenant_id = tenant_id
+
+            # Explicit tenant overrides and context-free system records are
+            # trusted platform writes; ordinary tenant records stay scoped.
+            needs_system = (
+                tenant_id is not None
+                or tenant_context.current_tenant_id.get() is None
+            )
+            if needs_system:
+                async with tenant_context.system_context(s):
+                    s.add(row)
+                    await s.commit()
+            else:
                 s.add(row)
                 await s.commit()
-        finally:
-            if ctx is not None:
-                tenant_context.current_tenant_id.reset(ctx)
     except Exception:
         log.exception("audit_write_failed", action=action)

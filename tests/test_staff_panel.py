@@ -53,57 +53,59 @@ async def _tenant(slug: str, plan: str) -> uuid.UUID:
 async def _purge_staff(*phones: str) -> None:
     """Pichhle adhoore run ka kachra — warna (tenant, phone) unique tootta."""
     async with async_session_factory() as db:
-        for phone in phones:
-            await db.execute(
-                sqltext(
-                    "DELETE FROM staff_sessions WHERE staff_id IN"
-                    " (SELECT id FROM staff WHERE phone = :p)"
-                ),
-                {"p": phone},
-            )
-            # Conversations keep an FK to staff independently of customer history.
-            await db.execute(
-                sqltext(
-                    "DELETE FROM conversations WHERE staff_id IN"
-                    " (SELECT id FROM staff WHERE phone = :p)"
-                ),
-                {"p": phone},
-            )
-            await db.execute(
-                sqltext(
-                    "UPDATE tasks SET assigned_staff_id = NULL WHERE assigned_staff_id IN"
-                    " (SELECT id FROM staff WHERE phone = :p)"
-                ),
-                {"p": phone},
-            )
-            # order bhi staff par ishara karte hain — pehle unhe chhodo,
-            # warna delete FK par atak jata hai
-            for col in ("assigned_washer_id", "assigned_delivery_id"):
+        async with tenant_context.system_context(db):
+            for phone in phones:
                 await db.execute(
                     sqltext(
-                        f"UPDATE orders SET {col} = NULL WHERE {col} IN"
+                        "DELETE FROM staff_sessions WHERE staff_id IN"
                         " (SELECT id FROM staff WHERE phone = :p)"
                     ),
                     {"p": phone},
                 )
-            await db.execute(sqltext("DELETE FROM staff WHERE phone = :p"), {"p": phone})
-        await db.commit()
+                # Conversations keep an FK to staff independently of customer history.
+                await db.execute(
+                    sqltext(
+                        "DELETE FROM conversations WHERE staff_id IN"
+                        " (SELECT id FROM staff WHERE phone = :p)"
+                    ),
+                    {"p": phone},
+                )
+                await db.execute(
+                    sqltext(
+                        "UPDATE tasks SET assigned_staff_id = NULL WHERE assigned_staff_id IN"
+                        " (SELECT id FROM staff WHERE phone = :p)"
+                    ),
+                    {"p": phone},
+                )
+                # order bhi staff par ishara karte hain — pehle unhe chhodo,
+                # warna delete FK par atak jata hai
+                for col in ("assigned_washer_id", "assigned_delivery_id"):
+                    await db.execute(
+                        sqltext(
+                            f"UPDATE orders SET {col} = NULL WHERE {col} IN"
+                            " (SELECT id FROM staff WHERE phone = :p)"
+                        ),
+                        {"p": phone},
+                    )
+                await db.execute(sqltext("DELETE FROM staff WHERE phone = :p"), {"p": phone})
+            await db.commit()
 
 
 async def _staff(tenant_id, phone: str, name: str, role: StaffRole) -> uuid.UUID:
-    async with async_session_factory() as db:
-        sid = uuid.uuid4()
-        await db.execute(
-            sqltext(
-                "INSERT INTO staff (id, tenant_id, phone, name, role, is_active,"
-                " must_change_password) VALUES (:i, :t, :p, :n, :r, true, false)"
-            ),
-            {"i": str(sid), "t": str(tenant_id), "p": phone, "n": name, "r": role.name},
-        )
-        await db.commit()
-        st = await db.get(Staff, sid)
-        await staff_auth.set_password(db, st, PW, temp=False)
-        return sid
+    async with tenant_context.as_tenant(tenant_id):
+        async with async_session_factory() as db:
+            sid = uuid.uuid4()
+            await db.execute(
+                sqltext(
+                    "INSERT INTO staff (id, tenant_id, phone, name, role, is_active,"
+                    " must_change_password) VALUES (:i, :t, :p, :n, :r, true, false)"
+                ),
+                {"i": str(sid), "t": str(tenant_id), "p": phone, "n": name, "r": role.name},
+            )
+            await db.commit()
+            st = await db.get(Staff, sid)
+            await staff_auth.set_password(db, st, PW, temp=False)
+            return sid
 
 
 @pytest.fixture
@@ -121,42 +123,42 @@ async def two_shops():
     }
     yield ids
     # Cleanup must run in trusted system context even if a test leaves a tenant ContextVar set.
-    tenant_context.current_tenant_id.set(None)
     async with async_session_factory() as db:
-        for phone in (A_PHONE, A_MGR_PHONE, A_DEL_PHONE, B_PHONE):
-            await db.execute(
-                sqltext(
-                    "DELETE FROM staff_sessions WHERE staff_id IN"
-                    " (SELECT id FROM staff WHERE phone = :p)"
-                ),
-                {"p": phone},
-            )
-            await db.execute(
-                sqltext(
-                    "DELETE FROM conversations WHERE staff_id IN"
-                    " (SELECT id FROM staff WHERE phone = :p)"
-                ),
-                {"p": phone},
-            )
-            await db.execute(
-                sqltext(
-                    "UPDATE tasks SET assigned_staff_id = NULL WHERE assigned_staff_id IN"
-                    " (SELECT id FROM staff WHERE phone = :p)"
-                ),
-                {"p": phone},
-            )
-            # order bhi staff par ishara karte hain — pehle unhe chhodo,
-            # warna delete FK par atak jata hai
-            for col in ("assigned_washer_id", "assigned_delivery_id"):
+        async with tenant_context.system_context(db):
+            for phone in (A_PHONE, A_MGR_PHONE, A_DEL_PHONE, B_PHONE):
                 await db.execute(
                     sqltext(
-                        f"UPDATE orders SET {col} = NULL WHERE {col} IN"
+                        "DELETE FROM staff_sessions WHERE staff_id IN"
                         " (SELECT id FROM staff WHERE phone = :p)"
                     ),
                     {"p": phone},
                 )
-            await db.execute(sqltext("DELETE FROM staff WHERE phone = :p"), {"p": phone})
-        await db.commit()
+                await db.execute(
+                    sqltext(
+                        "DELETE FROM conversations WHERE staff_id IN"
+                        " (SELECT id FROM staff WHERE phone = :p)"
+                    ),
+                    {"p": phone},
+                )
+                await db.execute(
+                    sqltext(
+                        "UPDATE tasks SET assigned_staff_id = NULL WHERE assigned_staff_id IN"
+                        " (SELECT id FROM staff WHERE phone = :p)"
+                    ),
+                    {"p": phone},
+                )
+                # order bhi staff par ishara karte hain — pehle unhe chhodo,
+                # warna delete FK par atak jata hai
+                for col in ("assigned_washer_id", "assigned_delivery_id"):
+                    await db.execute(
+                        sqltext(
+                            f"UPDATE orders SET {col} = NULL WHERE {col} IN"
+                            " (SELECT id FROM staff WHERE phone = :p)"
+                        ),
+                        {"p": phone},
+                    )
+                await db.execute(sqltext("DELETE FROM staff WHERE phone = :p"), {"p": phone})
+            await db.commit()
     # Tests can create customers with phones beyond CUST_A/CUST_B. Purge
     # every customer belonging to these disposable tenants before deleting
     # the tenant rows, otherwise the next test fails on the tenant FK.

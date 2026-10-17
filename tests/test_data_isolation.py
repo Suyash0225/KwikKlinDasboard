@@ -42,48 +42,49 @@ async def two_tenants():
     system context mein saaf kiya."""
     home_id = await _home_id()
     async with async_session_factory() as db:
-        tenant_b = Tenant(
-            slug=B_SLUG,
-            shop_name="Isolation Test Laundry",
-            owner_name="Tenant B",
-            owner_phone="+919999900083",
-            plan="starter",
-            status="active",
-        )
-        db.add(tenant_b)
-        await db.flush()
-        b_id = tenant_b.id
-        db.add(Customer(phone=HOME_PHONE, name="Home Grahak", tenant_id=home_id))
-        db.add(Customer(phone=B_PHONE, name="B Grahak", tenant_id=b_id))
-        await db.commit()
+        async with tenant_context.system_context(db):
+            tenant_b = Tenant(
+                slug=B_SLUG,
+                shop_name="Isolation Test Laundry",
+                owner_name="Tenant B",
+                owner_phone="+919999900083",
+                plan="starter",
+                status="active",
+            )
+            db.add(tenant_b)
+            await db.flush()
+            b_id = tenant_b.id
+            db.add(Customer(phone=HOME_PHONE, name="Home Grahak", tenant_id=home_id))
+            db.add(Customer(phone=B_PHONE, name="B Grahak", tenant_id=b_id))
+            await db.commit()
     try:
         yield home_id, b_id
     finally:
-        tenant_context.current_tenant_id.set(None)  # cleanup always system ctx
         async with async_session_factory() as db:
-            await db.execute(
-                sqltext("DELETE FROM customers WHERE phone IN (:p1, :p2)"),
-                {"p1": HOME_PHONE, "p2": B_PHONE},
-            )
-            await db.execute(
-                sqltext(
-                    "DELETE FROM login_sessions WHERE user_id IN "
-                    "(SELECT id FROM users WHERE tenant_id = "
-                    " (SELECT id FROM tenants WHERE slug = :s))"
-                ),
-                {"s": B_SLUG},
-            )
-            await db.execute(
-                sqltext(
-                    "DELETE FROM users WHERE tenant_id = "
-                    "(SELECT id FROM tenants WHERE slug = :s)"
-                ),
-                {"s": B_SLUG},
-            )
-            await db.execute(
-                sqltext("DELETE FROM tenants WHERE slug = :s"), {"s": B_SLUG}
-            )
-            await db.commit()
+            async with tenant_context.system_context(db):
+                await db.execute(
+                    sqltext("DELETE FROM customers WHERE phone IN (:p1, :p2)"),
+                    {"p1": HOME_PHONE, "p2": B_PHONE},
+                )
+                await db.execute(
+                    sqltext(
+                        "DELETE FROM login_sessions WHERE user_id IN "
+                        "(SELECT id FROM users WHERE tenant_id = "
+                        " (SELECT id FROM tenants WHERE slug = :s))"
+                    ),
+                    {"s": B_SLUG},
+                )
+                await db.execute(
+                    sqltext(
+                        "DELETE FROM users WHERE tenant_id = "
+                        "(SELECT id FROM tenants WHERE slug = :s)"
+                    ),
+                    {"s": B_SLUG},
+                )
+                await db.execute(
+                    sqltext("DELETE FROM tenants WHERE slug = :s"), {"s": B_SLUG}
+                )
+                await db.commit()
 
 
 async def test_orm_layer_scopes_selects_per_tenant(two_tenants) -> None:
@@ -161,12 +162,13 @@ async def test_rls_blocks_raw_sql_writes(two_tenants) -> None:
 
     # System context se verify: row untouched hai.
     async with async_session_factory() as db:
-        name = (
-            await db.execute(
-                sqltext("SELECT name FROM customers WHERE phone = :p"),
-                {"p": HOME_PHONE},
-            )
-        ).scalar_one()
+        async with tenant_context.system_context(db):
+            name = (
+                await db.execute(
+                    sqltext("SELECT name FROM customers WHERE phone = :p"),
+                    {"p": HOME_PHONE},
+                )
+            ).scalar_one()
     assert name == "Home Grahak"
 
 
@@ -198,17 +200,18 @@ async def test_api_scopes_other_tenants_session_to_own_data(client, two_tenants)
     byte bhi nahi (RLS + ctx middleware ka proof, poora HTTP raasta)."""
     home_id, b_id = two_tenants
     async with async_session_factory() as db:
-        user_b = User(
-            tenant_id=b_id,
-            name="B Owner",
-            email=B_EMAIL,
-            password_hash=auth.hash_password("isolation-test-pw"),
-            role="OWNER",
-        )
-        db.add(user_b)
-        await db.commit()
-        raw_token = await auth.start_session(db, user_b, ip="127.0.0.1", user_agent="pytest")
-        await db.commit()
+        async with tenant_context.system_context(db):
+            user_b = User(
+                tenant_id=b_id,
+                name="B Owner",
+                email=B_EMAIL,
+                password_hash=auth.hash_password("isolation-test-pw"),
+                role="OWNER",
+            )
+            db.add(user_b)
+            await db.commit()
+            raw_token = await auth.start_session(db, user_b, ip="127.0.0.1", user_agent="pytest")
+            await db.commit()
 
     client.cookies.set("kk_session", raw_token)
     try:
@@ -238,15 +241,89 @@ async def test_api_responses_never_contain_other_tenant_data(
 async def test_system_context_still_sees_everything(two_tenants) -> None:
     """Scheduler/backup ki guarantee: system context (koi tenant set nahi)
     mein dono tenants ke rows dikhte hain — warna replay/backup toot jaata."""
-    assert tenant_context.current_tenant_id.get() is None
     async with async_session_factory() as db:
-        rows = (
-            await db.execute(
-                sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
-                {"p1": HOME_PHONE, "p2": B_PHONE},
-            )
-        ).scalars().all()
+        async with tenant_context.system_context(db):
+            rows = (
+                await db.execute(
+                    sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                    {"p1": HOME_PHONE, "p2": B_PHONE},
+                )
+            ).scalars().all()
     assert set(rows) == {HOME_PHONE, B_PHONE}
+
+
+async def test_rls_unset_tenant_returns_no_rows(two_tenants) -> None:
+    """No tenant and no explicit system grant must fail closed in ORM and PostgreSQL."""
+    tenant_token = tenant_context.current_tenant_id.set(None)
+    system_token = tenant_context.current_system_context.set(False)
+    try:
+        async with async_session_factory() as db:
+            orm_rows = (
+                await db.execute(
+                    select(Customer.phone).where(Customer.phone.in_((HOME_PHONE, B_PHONE)))
+                )
+            ).scalars().all()
+            raw_rows = (
+                await db.execute(
+                    sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                    {"p1": HOME_PHONE, "p2": B_PHONE},
+                )
+            ).scalars().all()
+        assert orm_rows == []
+        assert raw_rows == []
+    finally:
+        tenant_context.current_system_context.reset(system_token)
+        tenant_context.current_tenant_id.reset(tenant_token)
+
+
+
+async def test_rls_context_does_not_leak_on_reused_connection(two_tenants) -> None:
+    """The same checked-out connection must not retain a prior tenant GUC."""
+    tenant_token = tenant_context.current_tenant_id.set(None)
+    system_token = tenant_context.current_system_context.set(False)
+    try:
+        from app.database import engine
+
+        home_id, b_id = two_tenants
+        async with engine.connect() as conn:
+            async with conn.begin():
+                rows = (await conn.execute(
+                    sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                    {"p1": HOME_PHONE, "p2": B_PHONE},
+                )).scalars().all()
+                assert rows == []
+
+            token = tenant_context.current_tenant_id.set(home_id)
+            try:
+                async with conn.begin():
+                    rows = (await conn.execute(
+                        sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                        {"p1": HOME_PHONE, "p2": B_PHONE},
+                    )).scalars().all()
+                    assert rows == [HOME_PHONE]
+            finally:
+                tenant_context.current_tenant_id.reset(token)
+
+            token = tenant_context.current_tenant_id.set(b_id)
+            try:
+                async with conn.begin():
+                    rows = (await conn.execute(
+                        sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                        {"p1": HOME_PHONE, "p2": B_PHONE},
+                    )).scalars().all()
+                    assert rows == [B_PHONE]
+            finally:
+                tenant_context.current_tenant_id.reset(token)
+
+            async with conn.begin():
+                rows = (await conn.execute(
+                    sqltext("SELECT phone FROM customers WHERE phone IN (:p1, :p2)"),
+                    {"p1": HOME_PHONE, "p2": B_PHONE},
+                )).scalars().all()
+                assert rows == []
+    finally:
+        tenant_context.current_system_context.reset(system_token)
+        tenant_context.current_tenant_id.reset(tenant_token)
 
 
 # ---------------------------------------- per-dukaan unique constraints ----
@@ -261,8 +338,9 @@ async def _fresh(slug: str, table: str):
     """
     tid = await _tenant(slug)
     async with async_session_factory() as db:
-        await db.execute(sqltext(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": tid})
-        await db.commit()
+        async with tenant_context.system_context(db):
+            await db.execute(sqltext(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": tid})
+            await db.commit()
     return tid
 
 
@@ -405,21 +483,30 @@ async def test_rls_is_actually_in_force_not_just_configured(client) -> None:
 
     a, b = await _fresh("rls-live-a", "customers"), await _fresh("rls-live-b", "customers")
     async with async_session_factory() as db:
-        for tid, name in ((a, "A ka grahak"), (b, "B ka grahak")):
-            await db.execute(
-                sqltext("INSERT INTO customers (id, tenant_id, phone, name) "
-                        "VALUES (gen_random_uuid(), :t, :p, :n)"),
-                {"t": tid, "p": f"+9190{str(tid)[:8]}", "n": name},
-            )
-        await db.commit()
+        async with tenant_context.system_context(db):
+            for tid, name in ((a, "A ka grahak"), (b, "B ka grahak")):
+                await db.execute(
+                    sqltext("INSERT INTO customers (id, tenant_id, phone, name) "
+                            "VALUES (gen_random_uuid(), :t, :p, :n)"),
+                    {"t": tid, "p": f"+9190{str(tid)[:8]}", "n": name},
+                )
+            await db.commit()
 
     # RAW SQL — jaan-boojh kar. ORM ka filter yahan lagta hi nahi, isliye
     # jo bhi rokta hai wo sirf RLS hai. Yahi is test ka poora maqsad hai.
-    async with async_session_factory() as db:
-        await db.execute(sqltext(f"SET LOCAL app.tenant_id = '{a}'"))
-        rows = (
-            await db.execute(sqltext("SELECT name FROM customers WHERE phone LIKE '+9190%'"))
-        ).scalars().all()
+    # The test harness grants system context by default for legacy setup;
+    # explicitly turn it off for this database-level RLS assertion.
+    system_token = tenant_context.current_system_context.set(False)
+    tenant_token = tenant_context.current_tenant_id.set(None)
+    try:
+        async with async_session_factory() as db:
+            await db.execute(sqltext(f"SET LOCAL app.tenant_id = '{a}'"))
+            rows = (
+                await db.execute(sqltext("SELECT name FROM customers WHERE phone LIKE '+9190%'"))
+            ).scalars().all()
+    finally:
+        tenant_context.current_system_context.reset(system_token)
+        tenant_context.current_tenant_id.reset(tenant_token)
     assert rows == ["A ka grahak"], f"RLS ne doosri dukaan ki row nahi roki: {rows}"
 
 

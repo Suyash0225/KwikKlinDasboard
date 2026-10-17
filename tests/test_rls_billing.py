@@ -21,25 +21,26 @@ PAY_X = "pay_TESTRLSX0001"
 @pytest.fixture
 async def tenant_b():
     async with async_session_factory() as db:
-        await db.execute(sqltext("DELETE FROM invoices WHERE rzp_payment_id IN (:a, :b)"), {"a": PAY_B, "b": PAY_X})
-        await db.execute(sqltext("DELETE FROM tenants WHERE slug = :s"), {"s": SLUG_B})
-        await db.commit()
-        t = Tenant(slug=SLUG_B, shop_name="RLS B", owner_name="B", plan="starter",
-                   owner_phone="+919999900401", status="active")
-        db.add(t)
-        await db.commit()
-        await db.refresh(t)
-        # system context se B ka invoice — jaise Razorpay webhook likhta hai
-        db.add(Invoice(tenant_id=t.id, rzp_payment_id=PAY_B, plan="starter", amount_paise=99900))
-        await db.commit()
-    try:
-        yield t
-    finally:
-        tenant_context.current_tenant_id.set(None)
-        async with async_session_factory() as db:
+        async with tenant_context.system_context(db):
             await db.execute(sqltext("DELETE FROM invoices WHERE rzp_payment_id IN (:a, :b)"), {"a": PAY_B, "b": PAY_X})
             await db.execute(sqltext("DELETE FROM tenants WHERE slug = :s"), {"s": SLUG_B})
             await db.commit()
+            t = Tenant(slug=SLUG_B, shop_name="RLS B", owner_name="B", plan="starter",
+                       owner_phone="+919999900401", status="active")
+            db.add(t)
+            await db.commit()
+            await db.refresh(t)
+            # system context se B ka invoice — jaise Razorpay webhook likhta hai
+            db.add(Invoice(tenant_id=t.id, rzp_payment_id=PAY_B, plan="starter", amount_paise=99900))
+            await db.commit()
+    try:
+        yield t
+    finally:
+        async with async_session_factory() as db:
+            async with tenant_context.system_context(db):
+                await db.execute(sqltext("DELETE FROM invoices WHERE rzp_payment_id IN (:a, :b)"), {"a": PAY_B, "b": PAY_X})
+                await db.execute(sqltext("DELETE FROM tenants WHERE slug = :s"), {"s": SLUG_B})
+                await db.commit()
 
 
 async def test_a_shop_sees_only_its_own_invoices(tenant_b) -> None:
@@ -56,7 +57,8 @@ async def test_a_shop_sees_only_its_own_invoices(tenant_b) -> None:
     assert PAY_B in rows
     # system context (control panel) ko sab
     async with async_session_factory() as db:
-        rows = (await db.execute(select(Invoice.rzp_payment_id))).scalars().all()
+        async with tenant_context.system_context(db):
+            rows = (await db.execute(select(Invoice.rzp_payment_id))).scalars().all()
     assert PAY_B in rows
 
 
@@ -70,5 +72,6 @@ async def test_a_shop_cannot_write_another_shops_invoice(tenant_b) -> None:
                 await db.commit()
             await db.rollback()
     async with async_session_factory() as db:
-        n = (await db.execute(sqltext("SELECT count(*) FROM invoices WHERE rzp_payment_id = :p"), {"p": PAY_X})).scalar_one()
+        async with tenant_context.system_context(db):
+            n = (await db.execute(sqltext("SELECT count(*) FROM invoices WHERE rzp_payment_id = :p"), {"p": PAY_X})).scalar_one()
     assert n == 0

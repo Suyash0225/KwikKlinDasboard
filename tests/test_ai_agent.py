@@ -9,6 +9,7 @@ from app.config import settings
 from app.database import async_session_factory
 from app.models import Customer, Escalation
 from app.services.ai_agent import build_ai_reply
+from app.services import tenant_context
 from app.services.llm_client import LLMUnavailable
 
 PHONE = "+919999900123"
@@ -42,11 +43,14 @@ def esc_sent(monkeypatch) -> list[dict]:
 
 
 async def _seed_customer() -> Customer:
-    async with async_session_factory() as s:
-        cust = Customer(phone=PHONE, name="AI Grahak", address="Test Address, Varanasi")
-        s.add(cust)
-        await s.commit()
-        return cust
+    home = await tenant_context.get_home_tenant_id()
+    assert home is not None
+    async with tenant_context.as_tenant(home):
+        async with async_session_factory() as s:
+            cust = Customer(phone=PHONE, name="AI Grahak", address="Test Address, Varanasi")
+            s.add(cust)
+            await s.commit()
+            return cust
 
 
 async def _escalations_for(customer_id) -> list[Escalation]:
@@ -350,8 +354,11 @@ async def test_simple_greeting_does_not_call_llm(monkeypatch) -> None:
         raise AssertionError("simple greeting must not call the LLM")
 
     monkeypatch.setattr(agent_module.llm_client, "ask_json", unexpected_llm)
-    async with async_session_factory() as db:
-        cust = await _seed_customer()
-        reply = await build_ai_reply(db, cust, "  Hello!! ")
+    home = await tenant_context.get_home_tenant_id()
+    assert home is not None
+    async with tenant_context.as_tenant(home):
+        async with async_session_factory() as db:
+            cust = await _seed_customer()
+            reply = await build_ai_reply(db, cust, "  Hello!! ")
 
     assert reply and "Welcome to Kwik Klin" in reply

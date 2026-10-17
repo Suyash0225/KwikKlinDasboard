@@ -61,32 +61,42 @@ async def login(
     number maujood hai ye batana bhi ek leak hai."""
     if throttled(ip):
         raise HTTPException(status_code=429, detail="Too many attempts — try again shortly")
-    rows = (
-        await db.execute(select(Staff).where(Staff.phone == phone, Staff.is_active))
-    ).scalars().all()
-    staff = next((s for s in rows if s.password_hash and verify_password(password, s.password_hash)), None)
+    from app.services import tenant_context
+
+    # Login begins before the tenant is known, so the phone lookup is an
+    # explicit trusted cross-tenant read. End that transaction before
+    # switching to the matched tenant; SET LOCAL must not leak across phases.
+    async with tenant_context.system_context(db):
+        rows = (
+            await db.execute(select(Staff).where(Staff.phone == phone, Staff.is_active))
+        ).scalars().all()
+        staff = next(
+            (row for row in rows if row.password_hash and verify_password(password, row.password_hash)),
+            None,
+        )
+        await db.commit()
+
     if staff is None:
         note_failure(ip)
         log.info("staff_login_failed", phone=phone[-4:])
         raise HTTPException(status_code=401, detail="Wrong number or password")
 
     token = secrets.token_urlsafe(32)
-    db.add(
-        StaffSession(
-            staff_id=staff.id,
-            # Tenant SAAF-SAAF likha jata hai. Login ke waqt context system
-            # hota hai (abhi pata hi nahi tha kis dukaan ka aadmi hai), aur
-            # us haalat mein naya row HOME tenant par stamp ho jata — phir
-            # doosri dukaan ka staff apne hi session se pehchana na jaata.
-            tenant_id=staff.tenant_id,
-            token_hash=_token_hash(token),
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS),
-            user_agent=(user_agent or "")[:200],
+    # The read transaction is committed above. Create the session and update
+    # last_login under the matched tenant, not under the system grant.
+    async with tenant_context.as_tenant(staff.tenant_id):
+        db.add(
+            StaffSession(
+                staff_id=staff.id,
+                tenant_id=staff.tenant_id,
+                token_hash=_token_hash(token),
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS),
+                user_agent=(user_agent or "")[:200],
+            )
         )
-    )
-    staff.last_login_at = datetime.now(timezone.utc)
-    db.add(staff)
-    await db.commit()
+        staff.last_login_at = datetime.now(timezone.utc)
+        db.add(staff)
+        await db.commit()
     log.info("staff_login", staff=staff.name, role=staff.role.name)
     return token, staff
 

@@ -125,12 +125,9 @@ async def _ensure_rzp_plan(db: AsyncSession, plan_code: str, *, annual: bool) ->
     # Cache GLOBAL vendor data hai (Razorpay plan ids sab tenants ke liye
     # same) — system context mein padho/likho warna non-home tenant ke
     # request mein RLS use chhupa dega aur har checkout naya plan banayega.
-    ctx = tenant_context.current_tenant_id.set(None)
-    try:
+    async with tenant_context.as_system_context():
         async with async_session_factory() as sysdb:
             cached = await app_settings.get(sysdb, "rzp_plan_ids") or {}
-    finally:
-        tenant_context.current_tenant_id.reset(ctx)
     if cache_key in cached:
         return cached[cache_key]
 
@@ -152,12 +149,9 @@ async def _ensure_rzp_plan(db: AsyncSession, plan_code: str, *, annual: bool) ->
         raise RuntimeError(f"Razorpay plan nahi bana: {r.text[:150]}")
     plan_id = r.json()["id"]
     cached[cache_key] = plan_id
-    ctx = tenant_context.current_tenant_id.set(None)
-    try:
+    async with tenant_context.as_system_context():
         async with async_session_factory() as sysdb:
             await app_settings.set_value(sysdb, "rzp_plan_ids", cached)
-    finally:
-        tenant_context.current_tenant_id.reset(ctx)
     log.info("rzp_plan_created", plan=cache_key, rzp_plan_id=plan_id)
     return plan_id
 
