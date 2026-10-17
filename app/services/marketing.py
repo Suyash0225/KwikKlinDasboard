@@ -860,7 +860,7 @@ async def run_customer_cycle_nudges(db: AsyncSession, *, now: datetime | None = 
                 template_name="kk_repeat_pickup",
                 template_params=[(customer.name or "there").split()[0], tenant.shop_name],
                 sent_by="marketing",
-                intent="promotional",
+                intent="promotional", enqueue_on_fail=False,
             )
             customer.last_marketing_at = current
             await db.commit()
