@@ -777,6 +777,12 @@ async def bill_page(token: str):
         "{{PAY_BLOCK}}": pay_block + delivery_card + earlier_card + rewards_card, "{{ITEMS}}": "".join(items), "{{TOTALS}}": totals,
         "{{TERMS}}": terms, "{{CONTACT_BTN}}": contact_btn,
         "{{DELIVERY_ACTIONS}}": delivery_actions,
+        "{{RAZORPAY_BUTTON}}": (
+            f"<button type='button' class='contact-btn' id='razorpay-pay' data-token='{e(token)}'>"
+            "🔒 Pay securely online</button><p id='razorpay-error' class='note' hidden></p>"
+            if r["has_total"] and due > 0 and settings.RAZORPAY_KEY_ID
+            and settings.RAZORPAY_KEY_SECRET and settings.RAZORPAY_WEBHOOK_SECRET else ""
+        ),
         "{{MOOD}}": mood, "{{THEME}}": theme, "{{HERO_ART}}": art, "{{HERO_EMOJI}}": emoji,
         "{{HERO_TITLE}}": e(title), "{{HERO_SUB}}": e(sub), "{{HERO_BADGE}}": badge, "{{PROGRESS}}": progress,
         "{{ASSET_V}}": _SITE_ASSET_V, "{{SHOP}}": e(shop),
@@ -788,6 +794,43 @@ async def bill_page(token: str):
         html = html.replace(k, v)
     return _Resp(content=html, media_type="text/html",
                  headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
+@app.post("/b/{token}/razorpay-link", include_in_schema=False)
+async def create_order_razorpay_link(token: str):
+    """Create/reuse a provider-hosted payment link for the signed order bill."""
+    from decimal import Decimal
+
+    from fastapi.responses import JSONResponse
+
+    from app.models import Order
+    from app.services import bill_link, integrations, order_payment_gateway
+
+    parsed = bill_link.parse(token)
+    if parsed is None:
+        return JSONResponse({"detail": "not found"}, status_code=404,
+                            headers={"Cache-Control": "no-store"})
+    tid, oid = parsed
+    async with integrations.tenant_db(tid) as db:
+        order = await db.get(Order, oid)
+        if order is None or order.tenant_id != tid:
+            return JSONResponse({"detail": "not found"}, status_code=404,
+                                headers={"Cache-Control": "no-store"})
+        due = (Decimal(str(order.total_amount or 0)) - Decimal(str(order.amount_paid or 0))).quantize(Decimal("0.01"))
+        if due <= 0:
+            return JSONResponse({"detail": "This bill has no outstanding balance."}, status_code=409,
+                                headers={"Cache-Control": "no-store"})
+        try:
+            url = await order_payment_gateway.create_payment_link(db, order, due)
+        except order_payment_gateway.PaymentGatewayDisabled:
+            return JSONResponse({"detail": "Online payment is not configured."}, status_code=503,
+                                headers={"Cache-Control": "no-store"})
+        except order_payment_gateway.PaymentGatewayError:
+            log.exception("order_payment_link_create_failed", order=order.order_number)
+            return JSONResponse({"detail": "Could not create a payment link. Please try again."}, status_code=502,
+                                headers={"Cache-Control": "no-store"})
+    return JSONResponse({"url": url}, headers={"Cache-Control": "no-store"})
+
 
 
 def _earlier_bills_card(prev: dict, statement_link: str) -> str:
