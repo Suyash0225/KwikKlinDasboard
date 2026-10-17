@@ -9,15 +9,15 @@ Ye document 3 sawaalon ka jawab hai:
 
 ## 1. System overview
 
-```
-WhatsApp user ──▶ Meta Cloud API ──▶ cloudflared tunnel ──▶ FastAPI (uvicorn)
-                                                              │
-                     ┌────────────────────────────────────────┼──────────────┐
-                     │                                        │              │
-               APScheduler                              PostgreSQL 15   Gemini LLM
-       (hourly/nightly/durability jobs)                (single source    (AI replies)
-                                                        of truth)
-```
+**Production:** WhatsApp/owner browser → HTTPS on `kwikklin.online` → nginx
+(reverse proxy) → FastAPI/uvicorn on Ubuntu EC2. FastAPI connects to PostgreSQL;
+scheduled jobs use the same database and a PostgreSQL advisory lock elects one
+scheduler leader across web workers.
+
+**Local development only:** Meta webhooks can reach a laptop through an optional
+`cloudflared` quick tunnel. That tunnel is not the production ingress. See
+[README.md](README.md#webhook-local-development) for the dev setup and
+[docs/DEPLOY.md](docs/DEPLOY.md) for the production topology.
 
 - Har inbound/outbound message `conversations` mein, har order `orders` +
   `order_status_history` mein. Dashboard sirf API ke through data dekhta hai
@@ -33,7 +33,7 @@ Layered guarantees, har layer independent:
 | Outbound queue | `outbound_queue` — network/5xx/429 par send auto-queue; backoff 5 min → 6 h; 8 attempts, phir dead-letter | Meta down ho to bhi customer message eventually jaata hai, kabhi silently drop nahi hota |
 | Atomic transitions | Order status + history + SLA date **ek hi commit** mein | Aadha-updated order kabhi nahi ban sakta |
 | Idempotency keys | `sent_events` + unclaim-on-permanent-failure | Scheduled message na double jaata hai, na burn hota hai |
-| Nightly backup | `pg_dump -Fc` → `backups/` (14 din retention), scheduler 21:30 pe | Disk crash par bhi kal raat tak ka data wapas aata hai |
+| Nightly backup | `pg_dump -Fc` → `backups/` (14 din retention); optional S3-compatible off-host upload | Local dump stays available if upload is disabled/fails; upload failures alert owner/admin |
 | Process supervision | Server par systemd/docker restart policy; `/health` liveness | Reboot/crash ke baad app khud khadi hoti hai |
 
 **Restore drill** (kabhi zaroorat pade):
@@ -46,9 +46,9 @@ pg_restore -h localhost -U laundry -d laundry --clean backups\kwikklin-<latest>.
 - **Webhook**: Meta ka `X-Hub-Signature-256` HMAC verify hota hai (raw body,
   app secret), galat signature → 403. Token compares sab `hmac.compare_digest`
   (timing-attack safe).
-- **Admin API**: `X-API-Key` constant-time compare + per-IP throttle
-  (10 galat attempts / 10 min → 429, sahi key bhi block). Fail attempts IP ke
-  saath log hote hain.
+- **Admin API**: `X-API-Key` constant-time compare + rate limiting. Client IP
+  forwarding is accepted only from configured `TRUSTED_PROXIES`; nginx must
+  overwrite forwarding headers and untrusted peers cannot spoof their IP.
 - **Headers**: `X-Content-Type-Options`, `X-Frame-Options: DENY`,
   `Referrer-Policy: no-referrer` (media URLs ke `?key=` leak se bachata hai), HSTS.
 - **Secrets**: `.env` git se bahar; `ig_access_token` API responses mein
@@ -66,14 +66,18 @@ Kiya hua (is commit mein):
   customers `limit/offset`, thread messages pehle se capped.
 - **GZip**: bade JSON responses ~10x chhote.
 
-Capacity math (is hardware par): 10k customers × ~50 messages =
-500k conversation rows — indexed queries ke liye trivial hai; Postgres
-millions tak comfortable. Bottleneck DB nahi, **ye Windows machine + tunnel** hai.
+Capacity depends on query patterns, message volume, LLM latency, EC2 sizing,
+PostgreSQL I/O, and connection-pool limits—not just customer count. Indexed
+500k-row conversation workloads are a reasonable planning target, not a
+performance guarantee; measure production latency and database load before
+choosing a worker or instance size.
 
-Agla kadam jab load real ho (abhi zaroorat NAHI):
-1. Cloud VM (Oracle Free / RackNerd) — 100% uptime, tunnel ki jagah real domain + TLS.
-2. Uvicorn workers 2–4 (multi-process) — abhi single process kaafi hai.
-3. `webhook_events`/`conversations` partitioning — 10M+ rows ke baad hi sochna.
+Production currently uses Ubuntu EC2 + nginx + systemd; the cloudflared tunnel
+is a local-development convenience, not a production bottleneck. The scheduler
+uses PostgreSQL `pg_try_advisory_lock` leader election, so only one worker
+runs scheduled jobs and another can take over after the lock connection is
+lost. Scale workers only after load testing and pool sizing. Consider table
+partitioning only when measured query/maintenance needs justify it.
 
 ## 5. Multi-tenant — ek instance, 50–60 laundry businesses
 
@@ -87,9 +91,9 @@ Agla kadam jab load real ho (abhi zaroorat NAHI):
 
 | Layer | Kahan | Kya karta hai |
 |---|---|---|
-| 1. Request context | `app/main.py` middleware → `tenant_context.current_tenant_id` (ContextVar) | Session cookie → user ka tenant; staff cookie → staff ki dukaan; anonymous/API-key → home tenant. Owner ka phone bhi context mein (`manager_phone()`). |
-| 2. ORM | `app/database.py` events | Har SELECT par automatic `tenant_id = <ctx>` filter (`with_loader_criteria`), har naye row par automatic stamp (`before_flush`). Developer WHERE bhool bhi jaye to filter lagta hai. |
-| 3. Postgres RLS | migrations `d4c8e2f7a915` (19) + `r2a8c5d3f9e7` (4 billing) + `v6e3a9b7d4f2`/`x8a5c3d9f6b4` (coupon_redemptions, users, invites — ab HAR tenant table par) | `ENABLE + FORCE ROW LEVEL SECURITY`, policy `tenant_isolation` — GUC `app.tenant_id` set ho to sirf usi tenant ki rows (read **aur** write); unset = system context, sab rows. Table owner bhi bypass nahi kar sakta. |
+| 1. Request context | `app/main.py` middleware → `tenant_context.current_tenant_id` (ContextVar) | Valid session → us user ka tenant; staff cookie → staff ki dukaan; anonymous/no-session → no tenant (fail closed); only a valid `ADMIN_API_KEY` on routes that accept it may select the home tenant. Public bill/token routes resolve tenant from the token. |
+| 2. ORM | `app/database.py` events | Tenant selected ho to automatic `tenant_id = <ctx>` filter and row stamping. No tenant + no explicit trusted system context means tenant-scoped ORM reads return no rows and new rows are not silently stamped into the home tenant. |
+| 3. Postgres RLS | Original tenant policies plus `20261017_rls_fail_closed` | `ENABLE + FORCE ROW LEVEL SECURITY`; rows are visible/writable only when `app.tenant_id` is non-empty and matches `tenant_id`, or trusted code explicitly sets `app.system_context='on'`. Missing/empty tenant without that grant returns no rows. Table owners do not bypass FORCE RLS; superuser/BYPASSRLS roles still must not be used by the runtime app. |
 
 **Kaun sa table kahan** — 23 tables tenant-scoped (customers, orders, payments,
 staff, tasks, conversations, campaigns, coupons, rate_card, settings_kv,
@@ -107,12 +111,14 @@ unmein dukaan pata hi nahi hoti jab tak user/token resolve na ho jaye.
 Ye zaroori tha users/invites par RLS lagane se pehle — warna doosri
 dukaan ka owner apne hi account se login nahi kar pata.
 
-**System context** (ContextVar = None, GUC unset, RLS pass-through) sirf in
-raaston par: `/control/*` (vendor panel), `/webhooks/razorpay`, alembic,
-pg_dump/backup, aur scheduler ka platform-level hissa. Scheduler ka
-dukaan-level kaam (standup, reminders, summary, nudges, segments)
-`_for_each_tenant()` se har chalu dukaan ke liye alag `as_tenant()` block
-mein chalta hai — apna data, apna WhatsApp number, apna malik.
+**System context** is not implied by `current_tenant_id=None` or an unset GUC.
+RLS requires an explicit `app.system_context='on'` grant; otherwise a missing
+tenant sees zero tenant-scoped rows. Trusted cross-tenant operations opt in
+through `tenant_context.system_context(db)` / `as_system_context()`, or a
+separate one-shot backup/restore process with the documented system GUC.
+Current platform paths include `/control/*`, `/webhooks/razorpay`, account
+lifecycle lookups, and scheduler platform-level work. Scheduler shop-level
+work runs inside a separate `as_tenant()` block for each active shop.
 
 ### Per-tenant cheezein
 
@@ -143,10 +149,10 @@ mein chalta hai — apna data, apna WhatsApp number, apna malik.
 ### "Home tenant" — kya bacha hai aur kyun
 
 Home = is deployment ki apni dukaan (`settings_kv.home_tenant_slug`, warna
-sabse purana tenant). Sirf teen jagah matlab rakhta hai: `.env` WhatsApp
-creds ka fallback, anonymous/`ADMIN_API_KEY` request ka context, Meta
-block watcher. Ye single-shop deploy ki backward-compat hai — 60 dukaanon
-mein home bhi bas ek tenant hai, koi special access nahi.
+sabse purana tenant). Iska use `.env` WhatsApp credentials ke fallback,
+Meta block watcher, aur sirf valid `ADMIN_API_KEY` wali protected request
+mein hota hai. Anonymous/no-session requests ko home tenant nahi milta.
+Home tenant backward compatibility hai, anonymous access grant nahi.
 
 ### Naya vendor onboard — ab 2 minute, code/deploy nahi
 

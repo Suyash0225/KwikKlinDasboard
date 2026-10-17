@@ -2,20 +2,22 @@
 
 Kaun kaun is ContextVar ko padhta hai:
 
-1. `app/main.py` ka tenant middleware — HAR HTTP request par set karta hai
-   (session ho to us user ka tenant, warna is instance ka HOME tenant).
+1. `app/main.py` ka tenant middleware — valid session/staff token par tenant
+   set karta hai; anonymous/no-session requests unscoped rehti hain. Sirf
+   valid `ADMIN_API_KEY` protected routes home tenant select kar sakte hain.
 2. `app/database.py` ka "begin" event — har DB transaction par
    `SET LOCAL app.tenant_id` bhejta hai; Postgres Row-Level Security
    policies isi GUC se enforce karti hain (DB-level isolation).
 3. `app/database.py` ke ORM events — har SELECT par automatic
    `tenant_id = <ctx>` filter, har naye row par automatic tenant stamp.
 
-SYSTEM CONTEXT (ContextVar = None): scheduler jobs, webhook replay,
-alembic migrations, pg_dump — in-process trusted code jo kisi HTTP user ke
-behalf par nahi chal raha. Iske liye RLS policy full access deti hai
-(GUC unset => policy pass) aur naye rows HOME tenant par stamp hote hain.
-HTTP surface par ye kabhi nahi hota: middleware har request par context set
-karta hai, isliye API se aane wali har query hamesha scoped hai.
+SYSTEM CONTEXT is a separate explicit grant (`current_system_context=True`
+and PostgreSQL `app.system_context='on'`), not the absence of a tenant.
+Without a tenant and without that grant, ORM and PostgreSQL RLS fail closed.
+Trusted platform/scheduler paths must opt in via `system_context()` or
+`as_system_context()`; tenant-specific scheduled work uses `as_tenant()`.
+The database event uses transaction-local GUCs so pooled connections do not
+retain tenant/system privileges after a transaction ends.
 """
 
 from __future__ import annotations

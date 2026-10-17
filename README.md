@@ -150,9 +150,9 @@ Then in developers.facebook.com → app → WhatsApp → **Configuration**:
 - Verify token: the `WHATSAPP_VERIFY_TOKEN` from `.env`
 - Webhook fields → subscribe to **`messages`**
 
-⚠️ The trycloudflare URL is random **per tunnel run** — after every tunnel
-restart, paste the new URL into Meta's Configuration again. (Production gets
-a fixed domain in Phase 6.)
+⚠️ This tunnel is **local-development only**. Its URL is random per run, so
+paste the new URL into Meta's Configuration after a restart. Production uses
+the fixed HTTPS domain and nginx ingress described in [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ⚠️ The API Setup access token expires every ~24h during development —
 regenerate and update `WHATSAPP_TOKEN` in `.env`, then restart uvicorn
@@ -199,8 +199,9 @@ Rules that matter:
 **Migrations**: `alembic upgrade head` (latest: payments ledger, audit_log,
 campaigns/coupons, open_questions, faq/corrections, settings_kv).
 
-**Tests**: `.venv\Scripts\python -m pytest` — all LLM/WhatsApp mocked. Suite runs
-against the local DB; seed demo data makes a few count-based tests fail.
+**Tests**: `.venv\Scripts\python -m pytest` — all LLM/WhatsApp calls are mocked.
+The suite requires a dedicated disposable `TEST_DATABASE_URL`; it must never
+run against the development or production database. See [Run tests](#run-tests).
 
 ## Off-host backups and restore drill
 

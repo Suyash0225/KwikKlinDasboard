@@ -1561,8 +1561,9 @@ HTTP request aati hai
   → Postgres RLS policy: sirf usi tenant ke rows dikhte hain
       (SELECT bhi, INSERT/UPDATE/DELETE bhi)
 
-app.tenant_id UNSET  → system context, saare rows dikhte hain
-  (scheduler, migrations, pg_dump — deliberate)
+app.tenant_id UNSET + app.system_context not "on" → zero tenant rows
+app.system_context = 'on' → trusted system context, cross-tenant access
+  (explicitly wrapped scheduler/platform operations; one-shot backup/restore)
 ```
 
 **Do layer of defense:** ORM filter (app level) **+** RLS (DB level). Endpoint filter bhool bhi jaye to Postgres data nahi dega.
@@ -1574,11 +1575,11 @@ app.tenant_id UNSET  → system context, saare rows dikhte hain
 2.  Tenant A ke context mein tenant B ke order ko UPDATE → 0 rows affected
 3.  Tenant A ke context mein tenant B ke order ko DELETE → 0 rows affected
 4.  Tenant A ke context mein tenant_id=B ke saath INSERT → refuse
-5.  GUC unset (system context) → saare tenants ke rows dikhein
-6.  GUC = '' (empty string) → unset jaisa treat ho (NULLIF guard)
-7.  Raw SQL (ORM bypass) bhi RLS se filter ho
-8.  19 tenant tables mein se HAR EK pe policy lagi hai (loop test)
-9.  Har table pe FORCE ROW LEVEL SECURITY on hai (app owner user hai)
+5.  Tenant GUC unset + system GUC off → zero tenant rows (fail closed)
+6.  Explicit app.system_context='on' → trusted system operation can see all tenants
+7.  Empty tenant GUC + system context off → zero tenant rows, not a bypass
+8.  Raw SQL (ORM bypass) bhi RLS se filter ho
+9.  Har tenant-scoped table par policy + FORCE ROW LEVEL SECURITY ho
 10. Cross-tenant FK: A ke order mein B ka customer_id → block
 11. AI knowledge: Shop A ka FAQ Shop B ke retriever ko na mile
 12. Vendor session se client data — impersonate ke bina na dikhe

@@ -61,8 +61,8 @@ After=network.target postgresql.service
 User=ubuntu
 WorkingDirectory=/opt/kwikklin
 EnvironmentFile=/opt/kwikklin/.env
-# 1 worker: scheduler app ke andar chalta hai; kai workers = kai scheduler.
-# Load badhe to workers badhao aur scheduler ek alag process mein le jao.
+# 1 worker is the conservative default. PostgreSQL advisory-lock leader election
+# ensures only one worker runs APScheduler; load-test and size the DB pool before scaling.
 ExecStart=/opt/kwikklin/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=always
 RestartSec=3
