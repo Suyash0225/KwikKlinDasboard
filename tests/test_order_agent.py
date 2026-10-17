@@ -10,6 +10,7 @@ from app.database import async_session_factory
 from app.models import Order, OrderStatus, Staff, StaffRole, Task
 from app.services.bill_agent import handle_staff_message
 from app.services.order_service import create_order, update_status
+from app.utils.dates import today_ist
 from tests.conftest import TEST_WASHER_NAME, TEST_WASHER_PHONE
 
 PHONE = "+919999900555"
@@ -36,7 +37,7 @@ async def test_picked_up_sets_sla_and_notifies(sent) -> None:
         sent.clear()
         await update_status(db, order, OrderStatus.PICKED_UP, changed_by="Superman")
     # heavy item (blanket) -> 7 din from pickup day
-    assert order.expected_delivery == date.today() + timedelta(days=7)
+    assert order.expected_delivery == today_ist() + timedelta(days=7)
     assert any("have been picked up" in (c["text"] or "") for c in sent)
 
 
