@@ -421,7 +421,6 @@ async def send_campaign(campaign_id) -> None:
 
             rhythm_by_customer = await load_customer_rhythms(db)
         sent_now = 0
-        last_send_at: float | None = None
         while True:
             # Page the queue instead of re-querying one row at a time, and
             # bring each recipient's customer along — 'queued' is still the
@@ -510,13 +509,8 @@ async def send_campaign(campaign_id) -> None:
                             text += "\n\nJab chahein, apne agle order ke liye message karein."
                 else:
                     text = campaign.message_text.replace("{name}", cust.name or "ji")
-                # Enforce a real server-side gap between outbound sends.
-                # Skipped recipients do not consume the delay; parallel UI
-                # refreshes cannot bypass this worker's pacing.
-                if last_send_at is not None:
-                    remaining = random.uniform(15.0, 20.0) - (asyncio.get_running_loop().time() - last_send_at)
-                    if remaining > 0:
-                        await asyncio.sleep(remaining)
+                # Shared outbound_policy reserves a tenant-wide send slot;
+                # no worker-local sleep can be bypassed by another campaign.
                 try:
                     # One campaign = one approved creative. Send the same
                     # generated image + caption to each eligible customer;
@@ -546,7 +540,6 @@ async def send_campaign(campaign_id) -> None:
                     cust.last_marketing_at = datetime.now(timezone.utc)
                     sent_now += 1
                     spent += 1
-                    last_send_at = asyncio.get_running_loop().time()
                 except SendError as exc:
                     # window closed & no approved marketing template -> honest fail
                     rec.status = "failed"
