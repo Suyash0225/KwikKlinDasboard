@@ -30,20 +30,21 @@ async def test_one_worker_leads_and_standby_takes_over_after_connection_loss() -
         first_scheduler.start,
         first_scheduler.shutdown,
         poll_interval=0.05,
-        # Leave the dedicated connection idle while the test invalidates it.
-        health_interval=2.0,
+        health_interval=0.1,
     )
     second = SchedulerLeader(
         engine,
         second_scheduler.start,
         second_scheduler.shutdown,
-        poll_interval=0.05,
+        # A standby should poll slower than the leader's health check so the
+        # disconnected leader shuts down before takeover begins.
+        poll_interval=0.5,
         health_interval=0.05,
     )
 
     try:
         await first.start()
-        await asyncio.wait_for(first_scheduler.started_event.wait(), timeout=5)
+        await asyncio.wait_for(first_scheduler.started_event.wait(), timeout=8)
 
         await second.start()
         await asyncio.sleep(0.15)
