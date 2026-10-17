@@ -80,6 +80,7 @@ async def _seed_order(**kw) -> Order:
         )
 
 
+@pytest.mark.requires_independent_sessions
 async def test_standup_lists_pending_and_is_idempotent(sched_sent, sent, test_washer) -> None:
     async with async_session_factory() as db:
         await app_settings.set_value(db, "default_washer_phone", TEST_WASHER_PHONE)

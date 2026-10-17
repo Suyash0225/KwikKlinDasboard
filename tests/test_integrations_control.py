@@ -77,6 +77,7 @@ async def test_owner_dashboard_cannot_write_instagram_or_connect_google(client, 
     assert r.status_code == 200 and r.json()["connected"] is False
 
 
+@pytest.mark.requires_independent_sessions
 async def test_control_sets_instagram_encrypted_for_that_shop_only(client, shops, monkeypatch) -> None:
     assert secrets.is_enabled(), "TOKEN_ENCRYPTION_KEY must be set (python -m scripts.secure_setup)"
 
@@ -121,6 +122,7 @@ async def test_control_rejects_bad_instagram_without_saving(client, shops, monke
     assert await _raw_setting(shops["a"], "ig_access_token") is None
 
 
+@pytest.mark.requires_independent_sessions
 async def test_google_connect_goes_through_control_and_lands_on_the_right_shop(
     client, shops, monkeypatch
 ) -> None:

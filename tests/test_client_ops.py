@@ -197,6 +197,7 @@ async def test_wa_creds_via_panel(client, monkeypatch, tenant_b) -> None:
 
 # --------------------------------------------------------------- AI toggle --
 
+@pytest.mark.requires_independent_sessions
 async def test_agent_toggle_is_per_tenant(client, tenant_b, real_agent_switch) -> None:
     from app.services import app_settings
 
@@ -379,6 +380,7 @@ async def test_admin_can_set_owner_password_directly(client, tenant_b) -> None:
     assert r.status_code == 422
 
 
+@pytest.mark.requires_independent_sessions
 async def test_agent_flag_shows_in_tenant_list(client, tenant_b) -> None:
     """Row se hi agent on/off dikhe (panel ka toggle isi par chalta hai)."""
     await client.put(f"/control/api/tenants/{SLUG}/settings", headers=AUTH,
@@ -457,6 +459,7 @@ async def test_recharge_rejects_zero_and_bad_kind(client, tenant_b) -> None:
                               json={"kind": "gold", "amount": 5})).status_code == 422
 
 
+@pytest.mark.requires_independent_sessions
 async def test_recharge_validity_expires_leftover_only(client, tenant_b) -> None:
     """Validity wala top-up: bacha hua hissa hi expire hota hai, kharch
     kiya hua wapas nahi hota, aur ledger mein poora trail rehta hai."""

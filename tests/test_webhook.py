@@ -531,6 +531,7 @@ async def test_status_receipt_stores_nothing(client, sent) -> None:
 # --- ek baat, EK jawab (coalescing) ----------------------------------------
 
 
+@pytest.mark.requires_independent_sessions
 async def test_two_texts_in_one_batch_get_one_reply(client, sent) -> None:
     """"11 iron" + "3 dryclean" ek hi batch mein = EK jawab, do nahi.
 

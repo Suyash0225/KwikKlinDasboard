@@ -111,9 +111,26 @@ Check: <http://127.0.0.1:8000/health> → `{"status":"ok","db":"connected"}`
 
 ## Run tests
 
-```bat
-.venv\Scripts\python.exe -m pytest
+Tests run only against a dedicated disposable database. Set `TEST_DATABASE_URL`
+in `.env` to the **NOSUPERUSER app-role URL** for a separate database such as
+`laundry_test`. Never point it at the development or production database.
+The test harness refuses to start if this URL is missing or identifies the same
+database as `DATABASE_URL` / `APP_DATABASE_URL`.
+
+Apply migrations to the test database using the owner connection for that one
+command, then run pytest. Replace placeholders with your local credentials:
+
+```bash
+DATABASE_URL='postgresql+asyncpg://laundry:<password>@localhost:5432/laundry_test' \
+  .venv/bin/alembic upgrade heads
+.venv/bin/python -m pytest
 ```
+
+RLS/data-isolation tests opt into an outer transaction; their sessions use
+savepoints and the transaction rolls back after each test. Tests that exercise
+concurrent/background sessions use the dedicated disposable database plus the
+existing marked-row cleanup, because those paths need independent connections.
+CI provisions a fresh PostgreSQL test database and sets `TEST_DATABASE_URL` explicitly.
 
 ## Webhook (local development)
 

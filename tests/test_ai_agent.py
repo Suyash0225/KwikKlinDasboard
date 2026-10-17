@@ -279,6 +279,7 @@ async def test_compose_llm_down_falls_back(monkeypatch) -> None:
         assert reply and "Welcome to Kwik Klin" in reply
 
 
+@pytest.mark.requires_independent_sessions
 async def test_webhook_prefers_ai_reply(client, sent, monkeypatch) -> None:
     """Full inbound flow: AI answer goes out; AI None -> rule-based ack."""
     import app.routers.webhook as webhook_module

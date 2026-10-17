@@ -46,7 +46,7 @@ def _mock_sends(sent):
 
 
 @pytest.fixture(autouse=True)
-async def _cleanup_orders():
+async def _cleanup_orders(test_db_transaction):
     yield
     from tests.conftest import purge_phones
 
@@ -129,6 +129,7 @@ async def test_create_order_rejects_bad_items() -> None:
             await create_order(db, customer_phone=TEST_PHONE, items=[{"qty": 2}])
 
 
+@pytest.mark.requires_independent_sessions
 async def test_order_numbers_unique_under_concurrency() -> None:
     """5 simultaneous creates must mint 5 distinct numbers (advisory lock)."""
 

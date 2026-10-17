@@ -13,6 +13,8 @@ from app.database import async_session_factory
 from app.models.tenant import Invoice, Tenant
 from app.services import tenant_context
 
+pytestmark = pytest.mark.usefixtures("test_db_transaction")
+
 SLUG_B = "test-rls-b"
 PAY_B = "pay_TESTRLSB0001"
 PAY_X = "pay_TESTRLSX0001"

@@ -34,6 +34,7 @@ jobs:
       # Runtime tests must use a NOSUPERUSER role so PostgreSQL RLS is genuinely enforced.
       # Alembic continues to use DATABASE_URL (the migration owner).
       APP_DATABASE_URL: postgresql+asyncpg://kk_app:ci-app-role-password-2026@localhost:5432/kwikklin_test
+      TEST_DATABASE_URL: postgresql+asyncpg://kk_app:ci-app-role-password-2026@localhost:5432/kwikklin_test
       MANAGER_PHONE: "+919999000000"
       ADMIN_API_KEY: ci-only-not-a-secret
       VENDOR_API_KEY: ci-only-vendor-key
@@ -100,6 +101,8 @@ jobs:
           add_if_present tests/test_client_ip.py test_trusted_proxy_can_forward_client_ip
           add_if_present tests/test_backup_offsite.py test_offsite_backup_disabled_warns_without_crashing
           add_if_present tests/test_backup_offsite.py test_offsite_upload_failure_alerts_owner
+          add_if_present tests/test_database_safety.py test_guard_rejects_same_database_even_with_different_credentials
+          add_if_present tests/test_database_safety.py test_guard_requires_explicit_test_database
 
           if (( ${#focused[@]} )); then
             pytest -q "${focused[@]}"

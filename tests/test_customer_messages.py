@@ -1,5 +1,6 @@
 """Bill par haath se bheje messages + choti Google review link (/r/<slug>)."""
 
+import pytest
 from decimal import Decimal
 
 from sqlalchemy import text as sqltext
@@ -34,6 +35,7 @@ async def _home_slug() -> str:
         return (await db.execute(sqltext("SELECT slug FROM tenants WHERE id = :t"), {"t": str(tid)})).scalar_one()
 
 
+@pytest.mark.requires_independent_sessions
 async def test_delivery_update_message_says_full_or_partial_with_bill_link(client, sent, monkeypatch) -> None:
     """Send message -> Delivery update: kuch nahi diya to mana; kuch diya to
     'X diye, Y baaki'; sab diya to 'sabhi N kapde' — har baar web bill link."""

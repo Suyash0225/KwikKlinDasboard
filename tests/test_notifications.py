@@ -370,6 +370,7 @@ async def test_no_orders_falls_back_to_ack(client, sent) -> None:
     assert sent[0]["text"] == get_message("ack_received")
 
 
+@pytest.mark.requires_independent_sessions
 async def test_paused_thread_auto_resumes_after_the_window(client, sent) -> None:
     """Complaint par bot chup hota hai — par HAMESHA ke liye nahi.
 

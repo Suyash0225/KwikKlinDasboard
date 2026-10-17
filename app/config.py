@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # tab RLS bypass hoti hai aur startup hardening uspar chillata hai.
     # Banane ke liye: python -m scripts.create_app_role
     APP_DATABASE_URL: str = ""
+    # Dedicated disposable database URL used only by the pytest harness.
+    TEST_DATABASE_URL: str = ""
 
     # --- Provider switch ---
     # "meta"  = direct Meta Cloud API (test number, development)
