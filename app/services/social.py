@@ -348,7 +348,7 @@ async def post_to_instagram(db, image_public_url: str, caption: str) -> str:
 
 async def run_daily_social(force: bool = False) -> str:
     """Generate today's poster+caption, IG-publish, WhatsApp the owner."""
-    from app.services.scheduler import _claim
+    from app.services.scheduler import _claim, _unclaim
     from app.services.whatsapp import SendError, send_image, send_message
 
     now = datetime.now(IST)
@@ -367,9 +367,14 @@ async def run_daily_social(force: bool = False) -> str:
         try:
             draw_poster(theme_title, headline, subline, path)
         except Exception:
+            await _unclaim(claim_key)
             log.exception("poster_draw_failed")
             return "draw_failed"
-        caption = await _caption(db, theme_title, headline, subline)
+        try:
+            caption = await _caption(db, theme_title, headline, subline)
+        except Exception:
+            await _unclaim(claim_key)
+            raise
 
         # Instagram (only when linked): Meta fetches from our public route
         from app.services.google_auth import public_base
