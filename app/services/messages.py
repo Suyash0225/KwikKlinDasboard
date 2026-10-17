@@ -461,7 +461,7 @@ EDITABLE_KEYS = [
     "payment_reminder_firm", "ack_received", "complaint_ack",
     "escalated_ack", "rate_good_reply", "rate_mid_reply", "rate_bad_reply",
     "stop_confirmed", "start_confirmed",
-    "payment_thanks", "service_thanks", "review_request", "review_invitation_line", "partial_delivery",
+    "payment_thanks", "service_thanks", "partial_delivery",
     "delivery_update_full", "reward_earned",
 ]
 
@@ -479,7 +479,14 @@ def allowed_placeholders(key: str) -> set[str]:
 
 
 def set_override(key: str, text: str | None) -> None:
-    """Install/remove an owner override in the live cache (hot reload)."""
+    """Install/remove an owner override in the live cache (hot reload).
+
+    Review solicitation copy is deliberately locked: owner overrides must not
+    selectively solicit positive reviews or introduce incentives.
+    """
+    if key not in EDITABLE_KEYS:
+        _OVERRIDES.pop(key, None)
+        return
     if text:
         _OVERRIDES[key] = text
     else:
@@ -488,7 +495,7 @@ def set_override(key: str, text: str | None) -> None:
 
 def load_overrides(data: dict[str, str]) -> None:
     _OVERRIDES.clear()
-    _OVERRIDES.update({k: v for k, v in (data or {}).items() if k in MESSAGES and v})
+    _OVERRIDES.update({k: v for k, v in (data or {}).items() if k in EDITABLE_KEYS and v})
     if _OVERRIDES:
         log.info("message_overrides_loaded", count=len(_OVERRIDES))
 
@@ -509,7 +516,7 @@ CUSTOMER_KEYS = frozenset({
     "status_reply", "status_reply_with_date", "orders_list_header",
     "order_not_found", "complaint_ack", "escalated_ack",
     "payment_reminder", "payment_reminder_firm",
-    "payment_thanks", "service_thanks", "review_request", "partial_delivery",
+    "payment_thanks", "service_thanks", "review_request", "review_invitation_line", "partial_delivery",
     "delivery_update_full", "reward_earned",
     "start_confirmed", "stop_confirmed", "relay_message_customer",
 })
