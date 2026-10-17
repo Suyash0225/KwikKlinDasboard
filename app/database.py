@@ -77,17 +77,11 @@ from sqlalchemy.orm import Session, with_loader_criteria
 from app.services import tenant_context
 
 
-@event.listens_for(engine.sync_engine, "begin")
-def _rls_set_tenant(conn) -> None:
-    """Har transaction ke shuru mein Postgres ko batao kis tenant ki request
-    hai. SET LOCAL transaction-scoped hai — commit/rollback par khud reset,
-    isliye pooled connections ke beech kabhi leak nahi hota."""
+def _set_rls_context(conn) -> None:
+    """Apply transaction-local RLS GUCs for the current context."""
     tid = tenant_context.current_tenant_id.get()
-    # A selected tenant always takes precedence over a system grant. This
-    # also prevents a nested/test context from accidentally bypassing RLS.
-    system_access = (
-        tenant_context.current_system_context.get() and tid is None
-    )
+    # A selected tenant always takes precedence over a system grant.
+    system_access = tenant_context.current_system_context.get() and tid is None
     conn.exec_driver_sql(
         "SET LOCAL app.system_context = 'on'"
         if system_access
@@ -99,6 +93,23 @@ def _rls_set_tenant(conn) -> None:
     else:
         # An unset/empty tenant without explicit system access must see no rows.
         conn.exec_driver_sql("SET LOCAL app.tenant_id = ''")
+
+
+@event.listens_for(engine.sync_engine, "begin")
+def _rls_set_tenant(conn) -> None:
+    """Initialize RLS GUCs on every physical connection transaction."""
+    _set_rls_context(conn)
+
+
+@event.listens_for(Session, "after_begin")
+def _rls_set_session_tenant(session, transaction, connection) -> None:
+    """Refresh GUCs for each Session transaction/savepoint on a reused connection.
+
+    The test harness joins sessions to an outer transaction using savepoints.
+    Reapplying the context here also prevents a previous session's SET LOCAL
+    value from being reused by the next session in that same transaction.
+    """
+    _set_rls_context(connection)
 
 
 @event.listens_for(Session, "do_orm_execute")

@@ -1,8 +1,8 @@
 """Shared fixtures for the test suite.
 
-These tests run against the LOCAL dev database (same DATABASE_URL as the
-app). Every test cleans up after itself: test rows use recognizable markers
-(wamid.TEST*, phone +919999900011) and are deleted in the autouse fixture.
+Tests require a dedicated TEST_DATABASE_URL. The harness rejects a missing URL
+and refuses to run against the configured development database. Each test runs
+inside a rollback-only outer transaction with savepoints for Session commits.
 
 The WhatsApp send function is monkeypatched in webhook tests — tests must
 never call Meta's real API.
@@ -11,6 +11,39 @@ never call Meta's real API.
 import hashlib
 import hmac
 import json
+import os
+
+from dotenv import dotenv_values
+
+from database_safety import validate_test_database_url
+
+# Read .env without importing app.config (which creates the DB engine too early).
+_env_file = os.getenv("KWIKKLIN_ENV_FILE", ".env")
+_file_env = dotenv_values(_env_file)
+
+
+def _env_value(name: str) -> str:
+    if name in os.environ:
+        return os.environ[name]
+    return str(_file_env.get(name) or "")
+
+
+_ci = _env_value("CI").strip().lower() in {"true", "1", "yes"}
+_test_database_url = validate_test_database_url(
+    _env_value("TEST_DATABASE_URL"),
+    [
+        ("DEV_DATABASE_URL", _env_value("DEV_DATABASE_URL")),
+        ("DATABASE_URL", _env_value("DATABASE_URL")),
+        ("APP_DATABASE_URL", _env_value("APP_DATABASE_URL")),
+    ],
+    ci=_ci,
+)
+# Set both values before importing any app module: no test code can accidentally
+# create an engine against the development database.
+os.environ["TEST_DATABASE_URL"] = _test_database_url
+os.environ["DATABASE_URL"] = _test_database_url
+os.environ["APP_DATABASE_URL"] = _test_database_url
+
 
 import httpx
 import pytest
@@ -32,6 +65,35 @@ TEST_CUSTOMER_PHONE = "+919999900011"
 TEST_WASHER_PHONE_RAW = "919999900094"
 TEST_WASHER_PHONE = "+919999900094"
 TEST_WASHER_NAME = "Qawasher"
+
+@pytest.fixture(autouse=True)
+async def _isolated_test_transaction():
+    """Use one outer transaction and savepoints; always roll back test writes."""
+    from app.services import tenant_context
+
+    system_token = tenant_context.current_system_context.set(True)
+    tenant_token = tenant_context.current_tenant_id.set(None)
+    connection = None
+    transaction = None
+    try:
+        connection = await engine.connect()
+        transaction = await connection.begin()
+        async_session_factory.configure(
+            bind=connection, join_transaction_mode="create_savepoint"
+        )
+        yield connection
+    finally:
+        if transaction is not None and transaction.is_active:
+            await transaction.rollback()
+        async_session_factory.configure(
+            bind=engine, join_transaction_mode="conditional_savepoint"
+        )
+        if connection is not None:
+            await connection.close()
+        await engine.dispose()
+        tenant_context.current_system_context.reset(system_token)
+        tenant_context.current_tenant_id.reset(tenant_token)
+
 
 
 async def purge_phones(*phones: str) -> None:
@@ -301,11 +363,7 @@ def _no_live_whatsapp(monkeypatch):
 
 @pytest.fixture(autouse=True)
 async def _cleanup_test_rows():
-    """Remove anything a test created; reset Ravi's window; free the pool.
-
-    engine.dispose() at the end matters: pytest-asyncio gives each test its
-    own event loop, and pooled asyncpg connections are loop-bound.
-    """
+    """Clean marked test rows before the outer rollback; do not dispose the pool here."""
     from datetime import datetime, timezone
 
     started = datetime.now(timezone.utc)
@@ -356,18 +414,13 @@ async def _cleanup_test_rows():
             )
         )
         await s.commit()
-    await engine.dispose()
 
 
 # --------------------------------------------------------------------------
 # Test-run ka apna kachra: audit_log
 # --------------------------------------------------------------------------
-# Suite LIVE DB par chalti hai (alag test DB abhi nahi hai). App ka har
-# action audit_log mein likhta hai, isliye har run owner ke asli audit
-# feed mein 1000+ jhoothi rows chhod jaata tha — panel padhne layak hi
-# nahi bachta. Ye fixture SIRF un rows ko hataata hai jo is run ke dauraan
-# bani AUR jinke markers pakke test ke hain (real data kabhi nahi chhuta:
-# time-window akela kaafi nahi maana, marker bhi match hona chahiye).
+# The suite is isolated to TEST_DATABASE_URL; these markers are a safety
+# cleanup guard for any explicitly committed session-level test artifacts.
 _TEST_AUDIT_MARKERS = r"""
      actor ILIKE '%@test.local' OR actor ILIKE '%@example.com'
   OR actor ILIKE 'test-%' OR actor = 'Qatestwala'
