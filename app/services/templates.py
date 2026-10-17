@@ -149,7 +149,7 @@ STANDARD_SPECS: dict[str, dict] = {
         "purpose": "Cycle-based repeat pickup reminder (marketing opt-in required)",
         "body": (
             "Hello {{1}}, it may be time for your next laundry pickup. "
-            "Would you like us to arrange one? Reply here with a convenient time. — {{2}}"
+            "Would you like us to arrange one? Reply here with a convenient time. — {{2}}. Thank you for choosing us."
         ),
         "samples": ["Rahul", "Kwik Klin"],
     },
