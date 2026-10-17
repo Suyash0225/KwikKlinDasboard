@@ -176,7 +176,7 @@ async def _issue_share_code_after_delivery(db: AsyncSession, order: Order) -> No
         try:
             await send_message(
                 db, to_phone=customer.phone, text=message, sent_by="bot",
-                intent="promotional",
+                intent="promotional", enqueue_on_fail=False,
             )
             customer.last_marketing_at = datetime.now(timezone.utc)
             await db.commit()
