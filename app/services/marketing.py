@@ -411,8 +411,13 @@ async def send_campaign(campaign_id) -> None:
                 # Delay is enforced immediately before the next actual send,
                 # so the final recipient does not add an unnecessary wait.
 
-        campaign.status = "sent"
-        campaign.sent_at = datetime.now(timezone.utc)
+        # "sent" must mean at least one recipient was actually accepted by
+        # the WhatsApp provider. A campaign with zero sends is a failure, not
+        # a success-looking green status; recipient-level partial failures
+        # remain visible in final_stats.
+        campaign.status = "sent" if sent_now > 0 else "failed"
+        if sent_now > 0:
+            campaign.sent_at = datetime.now(timezone.utc)
         final_stats = await campaign_stats(db, campaign.id)
         prior_stats = campaign.stats or {}
         if prior_stats.get("creative_file"):
@@ -426,8 +431,10 @@ async def send_campaign(campaign_id) -> None:
         campaign.stats = final_stats
         await db.commit()
         await audit.record(
-            actor_role="system", actor="marketing", action="campaign_sent",
-            args={"campaign": campaign.name}, result=f"sent {sent_now}",
+            actor_role="system", actor="marketing",
+            action="campaign_sent" if sent_now > 0 else "campaign_failed",
+            args={"campaign": campaign.name},
+            result=f"sent {sent_now}; failed {final_stats.get('failed', 0)}; skipped {final_stats.get('skipped', 0)}",
         )
 
 
