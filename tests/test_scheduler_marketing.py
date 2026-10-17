@@ -32,7 +32,7 @@ PHONE = "+919999900321"
 
 
 @pytest.fixture(autouse=True)
-async def _setup_cleanup(monkeypatch):
+async def _setup_cleanup(monkeypatch, request):
     # quiet hours never block tests
     monkeypatch.setattr(sched_module, "_in_quiet_hours", lambda now: False)
     # owner ki asli setting yaad rakho — test isse overwrite karta hai.
@@ -41,11 +41,20 @@ async def _setup_cleanup(monkeypatch):
     # aur layer chadha deta tha.
     async with async_session_factory() as s:
         prior = await app_settings.get(s, "default_washer_phone")
-    # These tests exercise tenant-scoped scheduler and campaign behavior.
-    # Establish the tenant explicitly instead of relying on production fallback.
-    tenant_id = await tenant_context.get_home_tenant_id()
-    assert tenant_id is not None, "test database must seed a tenant"
-    tenant_token = tenant_context.current_tenant_id.set(tenant_id)
+    # These legacy marketing tests exercise tenant-scoped campaign behavior.
+    # Establish tenant identity only for those tests; unrelated scheduler tests
+    # (e.g. worker standup) intentionally run in trusted system context.
+    tenant_scoped_marketing_tests = {
+        "test_campaign_queue_send_and_track",
+        "test_all_active_campaign_includes_customers_with_active_orders",
+        "test_queued_campaign_skips_customer_who_opts_out_before_send",
+        "test_personalized_winback_creates_customer_locked_coupon_and_caps_30_days",
+    }
+    tenant_token = None
+    if request.node.name in tenant_scoped_marketing_tests:
+        tenant_id = await tenant_context.get_home_tenant_id()
+        assert tenant_id is not None, "test database must seed a tenant"
+        tenant_token = tenant_context.current_tenant_id.set(tenant_id)
     yield
     from tests.conftest import purge_phones
 
@@ -61,7 +70,8 @@ async def _setup_cleanup(monkeypatch):
     if prior:
         async with async_session_factory() as s:
             await app_settings.set_value(s, "default_washer_phone", prior)
-    tenant_context.current_tenant_id.reset(tenant_token)
+    if tenant_token is not None:
+        tenant_context.current_tenant_id.reset(tenant_token)
 
 
 @pytest.fixture
