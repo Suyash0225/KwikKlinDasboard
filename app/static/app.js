@@ -2906,7 +2906,7 @@ function editTaskModal(code) {
       <div class="setfield"><label>Task / Instructions</label><textarea id="et-title" rows="3">${esc(t.title)}</textarea></div>
       <div class="split2">
         <div class="setfield"><label>Task type</label><select id="et-kind">
-          ${[["pickup","Pickup"],["wash","Washing"],["dry","Drying"],["iron","Ironing"],["delivery","Delivery"],["general","General"]].map(([v,l])=>`<option value="${v}" ${(t.kind||"general")===v?"selected":""}>${l}</option>`).join("")}
+          ${[["pickup","Pickup"],["wash","Washing"],["dry","Drying"],["iron","Ironing"],["delivery","Delivery"],["packing","Packing"],["custom","Custom"],["general","General"]].map(([v,l])=>`<option value="${v}" ${(t.kind||"general")===v?"selected":""}>${l}</option>`).join("")}
         </select></div>
         <div class="setfield"><label>Priority</label><select id="et-priority">
           <option value="normal" ${t.urgent?"":"selected"}>Normal</option><option value="urgent" ${t.urgent?"selected":""}>Urgent</option>
@@ -3175,7 +3175,7 @@ function newTaskModal() {
         <select id="nt-kind">
           <option value="pickup">🧺 Pickup</option><option value="wash">🧼 Washing</option>
           <option value="iron">👔 Ironing</option><option value="dry">💨 Drying</option>
-          <option value="delivery">🚚 Delivery</option><option value="general">📋 General</option>
+          <option value="delivery">🚚 Delivery</option><option value="packing">📦 Packing</option><option value="custom">🛠️ Custom</option><option value="general">📋 General</option>
         </select></div>
       <div class="setfield"><label>Customer <span class="muted">(optional for general tasks)</span></label>
         <input id="nt-customer" placeholder="Search existing customer by name or WhatsApp…" autocomplete="off">
