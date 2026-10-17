@@ -535,6 +535,7 @@ async def send_campaign(campaign_id) -> None:
                             caption=text,
                             local_url=f"/admin/media/{creative_file}",
                             sent_by="bot",
+                            intent="promotional",
                         )
                     else:
                         wamid = await send_message(
@@ -868,6 +869,7 @@ async def run_customer_cycle_nudges(db: AsyncSession, *, now: datetime | None = 
                 template_name="kk_repeat_pickup",
                 template_params=[(customer.name or "there").split()[0], tenant.shop_name],
                 sent_by="marketing",
+                intent="promotional",
             )
             customer.last_marketing_at = current
             await db.commit()
