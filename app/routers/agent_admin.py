@@ -171,7 +171,18 @@ async def segments(db: AsyncSession = Depends(get_db)) -> dict:
         "counts": {k: len(v) for k, v in segs.items()},
         "members": {
             k: [
-                {"name": m["name"], "phone": m["phone"], "lifetime_paid": float(m["lifetime_paid"])}
+                {
+                    "name": m["name"], "phone": m["phone"],
+                    "lifetime_paid": float(m["lifetime_paid"]),
+                    "last_visit_at": (
+                        m["last_visit_at"].isoformat()
+                        if hasattr(m.get("last_visit_at"), "isoformat")
+                        else m.get("last_visit_at")
+                    ),
+                    "average_visit_gap_days": m.get("average_visit_gap_days"),
+                    "usual_items": m.get("usual_items", []),
+                    "seasonal_items": m.get("seasonal_items", {}),
+                }
                 for m in v[:50]
             ]
             for k, v in segs.items()
