@@ -98,6 +98,8 @@ class Settings(BaseSettings):
     WHATSAPP_APP_ID: str = ""
     # Optional second number CC'd on every escalation alert (Ravi).
     ESCALATION_CC_PHONE: str = ""
+    # Customer-facing acknowledgement SLA and owner follow-up threshold.
+    ESCALATION_SLA_HOURS: int = Field(default=2, ge=1, le=24)
 
     # --- Internal admin API ---
     # Sent as the X-API-Key header on /admin and /orders endpoints.
