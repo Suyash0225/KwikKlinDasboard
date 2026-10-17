@@ -354,8 +354,11 @@ async def test_simple_greeting_does_not_call_llm(monkeypatch) -> None:
         raise AssertionError("simple greeting must not call the LLM")
 
     monkeypatch.setattr(agent_module.llm_client, "ask_json", unexpected_llm)
-    async with async_session_factory() as db:
-        cust = await _seed_customer()
-        reply = await build_ai_reply(db, cust, "  Hello!! ")
+    home = await tenant_context.get_home_tenant_id()
+    assert home is not None
+    async with tenant_context.as_tenant(home):
+        async with async_session_factory() as db:
+            cust = await _seed_customer()
+            reply = await build_ai_reply(db, cust, "  Hello!! ")
 
     assert reply and "Welcome to Kwik Klin" in reply
