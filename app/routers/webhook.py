@@ -1232,7 +1232,10 @@ async def _handle_inbound_message(
                 args={}, result="opted out",
             )
             try:
-                await send_message(db, to_phone=phone, text=get_message("stop_confirmed"))
+                await send_message(
+                    db, to_phone=phone, text=get_message("stop_confirmed"),
+                    intent="transactional", outbound_kind="opt_out_confirmation",
+                )
             except SendError:
                 log.exception("stop_confirm_send_failed", phone=phone)
             return
@@ -1242,7 +1245,10 @@ async def _handle_inbound_message(
             await db.commit()
             log.info("customer_opted_in", phone=phone)
             try:
-                await send_message(db, to_phone=phone, text=get_message("start_confirmed"))
+                await send_message(
+                    db, to_phone=phone, text=get_message("start_confirmed"),
+                    intent="transactional", outbound_kind="service_reply",
+                )
             except SendError:
                 log.exception("start_confirm_send_failed", phone=phone)
             return

@@ -133,6 +133,7 @@ async def _send_fixed_choice_menu(
         await send_message(
             db, to_phone=to_phone, text=text, list_rows=rows,
             list_button=button, list_title=title, sent_by="bot",
+            intent="transactional", outbound_kind="service_reply",
         )
         return True
     except (WindowClosedError, SendError):
@@ -582,7 +583,10 @@ async def _send_with_buttons(
     """Buttons ke saath bhejo. Na ja paye to wahi baat text mein wapas do —
     caller use normal reply ki tarah bhej dega (kuch bhi chupke se gire na)."""
     try:
-        await send_message(db, to_phone=to_phone, text=text, buttons=buttons)
+        await send_message(
+            db, to_phone=to_phone, text=text, buttons=buttons,
+            intent="transactional", outbound_kind="service_reply",
+        )
         return None
     except (WindowClosedError, SendError) as exc:
         log.warning("work_card_buttons_failed", to=to_phone, error=str(exc)[:120])
@@ -624,6 +628,7 @@ async def _handle_work_pick(
                         list_rows=rows,
                         list_button="Status chuniye",
                         list_title="Task status",
+                        intent="transactional", outbound_kind="service_reply",
                     )
                     return ""
                 except (WindowClosedError, SendError) as exc:
@@ -3223,7 +3228,11 @@ async def _apply_relay(
         return get_message("staff_cmd_unknown")
 
     try:
-        await send_message(db, to_phone=to_phone, text=message)
+        await send_message(
+            db, to_phone=to_phone, text=message,
+            intent="transactional" if recipient_type == "CUSTOMER" else None,
+            outbound_kind="service_reply" if recipient_type == "CUSTOMER" else None,
+        )
     except WindowClosedError:
         if recipient_type == "CUSTOMER":
             return get_message("relay_window_closed", name=to_name)

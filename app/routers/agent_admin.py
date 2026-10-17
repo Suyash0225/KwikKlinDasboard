@@ -1035,6 +1035,7 @@ async def answer_teachme(qid: str, body: TeachIn, db: AsyncSession = Depends(get
                 await send_message(
                     db, to_phone=cust.phone,
                     text=get_message("relay_message_customer", message=body.answer),
+                    intent="transactional", outbound_kind="service_reply",
                 )
                 sent = True
             except SendError:

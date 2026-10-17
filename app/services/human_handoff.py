@@ -166,7 +166,10 @@ async def _reply_one(db: AsyncSession, customer: Customer, inbound: Conversation
             return False
 
         try:
-            await send_message(db, to_phone=customer.phone, text=reply, sent_by="ai")
+            await send_message(
+                db, to_phone=customer.phone, text=reply, sent_by="ai",
+                intent="transactional", outbound_kind="conversation_reply",
+            )
         except SendError as exc:
             if not exc.transient:
                 await _unclaim(key)
