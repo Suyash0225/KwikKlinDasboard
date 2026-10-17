@@ -29,16 +29,17 @@ async def test_one_worker_leads_and_standby_takes_over_after_connection_loss() -
         engine,
         first_scheduler.start,
         first_scheduler.shutdown,
-        poll_interval=0.05,
+        # After detecting connection loss, this worker waits longer to retry
+        # so the standby can demonstrate takeover first.
+        poll_interval=0.5,
         health_interval=0.1,
     )
     second = SchedulerLeader(
         engine,
         second_scheduler.start,
         second_scheduler.shutdown,
-        # A standby should poll slower than the leader's health check so the
-        # disconnected leader shuts down before takeover begins.
-        poll_interval=0.5,
+        # Standby retries faster than the disconnected worker's re-election.
+        poll_interval=0.05,
         health_interval=0.05,
     )
 
