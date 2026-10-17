@@ -23,6 +23,7 @@ import hashlib
 import hmac
 import json
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
