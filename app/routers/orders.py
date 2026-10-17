@@ -36,6 +36,7 @@ from app.schemas.orders import (
     DeliverIn,
     DeliveryDateIn,
     OrderCreateIn,
+    BillingAdjustmentIn,
     OrderOut,
     PaymentIn,
     StatusHistoryOut,
@@ -47,6 +48,8 @@ from app.services.order_service import (
     OrderError,
     OrderNotFoundError,
     PlanLimitError,
+    add_billing_adjustment,
+    remove_billing_adjustment,
 )
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -464,6 +467,7 @@ async def _order_out(
         pickup_date=order.pickup_date,
         created_at=order.created_at,
         notes=order.notes if include_notes else None,
+        billing_adjustments=order.billing_adjustments(),
     )
 
 
@@ -813,6 +817,47 @@ async def record_payment(
     except OrderError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return await _order_out(db, order)
+
+
+@router.post("/{order_number}/billing-adjustment", dependencies=[Depends(require_admin_owner), Depends(require_feature("billing"))])
+async def add_adjustment(
+    order_number: str, body: BillingAdjustmentIn, db: AsyncSession = Depends(get_db)
+) -> OrderOut:
+    try:
+        order = await order_service.get_order(db, order_number)
+        await add_billing_adjustment(
+            db, order, label=body.label, amount=body.amount, kind=body.kind,
+            note=body.note, changed_by=body.changed_by,
+        )
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except OrderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await audit.record(
+        actor_role="admin", actor=body.changed_by, action="billing_adjustment_added",
+        args={"order": order_number, "label": body.label, "amount": str(body.amount), "kind": body.kind},
+        result=f"total={order.total_amount}",
+    )
+    return await _order_out(db, order, include_notes=True)
+
+
+@router.delete("/{order_number}/billing-adjustment/{adjustment_id}", dependencies=[Depends(require_admin_owner), Depends(require_feature("billing"))])
+async def delete_adjustment(
+    order_number: str, adjustment_id: str, changed_by: str = Query(default="dashboard"), db: AsyncSession = Depends(get_db)
+) -> OrderOut:
+    try:
+        order = await order_service.get_order(db, order_number)
+        await remove_billing_adjustment(db, order, adjustment_id=adjustment_id, changed_by=changed_by)
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except OrderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await audit.record(
+        actor_role="admin", actor=changed_by, action="billing_adjustment_removed",
+        args={"order": order_number, "adjustment_id": adjustment_id},
+        result=f"total={order.total_amount}",
+    )
+    return await _order_out(db, order, include_notes=True)
 
 
 @router.post("/{order_number}/delivery-date", dependencies=[Depends(require_admin_key)])

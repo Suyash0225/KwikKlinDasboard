@@ -88,6 +88,14 @@ class StatusUpdateIn(BaseModel):
     changed_by: str = "manager"
 
 
+class BillingAdjustmentIn(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+    amount: Decimal = Field(gt=0, le=1000000)
+    kind: str = Field(default="extra_charge", pattern="^(extra_charge|due_charge)$")
+    note: str | None = Field(default=None, max_length=300)
+    changed_by: str = Field(default="dashboard", max_length=80)
+
+
 class PaymentIn(BaseModel):
     amount: Decimal = Field(gt=0)
     method: PaymentMethod
@@ -114,6 +122,7 @@ class OrderOut(BaseModel):
     pickup_date: date | None
     created_at: datetime
     notes: str | None = None  # included only in single-order admin view
+    billing_adjustments: list = []
 
 
 class StatusHistoryOut(BaseModel):
