@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session_factory
-from app.models import Conversation, Customer, Staff
+from app.models import Conversation, Customer, Lead, Staff
 from app.services.messages import get_message
 from tests.conftest import (
     TEST_WASHER_PHONE,
@@ -67,6 +67,53 @@ async def test_post_bad_signature_rejected(client, sent) -> None:
 
 
 # --- inbound customer message ---
+
+async def test_inbound_lead_is_captured_when_agent_is_disabled(client, sent, monkeypatch) -> None:
+    """A genuine enquiry is a lead even when automated replies are switched off."""
+    import app.routers.webhook as wh
+    import app.services.leads as leads_service
+
+    async def agent_disabled(db, customer):
+        return False
+
+    async def fake_lead_alert(db, *, to_phone, text, **kwargs):
+        return "wamid.LEAD-ALERT"
+
+    monkeypatch.setattr(wh, "_customer_agent_enabled", agent_disabled)
+    monkeypatch.setattr(leads_service, "send_message", fake_lead_alert)
+    await _inbound_from(
+        client, "bhaiya dry clean ka rate kya hai?", "Lead Capture Test",
+        "wamid.TEST-lead-agent-off",
+    )
+
+    async with async_session_factory() as db:
+        lead = (
+            await db.execute(select(Lead).where(Lead.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one_or_none()
+    assert lead is not None
+    assert lead.stage == "CONTACTED"
+    assert "dry clean" in lead.items_text.lower()
+    assert sent == [], "agent OFF must not send an automated customer reply"
+
+
+async def test_opted_out_customer_is_not_recreated_as_lead(client, sent, monkeypatch) -> None:
+    import app.routers.webhook as wh
+    import app.services.leads as leads_service
+
+    async def fake_lead_alert(db, *, to_phone, text, **kwargs):
+        return "wamid.LEAD-ALERT"
+
+    monkeypatch.setattr(leads_service, "send_message", fake_lead_alert)
+    await _inbound_from(client, "STOP", None, "wamid.TEST-lead-stop")
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one()
+        assert customer.opted_out is True
+        assert (
+            await db.execute(select(Lead).where(Lead.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one_or_none() is None
+
 
 async def test_inbound_text_stores_and_acks(client, sent) -> None:
     body = meta_payload(
