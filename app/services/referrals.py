@@ -27,6 +27,7 @@ from app.models import (
 )
 from app.services import app_settings, audit
 from app.services.whatsapp import SendError, send_message
+from app.utils.dates import today_ist
 
 log = structlog.get_logger()
 
@@ -68,7 +69,7 @@ async def _get_or_create_referral_code(
                 .order_by(Coupon.created_at.desc()).limit(1)
             )
         ).scalar_one_or_none()
-        if coupon and (coupon.valid_to is None or coupon.valid_to >= date.today()):
+        if coupon and (coupon.valid_to is None or coupon.valid_to >= today_ist()):
             return campaign, coupon
 
     friend_discount = Decimal(str(await app_settings.get(db, "referral_friend_discount") or 50))
@@ -162,7 +163,10 @@ async def _issue_share_code_after_delivery(db: AsyncSession, order: Order) -> No
         "Aapko bhi unka pehla order deliver hone par referral reward milega. 🧺"
     )
     try:
-        await send_message(db, to_phone=customer.phone, text=message, sent_by="bot")
+        await send_message(
+            db, to_phone=customer.phone, text=message, sent_by="bot",
+            intent="promotional",
+        )
         customer.last_marketing_at = datetime.now(timezone.utc)
         await db.commit()
         await audit.record(
@@ -296,6 +300,7 @@ async def _reward_referrer_after_delivery(db: AsyncSession, order: Order) -> Non
                 "Kwik Klin ko recommend karne ke liye dhanyavaad!"
             ),
             sent_by="bot",
+            intent="promotional",
         )
         referrer.last_marketing_at = datetime.now(timezone.utc)
         await db.commit()
