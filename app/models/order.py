@@ -83,6 +83,13 @@ class Order(Base, TenantScoped):
     )
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Optional Razorpay payment link for the current outstanding amount.
+    # Webhook notes carry tenant/order IDs; the signed token remains the public
+    # authorization for creating a link from the customer bill page.
+    razorpay_payment_link_id: Mapped[str | None] = mapped_column(String(80))
+    razorpay_payment_link_url: Mapped[str | None] = mapped_column(String(500))
+    razorpay_payment_link_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+
     # --- Dates ---
     pickup_date: Mapped[date | None] = mapped_column(SADate)
     # THE promise to the customer. Ground rule: never quote a date in a
