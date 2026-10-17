@@ -7,6 +7,26 @@ from sqlalchemy import select
 
 from app.database import async_session_factory
 
+async def _test_tenant_id():
+    from app.models import Tenant
+    from app.services import tenant_context
+
+    async with async_session_factory() as db:
+        async with tenant_context.system_context(db):
+            tenant = (
+                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
+            ).scalar_one_or_none()
+            if tenant is None:
+                tenant = Tenant(
+                    slug="kwik-klin", shop_name="Kwik Klin",
+                    owner_name="Test Owner", owner_phone="+919999000000",
+                    plan="starter", status="active",
+                )
+                db.add(tenant)
+                await db.commit()
+            return tenant.id
+
+
 
 async def test_outbound_retry_without_tenant_is_dead_lettered_without_send(monkeypatch) -> None:
     """Legacy/malformed retry payloads must never fall back to the home shop."""
@@ -64,12 +84,7 @@ async def test_repeated_claimed_job_sends_once(monkeypatch) -> None:
     from app.services.scheduler import IST, _gbp_reviews_tick
     import app.services.scheduler as scheduler
 
-    async with async_session_factory() as db:
-        async with tenant_context.system_context(db):
-            tenant = (
-                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
-            ).scalar_one()
-            tenant_id = tenant.id
+    tenant_id = await _test_tenant_id()
 
     sends = []
     fixed_now = datetime.now(IST).replace(minute=0, second=0, microsecond=0)
@@ -101,12 +116,7 @@ async def test_restart_retry_job_emits_mock_message_once() -> None:
     from app.services import tenant_context
     from app.services.scheduler import _claim
 
-    async with async_session_factory() as db:
-        async with tenant_context.system_context(db):
-            tenant = (
-                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
-            ).scalar_one()
-            tenant_id = tenant.id
+    tenant_id = await _test_tenant_id()
 
     sends = []
     key = f"restart-send-regression:{uuid.uuid4().hex}"
@@ -128,12 +138,7 @@ async def test_concurrent_referral_code_issuance_reuses_one_coupon() -> None:
     from app.services import tenant_context
     from app.services.referrals import _get_or_create_referral_code
 
-    async with async_session_factory() as db:
-        async with tenant_context.system_context(db):
-            tenant = (
-                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
-            ).scalar_one()
-            tenant_id = tenant.id
+    tenant_id = await _test_tenant_id()
 
     phone = f"+91997{uuid.uuid4().int % 10**7:07d}"
     async with tenant_context.as_tenant(tenant_id):
@@ -225,12 +230,7 @@ async def test_duplicate_delivery_event_sends_one_referral_share(monkeypatch) ->
     from app.services import tenant_context, app_settings
     from app.services import marketing, referrals
 
-    async with async_session_factory() as db:
-        async with tenant_context.system_context(db):
-            tenant = (
-                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
-            ).scalar_one()
-            tenant_id = tenant.id
+    tenant_id = await _test_tenant_id()
 
     phone = f"+91995{uuid.uuid4().int % 10**7:07d}"
     async with tenant_context.as_tenant(tenant_id):
@@ -314,12 +314,7 @@ async def test_promotional_daily_cap_is_shared_per_tenant(monkeypatch) -> None:
     from app.services import tenant_context, app_settings, outbound_policy
     from app.services.whatsapp import SendError
 
-    async with async_session_factory() as db:
-        async with tenant_context.system_context(db):
-            tenant = (
-                await db.execute(select(Tenant).where(Tenant.slug == "kwik-klin"))
-            ).scalar_one()
-            tenant_id = tenant.id
+    tenant_id = await _test_tenant_id()
 
     async def setting(db, key):
         if key == "outbound_daily_msg_cap":
