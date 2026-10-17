@@ -908,6 +908,28 @@ async def drain_outbound_queue() -> int:
                             log.info("outbound_ai_retry_suppressed", to=to_phone)
                             continue
 
+                    # One durable claim per queue-row attempt. The tenant prefix is
+                    # supplied by _claim() from the active as_tenant() context. If a
+                    # process restarted after claiming but before updating the queue row,
+                    # dead-letter rather than risk delivering the same message twice.
+                    from app.services.scheduler import _claim
+
+                    retry_claim = f"outbound-retry:{row_id}:attempt:{attempts_before}"
+                    if not await _claim(retry_claim):
+                        await db.rollback()
+                        await db.execute(
+                            update(OutboundMessage)
+                            .where(OutboundMessage.id == row_id)
+                            .values(
+                                status="dead",
+                                last_error="duplicate retry claim; send suppressed to prevent duplicate delivery",
+                                next_attempt_at=now,
+                            )
+                        )
+                        await db.commit()
+                        log.warning("outbound_retry_duplicate_suppressed", row_id=str(row_id))
+                        continue
+
                     try:
                         await send_message(
                             db,
