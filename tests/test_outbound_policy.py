@@ -72,9 +72,10 @@ async def test_repeated_claimed_job_sends_once(monkeypatch) -> None:
             tenant_id = tenant.id
 
     sends = []
+    fixed_now = datetime.now(IST).replace(minute=0, second=0, microsecond=0)
     async def fake_for_each(job_name, fn):
         async with tenant_context.as_tenant(tenant_id):
-            await fn(datetime.now(IST))
+            await fn(fixed_now)
 
     async def fake_connection(db):
         return {"refresh_token": "mock-token", "account": "mock-account", "location": "mock-location"}
