@@ -494,11 +494,19 @@ async def test_rls_is_actually_in_force_not_just_configured(client) -> None:
 
     # RAW SQL — jaan-boojh kar. ORM ka filter yahan lagta hi nahi, isliye
     # jo bhi rokta hai wo sirf RLS hai. Yahi is test ka poora maqsad hai.
-    async with async_session_factory() as db:
-        await db.execute(sqltext(f"SET LOCAL app.tenant_id = '{a}'"))
-        rows = (
-            await db.execute(sqltext("SELECT name FROM customers WHERE phone LIKE '+9190%'"))
-        ).scalars().all()
+    # The test harness grants system context by default for legacy setup;
+    # explicitly turn it off for this database-level RLS assertion.
+    system_token = tenant_context.current_system_context.set(False)
+    tenant_token = tenant_context.current_tenant_id.set(None)
+    try:
+        async with async_session_factory() as db:
+            await db.execute(sqltext(f"SET LOCAL app.tenant_id = '{a}'"))
+            rows = (
+                await db.execute(sqltext("SELECT name FROM customers WHERE phone LIKE '+9190%'"))
+            ).scalars().all()
+    finally:
+        tenant_context.current_system_context.reset(system_token)
+        tenant_context.current_tenant_id.reset(tenant_token)
     assert rows == ["A ka grahak"], f"RLS ne doosri dukaan ki row nahi roki: {rows}"
 
 
