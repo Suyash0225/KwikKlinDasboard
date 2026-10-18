@@ -498,6 +498,30 @@ def test_waha_outbound_detection_accepts_supported_payload_shapes(payload) -> No
     assert _waha_message_is_from_me(payload) is True
 
 
+def test_waha_send_response_extracts_nested_noweb_message_id() -> None:
+    from app.services.waha import _message_id
+
+    assert _message_id({
+        "key": {
+            "remoteJid": "919336393612@s.whatsapp.net",
+            "fromMe": True,
+            "id": "3EB0BA3A25478975C19EFB",
+        }
+    }) == "3EB0BA3A25478975C19EFB"
+
+
+def test_waha_webhook_message_id_extracts_nested_noweb_key() -> None:
+    from app.routers.webhook import _waha_message_id
+
+    assert _waha_message_id({
+        "_data": {"key": {
+            "remoteJid": "919336393612@s.whatsapp.net",
+            "fromMe": True,
+            "id": "3EB0BA3A25478975C19EFB",
+        }}
+    }) == "3EB0BA3A25478975C19EFB"
+
+
 def test_waha_outbound_detection_does_not_treat_inbound_as_outbound() -> None:
     from app.routers.webhook import _waha_message_is_from_me
 
