@@ -1131,6 +1131,11 @@ select {
    can never hijack the desktop split pane after a rotate/resize.
    ========================================================================== */
 @media (max-width: 767.98px) {
+  body.inbox-mode.chat-open #sec-inbox .chatpane {
+    display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 70; background: #efe7dd;
+    height: 100dvh; padding-top: env(safe-area-inset-top);
+  }
   body.chat-open .chatpane {
     display: flex; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
     z-index: 70; background: var(--n0);
@@ -2774,4 +2779,473 @@ html.overlay-scroll-locked body {
   .th-filters button { min-height: 38px; padding-inline: 12px; }
   .chat-searchbar { padding-inline: 10px; }
   .bubble .breply, .bubble .breact { min-width: 34px; min-height: 34px; }
+}
+
+
+/* ==========================================================================
+   Inbox Web refresh (2026-10-18)
+   Scoped to #sec-inbox/body.inbox-mode so other admin screens keep their layout.
+   Changes: viewport-filling pane, fixed list controls, tidy desktop/tablet split,
+   WhatsApp Web bubbles, one-line toolbar, safe-area/keyboard containment.
+   ========================================================================== */
+body.inbox-mode,
+body.inbox-mode html { overflow: hidden; }
+body.inbox-mode .main {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  min-width: 0;
+  padding: 0 24px 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+body.inbox-mode #sec-inbox {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+body.inbox-mode #sec-inbox .pagehead {
+  height: 72px;
+  min-height: 72px;
+  flex: 0 0 72px;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 12px;
+}
+body.inbox-mode #sec-inbox .pagehead h2 {
+  display: block;
+  font-size: 28px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+body.inbox-mode #sec-inbox .pagehead p {
+  display: block;
+  color: var(--n500);
+  font-size: 13px;
+}
+body.inbox-mode #sec-inbox .pagehead .actions {
+  margin-left: auto;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+body.inbox-mode #sec-inbox .pagehead .actions .btn {
+  height: 44px;
+  min-height: 44px;
+  padding: 0 16px;
+  white-space: nowrap;
+  border-radius: 12px;
+}
+body.inbox-mode #sec-inbox .inboxwrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  height: auto;
+  margin: 0;
+  border: 1px solid #e6e9ee;
+  border-radius: 14px;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  background: #fff;
+}
+body.inbox-mode #sec-inbox .threads {
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid #e6e9ee;
+}
+body.inbox-mode #sec-inbox .th-head {
+  position: static;
+  flex: 0 0 64px;
+  height: 64px;
+  min-height: 64px;
+  padding: 10px 12px;
+  gap: 10px;
+}
+body.inbox-mode #sec-inbox .th-head .kkav {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  font-size: 14px;
+}
+body.inbox-mode #sec-inbox .th-ico {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  min-height: 38px;
+}
+body.inbox-mode #sec-inbox .th-search {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+}
+body.inbox-mode #sec-inbox .th-search input {
+  height: 42px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 21px;
+  padding: 0 14px;
+  background: #f6f7f9;
+  font-size: 14px;
+}
+body.inbox-mode #sec-inbox .th-search input:focus {
+  box-shadow: inset 0 0 0 2px #ff6a1a;
+}
+body.inbox-mode #sec-inbox .th-filters {
+  flex: 0 0 auto;
+  gap: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+body.inbox-mode #sec-inbox .th-filters::-webkit-scrollbar { display: none; }
+body.inbox-mode #sec-inbox .th-filters button {
+  height: 34px;
+  min-height: 34px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  border-radius: 999px;
+}
+body.inbox-mode #sec-inbox .th-filters button.on {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #166534;
+}
+body.inbox-mode #sec-inbox #th-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+body.inbox-mode #sec-inbox .thread-item {
+  min-height: 72px;
+  padding: 12px 14px;
+  border-left: 3px solid transparent;
+  transition: background-color .12s ease;
+}
+body.inbox-mode #sec-inbox .thread-item:hover { background: #f6f7f9; }
+body.inbox-mode #sec-inbox .thread-item.on {
+  background: #f0f4ff;
+  border-left-color: #22c55e;
+  padding-left: 14px;
+}
+body.inbox-mode #sec-inbox .thread-item > div {
+  min-width: 0;
+  gap: 12px !important;
+}
+body.inbox-mode #sec-inbox .thread-item .avatar {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+}
+body.inbox-mode #sec-inbox .thread-item .nm {
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+body.inbox-mode #sec-inbox .thread-item .nm > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.inbox-mode #sec-inbox .thread-item .nm .t {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: #7b8798;
+}
+body.inbox-mode #sec-inbox .thread-item .pv {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+body.inbox-mode #sec-inbox .chatpane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #efe7dd;
+}
+body.inbox-mode #sec-inbox .chathead {
+  flex: 0 0 64px;
+  height: 64px;
+  min-height: 64px;
+  min-width: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  background: #fff;
+  border-bottom: 1px solid #e6e9ee;
+  overflow: hidden;
+}
+body.inbox-mode #sec-inbox .chathead > div:not(.avatar) {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+body.inbox-mode #sec-inbox .chathead > div:not(.avatar) b {
+  font-size: 17px;
+  font-weight: 700;
+}
+body.inbox-mode #sec-inbox .chathead .avatar {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+}
+body.inbox-mode #sec-inbox .chathead .chat-back { display: none; }
+body.inbox-mode #sec-inbox .chathead .muted {
+  font-size: 12px;
+  color: #667085;
+}
+body.inbox-mode #sec-inbox .chathead .winchip {
+  flex: 0 0 auto;
+  grid-area: auto;
+}
+body.inbox-mode #sec-inbox .chathead .btn.sm {
+  flex: 0 0 auto;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0 10px;
+  white-space: nowrap;
+  border-radius: 10px;
+}
+body.inbox-mode #sec-inbox .chathead #agent-pause-btn { grid-area: auto; }
+body.inbox-mode #sec-inbox .chat-searchbar { flex: 0 0 auto; min-width: 0; }
+body.inbox-mode #sec-inbox .chatlog {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 10%;
+  gap: 6px;
+  background: #efe7dd;
+}
+body.inbox-mode #sec-inbox .bubble {
+  max-width: min(70%, 560px);
+  padding: 9px 52px 9px 12px;
+  border-radius: 10px;
+  font-size: 14.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  box-shadow: 0 1px 2px rgba(16,24,40,.08);
+}
+body.inbox-mode #sec-inbox .bubble.in { background: #fff; }
+body.inbox-mode #sec-inbox .bubble.out { background: #d9fdd3; }
+body.inbox-mode #sec-inbox .bubble .bt { font-size: 11px; text-align: right; }
+body.inbox-mode #sec-inbox .daychip {
+  background: #e2e8f0;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+body.inbox-mode #sec-inbox .composer {
+  flex: 0 0 auto;
+  min-width: 0;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid #e6e9ee;
+  background: #f0f2f5;
+}
+body.inbox-mode #sec-inbox .composer .btn.ghost.sm,
+body.inbox-mode #sec-inbox .composer .btn:not(.ghost) {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
+}
+body.inbox-mode #sec-inbox .composer #chat-intent {
+  width: auto;
+  max-width: 150px;
+  height: 44px;
+  min-height: 44px;
+  flex: 0 1 150px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+body.inbox-mode #sec-inbox .composer #chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  height: 44px;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 15px;
+  border: 0;
+  resize: none;
+}
+body.inbox-mode #sec-inbox .composer #chat-input:focus {
+  box-shadow: inset 0 0 0 2px rgba(255,106,26,.35);
+}
+body.inbox-mode #sec-inbox .newmsg-pill { z-index: 2; }
+
+/* Tablet: keep the same two-pane model; controls become compact icon buttons. */
+@media (min-width: 769px) and (max-width: 1099px) {
+  body.inbox-mode .main { padding: 0 0 64px; }
+  body.inbox-mode #sec-inbox .pagehead { padding: 0 20px; }
+  body.inbox-mode #sec-inbox .inboxwrap {
+    grid-template-columns: 320px minmax(0, 1fr);
+    border-radius: 14px;
+    margin: 0 20px 16px;
+    width: auto;
+  }
+  body.inbox-mode #sec-inbox .thread-item { padding-left: 11px; padding-right: 11px; }
+  body.inbox-mode #sec-inbox .thread-item.on { padding-left: 11px; }
+  body.inbox-mode #sec-inbox .chathead .btn.sm {
+    width: 38px;
+    min-width: 38px;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
+  }
+  body.inbox-mode #sec-inbox .chathead .btn.sm::first-letter { font-size: 18px; }
+  body.inbox-mode #sec-inbox .chathead #agent-pause-btn { max-width: 42px; }
+  body.inbox-mode #sec-inbox .chathead .winchip { max-width: 120px; font-size: 10px; }
+  body.inbox-mode #sec-inbox .chatlog { padding: 14px 5%; }
+}
+
+/* Phone: list-first; open chat is a keyboard-aware fixed pane. */
+@media (max-width: 768px) {
+  body.inbox-mode { overflow: hidden; }
+  body.inbox-mode .main {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+  }
+  body.inbox-mode .topbar { display: flex; height: 56px; min-height: 56px; flex: 0 0 56px; }
+  body.inbox-mode #sec-inbox .pagehead { display: none; }
+  body.inbox-mode #sec-inbox .inboxwrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    margin: 0;
+    width: 100%;
+    border: 0;
+    border-radius: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  body.inbox-mode #sec-inbox .threads { border: 0; }
+  body.inbox-mode #sec-inbox .thread-item .nm { font-size: 15px; }
+  body.inbox-mode #sec-inbox .chatpane { display: none; }
+  body.inbox-mode.chat-open .topbar { display: none; }
+  body.inbox-mode.chat-open #sec-inbox .threads { display: none; }
+  body.inbox-mode.chat-open #sec-inbox .chatpane {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    padding-top: env(safe-area-inset-top);
+    background: #efe7dd;
+  }
+  body.inbox-mode.chat-open #sec-inbox .chathead {
+    flex: 0 0 64px;
+    height: 64px;
+    min-height: 64px;
+    padding: 0 8px;
+    gap: 6px;
+  }
+  body.inbox-mode.chat-open #sec-inbox .chathead .chat-back {
+    display: inline-flex;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+  }
+  body.inbox-mode.chat-open #sec-inbox .chathead .avatar {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+  }
+  body.inbox-mode.chat-open #sec-inbox .chathead .winchip { display: none; }
+  body.inbox-mode.chat-open #sec-inbox .chathead .btn.sm {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
+  }
+  body.inbox-mode.chat-open #sec-inbox .chathead .btn.sm::first-letter { font-size: 18px; }
+  body.inbox-mode.chat-open #sec-inbox .chathead #agent-pause-btn { max-width: 38px; }
+  body.inbox-mode.chat-open #sec-inbox .chathead > div:not(.avatar) { flex: 1 1 auto; }
+  body.inbox-mode.chat-open #sec-inbox .chatlog {
+    padding: 12px 10px calc(12px + env(safe-area-inset-bottom));
+  }
+  body.inbox-mode.chat-open #sec-inbox .bubble { max-width: 85%; }
+  body.inbox-mode.chat-open #sec-inbox .composer {
+    gap: 3px;
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+  }
+  body.inbox-mode.chat-open #sec-inbox .composer .btn.ghost.sm,
+  body.inbox-mode.chat-open #sec-inbox .composer .btn:not(.ghost) {
+    width: 40px;
+    min-width: 40px;
+    height: 44px;
+    min-height: 44px;
+    flex-basis: 40px;
+  }
+  body.inbox-mode.chat-open #sec-inbox .composer #chat-intent { display: none; }
+  body.inbox-mode.chat-open #sec-inbox .composer #chat-input {
+    flex: 1 1 auto;
+    width: 0;
+    min-width: 0;
+    height: 44px;
+  }
+  body.inbox-mode.chat-open #sec-inbox .composer #chat-input:focus {
+    box-shadow: inset 0 0 0 2px rgba(255,106,26,.35);
+  }
+}
+
+/* All inbox content children must be allowed to shrink; long names never
+   widen a panel and only the two intended content regions scroll. */
+body.inbox-mode #sec-inbox *,
+body.inbox-mode #sec-inbox *::before,
+body.inbox-mode #sec-inbox *::after { box-sizing: border-box; }
+body.inbox-mode #sec-inbox .threads,
+body.inbox-mode #sec-inbox .chatpane,
+body.inbox-mode #sec-inbox #th-list,
+body.inbox-mode #sec-inbox #chat-log,
+body.inbox-mode #sec-inbox .chathead > div:not(.avatar),
+body.inbox-mode #sec-inbox .thread-item > div,
+body.inbox-mode #sec-inbox .thread-item .nm > span:first-child {
+  min-width: 0;
+  min-height: 0;
+}
+body.inbox-mode #sec-inbox .thread-item .nm .t,
+body.inbox-mode #sec-inbox .chathead .winchip { white-space: nowrap; }
+body.inbox-mode #sec-inbox .chathead .btn.sm { flex-shrink: 0; }
+body.inbox-mode #sec-inbox .thread-item .nm .t,
+body.inbox-mode #sec-inbox .thread-item .pv,
+body.inbox-mode #sec-inbox .chathead .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
