@@ -97,7 +97,8 @@
 
     <!-- Inbox -->
     <section id="sec-inbox" style="display:none">
-      <div class="pagehead"><div><h2>Inbox</h2><p>WhatsApp — see and reply yourself</p></div>
+      <!-- Inbox UI change: keep the existing sidebar drawer reachable on phones. -->
+      <div class="pagehead"><button class="inbox-mobile-burger" onclick="toggleSidebar()" aria-label="Open menu" title="Open menu">☰</button><div class="inbox-title"><h2>Inbox</h2><p>WhatsApp — see and reply yourself</p></div>
         <div class="actions">
           <button class="btn" onclick="newChatModal()">➕ New chat</button>
           <button class="btn ghost" onclick="loadThreads()">↻ Refresh</button>
