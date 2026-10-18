@@ -267,3 +267,29 @@ async def test_extract_customer_phone_and_name() -> None:
     )
     assert phone == "+919839983077"
     assert name == "Uma Shankar agrwal"
+
+
+async def test_garment_demand_aggregates_real_order_items(sample_order) -> None:
+    async with async_session_factory() as db:
+        # Add a second order containing more shirts and one saree.
+        await order_service.create_order(
+            db,
+            customer_phone=TEST_CUSTOMER_PHONE,
+            customer_name="Toolwala Grahak",
+            items=[
+                {"type": "shirt", "qty": 3, "service": "wash_iron"},
+                {"type": "saree", "qty": 1, "service": "dry_clean"},
+            ],
+            total_amount=Decimal("600"),
+            created_by="test",
+        )
+        out = await at.run_tool(db, "garment_demand", "all")
+    assert "shirt: 5 kapde, 2 orders" in out
+    assert "saree: 1 kapde, 1 orders" in out
+    assert "Sabse zyada demand: shirt" in out
+
+
+def test_garment_demand_is_read_only_and_advertised() -> None:
+    assert any(t["name"] == "garment_demand" for t in at.TOOL_SPECS)
+    assert "garment_demand" in at._TOOLS
+    assert "garment_demand" not in at.WRITE_TOOLS
