@@ -1974,9 +1974,10 @@ async def create_manual_lead(
         if not lead.source:
             lead.source = "phone_call"
         lead.items_text = need
-        if body.send_whatsapp:
+        if body.send_whatsapp and lead.stage != "CONVERTED":
             # Do not leave an older due follow-up queued if this new manual
             # outreach fails. A fresh ladder starts only after a successful send.
+            # A converted lead must never be moved backwards into the funnel.
             lead.stage = "NEW"
             lead.followup_count = 0
             lead.next_followup_at = None
@@ -2016,15 +2017,21 @@ async def create_manual_lead(
         }
 
     sent_at = datetime.now(timezone.utc)
-    lead.stage = "CONTACTED"
     lead.last_contact_at = sent_at
-    next_followup_at = sent_at + timedelta(hours=2)
-    lead.next_followup_at = next_followup_at
+    next_followup_at = None
+    if lead.stage != "CONVERTED":
+        lead.stage = "CONTACTED"
+        next_followup_at = sent_at + timedelta(hours=2)
+        lead.next_followup_at = next_followup_at
+    else:
+        # Existing customers with a converted lead can receive the owner-approved
+        # message, but must not be pushed back into the lead follow-up ladder.
+        lead.next_followup_at = None
     await db.commit()
     return {
         "id": str(lead.id), "name": lead.name, "phone": lead.phone,
         "stage": lead.stage, "whatsapp_status": "sent",
-        "next_followup_at": next_followup_at.isoformat(),
+        "next_followup_at": next_followup_at.isoformat() if next_followup_at else None,
         "message": "WhatsApp sent. Replies will be handled by the existing AI inbox flow.",
     }
 
