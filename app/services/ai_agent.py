@@ -835,7 +835,7 @@ async def _handle_llm_failure(
             select(Conversation.id).where(
                 Conversation.customer_id == customer.id,
                 Conversation.direction == Direction.OUTBOUND,
-                Conversation.message_text == get_message("ai_failover_ack", "hi"),
+                Conversation.message_text.like(get_message("ai_failover_ack", "hi") + "%"),
                 Conversation.created_at >= now - timedelta(hours=1),
             ).limit(1)
         )).scalar_one_or_none()
