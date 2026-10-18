@@ -5219,15 +5219,16 @@ function threadMenu(phone) {
 }
 
 function closeThreadMobile(push = true) {
+  // Responsive inbox reset: both panes return on desktop/tablet after resize.
   document.body.classList.remove("chat-open");
   const pane = document.querySelector(".chatpane");
   if (pane) pane.removeAttribute("style");
   // Phone par chat band = sach mein band. OPEN_PHONE saaf kiye bina 12s ka
   // refresh (loadThreads -> openThread) wahi chat dobara khol deta tha —
   // back button ka koi matlab hi nahi rehta tha.
-  if (window.innerWidth <= 767 && OPEN_PHONE) {
+  if (window.innerWidth <= 768 && OPEN_PHONE) {
     OPEN_PHONE = null;
-    if (THREADS.length) renderThreads();   // list ki green highlight bhi hatao
+    if (THREADS.length) renderThreads();   // list ki active highlight bhi hatao
   }
   if (push && location.hash.startsWith("#inbox/")) {
     NAVIGATING = true; location.hash = "inbox"; setTimeout(() => (NAVIGATING = false), 0);
@@ -5238,6 +5239,17 @@ function scrollChatBottom() {
   log.scrollTop = log.scrollHeight;
   $("newmsg-pill").classList.remove("show");
 }
+
+/* Responsive inbox: resize between mobile and tablet/desktop must never leave
+   the full-screen chat overlay active after its mobile breakpoint disappears. */
+let _inboxWasMobile = window.matchMedia("(max-width: 768px)").matches;
+window.addEventListener("resize", () => {
+  const mobileNow = window.matchMedia("(max-width: 768px)").matches;
+  if (_inboxWasMobile && !mobileNow && document.body.classList.contains("chat-open")) {
+    closeThreadMobile(false);
+  }
+  _inboxWasMobile = mobileNow;
+});
 
 /* One chat bubble — shared by the full render and the optimistic append on
    send, so a sent message can appear instantly without rebuilding the whole
