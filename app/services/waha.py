@@ -104,11 +104,34 @@ async def resolve_lid(lid: str) -> str | None:
 
 
 def _message_id(data: dict) -> str:
-    # WAHA has returned both id and nested ids across versions.
-    mid = data.get("id") or (data.get("data") or {}).get("id")
-    if isinstance(mid, dict):
-        mid = mid.get("_serialized") or mid.get("id")
-    return str(mid or data.get("messageId") or data.get("key") or "")
+    """Extract the actual WhatsApp message ID from WAHA response variants.
+
+    NOWEB may return the message key itself (remoteJid/fromMe/id), rather
+    than a plain string ID. Never stringify that whole key: conversation
+    deduplication and delivery receipts require the stable inner ID.
+    """
+    if not isinstance(data, dict):
+        return str(data or "")
+
+    candidates = [
+        data.get("id"),
+        (data.get("data") or {}).get("id") if isinstance(data.get("data"), dict) else None,
+        data.get("messageId"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            candidate = candidate.get("_serialized") or candidate.get("id")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+    # Some NOWEB versions return {key: {remoteJid, fromMe, id: "..."}}
+    for parent in (data, data.get("data") if isinstance(data.get("data"), dict) else {}):
+        key = parent.get("key") if isinstance(parent, dict) else None
+        if isinstance(key, dict):
+            value = key.get("_serialized") or key.get("id")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
 
 
 async def send_text(
