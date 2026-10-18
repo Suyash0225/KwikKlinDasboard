@@ -2186,6 +2186,66 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
     return {"wa_message_id": wa_id, "at": datetime.now(timezone.utc).isoformat()}
 
 
+
+class InboxReactionIn(BaseModel):
+    phone: str
+    wamid: str = Field(min_length=1, max_length=180)
+    reaction: str = Field(max_length=8)
+
+
+@router.post("/api/inbox/react", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
+async def inbox_react(body: InboxReactionIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Send/remove a native WhatsApp reaction for a message in this thread."""
+    if not _waha_is_home_tenant():
+        raise HTTPException(status_code=403, detail="WhatsApp reactions are managed for the home shop only")
+    try:
+        phone = normalize_phone(body.phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    allowed = {"👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉", ""}
+    if body.reaction not in allowed:
+        raise HTTPException(status_code=422, detail="Unsupported reaction")
+
+    customer = (
+        await db.execute(select(Customer.id).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    staff = (
+        await db.execute(select(Staff.id).where(Staff.phone == phone))
+    ).scalar_one_or_none()
+    conditions = []
+    if customer is not None:
+        conditions.append(Conversation.customer_id == customer)
+    if staff is not None:
+        conditions.append(Conversation.staff_id == staff)
+    if not conditions:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    message = (
+        await db.execute(
+            select(Conversation.id).where(
+                Conversation.wa_message_id == body.wamid,
+                or_(*conditions),
+            )
+        )
+    ).scalar_one_or_none()
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found in this chat")
+
+    response = await _waha_request(
+        "PUT",
+        "/api/reaction",
+        json={"session": settings.WAHA_SESSION, "messageId": body.wamid, "reaction": body.reaction},
+    )
+    if response.status_code >= 400:
+        log.warning("inbox_reaction_failed", status=response.status_code, phone=phone)
+        raise HTTPException(
+            status_code=502 if response.status_code >= 500 else 400,
+            detail="WhatsApp could not apply this reaction. Please try again.",
+        )
+    return {"ok": True, "phone": phone, "wamid": body.wamid, "reaction": body.reaction}
+
+
 class InboxPingIn(BaseModel):
     phone: str
     intent: str = Field(default="transactional", pattern="^(promotional|transactional)$")
