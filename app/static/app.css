@@ -3249,3 +3249,97 @@ body.inbox-mode #sec-inbox .chathead .muted {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+
+/* Inbox-only refinements: mobile title/actions, 305px desktop nav and page lock. */
+@media (min-width: 1024px) {
+  body.inbox-mode { --sidebar-w: 305px; }
+  body.inbox-mode .sidebar { width: 305px; }
+}
+html:has(body.inbox-mode) {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+body.inbox-mode {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+body.inbox-mode #sec-inbox .inbox-mobile-burger { display: none; }
+body.inbox-mode #sec-inbox .inbox-title { min-width: 0; }
+body.inbox-mode #sec-inbox .inbox-title h2 {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+body.inbox-mode #sec-inbox .pagehead .actions .btn:first-child {
+  background: #ff6a1a;
+  border-color: #ff6a1a;
+  color: #fff;
+}
+@media (max-width: 768px) {
+  body.inbox-mode .topbar { display: none; }
+  body.inbox-mode #sec-inbox .pagehead {
+    display: flex;
+    height: 56px;
+    min-height: 56px;
+    flex: 0 0 56px;
+    padding: 0 10px;
+    gap: 8px;
+    background: var(--n0);
+    border-bottom: 1px solid #e6e9ee;
+  }
+  body.inbox-mode #sec-inbox .inbox-mobile-burger {
+    display: inline-flex;
+    flex: 0 0 44px;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--n800);
+    font-size: 22px;
+  }
+  body.inbox-mode #sec-inbox .inbox-title { flex: 1 1 auto; min-width: 0; }
+  body.inbox-mode #sec-inbox .pagehead h2 {
+    display: block;
+    font-size: 22px;
+    line-height: 1.2;
+  }
+  body.inbox-mode #sec-inbox .pagehead p { display: none; }
+  body.inbox-mode #sec-inbox .pagehead .actions {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 6px;
+    margin-left: auto;
+  }
+  body.inbox-mode #sec-inbox .pagehead .actions .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
+    border-radius: 12px;
+  }
+  body.inbox-mode #sec-inbox .pagehead .actions .btn:first-child::before {
+    content: "+";
+    font-size: 24px;
+    line-height: 1;
+  }
+  body.inbox-mode #sec-inbox .pagehead .actions .btn:last-child::before {
+    content: "↻";
+    font-size: 21px;
+    line-height: 1;
+  }
+  body.inbox-mode #sec-inbox .composer #chat-input { width: 0; }
+}
