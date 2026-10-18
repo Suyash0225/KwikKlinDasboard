@@ -56,7 +56,7 @@ async def test_http_500_failure_falls_back_to_flash_lite(monkeypatch):
     monkeypatch.setattr(llm_client, "_generate", generate)
     result = await llm_client.ask(system="s", user_text="hi", model=llm_client.MODEL_SMART)
     assert result == "flash-lite reply"
-    assert calls == [llm_client.MODEL_SMART, llm_client.MODEL_CHEAP]
+    assert calls == [llm_client.MODEL_SMART, llm_client.MODEL_SMART, llm_client.MODEL_CHEAP]
 
 
 @pytest.mark.asyncio
