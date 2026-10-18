@@ -56,6 +56,11 @@ TOOL_SPECS = [
         "args": "filter (late|today|week|unpaid|active|delivered|status:NAME)",
     },
     {
+        "name": "garment_demand",
+        "when": "owner asks which kapde/items get the most orders, top-selling garments, garment demand/trends, sabse zyada order kis kapde ka aata hai",
+        "args": "period (all|today|week|month; default all)",
+    },
+    {
         "name": "staff_chat",
         "when": "owner asks what a staff member said / whether they replied / their pending work",
         "args": "name",
@@ -341,7 +346,71 @@ async def _search_orders(db: AsyncSession, args: str) -> str:
     return "\n".join(lines)
 
 
-async def _staff_chat(db: AsyncSession, args: str) -> str:
+
+
+async def _garment_demand(db: AsyncSession, args: str) -> str:
+    """Aggregate garment quantities and order counts from real order item JSON."""
+    period = (args or "all").strip().lower()
+    now_ist = datetime.now(IST)
+    if any(x in period for x in ("today", "aaj")):
+        start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        label = "aaj"
+    elif any(x in period for x in ("week", "hafte", "7 din")):
+        start = now_ist - timedelta(days=7)
+        label = "pichhle 7 din"
+    elif any(x in period for x in ("month", "mahine", "is mahine")):
+        start = now_ist.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        label = "is mahine"
+    else:
+        start = None
+        label = "ab tak (all-time)"
+
+    q = select(Order.items, Order.id).where(
+        Order.status != OrderStatus.CANCELLED
+    )
+    if start is not None:
+        q = q.where(Order.created_at >= start.astimezone(timezone.utc))
+    rows = (await db.execute(q)).all()
+    quantities: dict[str, int] = {}
+    order_counts: dict[str, set] = {}
+    for items, order_id in rows:
+        for item in items or []:
+            if not isinstance(item, dict) or item.get("kind") in {"extra_charge", "due_charge"}:
+                continue
+            name = str(item.get("type") or item.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                qty = max(1, int(item.get("qty", 1)))
+            except (TypeError, ValueError):
+                qty = 1
+            key = name.casefold()
+            quantities[key] = quantities.get(key, 0) + qty
+            order_counts.setdefault(key, set()).add(order_id)
+
+    if not quantities:
+        return f"{label}: garment-wise order data nahi mila, isliye top kapda verify nahi kar sakta."
+    names = {}
+    for items, _order_id in rows:
+        for item in items or []:
+            if isinstance(item, dict) and item.get("kind") not in {"extra_charge", "due_charge"}:
+                name = str(item.get("type") or item.get("name") or "").strip()
+                if name:
+                    names.setdefault(name.casefold(), name)
+    ranked = sorted(quantities, key=lambda key: (-quantities[key], -len(order_counts[key]), key))
+    lines = [f"Garment demand — {label}; cancelled orders excluded. Ranking item quantity se hai:"]
+    for key in ranked[:10]:
+        lines.append(
+            f"- {names.get(key, key)}: {quantities[key]} kapde, "
+            f"{len(order_counts[key])} orders"
+        )
+    top = ranked[0]
+    lines.append(
+        f"Sabse zyada demand: {names.get(top, top)} "
+        f"({quantities[top]} kapde, {len(order_counts[top])} orders)."
+    )
+    return "\\n".join(lines)
+\n\nasync def _staff_chat(db: AsyncSession, args: str) -> str:
     name = args.strip()
     q = select(Staff)
     if name:
@@ -1086,6 +1155,7 @@ _TOOLS = {
     "customer_detail": _customer_detail,
     "search_orders": _search_orders,
     "staff_chat": _staff_chat,
+    "garment_demand": _garment_demand,
     "money": _money_report,
     "billing_adjustment": _billing_adjustment,
     "ping_staff": _ping_staff,
