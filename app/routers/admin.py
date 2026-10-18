@@ -46,6 +46,7 @@ from app.models import (
     Conversation,
     CouponRedemption,
     Customer,
+    Direction,
     Escalation,
     EscalationStatus,
     Expense,
@@ -1936,8 +1937,17 @@ async def inbox_threads(
         .group_by(Conversation.customer_id)
         .subquery()
     )
+    customer_last_inbound = (
+        select(func.max(Conversation.created_at))
+        .where(
+            Conversation.customer_id == Customer.id,
+            Conversation.direction == Direction.INBOUND,
+        )
+        .correlate(Customer)
+        .scalar_subquery()
+    )
     q_cust = (
-        select(Customer, Conversation)
+        select(Customer, Conversation, customer_last_inbound.label("last_inbound"))
         .join(last_at, last_at.c.customer_id == Customer.id)
         .join(
             Conversation,
@@ -1949,7 +1959,7 @@ async def inbox_threads(
         q_cust = q_cust.where(_match(Customer))
     rows = (await db.execute(q_cust)).all()
     mgr_phone = normalize_phone(manager_phone())
-    for cust, conv in rows:
+    for cust, conv, last_inbound in rows:
         _add(
             {
                 # The owner's own number has a customer row from his tests —
@@ -1961,7 +1971,7 @@ async def inbox_threads(
                 "last_at": conv.created_at.isoformat(),
                 "last_direction": conv.direction.name,
             },
-            cust.last_message_at,
+            last_inbound,
         )
 
     last_at_s = (
@@ -1973,8 +1983,17 @@ async def inbox_threads(
         .group_by(Conversation.staff_id)
         .subquery()
     )
+    staff_last_inbound = (
+        select(func.max(Conversation.created_at))
+        .where(
+            Conversation.staff_id == Staff.id,
+            Conversation.direction == Direction.INBOUND,
+        )
+        .correlate(Staff)
+        .scalar_subquery()
+    )
     q_staff = (
-        select(Staff, Conversation)
+        select(Staff, Conversation, staff_last_inbound.label("last_inbound"))
         .join(last_at_s, last_at_s.c.staff_id == Staff.id)
         .join(
             Conversation,
@@ -1985,7 +2004,7 @@ async def inbox_threads(
     if term:
         q_staff = q_staff.where(_match(Staff))
     rows_s = (await db.execute(q_staff)).all()
-    for st, conv in rows_s:
+    for st, conv, last_inbound in rows_s:
         _add(
             {
                 "kind": "admin" if st.role is StaffRole.ADMIN else "staff",
@@ -1995,7 +2014,7 @@ async def inbox_threads(
                 "last_at": conv.created_at.isoformat(),
                 "last_direction": conv.direction.name,
             },
-            st.last_message_at,
+            last_inbound,
         )
 
     threads = [
