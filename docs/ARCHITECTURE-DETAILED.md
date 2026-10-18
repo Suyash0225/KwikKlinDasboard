@@ -24,7 +24,7 @@ Security (see ARCHITECTURE.md §5).
 
 ## AI failover policy
 
-**AI failover**: Paid Gemini smart model → Gemini flash-lite; `llm_monthly_budget_usd` is a hard spend cap, customer failures get the fixed acknowledgement at most once/hour and enter `open_questions`, and 3+ failures in 5 minutes trigger one owner WhatsApp alert/hour. No Anthropic/OpenRouter fallback.
+**AI failover**: Paid Gemini smart model → Gemini flash-lite; `llm_monthly_budget_usd` is a hard application-side spend gate using conservative reservations, customer failures get the fixed acknowledgement at most once/hour and enter `open_questions`, and 3+ failures in 5 minutes trigger one owner WhatsApp alert/hour. No Anthropic/OpenRouter fallback.
 
 ## 2. Tech stack
 
