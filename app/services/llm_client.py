@@ -1,8 +1,8 @@
 """The only module that talks to the paid Gemini API.
 
-All LLM calls use Google's paid Gemini API. There is no Anthropic or OpenRouter
-fallback: if Gemini is unavailable, callers use their existing rule-based
-degrade paths.
+All calls stay on Gemini: the requested model falls back to flash-lite when
+available under the per-tenant monthly budget. If both tiers fail, the customer
+agent sends its fixed acknowledgement and records an open question.
 """
 
 import asyncio
