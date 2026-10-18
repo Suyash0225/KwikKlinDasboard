@@ -1974,7 +1974,9 @@ async def create_manual_lead(
         if not lead.source:
             lead.source = "phone_call"
         lead.items_text = need
-        if lead.stage in {"LOST", "DORMANT"} and body.send_whatsapp:
+        if body.send_whatsapp:
+            # Do not leave an older due follow-up queued if this new manual
+            # outreach fails. A fresh ladder starts only after a successful send.
             lead.stage = "NEW"
             lead.followup_count = 0
             lead.next_followup_at = None
