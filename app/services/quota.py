@@ -210,7 +210,9 @@ async def check_ai_quota(
                     )
                 )
             ).scalar_one()
-            estimated_input_tokens = (len(input_text) + 3) // 4 + (1000 if image else 0)
+            # Conservative reservation: tokenization of Hindi/JSON can
+            # exceed the usual 4 chars/token heuristic; reserve at 3 chars/token.
+            estimated_input_tokens = (len(input_text) + 2) // 3 + (3000 if image else 0)
             reserve = estimated_cost_usd(
                 model or "", estimated_input_tokens, max(0, max_output_tokens), rates
             )
