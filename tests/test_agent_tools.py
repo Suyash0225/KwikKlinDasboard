@@ -267,3 +267,17 @@ async def test_extract_customer_phone_and_name() -> None:
     )
     assert phone == "+919839983077"
     assert name == "Uma Shankar agrwal"
+
+
+async def test_garment_demand_uses_persisted_order_items(sample_order) -> None:
+    async with async_session_factory() as db:
+        out = await at.run_tool(db, "garment_demand", "all")
+    assert "shirt: 2 kapde, 1 orders" in out
+    assert "Top demand: shirt" in out
+
+
+async def test_marketing_followup_preview_does_not_send_messages() -> None:
+    async with async_session_factory() as db:
+        out = await at.run_tool(db, "marketing_followup", "preview")
+    assert "Marketing audience preview" in out or "Koi eligible customer nahi mila" in out
+    assert "message send nahi hua" in out or "nahi mila" in out
