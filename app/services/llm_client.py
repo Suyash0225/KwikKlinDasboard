@@ -216,12 +216,14 @@ async def _generate_with_fallback(
     """Try the requested Gemini model, then flash-lite, respecting each model's budget."""
     from app.services.quota import QuotaExceeded, ai_quota_guard
 
-    if _provider_is_open(PROVIDER):
-        raise LLMUnavailable("gemini circuit open")
+    provider_open = _provider_is_open(PROVIDER)
 
     cheap, smart = _provider_models(PROVIDER)
     candidates = [model] if model in (cheap, smart) else [smart]
-    if candidates[0] != cheap:
+    if provider_open and candidates[0] != cheap:
+        # A provider-wide circuit must not suppress the cheaper model too.
+        candidates = [cheap]
+    elif candidates[0] != cheap:
         candidates.append(cheap)
 
     budget = IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
@@ -256,6 +258,10 @@ async def _generate_with_fallback(
             return result
         except QuotaExceeded as exc:
             last_exc = LLMUnavailable(str(exc))
+            if exc.meter != "AI monthly budget USD":
+                # Daily/plan caps apply to both models; changing models cannot
+                # make an otherwise forbidden request valid.
+                break
             try:
                 await _record_usage(PROVIDER, candidate, 0, 0, 0, False)
             except Exception:
@@ -264,7 +270,7 @@ async def _generate_with_fallback(
                 "llm_model_budget_unavailable",
                 provider=PROVIDER, model=candidate, error=str(exc)[:200],
             )
-            # Continue to flash-lite if this was the smart-model reservation.
+            # Monthly budget is model-priced: try flash-lite before stopping.
             continue
         except LLMAuthError as exc:
             last_exc = exc
