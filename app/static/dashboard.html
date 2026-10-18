@@ -18,9 +18,9 @@
 <!-- app.css is mobile-first and carries every breakpoint — one sheet, one cascade.
      It stays render-blocking on purpose: it IS the critical CSS (too big to inline). -->
 <link rel="stylesheet" href="/admin/static/tokens.css?v=rs1">
-<link rel="stylesheet" href="/admin/static/app.css?v=rs11">
+<link rel="stylesheet" href="/admin/static/app.css?v=rs12">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
-<script src="/admin/static/app.js?v=alleligible20261011" defer></script>
+<script src="/admin/static/app.js?v=inboxux20261018" defer></script>
 </head>
 <body>
 <div class="shell">
@@ -110,11 +110,22 @@
             <button class="th-ico" onclick="newChatModal()" title="New chat" aria-label="New chat">✚</button>
             <button class="th-ico" onclick="bulkImportModal()" title="Bulk import numbers" aria-label="Bulk import numbers">⋮</button>
           </div>
-          <div class="th-search"><input id="th-search" type="search" aria-label="Search chats" placeholder="Search by name or number" oninput="threadSearch(this.value)"></div>
+          <div class="th-search"><input id="th-search" type="search" aria-label="Search chats" placeholder="Search name, number…" oninput="threadSearch(this.value)"></div>
+          <div class="th-filters" role="group" aria-label="Filter conversations">
+            <button class="on" data-th-filter="all" aria-pressed="true" onclick="setThreadFilter('all')">All</button>
+            <button data-th-filter="unread" aria-pressed="false" onclick="setThreadFilter('unread')">Unread</button>
+            <button data-th-filter="customers" aria-pressed="false" onclick="setThreadFilter('customers')">Customers</button>
+            <button data-th-filter="staff" aria-pressed="false" onclick="setThreadFilter('staff')">Staff</button>
+          </div>
           <div id="th-list" style="flex:1;overflow-y:auto" onscroll="onThreadScroll(this)"><div style="padding:12px"><div class="skel skelrow"></div><div class="skel skelrow"></div><div class="skel skelrow"></div></div></div>
         </div>
         <div class="chatpane" style="position:relative">
           <div class="chathead" id="chat-head"><span class="muted">Pick a conversation on the left…</span></div>
+          <div class="chat-searchbar" id="chat-searchbar">
+            <input id="chat-search-input" type="search" placeholder="Find in this conversation…" aria-label="Find in this conversation" oninput="filterChatMessages()">
+            <span id="chat-search-count" class="muted" aria-live="polite"></span>
+            <button class="th-ico" onclick="toggleChatSearch()" aria-label="Close message search">✕</button>
+          </div>
           <div class="chatlog" id="chat-log"></div>
           <div class="newmsg-pill" id="newmsg-pill" onclick="scrollChatBottom()">⬇ New messages</div>
           <div class="replybar" id="reply-bar"></div>

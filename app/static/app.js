@@ -5032,6 +5032,9 @@ const EMOJIS = ["😀","😄","😊","🙏","👍","👌","✅","❤️","🎉",
    it reaches every contact, including ones who never messaged. */
 const TH_PAGE = 50;
 let TH_QUERY = "", TH_MORE = false, TH_TOTAL = 0, TH_LOADING = false;
+let TH_FILTER = "all";
+let CHAT_SEARCH_OPEN = false;
+let REACTIONS_BY_WAMID = {};
 
 async function fetchThreads(offset = 0) {
   const p = new URLSearchParams({ limit: TH_PAGE, offset, q: TH_QUERY });
@@ -5040,7 +5043,7 @@ async function fetchThreads(offset = 0) {
 async function loadThreads() {
   try {
     // the 12s auto-refresh must not yank a scrolled list back to page one
-    const keep = Math.max(TH_PAGE, THREADS.length || 0);
+    const keep = TH_FILTER === "unread" ? 500 : Math.max(TH_PAGE, THREADS.length || 0);
     const r = await api(`/admin/api/inbox/threads?${new URLSearchParams(
       { limit: Math.min(keep, 500), offset: 0, q: TH_QUERY })}`);
     THREADS = r.threads; TH_MORE = r.has_more; TH_TOTAL = r.total;
@@ -5111,8 +5114,24 @@ function updateUnreadBadge() {
    Ab: kuch badla hi nahi to DOM ko chhoo bhi nahi; badla to scroll wapas
    wahi rakho jahan tha. */
 let LAST_TH_HTML = "";
+function setThreadFilter(filter) {
+  TH_FILTER = ["all", "unread", "customers", "staff"].includes(filter) ? filter : "all";
+  document.querySelectorAll("[data-th-filter]").forEach((b) => {
+    const active = b.dataset.thFilter === TH_FILTER;
+    b.classList.toggle("on", active);
+    b.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  LAST_TH_HTML = "";
+  if (TH_FILTER === "unread") { loadThreads(); return; }
+  renderThreads();
+}
 function renderThreads() {
-  const rows = THREADS;
+  const rows = THREADS.filter((t) => {
+    if (TH_FILTER === "unread") return isUnread(t);
+    if (TH_FILTER === "customers") return t.kind === "customer";
+    if (TH_FILTER === "staff") return t.kind === "staff" || t.kind === "admin";
+    return true;
+  });
   const items = rows.map((t) => {
     const chip = t.kind === "staff" ? '<span class="staff-chip">staff</span>' : t.kind === "admin" ? '<span class="staff-chip">👑 you</span>' : "";
     const preview = t.no_messages
@@ -5130,9 +5149,9 @@ function renderThreads() {
       </div></div>`;
   }).join("");
   const footer = TH_MORE
-    ? `<div class="th-more" onclick="loadMoreThreads()">⬇ Show more (${rows.length}/${TH_TOTAL})</div>`
+    ? `<div class="th-more" onclick="loadMoreThreads()">⬇ Show more (${THREADS.length}/${TH_TOTAL})</div>`
     : rows.length
-      ? `<div class="th-end">${rows.length} ${TH_QUERY ? "found" : "chats"}</div>`
+      ? `<div class="th-end">${rows.length} ${TH_QUERY ? "found" : "loaded chats"}</div>`
       : "";
   const html = (items || `<div class="thread-item">${
     TH_QUERY ? "No matches" : T.noData}</div>`) + footer;
@@ -5290,10 +5309,16 @@ function oneBubble(m, threadName) {
   const meta = `<span class="bt">${fmtClock(m.at)}${
     m.direction === "OUTBOUND" ? " · " + (m.sent_by || "bot") + ticks(m.status) : ""
   }</span>`;
-  const reply = m.wamid
-    ? `<button class="breply" title="Reply" aria-label="Reply" onclick="replyTo('${m.wamid}')">↩</button>`
+  const reaction = m.wamid && REACTIONS_BY_WAMID[m.wamid]
+    ? `<button class="reaction-chip" title="Change reaction" onclick="openReactionPicker('${m.wamid}')">${esc(REACTIONS_BY_WAMID[m.wamid])}</button>`
     : "";
-  return `<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${quote}${body}${meta}${reply}</div>`;
+  const actions = m.wamid
+    ? `<div class="bubble-actions">
+        <button class="breply" title="Reply to message" aria-label="Reply to message" onclick="replyTo('${m.wamid}')">↩</button>
+        <button class="breact" title="React to message" aria-label="React to message" onclick="openReactionPicker('${m.wamid}')">☺</button>
+      </div>`
+    : "";
+  return `<div class="bubble ${m.direction === "INBOUND" ? "in" : "out"}">${quote}${body}${meta}${actions}${reaction}</div>`;
 }
 
 /* Optimistic append: drop ONE outbound bubble into the open log and scroll,
@@ -5364,6 +5389,9 @@ async function openThread(phone, silent = false, push = true) {
   try { OPEN_THREAD = await api(`/admin/api/inbox/thread?phone=${encodeURIComponent(phone)}`); }
   catch (e) { log.innerHTML = errBox(e.message, "loadThreads"); return; }
   const d = OPEN_THREAD;
+  try {
+    REACTIONS_BY_WAMID = JSON.parse(localStorage.getItem("kk_reactions_" + hashPhone(phone)) || "{}") || {};
+  } catch (e) { REACTIONS_BY_WAMID = {}; }
   // header sirf tab bane jab uska CONTENT badla — warna har 12s Ping/Agent
   // button ungli ke neeche se recreate ho jaate the
   const headSig = `${d.phone}|${d.name}|${d.kind}|${d.window.open}`;
@@ -5374,6 +5402,7 @@ async function openThread(phone, silent = false, push = true) {
     <div style="flex:1;min-width:0"><b>${esc(displayName(d.name, d.phone))}</b>
       <div class="muted">${d.phone} · ${d.kind === "staff" ? "Staff 🧑‍🔧" : d.kind === "admin" ? "You 👑" : "Customer"}</div></div>
     <span class="winchip ${d.window.open ? "open" : "closed"}">${d.window.open ? "window open" : "window closed"}</span>
+    <button class="btn sm ghost" title="Find in conversation" aria-label="Find in conversation" onclick="toggleChatSearch()">🔎</button>
     <button class="btn sm ghost" title="Yaad dilao" onclick="pingThread(this)">🔔 Ping</button>
     <button class="btn sm ghost danger" title="Delete chat" onclick="deleteThread('${phone}')">🗑️</button>
     ${d.kind === "customer" ? `<button class="btn sm ghost" id="agent-pause-btn" onclick="toggleAgentPause()">🤖 Agent: …</button>` : ""}`;
@@ -5406,6 +5435,7 @@ async function openThread(phone, silent = false, push = true) {
     if (nearBottom || !silent) scrollChatBottom();
     else if (newCount > prevCount) $("newmsg-pill").classList.add("show");
   } else if (!silent) scrollChatBottom();
+  filterChatMessages();
 }
 async function refreshPauseBtn() {
   const btn = $("agent-pause-btn");
@@ -5440,6 +5470,63 @@ async function flushOutbox() {
     if (OPEN_PHONE) openThread(OPEN_PHONE, true, false);
   }
 }
+/* Native WhatsApp reactions (not a text-message imitation). */
+const REACTION_CHOICES = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉"];
+function openReactionPicker(wamid) {
+  if (!wamid || !BY_WAMID[wamid]) return;
+  const current = REACTIONS_BY_WAMID[wamid] || "";
+  openModal(`<h3>React to message</h3>
+    <p class="muted">Reaction WhatsApp par bheji jayegi.</p>
+    <div class="reaction-picker">${REACTION_CHOICES.map((emoji) =>
+      `<button class="reaction-choice ${current === emoji ? "selected" : ""}" onclick="sendMessageReaction('${wamid}','${emoji}')">${emoji}</button>`
+    ).join("")}</div>
+    ${current ? `<button class="btn ghost" style="margin-top:12px" onclick="sendMessageReaction('${wamid}','')">Remove my reaction</button>` : ""}
+    <div class="btnrow"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
+}
+async function sendMessageReaction(wamid, emoji) {
+  if (!OPEN_PHONE || !wamid) return;
+  try {
+    await api("/admin/api/inbox/react", { method: "POST", body: { phone: OPEN_PHONE, wamid, reaction: emoji } });
+    if (emoji) REACTIONS_BY_WAMID[wamid] = emoji;
+    else delete REACTIONS_BY_WAMID[wamid];
+    localStorage.setItem("kk_reactions_" + hashPhone(OPEN_PHONE), JSON.stringify(REACTIONS_BY_WAMID));
+    closeModal();
+    openThread(OPEN_PHONE, true, false);
+    toast(emoji ? "WhatsApp reaction sent " + emoji : "Reaction removed");
+  } catch (e) { toast(e.message, true); }
+}
+function toggleChatSearch() {
+  CHAT_SEARCH_OPEN = !CHAT_SEARCH_OPEN;
+  const bar = $("chat-searchbar");
+  if (!bar) return;
+  bar.classList.toggle("show", CHAT_SEARCH_OPEN);
+  if (CHAT_SEARCH_OPEN) $("chat-search-input").focus();
+  else { $("chat-search-input").value = ""; filterChatMessages(); }
+}
+function filterChatMessages() {
+  const input = $("chat-search-input"), log = $("chat-log");
+  if (!input || !log) return;
+  const term = input.value.trim().toLocaleLowerCase();
+  let visible = 0;
+  log.querySelectorAll(".bubble").forEach((bubble) => {
+    const match = !term || bubble.textContent.toLocaleLowerCase().includes(term);
+    bubble.hidden = !match;
+    if (match) visible++;
+  });
+  if (term) {
+    log.querySelectorAll(".daychip").forEach((chip) => { chip.hidden = true; });
+    log.querySelectorAll(".bubble:not([hidden])").forEach((bubble) => {
+      let node = bubble.previousElementSibling;
+      while (node && !node.classList.contains("daychip")) node = node.previousElementSibling;
+      if (node) node.hidden = false;
+    });
+  } else {
+    log.querySelectorAll(".daychip").forEach((chip) => { chip.hidden = false; });
+  }
+  const count = $("chat-search-count");
+  if (count) count.textContent = term ? visible + " match" + (visible === 1 ? "" : "es") : "";
+}
+
 /* ---- reply to one message (WhatsApp's swipe-to-reply) ---- */
 let REPLY_TO = null;
 function replyTo(wamid) {
