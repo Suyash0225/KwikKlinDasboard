@@ -91,3 +91,35 @@ def test_owner_alert_requires_three_recent_failures_and_one_hour_cooldown():
     assert _failure_alert_due(3, None, now)
     assert not _failure_alert_due(5, now - timedelta(minutes=59), now)
     assert _failure_alert_due(3, now - timedelta(hours=1), now)
+
+
+@pytest.mark.asyncio
+async def test_flash_lite_budget_exhaustion_stops_without_provider_call(monkeypatch):
+    from app.services import quota
+
+    calls = []
+
+    @asynccontextmanager
+    async def no_budget(**kwargs):
+        calls.append(kwargs["model"])
+        raise quota.QuotaExceeded("AI monthly budget USD", 1.0, 1.0, "test")
+        yield
+
+    monkeypatch.setattr(quota, "ai_quota_guard", no_budget)
+
+    async def unexpected_generate(*args, **kwargs):
+        raise AssertionError("provider must not be called when both budgets are exhausted")
+
+    monkeypatch.setattr(llm_client, "_generate", unexpected_generate)
+    with pytest.raises(llm_client.LLMUnavailable, match="AI monthly budget USD"):
+        await llm_client.ask(system="s", user_text="hi", model=llm_client.MODEL_SMART)
+    assert calls == [llm_client.MODEL_SMART, llm_client.MODEL_CHEAP]
+
+
+def test_failover_acknowledgement_is_exact_and_not_owner_editable():
+    from app.services.messages import EDITABLE_KEYS, get_message
+
+    assert get_message("ai_failover_ack", "hi") == (
+        "Aapka message mil gaya hai, thodi der mein jawab dete hain 🙏"
+    )
+    assert "ai_failover_ack" not in EDITABLE_KEYS
