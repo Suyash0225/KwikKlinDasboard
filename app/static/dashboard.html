@@ -18,7 +18,7 @@
 <!-- app.css is mobile-first and carries every breakpoint — one sheet, one cascade.
      It stays render-blocking on purpose: it IS the critical CSS (too big to inline). -->
 <link rel="stylesheet" href="/admin/static/tokens.css?v=rs1">
-<link rel="stylesheet" href="/admin/static/app.css?v=rs12">
+<link rel="stylesheet" href="/admin/static/app.css?v=inboxweb20261018">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
 <script src="/admin/static/app.js?v=inboxux20261018" defer></script>
 </head>
@@ -138,7 +138,7 @@
               <option value="transactional">Service update</option>
               <option value="promotional">Promotional</option>
             </select>
-            <input type="text" id="chat-input" aria-label="Message" enterkeyhint="send" placeholder="Type a message" onkeydown="if(event.key==='Enter')sendChat()">
+            <textarea id="chat-input" aria-label="Message" enterkeyhint="send" placeholder="Type a message" rows="1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendChat()}" oninput="this.style.height='44px';this.style.height=Math.min(this.scrollHeight,140)+'px'"></textarea>
             <button class="btn" onclick="sendChat()" title="Send" aria-label="Send">➤</button>
           </div>
         </div>
