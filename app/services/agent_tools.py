@@ -56,6 +56,16 @@ TOOL_SPECS = [
         "args": "filter (late|today|week|unpaid|active|delivered|status:NAME)",
     },
     {
+        "name": "garment_demand",
+        "when": "owner asks top kapde/items, kis garment ke sabse zyada orders ya quantity hai",
+        "args": "period (all|today|week|month; default all)",
+    },
+    {
+        "name": "marketing_followup",
+        "when": "owner asks to follow up / marketing message customers who have no running/active order; preview audience or create a draft campaign, never send directly",
+        "args": "preview | draft | message text (draft creation only; owner must approve in Campaigns)",
+    },
+    {
         "name": "staff_chat",
         "when": "owner asks what a staff member said / whether they replied / their pending work",
         "args": "name",
@@ -339,6 +349,124 @@ async def _search_orders(db: AsyncSession, args: str) -> str:
             f"delivery {o.expected_delivery.strftime('%d %b') if o.expected_delivery else '?'}"
         )
     return "\n".join(lines)
+
+
+
+
+async def _garment_demand(db: AsyncSession, args: str) -> str:
+    """Aggregate real persisted order items, not model guesses."""
+    period = (args or "all").strip().lower()
+    now_ist = datetime.now(IST)
+    if "today" in period or "aaj" in period:
+        start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        label = "aaj"
+    elif "week" in period or "hafte" in period or "7 din" in period:
+        start = now_ist - timedelta(days=7)
+        label = "pichhle 7 din"
+    elif "month" in period or "mahine" in period:
+        start = now_ist.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        label = "is mahine"
+    else:
+        start, label = None, "ab tak (all-time)"
+    q = select(Order.items, Order.id).where(Order.status != OrderStatus.CANCELLED)
+    if start is not None:
+        q = q.where(Order.created_at >= start.astimezone(timezone.utc))
+    rows = (await db.execute(q)).all()
+    qty_by_name: dict[str, int] = {}
+    order_ids: dict[str, set] = {}
+    display_names: dict[str, str] = {}
+    for items, order_id in rows:
+        for item in items or []:
+            if not isinstance(item, dict) or item.get("kind") in {"extra_charge", "due_charge"}:
+                continue
+            name = str(item.get("type") or item.get("name") or "").strip()
+            if not name:
+                continue
+            key = name.casefold()
+            display_names.setdefault(key, name)
+            try:
+                qty = max(1, int(item.get("qty", 1)))
+            except (TypeError, ValueError):
+                qty = 1
+            qty_by_name[key] = qty_by_name.get(key, 0) + qty
+            order_ids.setdefault(key, set()).add(order_id)
+    if not qty_by_name:
+        return f"{label}: garment-wise order data nahi mila; top item verify nahi ho saka."
+    ranked = sorted(qty_by_name, key=lambda key: (-qty_by_name[key], -len(order_ids[key]), key))
+    lines = [f"Garment demand — {label}; cancelled orders excluded:"]
+    for key in ranked[:10]:
+        lines.append(f"- {display_names[key]}: {qty_by_name[key]} kapde, {len(order_ids[key])} orders")
+    key = ranked[0]
+    lines.append(f"Top demand: {display_names[key]} ({qty_by_name[key]} kapde, {len(order_ids[key])} orders).")
+    return "\n".join(lines)
+
+
+async def _marketing_followup(db: AsyncSession, args: str) -> str:
+    """Preview or draft an owner-approved campaign for customers with no active orders."""
+    from app.models import Campaign
+    from app.services.order_service import ACTIVE_STATUSES
+    from app.services.leads import check_marketing_eligible_bulk
+
+    command, _, custom_message = (args or "preview").partition("|")
+    command = command.strip().lower()
+    message = custom_message.strip()
+    if command not in {"preview", "draft", "create draft"}:
+        return "Format: preview | draft | message text. Main sirf draft banaunga; send Campaigns page se owner approval ke baad hoga."
+    active_customer_ids = select(Order.customer_id).where(Order.status.in_(ACTIVE_STATUSES))
+    candidates = (
+        await db.execute(
+            select(Customer.id, Customer.name)
+            .where(
+                Customer.is_active.is_(True),
+                Customer.opted_out.is_(False),
+                Customer.marketing_opt_out.is_(False),
+                Customer.id.notin_(active_customer_ids),
+            )
+            .order_by(Customer.name.asc())
+            .limit(501)
+        )
+    ).all()
+    if not candidates:
+        return "Koi eligible customer nahi mila jiske paas running order na ho."
+    if len(candidates) > 500:
+        return "Audience 500 se zyada hai. Safe owner-selected campaign limit 500 hai; pehle segment ko narrow karna hoga."
+    verdicts = await check_marketing_eligible_bulk(
+        db, [row.id for row in candidates], allow_active_orders=False
+    )
+    eligible_rows = [row for row in candidates if verdicts.get(row.id, (False, "missing"))[0]]
+    skipped = len(candidates) - len(eligible_rows)
+    if not eligible_rows:
+        return f"Running order nahi wale {len(candidates)} customers mile, lekin frequency cap/complaint/opt-out safety checks ke baad koi marketing ke liye eligible nahi."
+    if command == "preview":
+        return (
+            f"Marketing audience preview: {len(eligible_rows)} eligible customers with no active order; "
+            f"{skipped} skipped by compliance/frequency safeguards. Koi message send nahi hua. "
+            "Draft banane ke liye: marketing_followup('draft | [message]')"
+        )
+    if not message:
+        message = (
+            "Namaste {name} ji! Kwik Klin se pooch rahe hain—kya aapko laundry pickup ya wash & iron ki zarurat hai? "
+            "Aap chahein toh yahin reply kar dein. 🙏"
+        )
+    campaign = Campaign(
+        name=f"No-active-order follow-up {datetime.now(IST).strftime('%Y-%m-%d %H:%M')}"[:120],
+        segment="selected",
+        message_text=message[:2000],
+        status="draft",
+        rationale=(
+            f"Owner AI draft for customers without active orders. "
+            f"{len(eligible_rows)} eligible; {skipped} skipped by compliance gates. "
+            "No messages sent; explicit owner approval required."
+        ),
+        stats={"selected_customer_ids": [str(row.id) for row in eligible_rows], "audience_count": len(eligible_rows)},
+        created_by="agent",
+    )
+    db.add(campaign)
+    await db.commit()
+    return (
+        f"Marketing draft create ho gaya (campaign {campaign.id}). Audience: {len(eligible_rows)} eligible, "
+        f"{skipped} skipped. Koi WhatsApp message send nahi hua. Campaigns page mein draft review karke approve karna hoga."
+    )
 
 
 async def _staff_chat(db: AsyncSession, args: str) -> str:
@@ -1086,6 +1214,8 @@ _TOOLS = {
     "customer_detail": _customer_detail,
     "search_orders": _search_orders,
     "staff_chat": _staff_chat,
+    "garment_demand": _garment_demand,
+    "marketing_followup": _marketing_followup,
     "money": _money_report,
     "billing_adjustment": _billing_adjustment,
     "ping_staff": _ping_staff,
