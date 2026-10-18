@@ -228,6 +228,7 @@ async def _generate_with_fallback(
 
     budget = IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
     last_exc: LLMUnavailable | None = None
+    provider_failure_seen = False
     for candidate in candidates:
         # Each model gets its own bounded window so a full timeout on the
         # smart model does not prevent trying flash-lite.
@@ -273,6 +274,7 @@ async def _generate_with_fallback(
             # Monthly budget is model-priced: try flash-lite before stopping.
             continue
         except LLMAuthError as exc:
+            provider_failure_seen = True
             last_exc = exc
             log.warning(
                 "llm_provider_auth_failed", provider=PROVIDER,
@@ -280,6 +282,7 @@ async def _generate_with_fallback(
             )
             break
         except TimeoutError:
+            provider_failure_seen = True
             last_exc = LLMUnavailable(f"LLM request timed out after {budget:g}s")
             log.warning(
                 "llm_request_timeout", provider=PROVIDER,
@@ -292,6 +295,7 @@ async def _generate_with_fallback(
             # A timeout on the smart model should still try flash-lite.
             continue
         except LLMError as exc:
+            provider_failure_seen = True
             last_exc = exc if isinstance(exc, LLMUnavailable) else LLMUnavailable(str(exc))
             log.warning(
                 "llm_model_error", provider=PROVIDER,
@@ -299,7 +303,8 @@ async def _generate_with_fallback(
             )
             continue
 
-    _provider_failed(PROVIDER)
+    if provider_failure_seen:
+        _provider_failed(PROVIDER)
     if last_exc is not None:
         raise last_exc
     raise LLMUnavailable("Gemini unavailable and flash-lite fallback exhausted")
