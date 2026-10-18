@@ -257,6 +257,10 @@ async def _generate_with_fallback(
             return result
         except QuotaExceeded as exc:
             last_exc = LLMUnavailable(str(exc))
+            try:
+                await _record_usage(PROVIDER, candidate, 0, 0, 0, False)
+            except Exception:
+                log.exception("llm_usage_record_crashed", model=candidate)
             log.warning(
                 "llm_model_budget_unavailable",
                 provider=PROVIDER, model=candidate, error=str(exc)[:200],
@@ -490,6 +494,8 @@ async def _gemini_generate(
         )
         raise LLMRateLimited(f"gemini HTTP 429: {detail}")
     if resp.status_code >= 500:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        await _record_usage("gemini", model, 0, 0, latency_ms, False)
         log.warning("llm_unavailable", provider="gemini", model=model, status=resp.status_code)
         raise LLMUnavailable(f"gemini HTTP {resp.status_code}")
     if resp.status_code != 200:
