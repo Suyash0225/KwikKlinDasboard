@@ -62,8 +62,8 @@ async def test_daily_social_flow_and_idempotency(monkeypatch) -> None:
     monkeypatch.setattr("app.services.whatsapp.send_message", fake_send_message)
 
     status = await run_daily_social()
-    # IG not configured in tests -> skipped; LLM firewalled -> fallback caption
-    assert status == "skipped"
+    # Single-shop defaults keep IG auto-publishing off; the owner pack still runs.
+    assert status == "disabled"
     day = datetime.now(IST).strftime("%Y-%m-%d")
     assert (MEDIA_DIR / f"social-{day}.png").exists()
     assert any(s.startswith("image:") for s in sends)

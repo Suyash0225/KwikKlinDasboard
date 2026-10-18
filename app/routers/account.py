@@ -61,7 +61,7 @@ async def list_plans() -> dict:
         "setup_fee_inr": plans.SETUP_FEE_INR,
         "trial_days": plans.TRIAL_DAYS,
         "gst_percent": billing.GST_PERCENT,
-        "billing_live": billing.enabled(),
+        "billing_live": bool(settings.SAAS_SUBSCRIPTIONS_ENABLED and billing.enabled()),
         "google_login": google_auth.enabled(),
     }
 
@@ -220,6 +220,8 @@ async def checkout(
 
     Har cycle Razorpay khud charge karta hai; activation hamesha webhook
     se hoti hai (subscription.activated / subscription.charged)."""
+    if not settings.SAAS_SUBSCRIPTIONS_ENABLED:
+        raise HTTPException(status_code=503, detail="SaaS subscription billing is disabled for this deployment")
     if p.tenant is None:
         raise HTTPException(status_code=400, detail="Tenant not found")
     try:

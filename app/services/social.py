@@ -380,9 +380,11 @@ async def run_daily_social(force: bool = False) -> str:
         from app.services.google_auth import public_base
 
         base = await public_base(db)
-        ig_status = "skipped"
-        if base:
-            ig_status = await post_to_instagram(db, f"{base}/social/{fname}", caption)
+        ig_status = "disabled"
+        if await app_settings.get(db, "instagram_auto_publish_enabled"):
+            ig_status = "skipped"
+            if base:
+                ig_status = await post_to_instagram(db, f"{base}/social/{fname}", caption)
 
         # Google Business: alag poster (number ke bina) + rules wala text
         gname = f"social-google-{day_key}.png"
@@ -409,6 +411,7 @@ async def run_daily_social(force: bool = False) -> str:
         # owner's ready-to-post pack on WhatsApp (image + caption text)
         owner_note = {
             "posted": "✅ Instagram par post ho gaya.",
+            "disabled": "ℹ️ Instagram auto-publishing band hai; caption ready hai, chaaho toh manually post karo.",
             "skipped": "ℹ️ Instagram abhi linked nahi (Settings mein IG id/token daalo).",
         }.get(ig_status, f"⚠️ Instagram post fail: {ig_status[:120]}")
         try:

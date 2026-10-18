@@ -114,6 +114,8 @@ DEFAULTS: dict[str, Any] = {
     # daily social posts (Instagram auto-publish + GMB ready-to-post)
     "social_daily_enabled": True,
     "social_post_hour": 11,           # IST hour the daily poster goes out
+    # Keep poster generation/owner WhatsApp pack, but do not auto-publish to Instagram unless opted in.
+    "instagram_auto_publish_enabled": False,
     "ig_user_id": "",                 # Instagram Business user id (empty = off)
     "ig_access_token": "",            # token with instagram_content_publish
     "public_base_url": "",            # current tunnel URL (IG fetches images from here)
