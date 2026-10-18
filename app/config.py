@@ -141,6 +141,9 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_SECRET: str = ""
     # Razorpay dashboard mein webhook banate waqt jo secret set karo, wahi.
     RAZORPAY_WEBHOOK_SECRET: str = ""
+    # Single-shop deployments do not sell SaaS subscriptions by default.
+    # Existing signed webhooks and customer order-payment links remain separate.
+    SAAS_SUBSCRIPTIONS_ENABLED: bool = False
     # Public URL jahan checkout/callback wapas aayega (tunnel ya domain).
     APP_BASE_URL: str = "http://127.0.0.1:8000"
     # Public website ka pakka domain (canonical, sitemap, OG, JSON-LD) —
