@@ -468,7 +468,9 @@ async def build_ai_reply(
             )
     except LLMError as exc:
         log.warning("ai_compose_failed", error=str(exc)[:150])
-        return None
+        if sandbox:
+            return None
+        return await _handle_llm_failure(db, customer, text, str(exc))
 
     lang = out.get("language") if out.get("language") in ("hi", "en") else "hi"
     intent = out.get("intent") if out.get("intent") in {
@@ -761,6 +763,87 @@ async def _notify_admin_fyi(db: AsyncSession, customer: Customer, note: str) -> 
         )
     except Exception:
         log.exception("admin_fyi_failed")
+
+
+def _failure_alert_due(failure_count: int, last_alert_at, now) -> bool:
+    """Pure policy helper: alert on 3 failures/5m, at most once per hour."""
+    from datetime import timedelta
+
+    return failure_count >= 3 and (
+        last_alert_at is None or now - last_alert_at >= timedelta(hours=1)
+    )
+
+
+async def _handle_llm_failure(
+    db: AsyncSession, customer: Customer, text: str, reason: str
+) -> str:
+    """Keep the unanswered customer message visible and send a throttled acknowledgement."""
+    from datetime import timedelta
+    from sqlalchemy import func, text as sql_text
+    from app.models import Conversation, Direction, Escalation, LlmUsage
+
+    now = _dt.now(_tz.utc)
+    try:
+        await _open_question(
+            db, customer,
+            f"AI_FAILOVER ({reason[:180]}): {text[:1700]}",
+        )
+    except Exception:
+        log.exception("ai_failover_open_question_failed", phone=customer.phone)
+
+    tenant_id = getattr(customer, "tenant_id", None)
+    try:
+        # Serialize the check so simultaneous failures cannot fan out alerts.
+        await db.execute(
+            sql_text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"kwikklin-ai-failover-alert:{tenant_id or 'home'}"},
+        )
+        failures = int((await db.execute(
+            select(func.count()).select_from(LlmUsage).where(
+                LlmUsage.tenant_id == tenant_id,
+                LlmUsage.at >= now - timedelta(minutes=5),
+                LlmUsage.ok.is_(False),
+            )
+        )).scalar_one())
+        last_alert = (await db.execute(
+            select(Escalation.created_at).where(
+                Escalation.tenant_id == tenant_id,
+                Escalation.question.like("AI_FAILOVER_ALERT:%"),
+                Escalation.created_at >= now - timedelta(hours=1),
+            ).order_by(Escalation.created_at.desc()).limit(1)
+        )).scalar_one_or_none()
+        if _failure_alert_due(failures, last_alert, now):
+            await raise_escalation(
+                db,
+                question=(
+                    f"AI_FAILOVER_ALERT: {failures} Gemini/model/budget failures "
+                    f"in the last 5 minutes. Latest customer: {customer.phone}. "
+                    "Check Gemini availability and llm_monthly_budget_usd."
+                ),
+            )
+    except Exception:
+        log.exception("ai_failover_owner_alert_failed", tenant=str(tenant_id))
+
+    # Durable conversation history enforces the one-hour customer reply cap.
+    try:
+        await db.execute(
+            sql_text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"kwikklin-ai-failover-customer:{customer.id}"},
+        )
+        prior = (await db.execute(
+            select(Conversation.id).where(
+                Conversation.customer_id == customer.id,
+                Conversation.direction == Direction.OUTBOUND,
+                Conversation.message_text == get_message("ai_failover_ack", "hi"),
+                Conversation.created_at >= now - timedelta(hours=1),
+            ).limit(1)
+        )).scalar_one_or_none()
+        if prior is not None:
+            return ""
+    except Exception:
+        log.exception("ai_failover_customer_rate_limit_check_failed", phone=customer.phone)
+        # Fail open on a DB lookup error rather than leave the customer silent.
+    return get_message("ai_failover_ack", "hi")
 
 
 async def _open_question(db: AsyncSession, customer: Customer, text: str) -> None:
