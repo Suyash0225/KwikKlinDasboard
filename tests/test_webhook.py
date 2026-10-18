@@ -482,6 +482,28 @@ async def test_start_reenables_customer_after_stop(client, sent) -> None:
         assert customer.marketing_opt_out is False
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"fromMe": True},
+        {"fromMe": "true"},
+        {"_data": {"key": {"fromMe": True}}},
+        {"_data": {"key": {"fromMe": "true"}}},
+        {"key": {"fromMe": True}},
+    ],
+)
+def test_waha_outbound_detection_accepts_supported_payload_shapes(payload) -> None:
+    from app.routers.webhook import _waha_message_is_from_me
+
+    assert _waha_message_is_from_me(payload) is True
+
+
+def test_waha_outbound_detection_does_not_treat_inbound_as_outbound() -> None:
+    from app.routers.webhook import _waha_message_is_from_me
+
+    assert _waha_message_is_from_me({"fromMe": False, "_data": {"key": {"fromMe": False}}}) is False
+
+
 async def test_human_takeover_grace_window_suppresses_agent_reply(monkeypatch) -> None:
     from datetime import datetime, timedelta, timezone
     import uuid
