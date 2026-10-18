@@ -213,7 +213,7 @@ async def _generate_with_fallback(
     schema: dict | None = None,
     image: tuple[str, bytes] | None = None,
 ) -> str:
-    """Use only paid Gemini; retry the same deployment's cheaper tier once."""
+    """Try the requested Gemini model, then flash-lite, respecting each model's budget."""
     from app.services.quota import QuotaExceeded, ai_quota_guard
 
     if _provider_is_open(PROVIDER):
@@ -224,60 +224,76 @@ async def _generate_with_fallback(
     if candidates[0] != cheap:
         candidates.append(cheap)
 
-    # One deadline covers retries AND model fallback. The per-tenant budget
-    # lock remains held until _record_usage commits, preventing concurrent
-    # calls from passing the same spend pre-check at once.
-    try:
-        async with ai_quota_guard(
-            model=candidates[0],
-            input_text=system + "\n" + user_text,
-            max_output_tokens=max(max_tokens, 512),
-            image=image is not None,
-        ):
-            # Quota DB work and waiting for another in-flight budgeted request
-            # are outside the provider deadline; start it after the guard opens.
-            budget = IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
-            deadline = time.monotonic() + budget
-            last_exc: LLMUnavailable | None = None
-            for candidate in candidates:
+    budget = IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
+    deadline = time.monotonic() + budget
+    last_exc: LLMUnavailable | None = None
+    for candidate in candidates:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            last_exc = LLMUnavailable(f"LLM request timed out after {budget:g}s")
+            break
+        try:
+            # Budget is reserved per model, not once for the whole chain.
+            # If the smart model cannot fit under the hard monthly cap, the
+            # cheaper flash-lite model still gets its own atomic budget check.
+            async with ai_quota_guard(
+                model=candidate,
+                input_text=system + "\\n" + user_text,
+                max_output_tokens=max(max_tokens, 512),
+                image=image is not None,
+            ):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    break
-                try:
-                    async with asyncio.timeout(remaining):
-                        result = await _with_retry(
-                            lambda: _generate(
-                                system, user_text, candidate, max_tokens, schema, image, PROVIDER
-                            ),
-                            provider=PROVIDER,
-                            model=candidate,
-                        )
-                    _provider_succeeded(PROVIDER)
-                    return result
-                except LLMAuthError as exc:
-                    last_exc = exc
-                    log.warning(
-                        "llm_provider_auth_failed", provider=PROVIDER,
-                        model=candidate, error=str(exc)[:200],
+                    raise TimeoutError
+                async with asyncio.timeout(remaining):
+                    result = await _with_retry(
+                        lambda: _generate(
+                            system, user_text, candidate, max_tokens, schema, image, PROVIDER
+                        ),
+                        provider=PROVIDER,
+                        model=candidate,
                     )
-                    break
-                except TimeoutError:
-                    last_exc = LLMUnavailable(f"LLM request timed out after {budget:g}s")
-                    log.warning(
-                        "llm_request_timeout", provider=PROVIDER,
-                        model=candidate, timeout_seconds=budget,
-                    )
-                    break
-                except LLMError as exc:
-                    last_exc = exc
-                    log.warning(
-                        "llm_model_error", provider=PROVIDER,
-                        model=candidate, error=str(exc)[:200],
-                    )
-            _provider_failed(PROVIDER)
-            raise last_exc or LLMUnavailable("gemini unavailable")
-    except QuotaExceeded as exc:
-        raise LLMAuthError(str(exc)) from exc
+            _provider_succeeded(PROVIDER)
+            return result
+        except QuotaExceeded as exc:
+            last_exc = LLMUnavailable(str(exc))
+            log.warning(
+                "llm_model_budget_unavailable",
+                provider=PROVIDER, model=candidate, error=str(exc)[:200],
+            )
+            # Continue to flash-lite if this was the smart-model reservation.
+            continue
+        except LLMAuthError as exc:
+            last_exc = exc
+            log.warning(
+                "llm_provider_auth_failed", provider=PROVIDER,
+                model=candidate, error=str(exc)[:200],
+            )
+            break
+        except TimeoutError:
+            last_exc = LLMUnavailable(f"LLM request timed out after {budget:g}s")
+            log.warning(
+                "llm_request_timeout", provider=PROVIDER,
+                model=candidate, timeout_seconds=budget,
+            )
+            try:
+                await _record_usage(PROVIDER, candidate, 0, 0, int(budget * 1000), False)
+            except Exception:
+                log.exception("llm_usage_record_crashed", model=candidate)
+            # A timeout on the smart model should still try flash-lite.
+            continue
+        except LLMError as exc:
+            last_exc = exc if isinstance(exc, LLMUnavailable) else LLMUnavailable(str(exc))
+            log.warning(
+                "llm_model_error", provider=PROVIDER,
+                model=candidate, error=str(exc)[:200],
+            )
+            continue
+
+    _provider_failed(PROVIDER)
+    if last_exc is not None:
+        raise last_exc
+    raise LLMUnavailable("Gemini unavailable and flash-lite fallback exhausted")
 
 
 def _parse_json(text: str, model: str) -> dict:
