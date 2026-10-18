@@ -79,6 +79,10 @@ runs scheduled jobs and another can take over after the lock connection is
 lost. Scale workers only after load testing and pool sizing. Consider table
 partitioning only when measured query/maintenance needs justify it.
 
+## AI failover policy
+
+**AI failover**: Paid Gemini smart model → Gemini flash-lite; `llm_monthly_budget_usd` is a hard spend cap, customer failures get the fixed acknowledgement at most once/hour and enter `open_questions`, and 3+ failures in 5 minutes trigger one owner WhatsApp alert/hour. No Anthropic/OpenRouter fallback.
+
 ## 5. Multi-tenant — ek instance, 50–60 laundry businesses
 
 > **Purana plan (instance-per-tenant) ab code mein nahi hai.** Ye section
