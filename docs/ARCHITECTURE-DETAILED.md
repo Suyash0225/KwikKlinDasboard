@@ -22,6 +22,10 @@ multi-tenant**: one instance, one Postgres, every row carries `tenant_id`,
 isolated by request context + ORM auto-filter + Postgres Row-Level
 Security (see ARCHITECTURE.md §5).
 
+## AI failover policy
+
+**AI failover**: Paid Gemini smart model → Gemini flash-lite; `llm_monthly_budget_usd` is a hard spend cap, customer failures get the fixed acknowledgement at most once/hour and enter `open_questions`, and 3+ failures in 5 minutes trigger one owner WhatsApp alert/hour. No Anthropic/OpenRouter fallback.
+
 ## 2. Tech stack
 
 | Layer | Technology | Where |
@@ -29,7 +33,7 @@ Security (see ARCHITECTURE.md §5).
 | API server | **FastAPI** (async) on **uvicorn**, single process | `app/main.py` |
 | Database | **PostgreSQL 15**, SQLAlchemy 2 async ORM, **Alembic** migrations | `app/models/`, `alembic/` |
 | Scheduler | **APScheduler** in-process (cron jobs, IST timezone) | `app/services/scheduler.py` |
-| AI / LLM | Gemini (`gemini-3.5-flash` / `-flash-lite`) with Claude fallback names, JSON-schema outputs | `app/services/llm_client.py`, `ai_agent.py` |
+| AI / LLM | Paid Gemini smart → flash-lite failover; hard monthly USD budget; fixed customer acknowledgement + open-question handoff on exhaustion | `app/services/llm_client.py`, `ai_agent.py` |
 | Messaging | **Meta WhatsApp Cloud API** (webhooks in, Graph API out) | `app/routers/webhook.py`, `app/services/whatsapp.py` |
 | POS integration | DotPe webhook → normalised into the same pipeline | `app/routers/webhook.py`, `services/dotpe.py` |
 | Frontend | Vanilla HTML/CSS/JS single-page dashboard (PWA + service worker), no framework, no build step (only minification) | `app/static/` |
