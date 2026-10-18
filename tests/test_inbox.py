@@ -85,7 +85,7 @@ async def test_inbox_reaction_calls_waha_for_message_in_same_thread(client, monk
         seen.update({"method": method, "path": path, **kwargs})
         return httpx.Response(200, json={"ok": True})
 
-    with patch("app.routers.admin._waha_request", fake_waha_request):
+    with patch("app.routers.admin._waha_is_home_tenant", return_value=True), patch("app.routers.admin._waha_request", fake_waha_request):
         response = await client.post(
             "/admin/api/inbox/react",
             headers=AUTH,
