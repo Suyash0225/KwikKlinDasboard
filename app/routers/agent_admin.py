@@ -1946,6 +1946,8 @@ async def create_manual_lead(
 
     name = body.name.strip()
     need = body.need.strip()
+    if not name or not need:
+        raise HTTPException(status_code=422, detail="Name and interested service cannot be blank.")
     now = datetime.now(timezone.utc)
     customer = (
         await db.execute(select(Customer).where(Customer.phone == phone))
@@ -2013,12 +2015,13 @@ async def create_manual_lead(
     sent_at = datetime.now(timezone.utc)
     lead.stage = "CONTACTED"
     lead.last_contact_at = sent_at
-    lead.next_followup_at = sent_at + timedelta(hours=2)
+    next_followup_at = sent_at + timedelta(hours=2)
+    lead.next_followup_at = next_followup_at
     await db.commit()
     return {
         "id": str(lead.id), "name": lead.name, "phone": lead.phone,
         "stage": lead.stage, "whatsapp_status": "sent",
-        "next_followup_at": lead.next_followup_at.isoformat() if lead.next_followup_at else None,
+        "next_followup_at": next_followup_at.isoformat(),
         "message": "WhatsApp sent. Replies will be handled by the existing AI inbox flow.",
     }
 
