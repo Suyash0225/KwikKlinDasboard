@@ -6,8 +6,9 @@ Safety design — every rule enforced in CODE, not just in the prompt:
   (ground rule #3) and the model cannot invent dates/prices it wasn't given.
 - Anything the model can't answer from facts becomes an escalation row +
   manager alert, and the customer gets a polite hand-off message.
-- Any LLM failure returns None — the webhook then falls back to the same
-  rule-based replies that worked before Phase 4 (ground rule #5).
+- LLM failures are acknowledged once/hour, saved to open_questions, and
+  escalated to the owner after repeated failures; the webhook does not send a
+  second rule-based reply during the acknowledgement cooldown.
 """
 
 import re
