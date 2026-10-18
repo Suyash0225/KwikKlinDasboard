@@ -27,6 +27,7 @@ from app.models import (
     Customer,
     FaqEntry,
     OpenQuestion,
+    Lead,
     CampaignRecipient,
     Rate,
     Order,
@@ -1910,6 +1911,131 @@ async def trigger_task_followups() -> dict:
     return {"sent": await run_task_followups()}
 
 
+class ManualLeadIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    phone: str = Field(min_length=8, max_length=24)
+    need: str = Field(min_length=2, max_length=300)
+    call_notes: str | None = Field(default=None, max_length=2000)
+    whatsapp_consent_confirmed: bool = False
+    send_whatsapp: bool = False
+    message: str | None = Field(default=None, max_length=1200)
+
+
+@router.post("/leads/manual", status_code=201, dependencies=[Depends(require_feature("marketing_agent"))])
+async def create_manual_lead(
+    body: ManualLeadIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Save a phone-call lead and optionally send an owner-approved WhatsApp opener.
+
+    Sending is an explicit choice and requires the owner to confirm the lead
+    agreed to WhatsApp follow-up. Inbound replies use the existing AI webhook;
+    saving alone never schedules an automatic message.
+    """
+    if body.send_whatsapp and not body.whatsapp_consent_confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirm that the customer agreed to WhatsApp follow-up before sending.",
+        )
+    if body.send_whatsapp and not (body.message or "").strip():
+        raise HTTPException(status_code=422, detail="Prepare a WhatsApp message before sending.")
+
+    try:
+        phone = normalize_phone(body.phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    name = body.name.strip()
+    need = body.need.strip()
+    if not name or not need:
+        raise HTTPException(status_code=422, detail="Name and interested service cannot be blank.")
+    now = datetime.now(timezone.utc)
+    customer = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if customer is None:
+        customer = Customer(phone=phone, name=name)
+        db.add(customer)
+        await db.flush()
+    elif name and not customer.name:
+        customer.name = name
+
+    lead = (
+        await db.execute(select(Lead).where(Lead.phone == phone))
+    ).scalar_one_or_none()
+    if lead is None:
+        lead = Lead(
+            phone=phone, name=name, source="phone_call", items_text=need,
+            stage="NEW", followup_count=0, next_followup_at=None,
+        )
+        db.add(lead)
+        await db.flush()
+    else:
+        lead.name = name or lead.name
+        if not lead.source:
+            lead.source = "phone_call"
+        lead.items_text = need
+        if body.send_whatsapp and lead.stage != "CONVERTED":
+            # Do not leave an older due follow-up queued if this new manual
+            # outreach fails. A fresh ladder starts only after a successful send.
+            # A converted lead must never be moved backwards into the funnel.
+            lead.stage = "NEW"
+            lead.followup_count = 0
+            lead.next_followup_at = None
+
+    note_parts = [f"Phone call lead ({now.isoformat()}): need={need}"]
+    if body.call_notes and body.call_notes.strip():
+        note_parts.append("Call notes: " + body.call_notes.strip())
+    if body.whatsapp_consent_confirmed:
+        note_parts.append(
+            "WhatsApp follow-up consent confirmed by owner at " + now.isoformat()
+        )
+    existing_notes = (lead.notes or "").strip()
+    lead.notes = "\n\n".join(part for part in [existing_notes, *note_parts] if part)
+    await db.commit()
+    await db.refresh(lead)
+
+    if not body.send_whatsapp:
+        return {
+            "id": str(lead.id), "name": lead.name, "phone": lead.phone,
+            "stage": lead.stage, "whatsapp_status": "not_sent",
+            "message": "Lead saved. No WhatsApp message was sent.",
+        }
+
+    from app.services.whatsapp import SendError, send_message
+
+    try:
+        await send_message(
+            db, to_phone=phone, text=body.message.strip(), sent_by="bot",
+            intent="promotional", enqueue_on_fail=False,
+        )
+    except SendError as exc:
+        log.warning("manual_lead_whatsapp_not_sent", lead_id=str(lead.id), reason=str(exc))
+        return {
+            "id": str(lead.id), "name": lead.name, "phone": lead.phone,
+            "stage": lead.stage, "whatsapp_status": "not_sent",
+            "message": "Lead saved, but WhatsApp did not send: " + str(exc),
+        }
+
+    sent_at = datetime.now(timezone.utc)
+    lead.last_contact_at = sent_at
+    next_followup_at = None
+    if lead.stage != "CONVERTED":
+        lead.stage = "CONTACTED"
+        next_followup_at = sent_at + timedelta(hours=2)
+        lead.next_followup_at = next_followup_at
+    else:
+        # Existing customers with a converted lead can receive the owner-approved
+        # message, but must not be pushed back into the lead follow-up ladder.
+        lead.next_followup_at = None
+    await db.commit()
+    return {
+        "id": str(lead.id), "name": lead.name, "phone": lead.phone,
+        "stage": lead.stage, "whatsapp_status": "sent",
+        "next_followup_at": next_followup_at.isoformat() if next_followup_at else None,
+        "message": "WhatsApp sent. Replies will be handled by the existing AI inbox flow.",
+    }
+
+
 @router.get("/leads", dependencies=[Depends(require_feature("marketing_agent"))])
 async def list_leads(
     db: AsyncSession = Depends(get_db),
@@ -1925,8 +2051,8 @@ async def list_leads(
     rows = (await db.execute(q)).scalars().all()
     return [
         {
-            "phone": l.phone, "name": l.name, "source": l.source, "area": l.area,
-            "stage": l.stage, "followup_count": l.followup_count,
+            "id": str(l.id), "phone": l.phone, "name": l.name, "source": l.source, "area": l.area,
+            "need": l.items_text, "stage": l.stage, "followup_count": l.followup_count,
             "last_contact_at": l.last_contact_at.isoformat() if l.last_contact_at else None,
             "next_followup_at": l.next_followup_at.isoformat() if l.next_followup_at else None,
             "created_at": l.created_at.isoformat(),

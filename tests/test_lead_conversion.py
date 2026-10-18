@@ -279,3 +279,175 @@ def test_website_source_marker_is_detected_without_personal_data() -> None:
     assert _source_from_message("Hello Kwik Klin\nLead source: website\nutm_source: Instagram Ads") == "instagramads"
     assert _source_from_message("Hello Kwik Klin, I have a question.") == "whatsapp"
     assert _source_from_message("GOOGLE pickup request") == "google"
+
+
+
+TEST_MANUAL_LEAD_PHONE = f"+91998{uuid.uuid4().int % 10_000_000:07d}"
+
+
+async def _cleanup_manual_lead() -> None:
+    async with async_session_factory() as db:
+        await db.execute(delete(Lead).where(Lead.phone == TEST_MANUAL_LEAD_PHONE))
+        await db.execute(delete(Customer).where(Customer.phone == TEST_MANUAL_LEAD_PHONE))
+        await db.commit()
+
+
+async def test_manual_phone_call_lead_saves_without_sending(client) -> None:
+    """Saving a call lead must not silently send or schedule a follow-up."""
+    from app.config import settings
+
+    try:
+        response = await client.post(
+            "/admin/api/leads/manual",
+            headers={"X-API-Key": settings.ADMIN_API_KEY},
+            json={
+                "name": "Phone Call Lead",
+                "phone": TEST_MANUAL_LEAD_PHONE,
+                "need": "Dry cleaning",
+                "call_notes": "Asked about price and pickup",
+                "send_whatsapp": False,
+                "whatsapp_consent_confirmed": False,
+            },
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["whatsapp_status"] == "not_sent"
+        async with async_session_factory() as db:
+            lead = (
+                await db.execute(
+                    select(Lead).where(Lead.phone == TEST_MANUAL_LEAD_PHONE)
+                )
+            ).scalar_one()
+            customer = (
+                await db.execute(
+                    select(Customer).where(Customer.phone == TEST_MANUAL_LEAD_PHONE)
+                )
+            ).scalar_one()
+            assert customer.name == "Phone Call Lead"
+            assert lead.source == "phone_call"
+            assert lead.items_text == "Dry cleaning"
+            assert lead.stage == "NEW"
+            assert lead.next_followup_at is None
+            assert "Asked about price and pickup" in (lead.notes or "")
+    finally:
+        await _cleanup_manual_lead()
+
+
+async def test_manual_phone_call_lead_requires_consent_to_send(client) -> None:
+    from app.config import settings
+
+    response = await client.post(
+        "/admin/api/leads/manual",
+        headers={"X-API-Key": settings.ADMIN_API_KEY},
+        json={
+            "name": "No Consent Lead",
+            "phone": TEST_MANUAL_LEAD_PHONE,
+            "need": "Laundry",
+            "send_whatsapp": True,
+            "whatsapp_consent_confirmed": False,
+            "message": "Hello",
+        },
+    )
+    assert response.status_code == 400
+    assert "agreed to WhatsApp" in response.json()["detail"]
+
+
+async def test_manual_phone_call_lead_can_send_approved_whatsapp(client, monkeypatch) -> None:
+    from app.config import settings
+    from app.services import whatsapp
+
+    sent = []
+
+    async def fake_send(db, *, to_phone, text, **kwargs):
+        sent.append({"to": to_phone, "text": text, "kwargs": kwargs})
+        return "wamid.TEST-manual-lead"
+
+    monkeypatch.setattr(whatsapp, "send_message", fake_send)
+    try:
+        response = await client.post(
+            "/admin/api/leads/manual",
+            headers={"X-API-Key": settings.ADMIN_API_KEY},
+            json={
+                "name": "Manual Lead",
+                "phone": TEST_MANUAL_LEAD_PHONE,
+                "need": "Bulk laundry",
+                "call_notes": "Asked for a quote",
+                "whatsapp_consent_confirmed": True,
+                "send_whatsapp": True,
+                "message": "Namaste ji, here are the details you requested.",
+            },
+        )
+        assert response.status_code == 201, response.text
+        result = response.json()
+        assert result["whatsapp_status"] == "sent"
+        assert len(sent) == 1
+        assert sent[0]["to"] == TEST_MANUAL_LEAD_PHONE
+        assert sent[0]["kwargs"]["intent"] == "promotional"
+        async with async_session_factory() as db:
+            lead = (
+                await db.execute(
+                    select(Lead).where(Lead.phone == TEST_MANUAL_LEAD_PHONE)
+                )
+            ).scalar_one()
+            assert lead.stage == "CONTACTED"
+            assert lead.next_followup_at is not None
+            assert "consent confirmed by owner" in (lead.notes or "")
+    finally:
+        await _cleanup_manual_lead()
+
+
+
+async def test_manual_outreach_does_not_reopen_converted_lead(client, monkeypatch) -> None:
+    """A manual message to an existing customer must not restart lead automation."""
+    from app.config import settings
+    from app.services import whatsapp
+
+    sent = []
+
+    async def fake_send(db, *, to_phone, text, **kwargs):
+        sent.append(to_phone)
+        return "wamid.TEST-converted-lead"
+
+    monkeypatch.setattr(whatsapp, "send_message", fake_send)
+    try:
+        async with async_session_factory() as db:
+            db.add(Customer(phone=TEST_MANUAL_LEAD_PHONE, name="Converted Customer"))
+            db.add(Lead(
+                phone=TEST_MANUAL_LEAD_PHONE,
+                name="Converted Customer",
+                source="phone_call",
+                items_text="Dry cleaning",
+                stage="CONVERTED",
+                followup_count=4,
+                next_followup_at=None,
+            ))
+            await db.commit()
+
+        response = await client.post(
+            "/admin/api/leads/manual",
+            headers={"X-API-Key": settings.ADMIN_API_KEY},
+            json={
+                "name": "Converted Customer",
+                "phone": TEST_MANUAL_LEAD_PHONE,
+                "need": "Dry cleaning",
+                "whatsapp_consent_confirmed": True,
+                "send_whatsapp": True,
+                "message": "Namaste ji, details as discussed.",
+            },
+        )
+        assert response.status_code == 201, response.text
+        result = response.json()
+        assert result["whatsapp_status"] == "sent"
+        assert result["stage"] == "CONVERTED"
+        assert result["next_followup_at"] is None
+        assert sent == [TEST_MANUAL_LEAD_PHONE]
+        async with async_session_factory() as db:
+            lead = (
+                await db.execute(
+                    select(Lead).where(Lead.phone == TEST_MANUAL_LEAD_PHONE)
+                )
+            ).scalar_one()
+            assert lead.stage == "CONVERTED"
+            assert lead.next_followup_at is None
+            assert lead.followup_count == 4
+    finally:
+        await _cleanup_manual_lead()

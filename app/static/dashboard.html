@@ -317,6 +317,30 @@
 
     <!-- Campaign Control Center -->
     <section id="sec-campaigns" style="display:none">
+      <div id="manual-lead-handoff" class="camp-dashboard-card" style="margin-bottom:14px">
+        <div class="camp-section-head">
+          <div><h3>📞 Phone-call lead → WhatsApp handoff</h3><p>Save the call details, review a message, and send only after the customer has agreed. The existing AI agent handles replies.</p></div>
+          <button class="btn ghost sm" onclick="loadManualLeads()">↻ Refresh leads</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:12px">
+          <div class="camp-field"><label for="manual-lead-name">Customer name *</label><input id="manual-lead-name" maxlength="120" placeholder="Customer name"></div>
+          <div class="camp-field"><label for="manual-lead-phone">WhatsApp number *</label><input id="manual-lead-phone" inputmode="tel" maxlength="24" placeholder="+91 98765 43210"></div>
+          <div class="camp-field"><label for="manual-lead-need">Interested service *</label><input id="manual-lead-need" maxlength="300" placeholder="Dry cleaning, bulk laundry…"></div>
+        </div>
+        <div class="camp-field" style="margin-top:8px"><label for="manual-lead-notes">Call notes</label><textarea id="manual-lead-notes" rows="2" maxlength="2000" placeholder="Budget, pickup area, preferred date, questions…"></textarea></div>
+        <div style="display:flex;justify-content:flex-end;margin:8px 0"><button type="button" class="btn ghost sm" onclick="draftManualLeadMessage()">✍ Prepare WhatsApp draft</button></div>
+        <div class="camp-field"><label for="manual-lead-message">WhatsApp message (review/edit before sending)</label><textarea id="manual-lead-message" rows="4" maxlength="1200" placeholder="Prepare a draft, then review it here…"></textarea></div>
+        <label style="display:flex;align-items:flex-start;gap:9px;margin:10px 0;font-size:12px"><input id="manual-lead-consent" type="checkbox" style="margin-top:2px;flex:0 0 auto"><span>Customer explicitly agreed to receive WhatsApp follow-up. Required to send the message.</span></label>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <button type="button" class="btn ghost" onclick="submitManualLead(false)">Save lead only</button>
+          <button type="button" class="btn" onclick="submitManualLead(true)">Save &amp; send WhatsApp</button>
+        </div>
+        <div id="manual-lead-status" role="status" style="margin-top:10px;font-size:12px"></div>
+        <div style="border-top:1px solid var(--line);margin-top:16px;padding-top:12px">
+          <div class="camp-section-head"><div><h3>Recent manual leads</h3><p>Stage and next follow-up from the lead pipeline.</p></div></div>
+          <div id="manual-lead-list"><div class="camp-skeleton"></div></div>
+        </div>
+      </div>
       <div class="camp-top">
         <div class="camp-title">
           <div class="camp-icon">📣</div>

@@ -3634,6 +3634,7 @@ async function loadCampaigns() {
     renderCampaignOverview(overview);
     renderSegments(segs);
     renderCampaigns(camps);
+    loadManualLeads();
     selectCampaignAudience($("camp-seg")?.value || "all_active", false);
     updateCampaignPreview();
     // Keep polling briefly after send completion too: WhatsApp delivery/read
@@ -3652,6 +3653,81 @@ async function loadCampaigns() {
     if ($("camp-list")) $("camp-list").innerHTML = errBox(e.message, "loadCampaigns");
   }
 }
+function draftManualLeadMessage() {
+  const name = ($("manual-lead-name")?.value || "").trim();
+  const need = ($("manual-lead-need")?.value || "").trim();
+  if (!name || !need) {
+    toast("Enter the customer name and interested service first.");
+    return;
+  }
+  const message = "Namaste " + name + " ji, aapki call ke follow-up mein Kwik Klin se message kar raha hoon. Aapne " + need + " mein interest dikhaya tha. Aapko pricing, pickup timing ya service details mein kis cheez ki help chahiye? — Kwik Klin";
+  $("manual-lead-message").value = message;
+  $("manual-lead-message").focus();
+}
+async function submitManualLead(sendWhatsApp) {
+  const name = ($("manual-lead-name")?.value || "").trim();
+  const phone = ($("manual-lead-phone")?.value || "").trim();
+  const need = ($("manual-lead-need")?.value || "").trim();
+  const notes = ($("manual-lead-notes")?.value || "").trim();
+  const consent = Boolean($("manual-lead-consent")?.checked);
+  let message = ($("manual-lead-message")?.value || "").trim();
+  const status = $("manual-lead-status");
+  if (!name || !phone || !need) {
+    if (status) status.textContent = "Name, WhatsApp number and interested service are required.";
+    return;
+  }
+  if (sendWhatsApp && !consent) {
+    if (status) status.textContent = "WhatsApp follow-up bhejne se pehle customer ki permission confirm karo.";
+    return;
+  }
+  if (sendWhatsApp && !message) {
+    draftManualLeadMessage();
+    message = ($("manual-lead-message")?.value || "").trim();
+  }
+  if (sendWhatsApp && !message) return;
+  if (sendWhatsApp && !confirm("Send this reviewed WhatsApp message to " + phone + "?")) return;
+  const buttons = Array.from(document.querySelectorAll("#manual-lead-handoff button"));
+  buttons.forEach((b) => { if (b.dataset.busy !== "true") { b.dataset.wasDisabled = b.disabled ? "1" : "0"; b.disabled = true; } });
+  if (status) status.textContent = sendWhatsApp ? "Saving lead and sending WhatsApp…" : "Saving lead…";
+  try {
+    const result = await api("/admin/api/leads/manual", {
+      method: "POST",
+      body: {
+        name, phone, need, call_notes: notes || null,
+        whatsapp_consent_confirmed: consent,
+        send_whatsapp: Boolean(sendWhatsApp),
+        message: sendWhatsApp ? message : null,
+      },
+    });
+    if (status) status.textContent = result.message || (result.whatsapp_status === "sent" ? "WhatsApp sent." : "Lead saved.");
+    if (result.whatsapp_status === "sent" || !sendWhatsApp) {
+      ["manual-lead-name", "manual-lead-phone", "manual-lead-need", "manual-lead-notes", "manual-lead-message"].forEach((id) => { if ($(id)) $(id).value = ""; });
+      if ($("manual-lead-consent")) $("manual-lead-consent").checked = false;
+    }
+    await loadManualLeads();
+  } catch (e) {
+    if (status) status.textContent = e.message || "Could not save the lead.";
+  } finally {
+    buttons.forEach((b) => { b.disabled = b.dataset.wasDisabled === "1"; delete b.dataset.wasDisabled; });
+  }
+}
+async function loadManualLeads() {
+  const root = $("manual-lead-list");
+  if (!root) return;
+  try {
+    const leads = await api("/admin/api/leads?limit=20");
+    root.innerHTML = leads.length ? '<div style="display:grid;gap:8px">' + leads.map((lead) => {
+      const next = lead.next_followup_at ? new Date(lead.next_followup_at).toLocaleString("en-IN") : "Not scheduled";
+      return '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px">' +
+        '<div style="min-width:0"><b>' + esc(lead.name || lead.phone) + '</b><div style="font-size:12px;color:var(--muted)">' + esc(lead.phone) + ' · ' + esc(lead.need || "Service not specified") + '</div>' +
+        '<div style="font-size:11px;color:var(--muted);margin-top:4px">Next follow-up: ' + esc(next) + '</div></div>' +
+        '<div style="text-align:right"><span class="camp-badge ' + (lead.stage === "CONTACTED" || lead.stage === "INTERESTED" ? "completed" : "draft") + '">' + esc(lead.stage) + '</span><div style="font-size:10px;color:var(--muted);margin-top:5px">' + esc(lead.source || "lead") + '</div></div></div>';
+    }).join("") + "</div>" : '<p style="font-size:12px;color:var(--muted)">No leads yet. Add a phone-call lead above.</p>';
+  } catch (e) {
+    root.innerHTML = '<p style="font-size:12px;color:var(--muted)">Lead list could not load: ' + esc(e.message) + '</p>';
+  }
+}
+
 function renderSegments(segs) {
   const sel = $("camp-seg");
   if (sel) {
