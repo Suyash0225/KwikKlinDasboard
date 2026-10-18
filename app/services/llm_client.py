@@ -225,13 +225,12 @@ async def _generate_with_fallback(
         candidates.append(cheap)
 
     budget = IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
-    deadline = time.monotonic() + budget
     last_exc: LLMUnavailable | None = None
     for candidate in candidates:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            last_exc = LLMUnavailable(f"LLM request timed out after {budget:g}s")
-            break
+        # Each model gets its own bounded window so a full timeout on the
+        # smart model does not prevent trying flash-lite.
+        candidate_deadline = time.monotonic() + budget
+        remaining = candidate_deadline - time.monotonic()
         try:
             # Budget is reserved per model, not once for the whole chain.
             # If the smart model cannot fit under the hard monthly cap, the
@@ -242,7 +241,7 @@ async def _generate_with_fallback(
                 max_output_tokens=max(max_tokens, 512),
                 image=image is not None,
             ):
-                remaining = deadline - time.monotonic()
+                remaining = candidate_deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError
                 async with asyncio.timeout(remaining):
