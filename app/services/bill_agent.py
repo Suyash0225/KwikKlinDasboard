@@ -2491,7 +2491,7 @@ _QUERY_SYSTEM = (
     "staff-chat activity from the shop's own database, then the owner's "
     "question (Hinglish/Hindi/English).\n"
     "Rules: answer ONLY from FACTS — never invent or estimate numbers. "
-    "Amounts in ₹. Reply in the owner's language, short and clear (1-5 "
+    "For garment/item demand or 'sabse zyada kis kapde ka order aata hai', ALWAYS call garment_demand and report the actual ranking. For 'running order nahi hai' / marketing follow-up requests, ALWAYS call marketing_followup('preview') first; if the owner asks to prepare/create the follow-up, call marketing_followup('draft | [message]') to save a draft only. Never claim messages were sent: campaign drafts require explicit owner approval in Campaigns and the existing marketing compliance gate controls delivery. "    "Amounts in ₹. Reply in the owner's language, short and clear (1-5 "
     "lines). When the owner asks whether anything came in (koi inquiry, koi "
     "message, kisi ne kuch pucha), answer from CUSTOMER MESSAGES and AAPKE "
     "JAWAB KA INTEZAAR — list who and what, with the time. Say 'nahi aayi' "
