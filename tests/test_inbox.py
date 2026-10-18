@@ -72,6 +72,42 @@ async def test_threads_list_shows_participant(client) -> None:
     assert mine[0]["window"]["open"] is True
 
 
+
+@pytest.mark.requires_independent_sessions
+async def test_inbox_reaction_calls_waha_for_message_in_same_thread(client, monkeypatch) -> None:
+    import httpx
+    from unittest.mock import patch
+
+    await _seed_customer(window_open=True)
+    seen = {}
+
+    async def fake_waha_request(method, path, **kwargs):
+        seen.update({"method": method, "path": path, **kwargs})
+        return httpx.Response(200, json={"ok": True})
+
+    with patch("app.routers.admin._waha_request", fake_waha_request):
+        response = await client.post(
+            "/admin/api/inbox/react",
+            headers=AUTH,
+            json={"phone": PHONE, "wamid": "wamid.TESTINBOX-1", "reaction": "👍"},
+        )
+    assert response.status_code == 200, response.text
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/api/reaction"
+    assert seen["json"]["messageId"] == "wamid.TESTINBOX-1"
+    assert seen["json"]["reaction"] == "👍"
+
+
+async def test_inbox_reaction_rejects_message_from_another_thread(client) -> None:
+    await _seed_customer(window_open=True)
+    response = await client.post(
+        "/admin/api/inbox/react",
+        headers=AUTH,
+        json={"phone": PHONE, "wamid": "wamid.NOT-IN-THIS-CHAT", "reaction": "❤️"},
+    )
+    assert response.status_code == 404
+
+
 @pytest.mark.requires_independent_sessions
 async def test_reply_quotes_the_message_on_whatsapp_and_in_the_thread(client) -> None:
     """Answering one message must reach WhatsApp as a real quoted reply."""
