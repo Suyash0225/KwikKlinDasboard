@@ -123,7 +123,7 @@ TOOL_SPECS = [
 # one of these actually ran — see bill_agent's unbacked-claim check.
 WRITE_TOOLS = {
     "add_expense", "add_customer", "set_shop_info", "assign_task", "ping_staff",
-    "billing_adjustment",
+    "billing_adjustment", "marketing_followup",
 }
 
 
