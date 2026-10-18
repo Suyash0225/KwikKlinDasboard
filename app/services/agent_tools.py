@@ -409,7 +409,7 @@ async def _garment_demand(db: AsyncSession, args: str) -> str:
         f"Sabse zyada demand: {names.get(top, top)} "
         f"({quantities[top]} kapde, {len(order_counts[top])} orders)."
     )
-    return "\\n".join(lines)
+    return "\n".join(lines)
 \n\nasync def _staff_chat(db: AsyncSession, args: str) -> str:
     name = args.strip()
     q = select(Staff)
