@@ -237,7 +237,7 @@ async def _generate_with_fallback(
             # cheaper flash-lite model still gets its own atomic budget check.
             async with ai_quota_guard(
                 model=candidate,
-                input_text=system + "\\n" + user_text,
+                input_text=system + "\n" + user_text,
                 max_output_tokens=max(max_tokens, 512),
                 image=image is not None,
             ):
