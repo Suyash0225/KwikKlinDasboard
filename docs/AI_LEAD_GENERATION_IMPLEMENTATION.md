@@ -39,12 +39,15 @@ Status: Phases 1–5 have implementation PRs merged, including lead/revenue attr
 - [ ] Extend explicit tenant-isolation and duplicate-lead attribution coverage.
 
 ## Phase 4 — AI budget and resilient fallback
+
+**AI failover**: Paid Gemini smart model → Gemini flash-lite; `llm_monthly_budget_usd` is a hard application-side spend gate using conservative reservations, customer failures get the fixed acknowledgement at most once/hour and enter `open_questions`, and 3+ failures in 5 minutes trigger one owner WhatsApp alert/hour. No Anthropic/OpenRouter fallback.
+
 - [x] Add regression coverage for rate-card USD cost calculation.
 - [ ] Verify per-day FX rate handling and free-model pricing labels in a real dashboard session.
-- [x] Add per-tenant serialized spend reservations before paid provider calls (estimated cost; not an exact invoice cap).
+- [x] Add per-tenant serialized conservative spend reservations before paid provider calls; calls are blocked when the reservation cannot fit the configured monthly budget. Provider invoice totals may differ from estimates.
 - [x] Estimate monthly spend from recorded token usage and the configured token rate card; reserve estimated cost atomically per tenant for in-flight calls.
-- [ ] Complete failure-mode review for 429/503, exhausted budget, and usage logging; preserve deterministic fallback/human escalation.
-- [ ] Add tests for 429/503, timeout, exhausted budget, free-tier unavailability, and usage logging failures.
+- [x] Cover timeout, HTTP 500/503, provider quota, exhausted monthly budget, fixed customer acknowledgement, and owner-alert cooldown; preserve human escalation.
+- [x] Add tests for timeout, HTTP 500 fallback, monthly-budget exhaustion, fixed acknowledgement copy, and owner-alert rate limiting.
 - [ ] Keep paid providers disabled by default for the zero-additional-spend target.
 
 ## Phase 5 — Google Business Profile and campaign safety
