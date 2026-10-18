@@ -1375,6 +1375,9 @@ async def _handle_inbound_message(
                 log.info("reply_deferred_to_followup", phone=phone)
             else:
                 reply = await build_ai_reply(db, customer, spoken, conversation_id=convo.id)
+                # Empty string means the fixed AI-failure acknowledgement was
+                # already sent within the customer's one-hour cooldown. Do not
+                # replace it with another rule-based reply.
                 if reply is None:
                     reply = await _build_customer_reply(db, customer, spoken)
                 if reply and await _newer_inbound_exists(db, customer.id, convo):
