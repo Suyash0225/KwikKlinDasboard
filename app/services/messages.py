@@ -35,6 +35,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Maaf kijiye, abhi thodi dikkat aa gayi hai. Hum jald hi aapse sampark karenge. — {shop}",
         "en": "Sorry, something went wrong on our side. We will get back to you shortly. — {shop}",
     },
+    "ai_failover_ack": {
+        "hi": "Aapka message mil gaya hai, thodi der mein jawab dete hain 🙏",
+        "en": "Aapka message mil gaya hai, thodi der mein jawab dete hain 🙏",
+    },
     # --- order lifecycle notifications ---
     # No rate matched yet (customer said "chandni, kurta pajama" — we price
     # it when the clothes arrive). Showing "Total: ₹— | Baaki: ₹—" looked
@@ -507,7 +511,7 @@ def get_override(key: str) -> str | None:
 # Jo keys GRAHAK ko jaati hain. Nayi customer-facing key banao to yahan jodo,
 # warna wo staff ki bhasha (Hinglish) mein chali jayegi.
 CUSTOMER_KEYS = frozenset({
-    "ack_received", "error_fallback",
+    "ack_received", "error_fallback", "ai_failover_ack",
     "order_confirmed_no_price",
     "order_confirmed_bill", "bill_requested", "lead_followup_2h", "lead_day1", "lead_day3", "lead_day7",
     "pickup_done", "pickup_confirmed_customer", "thankyou_rating",
