@@ -1971,7 +1971,8 @@ async def create_manual_lead(
         await db.flush()
     else:
         lead.name = name or lead.name
-        lead.source = "phone_call"
+        if not lead.source:
+            lead.source = "phone_call"
         lead.items_text = need
         if lead.stage in {"LOST", "DORMANT"} and body.send_whatsapp:
             lead.stage = "NEW"
