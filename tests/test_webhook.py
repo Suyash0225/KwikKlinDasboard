@@ -816,3 +816,45 @@ async def test_non_lead_inbound_does_not_create_sales_lead(client, sent, monkeyp
     await _inbound_from(client, "Hello, are you available?", "Test Greeting",
                         "wamid.TEST-classifier-failure-nonlead")
     assert captured == [], f"ambiguous inbound message created a lead: {captured}"
+
+
+
+async def test_waha_webhook_fails_closed_when_home_tenant_is_unavailable(
+    client, monkeypatch
+) -> None:
+    """Do not journal/process a trusted webhook without an explicit shop tenant."""
+    import hashlib
+    import hmac
+    import json
+
+    from app.routers import webhook
+
+    secret = "test-waha-webhook-secret"
+    monkeypatch.setattr(settings, "WAHA_WEBHOOK_SECRET", secret)
+    monkeypatch.setattr(settings, "WAHA_WEBHOOK_HMAC_KEY", "")
+
+    async def no_home_tenant():
+        return None
+
+    monkeypatch.setattr(webhook, "get_home_tenant_id", no_home_tenant)
+    body = json.dumps(
+        {
+            "event": "message",
+            "session": "default",
+            "payload": {
+                "id": "wamid.TEST-no-home-tenant",
+                "fromMe": False,
+                "from": f"{TEST_CUSTOMER_PHONE_RAW}@c.us",
+                "body": "hello",
+            },
+        },
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(secret.encode(), body, hashlib.sha512).hexdigest()
+
+    response = await client.post(
+        "/webhook/waha", content=body, headers={"X-Webhook-Hmac": signature}
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"] == "shop tenant is not configured"
