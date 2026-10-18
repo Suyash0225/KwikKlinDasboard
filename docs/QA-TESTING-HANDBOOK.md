@@ -1789,13 +1789,17 @@ tests/
 □ Raw LLM response dekhne ka tareeka (debug mode)
 ```
 
-## 4.6 Budget
+## 4.6 Budget and failover
+
+**AI failover**: Paid Gemini smart model → Gemini flash-lite; `llm_monthly_budget_usd` is a hard spend cap, customer failures get the fixed acknowledgement at most once/hour and enter `open_questions`, and 3+ failures in 5 minutes trigger one owner WhatsApp alert/hour. No Anthropic/OpenRouter fallback.
 
 ```
-□ Kitne API calls kar sakta hun / month?  → ______
-□ Anthropic ka budget?                    → ₹______
-□ Parallel calls ki limit (rate limit)?   → ______ (3-4 safe)
-□ LLM judge ke liye alag key/quota?       → ______
+□ Monthly Gemini budget set?              → $______
+□ Budget exhausted: flash-lite tried?     → yes/no
+□ Both models blocked: fixed reply sent?  → yes/no
+□ Failed customer message in open_questions? → yes/no
+□ 3 failures / 5 minutes: owner alerted? → yes/no
+□ Repeat owner alert inside 1 hour blocked? → yes/no
 ```
 
 ---
