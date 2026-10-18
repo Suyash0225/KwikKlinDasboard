@@ -5043,7 +5043,7 @@ async function fetchThreads(offset = 0) {
 async function loadThreads() {
   try {
     // the 12s auto-refresh must not yank a scrolled list back to page one
-    const keep = Math.max(TH_PAGE, THREADS.length || 0);
+    const keep = TH_FILTER === "unread" ? 500 : Math.max(TH_PAGE, THREADS.length || 0);
     const r = await api(`/admin/api/inbox/threads?${new URLSearchParams(
       { limit: Math.min(keep, 500), offset: 0, q: TH_QUERY })}`);
     THREADS = r.threads; TH_MORE = r.has_more; TH_TOTAL = r.total;
@@ -5122,6 +5122,7 @@ function setThreadFilter(filter) {
     b.setAttribute("aria-pressed", active ? "true" : "false");
   });
   LAST_TH_HTML = "";
+  if (TH_FILTER === "unread") { loadThreads(); return; }
   renderThreads();
 }
 function renderThreads() {
