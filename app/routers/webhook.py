@@ -313,6 +313,28 @@ async def receive_webhook(
 
 
 
+def _waha_message_is_from_me(payload: dict) -> bool:
+    """Recognize WAHA outbound messages across payload/engine variants."""
+    data = payload.get("_data") or {}
+    if not isinstance(data, dict):
+        data = {}
+    key = data.get("key") or {}
+    if not isinstance(key, dict):
+        key = {}
+    top_key = payload.get("key") or {}
+    if not isinstance(top_key, dict):
+        top_key = {}
+
+    # Prefer a positive signal from any known location. WAHA engine versions
+    # have emitted both a top-level boolean and the NOWEB key field.
+    for value in (payload.get("fromMe"), key.get("fromMe"), top_key.get("fromMe")):
+        if value is True:
+            return True
+        if isinstance(value, str) and value.strip().lower() in {"true", "1", "yes"}:
+            return True
+    return False
+
+
 @router.post("/webhook/waha")
 async def receive_waha_webhook(
     request: Request, db: AsyncSession = Depends(get_db)
@@ -355,10 +377,15 @@ async def receive_waha_webhook(
             event_name = str(event.get("event") or "")
             payload = event.get("payload") or {}
             if event_name == "message":
-                # WAHA emits our own messages too. API-generated messages are
-                # already recorded by send_message(); phone/app messages are not.
-                if payload.get("fromMe") is True:
-                    if str(payload.get("source") or "").lower() != "api":
+                # WAHA/engine versions expose fromMe at either the payload
+                # root or _data.key. Accept the documented boolean and string
+                # forms; otherwise an outgoing phone reply can be misrouted as
+                # an inbound message and trigger another AI reply.
+                if _waha_message_is_from_me(payload):
+                    data = payload.get("_data") or {}
+                    nested_source = data.get("source") if isinstance(data, dict) else ""
+                    source = str(payload.get("source") or nested_source or "").strip().lower()
+                    if source != "api":
                         await _record_waha_manual_outbound(db, payload)
                 else:
                     raw_from = str(payload.get("from") or "")
@@ -445,9 +472,14 @@ async def _record_waha_manual_outbound(db: AsyncSession, payload: dict) -> None:
         raw_to = str(key.get("remoteJid") or "")
     if raw_to.endswith("@lid"):
         alternate = key.get("remoteJidAlt") or data.get("remoteJidAlt")
-        if isinstance(alternate, str):
+        if isinstance(alternate, str) and alternate:
             raw_to = alternate
-    if not raw_to or raw_to.endswith(("@g.us", "@newsletter", "@broadcast")):
+        else:
+            try:
+                raw_to = await waha.resolve_lid(raw_to) or raw_to
+            except waha.WahaError:
+                log.exception("waha_manual_outbound_lid_resolution_failed", raw_to=raw_to)
+    if not raw_to or raw_to.endswith(("@g.us", "@newsletter", "@broadcast", "@lid")):
         return
 
     try:
@@ -461,8 +493,8 @@ async def _record_waha_manual_outbound(db: AsyncSession, payload: dict) -> None:
     ).scalar_one_or_none()
     if customer is None:
         # Do not create customers merely because someone sent a message from
-        # the phone. If the conversation is not known to us, there is nothing
-        # for the service agent to take over.
+        # the phone. Log the mismatch so a failed human takeover is diagnosable.
+        log.warning("waha_manual_outbound_customer_not_found", phone=phone, raw_to=raw_to)
         return
 
     body = str(payload.get("body") or "").strip()
