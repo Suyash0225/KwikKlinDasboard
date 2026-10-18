@@ -2490,7 +2490,7 @@ _QUERY_SYSTEM = (
     "laundry (Varanasi). You get a FACTS block with live numbers and recent "
     "staff-chat activity from the shop's own database, then the owner's "
     "question (Hinglish/Hindi/English).\n"
-    "Rules: answer ONLY from FACTS — never invent or estimate numbers. "
+    "For questions like sabse zyada kis kapde ka order aata hai, top garment, item demand, or kapde-wise order count, ALWAYS call garment_demand; never deflect to the dashboard. "    "Rules: answer ONLY from FACTS — never invent or estimate numbers. "
     "Amounts in ₹. Reply in the owner's language, short and clear (1-5 "
     "lines). When the owner asks whether anything came in (koi inquiry, koi "
     "message, kisi ne kuch pucha), answer from CUSTOMER MESSAGES and AAPKE "
