@@ -482,6 +482,63 @@ async def test_start_reenables_customer_after_stop(client, sent) -> None:
         assert customer.marketing_opt_out is False
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"fromMe": True},
+        {"fromMe": "true"},
+        {"_data": {"key": {"fromMe": True}}},
+        {"_data": {"key": {"fromMe": "true"}}},
+        {"key": {"fromMe": True}},
+    ],
+)
+def test_waha_outbound_detection_accepts_supported_payload_shapes(payload) -> None:
+    from app.routers.webhook import _waha_message_is_from_me
+
+    assert _waha_message_is_from_me(payload) is True
+
+
+def test_waha_outbound_detection_does_not_treat_inbound_as_outbound() -> None:
+    from app.routers.webhook import _waha_message_is_from_me
+
+    assert _waha_message_is_from_me({"fromMe": False, "_data": {"key": {"fromMe": False}}}) is False
+
+
+async def test_waha_manual_outbound_is_saved_as_human_message() -> None:
+    import uuid
+    from app.database import async_session_factory
+    from app.models import Conversation, Customer, Direction
+    from app.routers.webhook import _record_waha_manual_outbound
+
+    phone = f"+91998{uuid.uuid4().int % 10**7:07d}"
+    wa_message_id = f"waha-human-{uuid.uuid4().hex}"
+    async with async_session_factory() as db:
+        customer = Customer(phone=phone, name="WAHA Human Reply Test")
+        db.add(customer)
+        await db.flush()
+
+        await _record_waha_manual_outbound(
+            db,
+            {
+                "id": wa_message_id,
+                "to": phone,
+                "fromMe": True,
+                "source": "app",
+                "body": "Main aapki madad karta hoon.",
+            },
+        )
+
+        row = (
+            await db.execute(
+                select(Conversation).where(Conversation.wa_message_id == wa_message_id)
+            )
+        ).scalar_one()
+        assert row.customer_id == customer.id
+        assert row.direction == Direction.OUTBOUND
+        assert row.sent_by == "human"
+        assert row.message_text == "Main aapki madad karta hoon."
+
+
 async def test_human_takeover_grace_window_suppresses_agent_reply(monkeypatch) -> None:
     from datetime import datetime, timedelta, timezone
     import uuid
