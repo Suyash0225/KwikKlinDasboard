@@ -49,6 +49,7 @@ async def _seed_customer(window_open: bool) -> None:
                 direction=Direction.INBOUND,
                 message_text="bhaiya kurta ready?",
                 wa_message_id="wamid.TESTINBOX-1",
+                created_at=last,
             )
         )
         await s.commit()
