@@ -72,6 +72,33 @@ async def test_threads_list_shows_participant(client) -> None:
     assert mine[0]["window"]["open"] is True
 
 
+async def test_outbound_message_does_not_reopen_24h_window(client) -> None:
+    """An outbound reminder must not count as customer activity for the 24h window."""
+    await _seed_customer(window_open=False)
+    async with async_session_factory() as s:
+        cust = (await s.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        s.add(
+            Conversation(
+                customer_id=cust.id,
+                direction=Direction.OUTBOUND,
+                message_text="Reminder sent by manager",
+                wa_message_id="wamid.TESTINBOX-OUT-WINDOW",
+                sent_by="manager",
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        # Simulate the denormalized activity timestamp being bumped by outbound.
+        cust.last_message_at = datetime.now(timezone.utc)
+        await s.commit()
+
+    r = await client.get("/admin/api/inbox/threads", headers=AUTH)
+    assert r.status_code == 200
+    mine = [t for t in r.json()["threads"] if t["phone"] == PHONE]
+    assert mine
+    assert mine[0]["last_text"] == "Reminder sent by manager"
+    assert mine[0]["window"]["open"] is False
+
+
 
 @pytest.mark.requires_independent_sessions
 async def test_inbox_reaction_calls_waha_for_message_in_same_thread(client, monkeypatch) -> None:
