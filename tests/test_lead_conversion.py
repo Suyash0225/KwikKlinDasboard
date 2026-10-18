@@ -393,3 +393,61 @@ async def test_manual_phone_call_lead_can_send_approved_whatsapp(client, monkeyp
             assert "consent confirmed by owner" in (lead.notes or "")
     finally:
         await _cleanup_manual_lead()
+
+
+
+async def test_manual_outreach_does_not_reopen_converted_lead(client, monkeypatch) -> None:
+    """A manual message to an existing customer must not restart lead automation."""
+    from app.config import settings
+    from app.services import whatsapp
+
+    sent = []
+
+    async def fake_send(db, *, to_phone, text, **kwargs):
+        sent.append(to_phone)
+        return "wamid.TEST-converted-lead"
+
+    monkeypatch.setattr(whatsapp, "send_message", fake_send)
+    try:
+        async with async_session_factory() as db:
+            db.add(Customer(phone=TEST_MANUAL_LEAD_PHONE, name="Converted Customer"))
+            db.add(Lead(
+                phone=TEST_MANUAL_LEAD_PHONE,
+                name="Converted Customer",
+                source="phone_call",
+                items_text="Dry cleaning",
+                stage="CONVERTED",
+                followup_count=4,
+                next_followup_at=None,
+            ))
+            await db.commit()
+
+        response = await client.post(
+            "/admin/api/leads/manual",
+            headers={"X-API-Key": settings.ADMIN_API_KEY},
+            json={
+                "name": "Converted Customer",
+                "phone": TEST_MANUAL_LEAD_PHONE,
+                "need": "Dry cleaning",
+                "whatsapp_consent_confirmed": True,
+                "send_whatsapp": True,
+                "message": "Namaste ji, details as discussed.",
+            },
+        )
+        assert response.status_code == 201, response.text
+        result = response.json()
+        assert result["whatsapp_status"] == "sent"
+        assert result["stage"] == "CONVERTED"
+        assert result["next_followup_at"] is None
+        assert sent == [TEST_MANUAL_LEAD_PHONE]
+        async with async_session_factory() as db:
+            lead = (
+                await db.execute(
+                    select(Lead).where(Lead.phone == TEST_MANUAL_LEAD_PHONE)
+                )
+            ).scalar_one()
+            assert lead.stage == "CONVERTED"
+            assert lead.next_followup_at is None
+            assert lead.followup_count == 4
+    finally:
+        await _cleanup_manual_lead()
