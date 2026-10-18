@@ -48,7 +48,7 @@ from app.services.whatsapp import SendError, send_message
 from app.services import waha
 from app.utils.phone import normalize_phone
 from app.utils.client_ip import get_client_ip
-from app.services.tenant_context import manager_phone
+from app.services.tenant_context import as_tenant, get_home_tenant_id, manager_phone
 
 router = APIRouter()
 log = structlog.get_logger()
@@ -336,73 +336,83 @@ async def receive_waha_webhook(
     except json.JSONDecodeError:
         return JSONResponse({"status": "ignored"})
 
-    journal = await _journal_event(db, "waha", body, event)
-    if journal is None:
-        return JSONResponse({"status": "duplicate"})
-    event_key = journal.event_key
+    # WAHA is a trusted, HMAC-verified platform webhook, but it has no
+    # browser session from which middleware could select a tenant. Resolve
+    # the configured home shop explicitly before the first DB operation so
+    # both the transaction-local PostgreSQL RLS GUC and ORM row stamps agree.
+    home_tenant_id = await get_home_tenant_id()
+    if home_tenant_id is None:
+        log.error("waha_webhook_home_tenant_unresolved")
+        return JSONResponse({"error": "shop tenant is not configured"}, status_code=503)
 
-    try:
-        event_name = str(event.get("event") or "")
-        payload = event.get("payload") or {}
-        if event_name == "message":
-            # WAHA emits our own messages too. API-generated messages are
-            # already recorded by send_message(); phone/app messages are not.
-            if payload.get("fromMe") is True:
-                if str(payload.get("source") or "").lower() != "api":
-                    await _record_waha_manual_outbound(db, payload)
-            else:
-                raw_from = str(payload.get("from") or "")
-                resolved_from = raw_from
-                if raw_from.endswith("@lid"):
+    async with as_tenant(home_tenant_id):
+        journal = await _journal_event(db, "waha", body, event)
+        if journal is None:
+            return JSONResponse({"status": "duplicate"})
+        event_key = journal.event_key
+    
+        try:
+            event_name = str(event.get("event") or "")
+            payload = event.get("payload") or {}
+            if event_name == "message":
+                # WAHA emits our own messages too. API-generated messages are
+                # already recorded by send_message(); phone/app messages are not.
+                if payload.get("fromMe") is True:
+                    if str(payload.get("source") or "").lower() != "api":
+                        await _record_waha_manual_outbound(db, payload)
+                else:
+                    raw_from = str(payload.get("from") or "")
+                    resolved_from = raw_from
+                    if raw_from.endswith("@lid"):
+                        try:
+                            resolved_from = await waha.resolve_lid(raw_from) or ""
+                        except waha.WahaError:
+                            log.exception("waha_lid_resolution_failed", raw_from=raw_from)
+                            resolved_from = ""
+    
+                        if not resolved_from:
+                            # Some NOWEB payloads expose a canonical phone JID in
+                            # the nested message key even when `from` is @lid.
+                            data = payload.get("_data") or {}
+                            key = data.get("key") or {}
+                            alternate = (
+                                key.get("remoteJidAlt")
+                                or data.get("remoteJidAlt")
+                                or key.get("remoteJid")
+                            )
+                            if isinstance(alternate, str) and alternate.endswith(("@c.us", "@s.whatsapp.net")):
+                                resolved_from = alternate.replace("@s.whatsapp.net", "@c.us")
+    
+                        if not resolved_from:
+                            log.warning(
+                                "inbound_lid_unresolved",
+                                raw_from=raw_from,
+                                wa_message_id=payload.get("id"),
+                            )
+                            await _mark_event(db, event_key, "processed")
+                            return JSONResponse({"status": "received"})
+    
+                    msg = _waha_to_meta_shape(payload, resolved_from=resolved_from)
+                    await _handle_inbound_message(
+                        msg, db,
+                        profile_name=str((payload.get("_data") or {}).get("notifyName") or ""),
+                    )
+            elif event_name == "message.ack":
+                status = _waha_ack_status(payload)
+                if status:
+                    await _record_delivery_status(db, str(payload.get("id") or ""), status)
                     try:
-                        resolved_from = await waha.resolve_lid(raw_from) or ""
-                    except waha.WahaError:
-                        log.exception("waha_lid_resolution_failed", raw_from=raw_from)
-                        resolved_from = ""
-
-                    if not resolved_from:
-                        # Some NOWEB payloads expose a canonical phone JID in
-                        # the nested message key even when `from` is @lid.
-                        data = payload.get("_data") or {}
-                        key = data.get("key") or {}
-                        alternate = (
-                            key.get("remoteJidAlt")
-                            or data.get("remoteJidAlt")
-                            or key.get("remoteJid")
-                        )
-                        if isinstance(alternate, str) and alternate.endswith(("@c.us", "@s.whatsapp.net")):
-                            resolved_from = alternate.replace("@s.whatsapp.net", "@c.us")
-
-                    if not resolved_from:
-                        log.warning(
-                            "inbound_lid_unresolved",
-                            raw_from=raw_from,
-                            wa_message_id=payload.get("id"),
-                        )
-                        await _mark_event(db, event_key, "processed")
-                        return JSONResponse({"status": "received"})
-
-                msg = _waha_to_meta_shape(payload, resolved_from=resolved_from)
-                await _handle_inbound_message(
-                    msg, db,
-                    profile_name=str((payload.get("_data") or {}).get("notifyName") or ""),
-                )
-        elif event_name == "message.ack":
-            status = _waha_ack_status(payload)
-            if status:
-                await _record_delivery_status(db, str(payload.get("id") or ""), status)
-                try:
-                    from app.services.marketing import track_status_update
-                    await track_status_update(db, str(payload.get("id") or ""), status)
-                except Exception:
-                    log.exception("waha_campaign_status_track_failed")
-        await _mark_event(db, event_key, "processed")
-    except Exception as exc:
-        log.exception("waha_webhook_processing_failed")
-        await _mark_event(db, event_key, "failed", error=repr(exc))
-
-    return JSONResponse({"status": "received"})
-
+                        from app.services.marketing import track_status_update
+                        await track_status_update(db, str(payload.get("id") or ""), status)
+                    except Exception:
+                        log.exception("waha_campaign_status_track_failed")
+            await _mark_event(db, event_key, "processed")
+        except Exception as exc:
+            log.exception("waha_webhook_processing_failed")
+            await _mark_event(db, event_key, "failed", error=repr(exc))
+    
+        return JSONResponse({"status": "received"})
+    
 
 async def _record_waha_manual_outbound(db: AsyncSession, payload: dict) -> None:
     """Record a WhatsApp-phone reply as a human takeover signal.
