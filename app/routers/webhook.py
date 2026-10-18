@@ -313,6 +313,27 @@ async def receive_webhook(
 
 
 
+def _waha_message_id(payload: dict) -> str:
+    """Return the stable WAHA message ID across NOWEB payload shapes."""
+    if not isinstance(payload, dict):
+        return ""
+    candidates = [payload.get("id"), payload.get("messageId")]
+    data = payload.get("_data")
+    if isinstance(data, dict):
+        candidates.extend([data.get("id"), data.get("messageId")])
+        for container in (data, data.get("key")):
+            if isinstance(container, dict):
+                key = container.get("key") if container is data else container
+                if isinstance(key, dict):
+                    candidates.extend([key.get("_serialized"), key.get("id")])
+    for value in candidates:
+        if isinstance(value, dict):
+            value = value.get("_serialized") or value.get("id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _waha_message_is_from_me(payload: dict) -> bool:
     """Recognize WAHA outbound messages across payload/engine variants."""
     data = payload.get("_data") or {}
@@ -427,10 +448,10 @@ async def receive_waha_webhook(
             elif event_name == "message.ack":
                 status = _waha_ack_status(payload)
                 if status:
-                    await _record_delivery_status(db, str(payload.get("id") or ""), status)
+                    await _record_delivery_status(db, _waha_message_id(payload), status)
                     try:
                         from app.services.marketing import track_status_update
-                        await track_status_update(db, str(payload.get("id") or ""), status)
+                        await track_status_update(db, _waha_message_id(payload), status)
                     except Exception:
                         log.exception("waha_campaign_status_track_failed")
             await _mark_event(db, event_key, "processed")
@@ -450,8 +471,9 @@ async def _record_waha_manual_outbound(db: AsyncSession, payload: dict) -> None:
     """
     from app.models import Direction
 
-    wa_message_id = str(payload.get("id") or "")
+    wa_message_id = _waha_message_id(payload)
     if not wa_message_id:
+        log.warning("waha_manual_outbound_missing_message_id")
         return
 
     # Defensive dedupe: an API message can race the webhook, and retries can
@@ -558,7 +580,7 @@ def _waha_to_meta_shape(payload: dict, *, resolved_from: str | None = None) -> d
     """Translate WAHA message payload to the existing inbound handler shape."""
     raw_from = str(resolved_from or payload.get("from") or "")
     wa_id = raw_from.replace("@s.whatsapp.net", "@c.us")
-    msg_id = str(payload.get("id") or "")
+    msg_id = _waha_message_id(payload)
     body = str(payload.get("body") or "")
     out = {
         "from": wa_id.split("@")[0],
