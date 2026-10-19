@@ -1,6 +1,6 @@
 """Outbound retry queue must fail closed on missing or cross-tenant identity."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import uuid
 
 import pytest
@@ -79,6 +79,9 @@ async def retry_tenant_and_home_customer():
 async def _queue_retry(payload: dict, to_phone: str, fixture_data: dict) -> uuid.UUID:
     row_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
+    # The queue drain only takes the oldest 30 rows. Put these guard rows ahead
+    # of leftovers from other tests so the assertions exercise the retry path.
+    created_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
     async with tenant_context.as_system_context():
         async with async_session_factory() as db:
             db.add(
@@ -89,7 +92,7 @@ async def _queue_retry(payload: dict, to_phone: str, fixture_data: dict) -> uuid
                     status="queued",
                     attempts=0,
                     next_attempt_at=now,
-                    created_at=now,
+                    created_at=created_at,
                 )
             )
             await db.commit()
@@ -121,6 +124,7 @@ async def test_retry_without_valid_tenant_is_dead_lettered_without_send(
         raise AssertionError("transport must not be called for a retry without tenant identity")
 
     monkeypatch.setattr(waha, "_post", forbidden_transport)
+    monkeypatch.setattr(whatsapp, "MAX_OUTBOUND_AGE", timedelta(days=365_000))
     row_id = await _queue_retry(payload, retry_tenant_and_home_customer["phone"], retry_tenant_and_home_customer)
 
     await whatsapp.drain_outbound_queue()
@@ -137,6 +141,7 @@ async def test_retry_cannot_send_home_customer_message_under_another_tenant(
         raise AssertionError("cross-tenant retry must be rejected before transport")
 
     monkeypatch.setattr(waha, "_post", forbidden_transport)
+    monkeypatch.setattr(whatsapp, "MAX_OUTBOUND_AGE", timedelta(days=365_000))
     data = retry_tenant_and_home_customer
     row_id = await _queue_retry(
         {
