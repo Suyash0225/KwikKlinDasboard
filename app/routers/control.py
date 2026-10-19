@@ -1662,7 +1662,9 @@ async def tenant_gbp_location(
 
 
 @router.post("/api/tenants/{slug}/google-business/locations/refresh")
-async def tenant_gbp_refresh_locations(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
+async def tenant_gbp_refresh_locations(
+    slug: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict:
     """Refresh all listings for the existing Google connection and target all for daily posts."""
     from app.services import google_business as gbp, integrations
 
@@ -1684,8 +1686,8 @@ async def tenant_gbp_refresh_locations(slug: str, db: AsyncSession = Depends(get
         conn.pop("choices", None)
         conn["last_error"] = ""
         await gbp.save_connection(tdb, conn)
-    await _audit_integration(request=None, t=t, action="google_business_locations_refresh",
-                             details={"locations": len(locations)})
+    await _audit_integration(request, t, "google_business_locations_refresh",
+                             {"locations": len(locations)})
     return {"ok": True, "location_count": len(locations),
             "locations": [{"title": x.get("title", ""), "location": x["location"]} for x in locations]}
 
