@@ -7,8 +7,14 @@ from app.services import ai_poster
 
 
 def _png_bytes(size=(300, 300)):
+    import random
+
+    rng = random.Random(7)
+    image = Image.new("RGB", size)
+    image.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256))
+                   for _ in range(size[0] * size[1])])
     stream = io.BytesIO()
-    Image.new("RGB", size, "#4d9daf").save(stream, format="PNG")
+    image.save(stream, format="PNG")
     return stream.getvalue()
 
 
