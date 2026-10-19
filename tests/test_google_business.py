@@ -230,6 +230,7 @@ async def test_gbp_auto_post_records_failure_retries_and_deduplicates(monkeypatc
     monkeypatch.setattr(gbp, "enabled", lambda: True)
     monkeypatch.setattr(gbp, "get_connection", fake_connection)
     monkeypatch.setattr(gbp_auto_post, "_generate_post", fake_generate)
+    monkeypatch.setattr(gbp_auto_post, "_build_poster_url", fake_poster)
     monkeypatch.setattr(gbp_auto_post, "_api_post", fake_publish)
     now = datetime(2026, 10, 10, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
     try:
@@ -351,10 +352,15 @@ async def test_gbp_auto_post_publishes_to_all_selected_locations(monkeypatch) ->
     calls = []
 
     async def fake_generate(db, now_ist):
-        return {"summary": "A useful laundry care tip", "topic_type": "STANDARD", "topic_key": "stain-care"}
+        return {"summary": "Laundry and dry cleaning in Varanasi. Book a pickup today.",
+                "topic_type": "STANDARD", "topic_key": "stain-care"}
+
+    async def fake_poster(db, now_ist, topic_key):
+        assert topic_key == "stain-care"
+        return "https://kwikklin.online/social/social-google-2026-10-10.png", None
 
     async def fake_publish(refresh_token, account, location, payload):
-        calls.append((account, location, payload["summary"]))
+        calls.append((account, location, payload.copy()))
         return {"name": f"{account}/{location}/localPosts/post-{len(calls)}"}
 
     async def fake_connection(db):
@@ -381,7 +387,13 @@ async def test_gbp_auto_post_publishes_to_all_selected_locations(monkeypatch) ->
                 assert result["published_count"] == 3
                 assert result["location_count"] == 3
                 assert len(result["published_locations"]) == 3
+                assert result["poster_attached"] is True
                 assert len({call[1] for call in calls}) == 3
+                assert all(call[2]["media"] == [{
+                    "mediaFormat": "PHOTO",
+                    "sourceUrl": "https://kwikklin.online/social/social-google-2026-10-10.png",
+                }] for call in calls)
+                assert all("phone" not in call[2]["summary"].lower() for call in calls)
                 again = await gbp_auto_post.auto_post_daily(db, now)
                 assert again["reason"] == "already_published_all_locations"
         assert len(calls) == 3
@@ -390,3 +402,16 @@ async def test_gbp_auto_post_publishes_to_all_selected_locations(monkeypatch) ->
             await db.execute(sqltext("DELETE FROM settings_kv WHERE tenant_id = :t"), {"t": other})
             await db.execute(sqltext("DELETE FROM tenants WHERE id = :t"), {"t": other})
             await db.commit()
+
+
+
+def test_gbp_poster_copy_uses_local_service_keywords_without_contact_details() -> None:
+    from app.services import gbp_auto_post
+
+    theme, headline, subline = gbp_auto_post._poster_copy("stain-care")
+    combined = f"{theme} {headline} {subline}".lower()
+    assert "varanasi" in combined
+    assert "laundry" in combined or "dry cleaning" in combined
+    assert "@" not in combined
+    assert "http" not in combined
+    assert "96968" not in combined

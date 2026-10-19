@@ -1184,7 +1184,7 @@ async function tabIntegrations(box, slug) {
     (gb.rating ? ` · ${Number(gb.rating).toFixed(1)} ★ · ${gb.count} reviews · ${gb.stored} on website` : "")));
   gsec.appendChild(el("p", "muted",
     `Daily AI posts: ${gb.auto_post_location_count || 1} location(s) selected · scheduled for 10:15 AM IST`));
-  buttonRow(gsec, [{ label: "Refresh locations + enable all 3", cls: "btn-primary", onClick: async () => {
+  buttonRow(gsec, [{ label: "Refresh locations + enable all", cls: "btn-primary", onClick: async () => {
     const r = await act(() => api(`/control/api/tenants/${slug}/google-business/locations/refresh`, { method: "POST" }));
     if (r && r.ok) toast(`Daily AI posting enabled for ${r.location_count} Google location(s)`, "ok");
     reopen(slug, "integrations");
