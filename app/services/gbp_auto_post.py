@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import ipaddress
 import re
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
@@ -260,6 +261,55 @@ async def _generate_post(db, now_ist: datetime) -> dict:
         topic_type = "STANDARD"
     return {"summary": summary[:700], "topic_type": topic_type, **strategy}
 
+
+def _poster_copy(topic_key: str) -> tuple[str, str, str]:
+    """SEO-aware but policy-safe copy for the image; no phone, price or offer."""
+    choices = {
+        "stain-care": ("Stain Care", "Care for Every Fabric", "Laundry and dry cleaning in Varanasi"),
+        "everyday-freshness": ("Everyday Laundry", "Fresh Clothes, Less Hassle", "Laundry service in Varanasi"),
+        "pickup-convenience": ("Laundry Convenience", "Laundry Made Easier", "Explore Kwik Klin online"),
+        "garment-longevity": ("Garment Care", "Give Clothes Thoughtful Care", "Laundry and dry cleaning in Varanasi"),
+        "family-laundry": ("Family Laundry", "Laundry for Busy Days", "Laundry service in Varanasi"),
+        "weekend-care": ("Weekend Care", "Get Clothes Ready", "Laundry and dry cleaning in Varanasi"),
+        "weekly-planning": ("Weekly Laundry", "Plan Your Laundry Care", "Explore Kwik Klin online"),
+        "winter-care": ("Seasonal Garment Care", "Care for Winter Clothes", "Laundry and dry cleaning in Varanasi"),
+        "monsoon-care": ("Monsoon Garment Care", "Keep Fabric Careful", "Laundry service in Varanasi"),
+        "festive-care": ("Occasion Wear Care", "Care for Special Outfits", "Laundry and dry cleaning in Varanasi"),
+    }
+    return choices.get(topic_key, ("Laundry Care", "Thoughtful Garment Care", "Laundry and dry cleaning in Varanasi"))
+
+
+async def _build_poster_url(db, now_ist: datetime, topic_key: str) -> tuple[str | None, str | None]:
+    """Generate and validate a phone-free branded poster and return its public URL.
+
+    Google fetches media from a stable public URL; a local file alone is not
+    sufficient. If the public host is not configured, keep the text post
+    working and expose the reason in the run result.
+    """
+    from app.services import google_auth, social
+
+    theme, headline, subline = _poster_copy(topic_key)
+    day = now_ist.strftime("%Y-%m-%d")
+    filename = f"social-google-{day}.png"
+    path = social.MEDIA_DIR / filename
+    try:
+        social.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        social.draw_poster(theme, headline, subline, path, show_phone=False)
+        problems = social.check_google_image(path)
+        if problems:
+            return None, "poster_validation_failed: " + "; ".join(problems)
+        base = await google_auth.public_base(db)
+        fixed = bool(await app_settings.get(db, "public_url_fixed")) or bool(settings.SITE_URL)
+        url, problem = social.google_image_url(base, fixed, filename)
+        if problem:
+            return None, "poster_url_unavailable: " + problem
+        if not _public_poster_url(url):
+            return None, "poster_url_unavailable: URL failed HTTPS/public-host validation"
+        return url, None
+    except Exception as exc:
+        log.warning("gbp_poster_generation_failed", error=str(exc)[:200])
+        return None, "poster_generation_failed: " + str(exc)[:200]
+
 async def auto_post_daily(db, now_ist: datetime) -> dict:
     """Publish today's AI post to every selected GBP location, independently."""
     if not gbp.enabled():
@@ -320,7 +370,9 @@ async def auto_post_daily(db, now_ist: datetime) -> dict:
         "topicType": "STANDARD",
         "callToAction": {"actionType": "LEARN_MORE", "url": cta_url},
     }
-    poster_url = _public_poster_url(await app_settings.get(db, "gbp_public_poster_url"))
+    # Generate today's branded, phone-free poster locally. Google can only
+    # attach it when the stable public /social URL is configured and valid.
+    poster_url, poster_issue = await _build_poster_url(db, now_ist, topic_key)
     if poster_url:
         payload["media"] = [{"mediaFormat": "PHOTO", "sourceUrl": poster_url}]
 
@@ -350,6 +402,8 @@ async def auto_post_daily(db, now_ist: datetime) -> dict:
             "date": day, "status": "published", "post_name": created.get("name", ""),
             "summary": post["summary"], "topic_key": topic_key, "campaign": campaign,
             "source_tag": source_tag, "cta_url": cta_url,
+            "poster_url": poster_url or "", "poster_attached": bool(poster_url),
+            "poster_issue": poster_issue or "",
             "performance_28d": post.get("performance", {"leads": 0, "orders": 0, "collected_revenue": 0.0}),
             "account": acc, "location": loc, "location_title": title,
             "published_at": datetime.now(timezone.utc).isoformat(),
@@ -376,6 +430,8 @@ async def auto_post_daily(db, now_ist: datetime) -> dict:
         "failed_locations": failures,
         "topic_key": topic_key,
         "summary": post["summary"],
+        "poster_attached": bool(poster_url),
+        "poster_issue": poster_issue or "",
     }
 
 
