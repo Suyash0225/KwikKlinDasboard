@@ -134,7 +134,11 @@ async def test_google_connect_goes_through_control_and_lands_on_the_right_shop(
         return "refresh-token-for-shop-a"
 
     async def fake_locations(refresh):
-        return [{"account": "accounts/1", "location": "locations/9", "title": "Integ A Laundry"}]
+        return [
+            {"account": "accounts/1", "location": "locations/9", "title": "Integ A Laundry"},
+            {"account": "accounts/1", "location": "locations/10", "title": "Integ A Laundry - B"},
+            {"account": "accounts/2", "location": "locations/11", "title": "Integ A Laundry - C"},
+        ]
 
     async def fake_sync(db):
         return {"reviews": []}
@@ -167,6 +171,13 @@ async def test_google_connect_goes_through_control_and_lands_on_the_right_shop(
 
     raw = await _raw_setting(shops["a"], "gbp_connection")
     assert raw["v"]["refresh_token"].startswith("enc:v1:")
+    async with integrations.tenant_db(shops["a"]) as db:
+        connected = await gbp.get_connection(db)
+    assert connected["location"] == "locations/9"
+    assert len(connected["post_locations"]) == 3
+    assert [x["location"] for x in connected["post_locations"]] == [
+        "locations/9", "locations/10", "locations/11"
+    ]
     assert await _raw_setting(shops["b"], "gbp_connection") is None
     r = await client.get(f"/control/api/tenants/{A}/integrations", headers=CTL)
     g = r.json()["google"]
