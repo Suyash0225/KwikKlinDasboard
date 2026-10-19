@@ -176,7 +176,15 @@ function openModal(html) {
   const first = $("modal-body").querySelector("input, select, textarea, button");
   if (first) first.focus();
 }
-function closeModal() { $("modal-ov").classList.remove("open"); syncOverlayScrollLock(); }
+function closeModal() {
+  $("modal-ov").classList.remove("open");
+  syncOverlayScrollLock();
+  // Explicit close must consume the modal history state; otherwise a later
+  // mobile back gesture can navigate away from the dashboard unexpectedly.
+  if (history.state && history.state.kk === "modal") {
+    history.replaceState({ kk: "nav" }, "", location.href);
+  }
+}
 let EXITING = false;
 function askExit() {
   history.pushState({ kk: "nav" }, "", location.href);
