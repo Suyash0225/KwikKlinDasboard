@@ -405,8 +405,40 @@ async def auto_post_daily(db, now_ist: datetime) -> dict:
     # Generate today's branded, phone-free poster locally. Google can only
     # attach it when the stable public /social URL is configured and valid.
     poster_url, poster_issue = await _build_poster_url(db, now_ist, topic_key)
-    if poster_url:
-        payload["media"] = [{"mediaFormat": "PHOTO", "sourceUrl": poster_url}]
+    if not poster_url:
+        # The owner explicitly expects a branded poster on GBP. Do not silently
+        # publish a text-only post when image generation or the stable public
+        # image URL is unavailable; record each target as failed for the UI.
+        issue = (poster_issue or "poster unavailable")[:300]
+        failures = []
+        for target in pending:
+            loc, acc = str(target["location"]), str(target["account"])
+            title = str(target.get("title") or loc)
+            entry = {
+                "date": day, "status": "failed", "error": issue,
+                "topic_key": topic_key, "campaign": campaign,
+                "account": acc, "location": loc, "location_title": title,
+                "poster_attached": False, "poster_issue": issue[:180],
+                "attempted_at": datetime.now(timezone.utc).isoformat(),
+            }
+            history.append(entry)
+            failures.append({"location": loc, "title": title, "error": issue[:200]})
+            await audit.record(
+                actor_role="system", actor="gbp_auto_post",
+                action="gbp_daily_post_failed",
+                args={"date": day, "topic_key": topic_key, "location": loc},
+                result=issue, ok=False,
+            )
+        await app_settings.set_value(db, _POSTS_KEY, history[-_MAX_HISTORY:])
+        await app_settings.set_value(db, _ENABLED_KEY, True)
+        return {
+            "ok": False, "published": False, "date": day,
+            "location_count": len(unique_targets), "published_count": 0,
+            "published_locations": [], "failed_locations": failures,
+            "topic_key": topic_key, "summary": post["summary"],
+            "poster_attached": False, "poster_issue": issue,
+        }
+    payload["media"] = [{"mediaFormat": "PHOTO", "sourceUrl": poster_url}]
 
     published, failures = [], []
     for target in pending:
