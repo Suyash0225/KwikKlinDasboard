@@ -1620,8 +1620,10 @@ async def tenant_gbp_callback(
             except gbp.GBPError:
                 pass  # error gbp_reviews mein likha gaya — status dikhayega
         else:
-            # The dropdown still chooses the primary listing for review sync.
-            # Daily AI posting defaults to every managed location on this account.
+            # Use the first managed listing as the default primary so the
+            # connection is immediately usable. The dropdown can change the
+            # review-sync primary later; daily AI posts target every listing.
+            conn.update(locations[0])
             conn["choices"] = locations
             conn["post_locations"] = locations
             await gbp.save_connection(tdb, conn)
