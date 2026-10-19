@@ -66,3 +66,64 @@ def test_fallback_background_is_square_png(tmp_path):
     with Image.open(path) as result:
         assert result.size == (1080, 1080)
         assert result.format == "PNG"
+
+
+async def test_campaign_poster_uses_gemini_background_and_local_composition(tmp_path, monkeypatch):
+    async def fake_generate(prompt, out_path):
+        assert "No text" in prompt
+        Image.new("RGB", (320, 240), "#89cbd4").save(out_path)
+        return out_path
+
+    calls = {}
+
+    def fake_compose(background, logo, out_path, theme, headline, subline):
+        calls.update(theme=theme, headline=headline, subline=subline)
+        Image.new("RGB", (1080, 1080), "#09203f").save(out_path)
+        return out_path
+
+    monkeypatch.setattr(ai_poster, "generate_background", fake_generate)
+    monkeypatch.setattr(ai_poster, "compose_poster", fake_compose)
+    monkeypatch.setattr(
+        ai_poster, "create_fallback_background",
+        lambda path: (_ for _ in ()).throw(AssertionError("fallback should not run")),
+    )
+
+    out = tmp_path / "campaign.png"
+    source = await ai_poster.create_branded_campaign_poster(
+        out, tmp_path / "logo.png", "Diwali Care", "Care for festive clothes",
+        "Laundry and dry cleaning in Varanasi",
+    )
+
+    assert source == "gemini"
+    assert out.is_file()
+    assert calls == {
+        "theme": "Diwali Care",
+        "headline": "Care for festive clothes",
+        "subline": "Laundry and dry cleaning in Varanasi",
+    }
+
+
+async def test_campaign_poster_falls_back_when_gemini_is_unavailable(tmp_path, monkeypatch):
+    async def unavailable(prompt, out_path):
+        raise ai_poster.AIPosterError("offline")
+
+    def fake_fallback(path):
+        Image.new("RGB", (320, 240), "#09203f").save(path)
+        return path
+
+    def fake_compose(background, logo, out_path, theme, headline, subline):
+        Image.new("RGB", (1080, 1080), "#09203f").save(out_path)
+        return out_path
+
+    monkeypatch.setattr(ai_poster, "generate_background", unavailable)
+    monkeypatch.setattr(ai_poster, "create_fallback_background", fake_fallback)
+    monkeypatch.setattr(ai_poster, "compose_poster", fake_compose)
+
+    out = tmp_path / "campaign-fallback.png"
+    source = await ai_poster.create_branded_campaign_poster(
+        out, tmp_path / "logo.png", "Laundry Care", "Fresh clothes",
+        "Laundry and dry cleaning in Varanasi",
+    )
+
+    assert source == "fallback"
+    assert out.is_file()
