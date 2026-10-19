@@ -1470,13 +1470,27 @@ async def create_bill(
         pickup_task = await task_service.get_by_code(db, body.pickup_task_code)
         if pickup_task is None or pickup_task.kind != "pickup":
             raise HTTPException(status_code=404, detail="Pickup task not found")
+        # Serialize simultaneous bill submissions for the same pickup. The
+        # order commit below releases this lock; a second request then sees
+        # total_amount set and cannot create a second advance/payment.
+        pickup_task = (
+            await db.execute(
+                select(Task).where(Task.id == pickup_task.id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if pickup_task is None or pickup_task.kind != "pickup":
+            raise HTTPException(status_code=404, detail="Pickup task not found")
         if pickup_task.status != TASK_OPEN:
             raise HTTPException(status_code=409, detail="Pickup task is already complete")
         if pickup_task.assigned_staff_id != p.staff.id and not p.is_manager:
             raise HTTPException(status_code=403, detail="This pickup is assigned to another delivery person")
         if pickup_task.order_id is None:
             raise HTTPException(status_code=409, detail="Pickup task has no order")
-        existing = await db.get(Order, pickup_task.order_id)
+        existing = (
+            await db.execute(
+                select(Order).where(Order.id == pickup_task.order_id).with_for_update()
+            )
+        ).scalar_one_or_none()
         if existing is None or existing.status is not OrderStatus.PICKUP_ASSIGNED:
             raise HTTPException(status_code=409, detail="Pickup is no longer awaiting collection")
         if existing.total_amount is not None:
@@ -1491,6 +1505,7 @@ async def create_bill(
         order.expected_delivery = delivery
         order.priority = "urgent" if body.urgent else "normal"
         order.bill_seconds = body.bill_seconds
+        order.recalculate_payment_status()
         if name and not existing_customer.name:
             existing_customer.name = name
         db.add(order)
@@ -1618,13 +1633,30 @@ async def my_bills(
     from app.models.order import OrderStatusHistory
 
     since = datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 90)))
-    sel = select(Order).where(Order.created_at >= since).order_by(Order.created_at.desc())
+    # A pickup request can sit open for longer than the bills-list window.
+    # Its bill is created when collection succeeds, so include orders whose
+    # PICKED_UP history was written in the requested window as well.
+    recent_pickups = select(OrderStatusHistory.order_id).where(
+        OrderStatusHistory.new_status == OrderStatus.PICKED_UP,
+        OrderStatusHistory.changed_at >= since,
+    )
+    sel = select(Order).where(
+        or_(Order.created_at >= since, Order.id.in_(recent_pickups))
+    ).order_by(Order.created_at.desc())
     # Worker ko sirf apne banaye bill. Manager ko poori dukaan ke — wahi
     # to dekh-rekh karta hai — aur mine=1 se wo bhi apne tak simat sakta hai.
     if not p.is_manager or mine:
         made_by_me = select(OrderStatusHistory.order_id).where(
-            OrderStatusHistory.old_status.is_(None),
-            OrderStatusHistory.changed_by == p.staff.name,
+            or_(
+                (
+                    (OrderStatusHistory.old_status.is_(None))
+                    & (OrderStatusHistory.changed_by == p.staff.name)
+                ),
+                (
+                    (OrderStatusHistory.new_status == OrderStatus.PICKED_UP)
+                    & (OrderStatusHistory.changed_by == f"staff:{p.staff.name}")
+                ),
+            )
         )
         sel = sel.where(Order.id.in_(made_by_me))
     if pay == "due":
