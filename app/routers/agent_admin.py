@@ -236,7 +236,7 @@ async def campaign_recipients(campaign_id:str,db:AsyncSession=Depends(get_db))->
     campaign=await db.get(Campaign,cid)
     if campaign is None:raise HTTPException(status_code=404,detail="campaign not found")
     rows=(await db.execute(select(CampaignRecipient,Customer).join(Customer,Customer.id==CampaignRecipient.customer_id).where(CampaignRecipient.campaign_id==cid).order_by(Customer.name.asc()))).all()
-    return {"campaign_id":str(cid),"recipients":[{"name":customer.name or "Customer","phone":customer.phone,"last_order_date":None,"status":recipient.status,"reason":recipient.detail or ""} for recipient,customer in rows]}
+    return {"campaign_id":str(cid),"recipients":[{"customer_id":str(recipient.customer_id),"name":customer.name or "Customer","phone":customer.phone,"last_order_date":None,"status":recipient.status,"reason":recipient.detail or ""} for recipient,customer in rows]}
 
 @router.get("/campaigns/overview", dependencies=[Depends(require_feature("campaigns"))])
 async def campaigns_overview(db: AsyncSession = Depends(get_db)) -> dict:
