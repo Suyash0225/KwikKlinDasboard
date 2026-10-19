@@ -674,11 +674,13 @@ async def ai_campaign_draft(
 async def create_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) -> dict:
     creative = body.creative_file or ""
     if not body.message_text.strip() and not creative: raise HTTPException(status_code=400, detail="Add message text or upload a supported campaign image.")
+    if creative:
+        if not re.fullmatch(r"campaign-[a-f0-9]{32}\\.(?:png|jpg|jpeg)",creative): raise HTTPException(status_code=400,detail="invalid campaign creative")
+        from pathlib import Path
+        if not (Path(__file__).resolve().parent.parent/"media"/creative).is_file(): raise HTTPException(status_code=400,detail="Campaign image is missing; upload it again.")
     if body.include_opted_out: raise HTTPException(status_code=400, detail="Opted-out customers cannot be included in campaigns.")
     segment="all_active" if body.campaign_type=="wish" else ("outstanding_dues" if body.campaign_type=="payment_reminder" else body.segment)
     rule_flags={"respect_frequency":False if body.campaign_type in ("wish","payment_reminder") else bool(body.respect_frequency),"skip_complaints":bool(body.skip_complaints),"skip_blocked":True,"include_opted_out":False}
-    if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\.(?:png|jpg|jpeg)", creative):
-        raise HTTPException(status_code=400, detail="invalid campaign creative")
     if segment == "selected":
         if not body.selected_customer_ids:
             raise HTTPException(status_code=400, detail="select at least one customer")
