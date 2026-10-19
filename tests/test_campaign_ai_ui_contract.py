@@ -61,7 +61,7 @@ def test_ai_google_copy_gets_natural_local_search_context():
     complete = "Laundry and dry cleaning in Varanasi for fresh garments."
     assert _ensure_gmb_local_search_context(complete) == complete
 
-    long_copy = _ensure_gmb_local_search_context("Fresh garment care. " * 60)
+    long_copy = _ensure_gmb_local_search_context("Lovely clothes this week. " * 60)
     assert len(long_copy) <= 700
     assert "varanasi" in long_copy.lower()
     assert "dry cleaning services in varanasi." in long_copy.lower()
