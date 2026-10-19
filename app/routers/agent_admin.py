@@ -15,7 +15,7 @@ import structlog
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -29,6 +29,8 @@ from app.models import (
     OpenQuestion,
     Lead,
     CampaignRecipient,
+    Conversation,
+    Direction,
     Rate,
     Order,
     OrderStatus,
