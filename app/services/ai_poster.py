@@ -207,9 +207,9 @@ async def create_branded_campaign_poster(
             "Create premium square 1:1 lifestyle background artwork for an Indian "
             "laundry and dry-cleaning campaign. Show fresh folded garments and "
             "tasteful fabric textures, realistic commercial photography, clean "
-            "natural light, navy and cyan accents, calm negative space. Visual "
-            f"theme: {str(theme or 'laundry care')[:60]}. No text, letters, numbers, "
-            "logo, watermark, phone, signage, price, discount or offer. Background only."
+            "natural light, navy and cyan accents, calm negative space. No text, "
+            "letters, numbers, logo, watermark, phone, signage, price, discount or offer. "
+            "Background only; all campaign copy is composited locally."
         )
         try:
             await generate_background(prompt, background)
