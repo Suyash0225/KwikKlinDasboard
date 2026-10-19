@@ -620,10 +620,14 @@ async def _cost_analysis(db: AsyncSession, args: str) -> str:
     ]
     if result["cost_per_piece_proxy"] is not None:
         lines.append(f"- Shared-expense proxy per piece: {money(result['cost_per_piece_proxy'])}")
+    elif not result["has_expenses"]:
+        lines.append("- Per-piece proxy: unavailable (no expense records; missing expenses are not zero)")
     else:
         lines.append("- Per-piece proxy: unavailable (no classified completed pieces)")
     if result["cost_per_kg_proxy"] is not None:
         lines.append(f"- Shared-expense proxy per kg: {money(result['cost_per_kg_proxy'])}")
+    elif not result["has_expenses"]:
+        lines.append("- Per-kg proxy: unavailable (no expense records; missing expenses are not zero)")
     else:
         lines.append("- Per-kg proxy: unavailable (no classified completed kg)")
     if result["mixed_units"]:
