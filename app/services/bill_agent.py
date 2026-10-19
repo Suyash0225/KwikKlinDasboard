@@ -1413,8 +1413,8 @@ async def handle_staff_message(
                 staff = (
                     await db.execute(select(Staff).where(Staff.phone == sender_phone))
                 ).scalar_one_or_none()
-                if staff is None or not await task_service.staff_can_access_task(db, task, staff):
-                    return "⚠️ Ye task aapki team ke access mein nahi hai."
+                if staff is None or not await task_service.staff_can_update_task(db, task, staff):
+                    return "⚠️ Ye task sirf assigned staff update kar sakta hai."
                 answer = "Yes" if choice == "yes" else "No"
                 await task_service.note_reply(db, staff.id, f"{answer} — fixed-choice reply", by=staff.name)
                 if answer == "Yes":
