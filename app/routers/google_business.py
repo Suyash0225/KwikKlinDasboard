@@ -33,7 +33,7 @@ def _post_location_statuses(locations: list[dict], history: list[dict], primary_
         if not isinstance(item, dict):
             continue
         location = str(item.get("location") or primary_location)
-        account = str(item.get("account") or "")
+        account = str(item.get("account") or "*")
         if location and (account, location) not in latest:
             latest[(account, location)] = item
 
@@ -48,7 +48,7 @@ def _post_location_statuses(locations: list[dict], history: list[dict], primary_
         if key in seen:
             continue
         seen.add(key)
-        item = latest.get(key)
+        item = latest.get(key) or latest.get(("*", location))
         result.append({
             "location": location,
             "title": str(target.get("title") or location),
