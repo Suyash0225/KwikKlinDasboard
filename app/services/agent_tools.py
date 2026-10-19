@@ -635,7 +635,7 @@ async def _cost_analysis(db: AsyncSession, args: str) -> str:
     if result["unclassified_lines"]:
         lines.append(f"⚠️ {result['unclassified_lines']} item line(s) had missing/unknown units and were excluded from volume.")
     lines.append("Use this for a first estimate only. Reliable pricing decisions need complete expenses and explicit cost allocation.")
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------
