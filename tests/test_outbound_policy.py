@@ -349,11 +349,20 @@ async def test_transactional_policy_honors_stop_and_urgent_quiet_exception(monke
             tenant_id=tenant_id, is_active=False, opted_out=False,
             payment_reminders_enabled=True,
         )
-        # Transactional sends are not blocked merely because a customer is inactive.
+        # Inbound customer support and order-status replies must work during
+        # quiet hours, while unrelated transactional messages remain blocked.
+        await outbound_policy.enforce_outbound_policy(
+            None, customer=customer, phone="+919999000012",
+            intent="transactional", kind="order_status",
+        )
+        await outbound_policy.enforce_outbound_policy(
+            None, customer=customer, phone="+919999000012",
+            intent="transactional", kind="customer_agent_reply",
+        )
         with pytest.raises(SendError, match="quiet hours"):
             await outbound_policy.enforce_outbound_policy(
                 None, customer=customer, phone="+919999000012",
-                intent="transactional", kind="order_status",
+                intent="transactional", kind="payment_reminder",
             )
         await outbound_policy.enforce_outbound_policy(
             None, customer=customer, phone="+919999000012",
