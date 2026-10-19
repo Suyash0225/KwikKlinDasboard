@@ -1732,7 +1732,7 @@ class GbpLocationIn(BaseModel):
 async def tenant_gbp_location(
     slug: str, body: GbpLocationIn, db: AsyncSession = Depends(get_db)
 ) -> dict:
-    from app.services import google_business as gbp, integrations
+    from app.services import app_settings, google_business as gbp, integrations
 
     t = await _tenant_or_404(db, slug)
     async with integrations.tenant_db(t.id) as tdb:
@@ -1753,6 +1753,9 @@ async def tenant_gbp_location(
             await gbp.sync(tdb)
         except gbp.GBPError as exc:
             return {"ok": False, "error": str(exc)}
+        # The Control panel button promises that selecting a primary listing
+        # also enables daily posts for every managed location.
+        await app_settings.set_value(tdb, "gbp_auto_post_enabled", True)
     return {"ok": True}
 
 
