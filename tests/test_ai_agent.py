@@ -113,14 +113,15 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
     async def fake_ask_json(**kw):
         nonlocal calls
         calls += 1
+        # One compose response per inbound message. The first message asks for
+        # the missing name; the follow-up extracts both supplied profile fields.
         if calls == 1:
-            intake = {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False}
             return {
-                "reply": "Ji, address bhej dijiye.",
+                "reply": "Ji, apna naam bata dijiye.",
                 "intent": "NEW_ORDER", "language": "hi",
                 "action": "CREATE_LEAD", "action_reason": "new enquiry",
                 "escalate": False, "escalation_reason": "", "admin_note": "",
-                "intake": intake,
+                "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
             }
         return {
             "reply": "Ji, main aapki request note kar leta hoon. — Kwik Klin",
@@ -134,6 +135,9 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
         }
 
     monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async def no_selected_tools(*args, **kwargs):
+        return {}
+    monkeypatch.setattr(agent_module, "_select_customer_tools", no_selected_tools)
     async with async_session_factory() as s:
         cust = Customer(phone=PHONE, name=None, address=None)
         s.add(cust)
@@ -153,8 +157,10 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
         cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
         reply = await build_ai_reply(db, cust, "Rahul Sharma, 12 Lanka, Varanasi")
 
-    assert cust.name == "Rahul Sharma"
-    assert cust.address == "12 Lanka, Varanasi"
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        assert cust.name == "Rahul Sharma"
+        assert cust.address == "12 Lanka, Varanasi"
     assert reply
 
 async def test_ai_facts_always_include_saved_name_and_address(monkeypatch) -> None:

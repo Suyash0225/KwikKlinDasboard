@@ -604,11 +604,17 @@ async function connectGA4() {
   try {
     const d = await api("/admin/api/ga4/connect-url", { method: "POST" });
     if (!d.url) throw new Error("Google connection URL missing");
-    window.location.href = d.url;
+    window.location.assign(d.url);
   } catch (e) {
-    alert("GA4 connect failed: " + e.message);
+    console.error("GA4 connect failed", e);
+    alert("GA4 connect failed: " + (e?.message || e));
   }
 }
+
+// GA4 buttons are inserted into dashboard cards as inline handlers.
+window.connectGA4 = connectGA4;
+window.disconnectGA4 = disconnectGA4;
+window.selectGA4Property = selectGA4Property;
 
 async function disconnectGA4() {
   if (!confirm("Disconnect Google Analytics 4 from this dashboard?")) return;

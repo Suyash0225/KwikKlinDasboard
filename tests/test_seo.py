@@ -19,7 +19,10 @@ async def test_root_is_the_laundry_site_and_old_url_redirects(client) -> None:
 
     old = await client.get("/laundry", follow_redirects=False)
     assert old.status_code == 301 and old.headers["location"] == "/"
-    assert (await client.get("/join")).status_code == 200
+    join = await client.get("/join")
+    assert join.status_code == 200
+    assert 'rel="canonical" href="http://test/join"' in join.text
+    assert '<meta name="robots" content="index, follow">' in join.text
 
 
 async def test_service_pages_have_unique_seo_and_valid_json_ld(client) -> None:

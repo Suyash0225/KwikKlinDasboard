@@ -19,5 +19,5 @@ def test_staff_modal_explicit_close_clears_modal_history() -> None:
 def test_modal_history_fix_refreshes_both_script_cache_versions() -> None:
     dashboard = Path("app/static/dashboard.html").read_text(encoding="utf-8")
     staff = Path("app/static/staff.html").read_text(encoding="utf-8")
-    assert "app.js?v=inboxux20261019modalfix" in dashboard
+    assert "app.js?v=inboxux20261019ga4fixmodalhistory" in dashboard
     assert "staff.js?v=s14" in staff
