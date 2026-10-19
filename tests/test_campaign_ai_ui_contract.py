@@ -23,3 +23,11 @@ def test_ai_google_copy_uses_policy_sanitizer_and_validates_poster():
     assert "enforce_google_rules(draft[\"gmb_body\"])" in source
     assert "enforce_google_rules(draft[\"gmb_title\"])" in source
     assert "check_google_image(image_path)" in source
+
+
+def test_control_panel_shows_per_location_google_post_results():
+    control = (ROOT / "app/static/control.js").read_text(encoding="utf-8")
+    assert "gb.auto_post_locations || []" in control
+    assert 'p.status === "published"' in control
+    assert 'p.status === "failed"' in control
+    assert "p.error" in control
