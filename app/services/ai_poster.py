@@ -77,6 +77,25 @@ async def generate_background(prompt: str, out_path: Path) -> Path:
         raise AIPosterError(f"Gemini image generation failed: {type(exc).__name__}") from exc
 
 
+def create_fallback_background(out_path: Path) -> Path:
+    """Create a clean navy/cyan fabric-inspired background without external APIs."""
+    image = Image.new("RGB", (1080, 1080), "#09203f")
+    pixels = image.load()
+    top = (8, 31, 59)
+    bottom = (0, 139, 164)
+    for y in range(1080):
+        ratio = y / 1079
+        shade = tuple(int(top[i] * (1 - ratio) + bottom[i] * ratio) for i in range(3))
+        for x in range(1080):
+            pixels[x, y] = shade
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.ellipse((640, 220, 1250, 830), fill=(110, 226, 241, 28), outline=(110, 226, 241, 70), width=6)
+    draw.ellipse((-220, 620, 430, 1270), fill=(255, 255, 255, 15), outline=(255, 255, 255, 35), width=5)
+    draw.rounded_rectangle((650, 80, 980, 140), radius=30, fill=(255, 255, 255, 20))
+    image.save(out_path, "PNG", optimize=True)
+    return out_path
+
+
 def _font(size: int, bold: bool = True) -> ImageFont.ImageFont:
     candidates = (
         ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
