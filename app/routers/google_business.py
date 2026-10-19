@@ -48,6 +48,7 @@ async def status_for(db: AsyncSession) -> dict:
         "stored": len(data.get("reviews") or []),
         "synced_at": data.get("synced_at", ""),
         "auto_post": await __import__("app.services.gbp_auto_post", fromlist=["status"]).status(db),
+        "auto_post_location_count": len(conn.get("post_locations") or ([{"location": conn.get("location")}] if conn.get("location") else [])),
     }
 
 
