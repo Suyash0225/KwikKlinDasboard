@@ -297,11 +297,18 @@ async def get_many(db: AsyncSession, *keys: str) -> dict[str, Any]:
     return out
 
 
-async def set_value(db: AsyncSession, key: str, value: Any) -> None:
-    """Upsert one setting (effective tenant ki). Commits."""
+async def set_value(
+    db: AsyncSession, key: str, value: Any, *, tenant_id=None
+) -> None:
+    """Upsert one setting (effective tenant by default). Commits.
+
+    Trusted cross-request service code may pass the tenant ID it has already
+    resolved from an authorized tenant record, avoiding implicit-context
+    ambiguity in multi-tenant control-plane operations.
+    """
     if key not in DEFAULTS:
         raise KeyError(f"unknown setting {key!r}")
-    tid = _effective_tenant_id()
+    tid = tenant_id or _effective_tenant_id()
     row = (
         await db.execute(
             select(SettingKV).where(
