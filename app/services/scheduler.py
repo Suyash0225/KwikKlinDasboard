@@ -436,22 +436,14 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
             import asyncio
 
             from app.models import Campaign
-            from app.services.marketing import send_campaign
-
+            from app.services.marketing import queue_campaign,send_campaign
             async with async_session_factory() as db:
-                stuck = (
-                    (
-                        await db.execute(
-                            select(Campaign).where(
-                                Campaign.status.in_(("approved", "sending"))
-                            )
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-            for c in stuck:
-                asyncio.create_task(send_campaign(c.id))
+                due=(await db.execute(select(Campaign).where(Campaign.status=="scheduled",Campaign.scheduled_at<=datetime.now(timezone.utc)))).scalars().all()
+                for c in due:c.status="approved"
+                await db.commit()
+                stuck=(await db.execute(select(Campaign).where(Campaign.status.in_(("approved","sending"))))).scalars().all()
+                for c in due:await queue_campaign(db,c)
+            for c in stuck+due:asyncio.create_task(send_campaign(c.id))
     except Exception:
         log.exception("campaign_resume_failed")
 

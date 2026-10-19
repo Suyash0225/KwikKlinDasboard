@@ -312,23 +312,12 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
         }
     if not targets:
         return 0
-    from app.services.leads import check_marketing_eligible_bulk
-
-    # THE single gate: opt-out, cap, complaints, active order, bad rating —
-    # for the whole segment in a fixed number of queries.
-    # Broad-reach campaigns should not suppress a customer just because
-    # they currently have an order in progress. Keep opt-out, frequency,
-    # complaint and negative-rating gates unchanged. Targeted win-back
-    # segments still exclude active orders.
-    allow_active_orders = campaign.segment in ("selected", "all_active")
-    verdicts = await check_marketing_eligible_bulk(
-        db,
-        [st["id"] for st in targets],
-        allow_active_orders=allow_active_orders,
-    )
+    # Apply persisted rule flags during queueing; opt-outs are never bypassed.
+    allow_active_orders=campaign.segment in ("selected","all_active") or campaign.campaign_type=="wish"
+    verdicts={}
     for st in targets:
-        if st["id"] in winback_recent_ids:
-            verdicts[st["id"]] = (False, "winback_30_day_cap")
+        verdicts[st["id"]]=await _campaign_eligibility(db,st["id"],campaign,allow_active_orders=allow_active_orders)
+        if st["id"] in winback_recent_ids:verdicts[st["id"]]=(False,"winback_30_day_cap")
     eligible_ids = [st["id"] for st in targets if verdicts.get(st["id"], (False, ""))[0]]
 
     # Broad-reach (all_active) and owner-picked campaigns express an explicit
@@ -363,6 +352,29 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
         queued=queued, holdout=len(eligible_ids) - queued,
     )
     return queued
+
+
+async def _campaign_eligibility(db: AsyncSession, customer_id, campaign: Campaign, *, allow_active_orders: bool) -> tuple[bool, str]:
+    """Campaign-scoped rules; opt-outs, inactive records and blocked test numbers are invariant safety gates."""
+    cust=await db.get(Customer,customer_id)
+    if cust is None or not cust.is_active:return False,"inactive"
+    if cust.opted_out or cust.marketing_opt_out:return False,"opted_out"
+    if _blocked_test_recipient(cust.phone):return False,"blocked_test_recipient"
+    flags=campaign.rule_flags or {};now=datetime.now(timezone.utc)
+    if flags.get("respect_frequency",True):
+        cap=int(await app_settings.get(db,"marketing_freq_cap_per_month"));gap=timedelta(days=max(1,30//max(cap,1)))
+        if cust.last_marketing_at and now-cust.last_marketing_at<gap:return False,"freq_cap"
+    if flags.get("skip_complaints",True):
+        n=(await db.execute(select(func.count()).select_from(Escalation).where(Escalation.customer_id==customer_id,Escalation.question.like("COMPLAINT:%"),Escalation.created_at>=now-timedelta(days=30)))).scalar_one()
+        if n:return False,"recent_complaint"
+    if not allow_active_orders:
+        from app.services.order_service import ACTIVE_STATUSES
+        n=(await db.execute(select(func.count()).select_from(Order).where(Order.customer_id==customer_id,Order.status.in_(ACTIVE_STATUSES)))).scalar_one()
+        if n:return False,"active_order"
+    from app.models import AuditLog
+    n=(await db.execute(select(func.count()).select_from(AuditLog).where(AuditLog.action=="rating",AuditLog.at>=now-timedelta(days=30),AuditLog.actor==cust.phone,AuditLog.result.like("%agent paused%")))).scalar_one()
+    if n:return False,"recent_bad_rating"
+    return True,""
 
 
 def _in_quiet_hours_now() -> bool:
@@ -461,19 +473,7 @@ async def send_campaign(campaign_id) -> None:
                 # This catches opt-outs, complaints, and frequency-cap changes
                 # that happened after the campaign was queued.
                 await db.refresh(cust)
-                still_eligible, skip_reason = await eligible(db, cust.id)
-                if still_eligible:
-                    # Re-run the broader segment gate too: active orders and
-                    # rating-based exclusions can change after queue creation.
-                    from app.services.leads import check_marketing_eligible_bulk
-                    verdicts = await check_marketing_eligible_bulk(
-                        db,
-                        [cust.id],
-                        allow_active_orders=campaign.segment in ("selected", "all_active"),
-                    )
-                    still_eligible, skip_reason = verdicts.get(
-                        cust.id, (False, "not_eligible")
-                    )
+                still_eligible,skip_reason=await _campaign_eligibility(db,cust.id,campaign,allow_active_orders=campaign.segment in ("selected","all_active") or campaign.campaign_type=="wish")
                 if not still_eligible:
                     rec.status = "skipped"
                     rec.detail = skip_reason[:200] or "not_eligible"

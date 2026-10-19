@@ -208,6 +208,11 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
                 "id": str(c.id),
                 "name": c.name,
                 "segment": c.segment,
+                "campaign_type": getattr(c,"campaign_type","promotion"),
+                "rule_flags": c.rule_flags or {},
+                "frequency_bypassed": not (c.rule_flags or {}).get("respect_frequency",True),
+                "complaints_bypassed": not (c.rule_flags or {}).get("skip_complaints",True),
+                "scheduled_at": c.scheduled_at.isoformat() if c.scheduled_at else None,
                 "status": c.status,
                 "message_text": c.message_text,
                 "rationale": c.rationale,
@@ -222,6 +227,15 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)) -> list[dict]:
         )
     return out
 
+
+@router.get("/campaigns/{campaign_id}/recipients", dependencies=[Depends(require_feature("campaigns"))])
+async def campaign_recipients(campaign_id:str,db:AsyncSession=Depends(get_db))->dict:
+    try:cid=uuid_module.UUID(campaign_id)
+    except ValueError as exc:raise HTTPException(status_code=400,detail="invalid campaign id") from exc
+    campaign=await db.get(Campaign,cid)
+    if campaign is None:raise HTTPException(status_code=404,detail="campaign not found")
+    rows=(await db.execute(select(CampaignRecipient,Customer).join(Customer,Customer.id==CampaignRecipient.customer_id).where(CampaignRecipient.campaign_id==cid).order_by(Customer.name.asc()))).all()
+    return {"campaign_id":str(cid),"recipients":[{"name":customer.name or "Customer","phone":customer.phone,"last_order_date":None,"status":recipient.status,"reason":recipient.detail or ""} for recipient,customer in rows]}
 
 @router.get("/campaigns/overview", dependencies=[Depends(require_feature("campaigns"))])
 async def campaigns_overview(db: AsyncSession = Depends(get_db)) -> dict:
@@ -409,10 +423,16 @@ async def upload_campaign_image(
 class CampaignIn(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     segment: str
-    message_text: str = Field(min_length=5)
+    message_text: str = Field(default="", max_length=4000)
     selected_customer_ids: list[str] = Field(default_factory=list, max_length=500)
     coupon_code: str | None = None
     creative_file: str | None = None
+    campaign_type: str = Field(default="promotion", pattern="^(wish|promotion|payment_reminder)$")
+    respect_frequency: bool = True
+    skip_complaints: bool = True
+    skip_blocked: bool = True
+    include_opted_out: bool = False
+    scheduled_at: datetime | None = None
 
 
 class CampaignAIDraftIn(BaseModel):
@@ -594,9 +614,13 @@ async def ai_campaign_draft(
 @router.post("/campaigns", dependencies=[Depends(require_feature("campaigns"))], status_code=201)
 async def create_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) -> dict:
     creative = body.creative_file or ""
+    if not body.message_text.strip() and not creative: raise HTTPException(status_code=400, detail="Add message text or upload a supported campaign image.")
+    if body.include_opted_out: raise HTTPException(status_code=400, detail="Opted-out customers cannot be included in campaigns.")
+    segment="all_active" if body.campaign_type=="wish" else ("outstanding_dues" if body.campaign_type=="payment_reminder" else body.segment)
+    rule_flags={"respect_frequency":bool(body.respect_frequency),"skip_complaints":bool(body.skip_complaints),"skip_blocked":True,"include_opted_out":False}
     if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\.(?:png|jpg|jpeg)", creative):
         raise HTTPException(status_code=400, detail="invalid campaign creative")
-    if body.segment == "selected":
+    if segment == "selected":
         if not body.selected_customer_ids:
             raise HTTPException(status_code=400, detail="select at least one customer")
         try:
@@ -624,14 +648,13 @@ async def create_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) 
     else:
         stats = {"creative_file": creative} if creative else None
 
-    c = Campaign(
-        name=body.name, segment=body.segment, message_text=body.message_text,
-        coupon_code=body.coupon_code, status="draft", created_by="owner",
-        stats=stats,
-    )
+    scheduled_at=body.scheduled_at
+    if scheduled_at and scheduled_at.tzinfo is None:scheduled_at=scheduled_at.replace(tzinfo=timezone.utc)
+    scheduled=bool(scheduled_at and scheduled_at>datetime.now(timezone.utc))
+    c=Campaign(name=body.name,segment=segment,message_text=body.message_text,campaign_type=body.campaign_type,rule_flags=rule_flags,scheduled_at=scheduled_at,coupon_code=body.coupon_code,status="scheduled" if scheduled else "draft",created_by="owner",stats=stats)
     db.add(c)
     await db.commit()
-    return {"id": str(c.id), "status": c.status}
+    return {"id":str(c.id),"status":c.status,"scheduled_at":c.scheduled_at.isoformat() if c.scheduled_at else None}
 
 
 @router.post("/campaigns/{campaign_id}/approve", dependencies=[Depends(require_feature("campaigns"))])
@@ -639,6 +662,7 @@ async def approve_campaign(campaign_id: str, db: AsyncSession = Depends(get_db))
     c = await db.get(Campaign, uuid_module.UUID(campaign_id))
     if c is None:
         raise HTTPException(status_code=404, detail="campaign not found")
+    if c.status=="scheduled" and c.scheduled_at and c.scheduled_at>datetime.now(timezone.utc):return {"queued":0,"status":"scheduled","scheduled_at":c.scheduled_at.isoformat()}
     if c.status not in ("draft", "suggested"):
         raise HTTPException(status_code=409, detail=f"campaign is {c.status}")
     if c.segment == "selected" and not (c.stats or {}).get("selected_customer_ids"):
