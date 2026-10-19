@@ -32,30 +32,21 @@ ESCALATE_AFTER_PINGS = 3
 MAX_FOLLOWUPS_PER_DAY = 3
 QUIET_START, QUIET_END = settings.QUIET_HOURS_START, settings.QUIET_HOURS_END
 
-# Operational teams share the same queue. assigned_staff_id remains the
-# primary/notification owner, but every active member of the relevant team
-# can see and update the open task. This keeps the DB source of truth while
-# making the WhatsApp/dashboard workflow collaborative.
-SHARED_TEAM_ROLES = {"WASHER", "SUPERVISOR", "DELIVERY"}
-SHARED_JOB_KINDS = {"pickup", "delivery"}
-
-def _task_team_matches_staff(task: Task, staff: Staff) -> bool:
-    role = staff.role.name
-    if role in {"ADMIN", "MANAGER"}:
-        return True
-    if role == "DELIVERY":
-        return task.kind in SHARED_JOB_KINDS
-    if role in {"WASHER", "SUPERVISOR"}:
-        return task.kind not in SHARED_JOB_KINDS
-    return False
-
+# Task ownership is strict: only the assignee can act. Managers/admins may
+# inspect and administer tasks within the active tenant; tenant context/RLS
+# remains the outer boundary for all task queries.
 async def staff_can_access_task(db: AsyncSession, task: Task, staff: Staff) -> bool:
-    """Shared-team authorization; manager/admin always have full access."""
+    """Read access: managers can view the tenant queue; staff see assigned tasks."""
     if not staff.is_active:
         return False
-    if _task_team_matches_staff(task, staff):
+    if staff.role.name in {"ADMIN", "MANAGER"}:
         return True
     return task.assigned_staff_id == staff.id
+
+
+async def staff_can_update_task(db: AsyncSession, task: Task, staff: Staff) -> bool:
+    """Write access: only the active assignee may change a task via WhatsApp."""
+    return bool(staff.is_active and task.assigned_staff_id == staff.id)
 
 
 
@@ -611,14 +602,14 @@ async def create_delivery_task(db: AsyncSession, order) -> Task | None:
 
 
 async def _staff_open_task_filter(db: AsyncSession, staff_id):
+    """Managers see the tenant queue; staff see only tasks assigned to them."""
     staff = await db.get(Staff, staff_id)
-    if staff is None:
+    if staff is None or not staff.is_active:
         return None
-    if staff.role.name == "DELIVERY":
-        return (Task.kind.in_(JOB_KINDS))
-    if staff.role.name in {"WASHER", "SUPERVISOR"}:
-        return (Task.kind.notin_(JOB_KINDS))
-    return (Task.assigned_staff_id == staff_id)
+    if staff.role.name in {"ADMIN", "MANAGER"}:
+        # PostgreSQL RLS / tenant context remains the outer tenant boundary.
+        return Task.id.is_not(None)
+    return Task.assigned_staff_id == staff_id
 
 async def open_pickup_awaiting_eta(db: AsyncSession, staff_id) -> Task | None:
     """Newest shared delivery-team pickup/delivery awaiting an ETA."""

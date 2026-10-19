@@ -494,6 +494,11 @@ async def mark_done(
     from app.services import tasks as task_service
 
     t = await _my_task(db, p, code)
+    if t.assigned_staff_id != p.staff.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the assigned staff member can complete this task",
+        )
     if t.status != TASK_OPEN:
         raise HTTPException(status_code=409, detail=f"{t.code} is already {t.status}")
     await task_service.complete_task(db, t, reply=body.note or None, by=p.staff.name)

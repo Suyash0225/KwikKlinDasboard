@@ -167,9 +167,10 @@ class PendingPayment:
 
 @dataclass
 class PendingTaskEta:
-    """Staff ne "⏳ Time lagega" dabaya — agla message uska ETA hai."""
+    """Staff ne Delay dabaya; typed ETA is a draft until an explicit Save button."""
 
     code: str
+    draft_text: str | None = None
     at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
@@ -334,7 +335,7 @@ _EXTRACT_SYSTEM = (
 # hone par bhi kaunsa kaam hai ye kabhi galat nahi hota. Jise likhna hai wo
 # likh sakta hai; ye sirf sabse aam jawab ka shortcut hai.
 _TASK_BTN_RE = re.compile(
-    r"^\s*\[button:task:(T-?\d+):(done|later|problem|wash|dry|iron|ready|pending)\]",
+    r"^\s*\[button:task:(T-?\d+):(done|later|problem|wash|dry|iron|ready|pending|save_eta|cancel_eta)\]",
     re.I,
 )
 # WAHA list menus use row IDs rather than Meta button IDs.
@@ -356,65 +357,8 @@ _LOW_SIGNAL_STAFF_RE = re.compile(
 )
 
 
-async def _handle_task_menu_display_text(
-    db: AsyncSession, sender_phone: str, sender_label: str, text: str
-) -> str | None:
-    """Recover a task-list selection when WhatsApp/WAHA sends display text only.
-
-    Some WhatsApp engines do not preserve the interactive row id in the
-    normalized inbound message. In that case the visible text can look like
-    "Done Pickup or delivery completed". Resolve it against the sender's
-    actual open-task menu, then feed the resulting task id to the same
-    deterministic handler. Never call the LLM for this.
-    """
-    raw = " ".join((text or "").split()).strip().casefold()
-    if not raw or raw.startswith("[button:"):
-        return None
-
-    def _display_key(value: str) -> str:
-        # WAHA/WhatsApp UI may drop emoji from the selected row title.
-        return " ".join(re.sub(r"[^a-z0-9]+", " ", value.casefold()).split())
-    raw_key = _display_key(raw)
-
-    staff = (
-        await db.execute(
-            select(Staff).where(Staff.phone == sender_phone).order_by(Staff.created_at.asc())
-        )
-    ).scalars().first()
-    if staff is None:
-        return None
-
-    from app.services import tasks as task_service
-    from app.services.work_orders import task_status_menu
-
-    candidates: list[tuple[str, str]] = []
-    for task in await task_service.open_tasks_for_staff(db, staff.id):
-        for row in await task_status_menu(db, task.code):
-            title = " ".join(str(row.title or "").split()).casefold()
-            desc = " ".join(str(row.description or "").split()).casefold()
-            if raw in {title, f"{title} {desc}".strip(), desc} or raw_key in {
-                _display_key(title), _display_key(f"{title} {desc}"), _display_key(desc)
-            }:
-                candidates.append((row.id, row.title))
-
-        # Backward compatibility for menu messages sent before the delivery
-        # labels became stage-aware. WAHA may return the old display text for
-        # a menu already on the worker's phone. Resolve it to that task's
-        # explicit action ID, but still require exactly one matching task
-        # below so a stale label can never update an arbitrary open task.
-        if (
-            raw_key == "done pickup or delivery completed"
-            and task.kind in {"pickup", "delivery"}
-        ):
-            candidates.append((f"task:{task.code}:done", "legacy Done"))
-    if len(candidates) != 1:
-        return None
-
-    action_id, _ = candidates[0]
-    return await _handle_task_button(
-        db, sender_phone, sender_label, f"[button:{action_id}]"
-    )
-
+# Task actions are accepted only through explicit interactive IDs. Visible
+# button text and arbitrary natural-language messages are never task commands.
 
 async def _handle_task_button(
     db: AsyncSession, sender_phone: str, sender_label: str, text: str
@@ -435,21 +379,37 @@ async def _handle_task_button(
     if task is None:
         return get_message("task_unknown_code", code=code)
 
-    # Team-shared task access: the primary assignee is still retained for
-    # ownership/audit, but any active member of the matching operational team
-    # may act on the shared queue.
+    # Authenticate the actor before any task mutation. An inbound label is
+    # not proof that a sender is the manager.
     staff = (
         await db.execute(
             select(Staff).where(Staff.phone == sender_phone).order_by(Staff.created_at.asc())
         )
     ).scalars().first()
-    if staff is not None:
-        if not await task_service.staff_can_access_task(db, task, staff):
-            return "Ye task aapki team ke shared queue mein nahi hai."
+    if staff is None or not staff.is_active:
+        log.warning("task_button_unknown_sender_denied", sender=sender_phone)
+        return "⚠️ Task update ke liye registered active staff number zaroori hai."
+    if not await task_service.staff_can_update_task(db, task, staff):
+        return "⚠️ Ye task sirf assigned staff update kar sakta hai."
+    pending_eta = _PENDING.get(sender_phone)
+    if action == "cancel_eta":
+        if isinstance(pending_eta, PendingTaskEta) and pending_eta.code == code:
+            _PENDING.pop(sender_phone, None)
+        return f"ℹ️ *{code}* ka ETA draft cancel kar diya; task record unchanged hai."
     if task.status != task_service.TASK_OPEN:
-        return await task_service.completion_message(db, task, by=staff.name if staff else sender_label)
+        return await task_service.completion_message(db, task, by=staff.name)
 
-    role = staff.role.name if staff is not None else "manager"
+    if action == "save_eta":
+        if (
+            not isinstance(pending_eta, PendingTaskEta)
+            or pending_eta.code != code
+            or not pending_eta.draft_text
+        ):
+            return "⚠️ ETA draft expire ho gaya. Task ka Delay button dobara dabayein."
+        _PENDING.pop(sender_phone, None)
+        return await task_service.record_pickup_eta(db, task, pending_eta.draft_text)
+
+    role = staff.role.name
 
     # Explicit Done is role-scoped by task type: pickup/delivery work belongs
     # to delivery staff, while washing/custom operational tasks can be closed
@@ -467,7 +427,9 @@ async def _handle_task_button(
 
     if action == "pending":
         staff_id = staff.id if staff is not None else task.assigned_staff_id
-        await task_service.note_reply(db, staff_id, "Pending", by=staff.name if staff else sender_label)
+        await task_service.note_reply(
+            db, staff_id, "Pending", by=staff.name, task_code=code,
+        )
         if task.kind in {"pickup", "delivery"}:
             _PENDING[sender_phone] = PendingTaskEta(code=code)
             await team.notify_admins(
@@ -558,13 +520,27 @@ async def _handle_task_button(
         )
 
     if action == "later":
+        await task_service.note_reply(
+            db, staff.id, "Pending — follow-up required",
+            by=staff.name, task_code=code,
+        )
+        if task.kind not in {"pickup", "delivery"}:
+            return (
+                f"⏳ *{code}* — pending status database mein save hai.\n"
+                "Due date dashboard se update karein."
+            )
         _PENDING[sender_phone] = PendingTaskEta(code=code)
         return (
-            f"⏳ *{code}* — please tell me the expected completion time.\n"
-            "Example: 2 baje / sham tak / kal subah."
+            f"⏳ *{code}* — pending status database mein save hai.\n"
+            "Expected time likhein; database/customer update ke liye baad mein Save ETA button dabana hoga."
         )
 
-    # problem: owner ko turant khabar, aur staff se wajah poochho
+    # problem button: persist the button event, then alert the owner. The
+    # following free-text explanation is notification context only.
+    await task_service.note_reply(
+        db, staff.id, "Issue reported — manager notified",
+        by=staff.name, task_code=code,
+    )
     _PENDING[sender_phone] = PendingTaskIssue(code=code)
     await team.notify_admins(
         db,
@@ -876,6 +852,35 @@ async def _handle_task_followup(
         return None
     if text.startswith("["):          # media/button — ye jawab nahi hai
         return None
+
+    if isinstance(pending, PendingTaskEta):
+        # A second free-text message must not overwrite an already staged ETA.
+        if pending.draft_text:
+            return f"ETA [{pending.code}] ka draft ready hai. Use save/cancel button se confirm karein."
+        from app.services import tasks as task_service
+        task = await task_service.get_by_code(db, pending.code)
+        if task is None:
+            _PENDING.pop(sender_phone, None)
+            return None
+        if task.kind not in {"pickup", "delivery"}:
+            _PENDING.pop(sender_phone, None)
+            return "Is task ke ETA ko dashboard se update karein; task record abhi change nahi hua."
+        draft = text.strip()[:120]
+        if not draft:
+            return "ETA blank hai. Expected time likh kar bhejein."
+        _PENDING[sender_phone] = PendingTaskEta(code=pending.code, draft_text=draft)
+        from app.services.work_orders import Button
+
+        fallback = await _send_with_buttons(
+            db, sender_phone,
+            f"ETA draft for [{task.code}]: {draft}\nDatabase/customer update abhi nahi hua. Confirm karein:",
+            [
+                Button(f"task:{task.code}:save_eta", "Save ETA"),
+                Button(f"task:{task.code}:cancel_eta", "Cancel"),
+            ],
+        )
+        return fallback or "ETA draft ready hai. Task/customer update sirf Save ETA button dabane par hoga."
+
     _PENDING.pop(sender_phone, None)
 
     # "Ajit ko kya bhejun?" ka jawab — ab bhejne wale ke apne shabd hain
@@ -918,18 +923,11 @@ async def _handle_task_followup(
     task = await task_service.get_by_code(db, pending.code)
     if task is None:
         return None
-    if isinstance(pending, PendingTaskEta):
-        task.eta_text = text.strip()[:120]
-        db.add(task)
-        await db.commit()
-        await team.notify_admins(
-            db, f"⏳ {sender_label}: [{task.code}] {task.title} — {task.eta_text}"
-        )
-        return f"👍 Note kar liya: {task.eta_text}"
+    # The issue description is notification context only; do not write it to task fields.
     await team.notify_admins(
         db, f"❗ {sender_label} ki dikkat [{task.code}]: {text.strip()[:300]}"
     )
-    return "Samajh gaya 🙏 Maine owner ko bata diya hai."
+    return "Samajh gaya 🙏 Owner ko bata diya; task record ko message se change nahi kiya."
 
 
 # "aaj ka kaam kya hai", "order details do", "kitne order pending hai" —
@@ -1469,10 +1467,13 @@ async def handle_staff_message(
                 staff = (
                     await db.execute(select(Staff).where(Staff.phone == sender_phone))
                 ).scalar_one_or_none()
-                if staff is None or not await task_service.staff_can_access_task(db, task, staff):
-                    return "⚠️ Ye task aapki team ke access mein nahi hai."
+                if staff is None or not await task_service.staff_can_update_task(db, task, staff):
+                    return "⚠️ Ye task sirf assigned staff update kar sakta hai."
                 answer = "Yes" if choice == "yes" else "No"
-                await task_service.note_reply(db, staff.id, f"{answer} — fixed-choice reply", by=staff.name)
+                await task_service.note_reply(
+                    db, staff.id, f"{answer} — fixed-choice reply",
+                    by=staff.name, task_code=code,
+                )
                 if answer == "Yes":
                     await task_service.complete_task(
                         db, task, reply=f"{answer} — fixed-choice reply", by=staff.name,
@@ -2791,48 +2792,34 @@ def _pickup_reference_date(text: str, today: date) -> date | None:
 async def _handle_pickup_exchange(
     db: AsyncSession, sender_phone: str, sender_label: str, text: str
 ) -> str | None:
-    """Drive the pickup mini-conversation. None = not part of it."""
+    """Legacy pickup buttons only; free text never writes task ETA/status."""
     from app.services import tasks as task_service
 
     staff = (
         await db.execute(select(Staff).where(Staff.phone == sender_phone))
-    ).scalar_one_or_none()
-    if staff is None:
+    ).scalars().first()
+    if staff is None or not staff.is_active:
         return None
 
-    btn = re.match(r"^\s*\[button:([^\]]+)\]", text)
-    payload = btn.group(1) if btn else text
+    btn = re.match(r"^\s*\[button:([^\]]+)\]", text or "")
+    if not btn:
+        return None
+    payload = btn.group(1)
+    if not (_PICKUP_YES_RE.search(payload) or _PICKUP_NO_RE.search(payload)):
+        return None
 
-    if btn and (_PICKUP_YES_RE.search(payload) or _PICKUP_NO_RE.search(payload)):
-        m_code = re.search(r"(T-\d+)", payload)
-        if m_code:
-            task = await task_service.get_by_code(db, m_code.group(1))
-        else:
-            # button titles carry no code — use their newest open pickup
-            task = await task_service.open_pickup_awaiting_confirm(db, staff.id)
-        if task is None:
-            return None
-        return await task_service.confirm_pickup(
-            db, task, done=bool(_PICKUP_YES_RE.search(payload)), by=staff.name or sender_label
-        )
-
-    # not a button: is this the answer to "kab tak pickup karoge?"
-    if text and not text.startswith("["):
-        pending = await task_service.open_pickup_awaiting_eta(db, staff.id)
-        if pending is not None and _ETA_HINT_RE.search(text):
-            order = await db.get(Order, pending.order_id) if pending.order_id else None
-            if order is not None and order.pickup_date is not None:
-                today_ist = datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
-                mentioned = _pickup_reference_date(text, today_ist)
-                if mentioned is not None and mentioned != order.pickup_date:
-                    target = order.pickup_date.strftime("%d %b %Y")
-                    return (
-                        f"⚠️ Pickup date mismatch for {order.order_number}. "
-                        f"The customer requested pickup on {target}. "
-                        f"Please give a pickup time for {target} (for example: 12 PM / 1 PM / evening)."
-                    )
-            return await task_service.record_pickup_eta(db, pending, text)
-    return None
+    m_code = re.search(r"(T-\d+)", payload)
+    # No code means no unambiguous task target; never guess the newest task.
+    if not m_code:
+        return "⚠️ Is button mein task code nahi hai. Current task ka button dobara kholen."
+    task = await task_service.get_by_code(db, m_code.group(1))
+    if task is None:
+        return None
+    if not await task_service.staff_can_update_task(db, task, staff):
+        return "⚠️ Ye task sirf assigned staff update kar sakta hai."
+    return await task_service.confirm_pickup(
+        db, task, done=bool(_PICKUP_YES_RE.search(payload)), by=staff.name or sender_label
+    )
 
 
 async def _close_task_by_code(
@@ -2869,97 +2856,9 @@ async def _close_task_by_code(
     return get_message("task_done_ack", code=task_code)
 
 
-_TASK_REPLY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "is_task_reply": {"type": "boolean"},
-        "status": {"type": "string", "enum": ["UPDATE", "DONE", "BLOCKED", "QUESTION", "NOT_RELATED"]},
-        "summary": {"type": "string"},
-    },
-    "required": ["is_task_reply", "status", "summary"],
-    "additionalProperties": False,
-}
-
-async def _handle_open_task_reply(
-    db: AsyncSession, sender_phone: str, sender_label: str, text: str
-) -> str | None:
-    """Understand a free-text reply in the context of the staff member's latest open task.
-
-    Staff often replies naturally instead of typing a task code. The task title
-    and the latest conversation are supplied to the model so messages such as
-    "Aaj RV, Pooja, BHU aur Samneghat pickup" are treated as an update to the
-    pending pickup-details task instead of an unrelated command.
-    """
-    if sender_label == "manager" or not text or text.startswith("["):
-        return None
-    from app.services import tasks as task_service, team
-
-    staff = (
-        await db.execute(select(Staff).where(Staff.phone == sender_phone))
-    ).scalar_one_or_none()
-    if staff is None or not staff.is_active:
-        return None
-
-    open_tasks = await task_service.open_tasks_for_staff(db, staff.id)
-    if not open_tasks:
-        return None
-    task = open_tasks[0]
-
-    try:
-        history = await _sender_history(db, sender_phone)
-        prompt = (
-            f"STAFF NAME: {staff.name}\n"
-            f"OPEN TASK: [{task.code}] {task.title}\n"
-            f"PREVIOUS TASK REPLY: {task.reply or '(none)'}\n"
-            f"RECENT WHATSAPP HISTORY:\n{history[-2500:] if history else '(none)'}\n\n"
-            f"NEW STAFF MESSAGE:\n{text[:1500]}"
-        )
-        with llm_client.track("task_reply"):
-            out = await llm_client.ask_json(
-                system=(
-                    "You are Kwik Klin's staff task interpreter. Decide whether the new "
-                    "message is a natural response/update to the staff member's OPEN TASK. "
-                    "Use the task title and recent history, not just keywords. Hinglish, "
-                    "Hindi, abbreviations, place names and informal wording are normal. "
-                    "A message listing pickup places, customers, delivery points, progress "
-                    "or a partial result can be a valid UPDATE even without the task code. "
-                    "Do not invent missing facts. Mark DONE only when the message clearly "
-                    "says the whole task is completed. Mark BLOCKED when the staff says the "
-                    "task cannot proceed. If it is unrelated to the task, use NOT_RELATED. "
-                    "Return a short factual summary in the staff's language."
-                ),
-                user_text=prompt,
-                schema=_TASK_REPLY_SCHEMA,
-                model=llm_client.MODEL_SMART,
-                max_tokens=260,
-            )
-    except LLMError:
-        return None
-
-    if not out.get("is_task_reply") or out.get("status") == "NOT_RELATED":
-        return None
-
-    summary = str(out.get("summary") or text).strip()[:500]
-    await task_service.note_reply(db, staff.id, text)
-
-    status = str(out.get("status") or "UPDATE").upper()
-    if status == "DONE":
-        await task_service.complete_task(db, task, by=staff.name or sender_label)
-        return f"✅ *{task.code} — Task complete!*\nSamajh gaya: {summary}"
-    if status == "BLOCKED":
-        await team.notify_admins(
-            db,
-            f"⚠️ *{task.code} — {staff.name} ki dikkat*\n{summary}",
-        )
-        return f"⚠️ *{task.code}* ka update note kar liya. Owner ko bata diya: {summary}"
-    if status == "QUESTION":
-        return f"👍 *{task.code}* ka message samajh gaya. {summary}\nAgar task complete hai to *done {task.code}* bhej dena."
-    return (
-        f"👍 *{task.code} — Update noted*\n"
-        f"{summary}\n\n"
-        f"Kaam complete hone par *done {task.code}* bhej dena."
-    )
-
+# Natural-language staff messages never mutate task records. The AI can answer
+# questions and route operational alerts, but task writes require an explicit
+# task button ID or an authenticated dashboard action.
 
 async def _order_in_text(db: AsyncSession, text: str) -> Order | None:
     """Pull a KK-... order out of free text so the task links to the bill."""
