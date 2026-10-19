@@ -457,6 +457,31 @@ async def test_stop_variants_set_global_and_marketing_optout(client, sent, stop_
         assert customer.marketing_opt_out is True
 
 
+async def test_start_reenables_marketing_only_optout(client, sent) -> None:
+    from app.database import async_session_factory
+    from app.models import Customer
+
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one_or_none()
+        if customer is None:
+            customer = Customer(phone=TEST_CUSTOMER_PHONE, name="Marketing Optout Test")
+            db.add(customer)
+        customer.opted_out = False
+        customer.marketing_opt_out = True
+        await db.commit()
+
+    await _inbound_from(client, "START", None, "wamid.TEST-start-marketing-only")
+
+    async with async_session_factory() as db:
+        customer = (
+            await db.execute(select(Customer).where(Customer.phone == TEST_CUSTOMER_PHONE))
+        ).scalar_one()
+        assert customer.opted_out is False
+        assert customer.marketing_opt_out is False
+
+
 async def test_start_reenables_customer_after_stop(client, sent) -> None:
     from app.database import async_session_factory
     from app.models import Customer

@@ -1309,7 +1309,7 @@ async def _handle_inbound_message(
             except SendError:
                 log.exception("stop_confirm_send_failed", phone=phone)
             return
-        if START_RE.search(text or "") and customer.opted_out:
+        if START_RE.search(text or "") and (customer.opted_out or customer.marketing_opt_out):
             customer.opted_out = False
             customer.marketing_opt_out = False
             await db.commit()
