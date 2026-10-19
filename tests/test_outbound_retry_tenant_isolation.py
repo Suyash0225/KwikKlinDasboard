@@ -78,10 +78,10 @@ async def retry_tenant_and_home_customer():
 
 async def _queue_retry(payload: dict, to_phone: str, fixture_data: dict) -> uuid.UUID:
     row_id = uuid.uuid4()
-    now = datetime.now(timezone.utc)
-    # The queue drain only takes the oldest 30 rows. Put these guard rows ahead
-    # of leftovers from other tests so the assertions exercise the retry path.
-    created_at = datetime(1900, 1, 1, tzinfo=timezone.utc)
+    # Ensure the row is unambiguously eligible under the DB-clock due filter,
+    # independent of app/DB clock skew and queue backlog in the shared test DB.
+    eligible_at = datetime(1900, 1, 1, tzinfo=timezone.utc)
+    created_at = eligible_at
     async with tenant_context.as_system_context():
         async with async_session_factory() as db:
             db.add(
@@ -91,7 +91,7 @@ async def _queue_retry(payload: dict, to_phone: str, fixture_data: dict) -> uuid
                     payload=payload,
                     status="queued",
                     attempts=0,
-                    next_attempt_at=now,
+                    next_attempt_at=eligible_at,
                     created_at=created_at,
                 )
             )
