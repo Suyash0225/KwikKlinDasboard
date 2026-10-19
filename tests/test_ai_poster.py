@@ -51,3 +51,12 @@ def test_composed_poster_uses_square_layout_and_real_logo(tmp_path):
     with Image.open(out) as result:
         assert result.size == (1080, 1080)
         assert result.format == "PNG"
+
+
+
+def test_fallback_background_is_square_png(tmp_path):
+    path = tmp_path / "fallback.png"
+    ai_poster.create_fallback_background(path)
+    with Image.open(path) as result:
+        assert result.size == (1080, 1080)
+        assert result.format == "PNG"
