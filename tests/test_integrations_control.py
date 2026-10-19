@@ -212,6 +212,7 @@ async def test_production_refuses_to_start_with_security_gaps(monkeypatch) -> No
             pass
 
 
+@pytest.mark.requires_independent_sessions
 async def test_refreshing_google_locations_enables_daily_posts(client, shops, monkeypatch) -> None:
     from app.services import app_settings
 
