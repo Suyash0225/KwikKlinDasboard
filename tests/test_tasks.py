@@ -176,6 +176,25 @@ async def test_unassigned_staff_cannot_update_task_with_button(worker, sent) -> 
             await db.commit()
 
 
+async def test_assigned_staff_button_updates_task_in_database(worker, sent) -> None:
+    """An explicit button from the assignee changes persisted task status."""
+    async with async_session_factory() as db:
+        task = await _mk(db, worker, title="Button completion", notify=False)
+        code = task.code
+
+    async with async_session_factory() as db:
+        reply = await bill_agent.handle_staff_message(
+            db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
+            text=f"[button:task:{code}:done] Done",
+        )
+        assert reply is not None
+
+    async with async_session_factory() as db:
+        saved = await task_service.get_by_code(db, code)
+        assert saved.status == TASK_DONE
+        assert saved.completed_at is not None
+
+
 async def test_unknown_code_is_not_a_crash(worker, sent) -> None:
     async with async_session_factory() as db:
         reply = await bill_agent.handle_staff_message(
