@@ -127,3 +127,17 @@ async def test_campaign_poster_falls_back_when_gemini_is_unavailable(tmp_path, m
 
     assert source == "fallback"
     assert out.is_file()
+
+
+def test_composed_poster_requires_real_kwik_klin_logo(tmp_path):
+    import pytest
+
+    background = tmp_path / "background.png"
+    out = tmp_path / "poster.png"
+    Image.new("RGB", (300, 300), "#89cbd4").save(background)
+
+    with pytest.raises(ai_poster.AIPosterError, match="logo asset is missing"):
+        ai_poster.compose_poster(
+            background, tmp_path / "missing-logo.png", out,
+            "Laundry Care", "Fresh Clothes", "Laundry and dry cleaning in Varanasi",
+        )
