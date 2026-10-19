@@ -595,8 +595,10 @@ async def ai_campaign_draft(
         "actual segment, customer value, previous campaign outcomes, season and rate card. "
         "Do not invent services, prices, margins or customer facts. Prefer non-discount "
         "value when it can work. Never exceed the supplied max discount. Keep WhatsApp "
-        "copy <= 3 short lines. Google Business copy must not include a phone number, "
-        "fake address, fake review, or fabricated claim. Return only JSON matching the schema."
+        "copy <= 3 short lines. For Google Business local discovery, naturally mention "
+        "a relevant laundry/dry-cleaning service and Varanasi where it fits; avoid keyword "
+        "stuffing. Google Business copy must not include a phone number, fake address, "
+        "fake review, or fabricated claim. Return only JSON matching the schema."
     )
     user = {
         "segment": body.segment,
@@ -633,7 +635,7 @@ async def ai_campaign_draft(
             "coupon_code": f"KK{body.segment[:5].upper()}{now.strftime('%d%m')}",
             "message": f"Hi {{name}}! Get {value:g}% off your next laundry order this week. — Kwik Klin",
             "gmb_title": f"{value:g}% off your next laundry order" if value else "Fresh clothes, less hassle",
-            "gmb_body": "Book your next laundry service with Kwik Klin this week.",
+            "gmb_body": "Book laundry and dry cleaning with Kwik Klin in Varanasi this week.",
             "gmb_cta": "Book now",
             "creative_brief": "Kwik Klin logo + clean laundry visual + offer badge; no phone number.",
             "rationale": "Safe deterministic fallback because the marketing model was unavailable.",
@@ -654,6 +656,23 @@ async def ai_campaign_draft(
     # posts. AI instructions alone are not a policy gate.
     from app.services.social import check_google_image, draw_poster, enforce_google_rules
     draft["gmb_body"] = enforce_google_rules(draft["gmb_body"])[:700]
+    # Add lightweight local-search context when the model omits it. Keep this
+    # to one natural service/location phrase; never repeat keywords or fabricate
+    # a street address, ranking claim, review, or service not in our rate card.
+    seo_body = draft["gmb_body"]
+    lowered = seo_body.casefold()
+    has_service = any(term in lowered for term in ("laundry", "dry clean", "dry-clean", "wash and fold", "garment care"))
+    has_location = "varanasi" in lowered
+    if not has_service or not has_location:
+        if not has_service and not has_location:
+            suffix = " Laundry and dry cleaning services in Varanasi."
+        elif not has_service:
+            suffix = " Laundry and dry cleaning services."
+        else:
+            suffix = " Serving Varanasi."
+        if suffix.strip().casefold() not in lowered:
+            seo_body = (seo_body.rstrip(" .") + suffix) if seo_body else suffix.strip()
+    draft["gmb_body"] = enforce_google_rules(seo_body)[:700]
     draft["gmb_title"] = enforce_google_rules(draft["gmb_title"])[:120]
     draft["gmb_cta"] = enforce_google_rules(draft["gmb_cta"])[:60]
     # Generate a branded phone-free creative and validate it before exposing it
