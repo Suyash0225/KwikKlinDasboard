@@ -675,9 +675,23 @@ async def ai_campaign_draft(
 
     # Hard safety/business clamps. AI is advisory; code owns money and dates.
     draft["segment"] = body.segment
-    draft["discount_value"] = max(0.0, min(float(draft.get("discount_value") or 0), max_discount))
-    if draft.get("offer_type") == "percent" and draft["discount_value"] > max_discount:
-        draft["discount_value"] = max_discount
+    from app.services.unit_costing import clamp_campaign_discount
+    proposed_discount = max(0.0, float(draft.get("discount_value") or 0))
+    draft["discount_value"] = clamp_campaign_discount(
+        draft.get("offer_type"), proposed_discount, max_discount, float(aov),
+        rate_card, cost_guard_applied,
+    )
+    if draft["discount_value"] < proposed_discount:
+        if draft.get("offer_type") == "flat":
+            draft["rationale"] = str(draft.get("rationale") or "").strip() + (
+                f" Fixed discount capped at ₹{draft['discount_value']:g} using the configured "
+                "percentage limit and average order value; any unit-cost guard excludes shared overhead."
+            )
+        elif draft.get("offer_type") == "percent":
+            draft["rationale"] = str(draft.get("rationale") or "").strip() + (
+                f" Percentage discount capped at {max_discount:g}% by the configured limit "
+                "and any applicable unit-cost guard."
+            )
     if cost_guard_applied and max_discount < configured_max_discount:
         draft["rationale"] = str(draft.get("rationale") or "").strip() + (
             f" Discount capped at {max_discount:g}% by configured per-unit costs; "
