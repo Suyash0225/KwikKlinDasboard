@@ -3736,7 +3736,7 @@ async function loadManualLeads() {
 function renderSegments(segs) {
   const sel = $("camp-seg");
   if (sel) {
-    const keys = ["all_active","active_regular","lapsed","high_value"];
+    const keys = ["all_active","active_regular","lapsed","high_value","outstanding_dues"];
     sel.innerHTML = keys.filter((k) => segs.counts[k] != null)
       .map((k) => '<option value="' + k + '">' + esc(SEGMENT_LABEL[k] || k) + '</option>').join("") + '<option value="selected">Selected customers</option>';
   }
@@ -3973,6 +3973,7 @@ function updateCampaignAudienceCount() {
   const count=segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.length:window.CAMPAIGN_SEG_COUNTS?.[segment];
   if($("camp-summary-count-label"))$("camp-summary-count-label").textContent=segment==="selected"?"Selected customers":"Recipients";
   if($("camp-summary-count"))$("camp-summary-count").textContent=count==null?"—":segment==="selected"?String(count):"~ "+count+" customers";
+  document.querySelectorAll(".camp-audience[data-segment]").forEach(card=>{const k=card.dataset.segment,n=k==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.length:Number(window.CAMPAIGN_SEG_COUNTS?.[k]||0);let badge=card.querySelector(".camp-live-count");if(!badge){badge=document.createElement("span");badge.className="camp-live-count";card.appendChild(badge)}badge.textContent=String(n);});
 }
 function prefillCampaign(seg) {
   selectCampaignAudience(seg,false);
