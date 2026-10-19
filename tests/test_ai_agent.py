@@ -113,10 +113,8 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
     async def fake_ask_json(**kw):
         nonlocal calls
         calls += 1
-        # build_ai_reply routes tools before composing a customer response.
-        # Keep tool-router calls separate from the compose response.
-        # The first call composes the reply on the current path; later calls
-        # provide the saved profile details returned by the model.
+        # This path has one composition call per inbound message. Return
+        # profile extraction on the second message without touching live LLM.
         if calls == 1:
             return {
                 "reply": "Ji, apna naam bata dijiye.",
@@ -137,6 +135,9 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
         }
 
     monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    # The deterministic read-tool selector normally needs no router call;
+    # keep it explicit here so the mock isolates profile extraction behavior.
+    monkeypatch.setattr(agent_module, "_select_customer_tools", lambda *args, **kwargs: {})
     async with async_session_factory() as s:
         cust = Customer(phone=PHONE, name=None, address=None)
         s.add(cust)
@@ -156,8 +157,10 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
         cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
         reply = await build_ai_reply(db, cust, "Rahul Sharma, 12 Lanka, Varanasi")
 
-    assert cust.name == "Rahul Sharma"
-    assert cust.address == "12 Lanka, Varanasi"
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        assert cust.name == "Rahul Sharma"
+        assert cust.address == "12 Lanka, Varanasi"
     assert reply
 
 async def test_ai_facts_always_include_saved_name_and_address(monkeypatch) -> None:
