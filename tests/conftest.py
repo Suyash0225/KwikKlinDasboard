@@ -307,10 +307,10 @@ async def test_washer():
 @pytest.fixture(autouse=True)
 def _no_live_llm(monkeypatch):
     """No test may reach the paid Gemini API — block at its HTTP boundary."""
-    # Keep the configured provider/model so provider-specific tests can select
-    # their own backend. All HTTP entry points below remain blocked by mocks.
-    monkeypatch.setattr(llm_module, "FALLBACK_PROVIDER", llm_module.PROVIDER)
-    monkeypatch.setattr(llm_module, "SECONDARY_FALLBACK_PROVIDER", llm_module.PROVIDER)
+    # Keep the selected Gemini provider/model intact for provider-specific tests.
+    # All HTTP requests remain blocked by this fixture's mocked transport.
+    # A deterministic provider override belongs in the tests that need one.
+
     llm_module._circuit_failures.clear()
     llm_module._circuit_open_until.clear()
 
