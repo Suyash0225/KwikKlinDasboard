@@ -385,20 +385,15 @@ async def _handle_task_button(
             select(Staff).where(Staff.phone == sender_phone).order_by(Staff.created_at.asc())
         )
     ).scalars().first()
-    is_verified_manager = (
-        staff is None
-        and sender_label == "manager"
-        and normalize_phone(sender_phone) == normalize_phone(manager_phone())
-    )
-    if staff is None and not is_verified_manager:
+    if staff is None or not staff.is_active:
         log.warning("task_button_unknown_sender_denied", sender=sender_phone)
-        return "⚠️ Task update ke liye registered staff ya verified manager number zaroori hai."
-    if staff is not None and not await task_service.staff_can_access_task(db, task, staff):
-        return "⚠️ Ye task sirf assigned staff ya manager update kar sakta hai."
+        return "⚠️ Task update ke liye registered active staff number zaroori hai."
+    if not await task_service.staff_can_update_task(db, task, staff):
+        return "⚠️ Ye task sirf assigned staff update kar sakta hai."
     if task.status != task_service.TASK_OPEN:
-        return await task_service.completion_message(db, task, by=staff.name if staff else sender_label)
+        return await task_service.completion_message(db, task, by=staff.name)
 
-    role = staff.role.name if staff is not None else "MANAGER"
+    role = staff.role.name
 
     # Explicit Done is role-scoped by task type: pickup/delivery work belongs
     # to delivery staff, while washing/custom operational tasks can be closed
@@ -2763,8 +2758,8 @@ async def _handle_pickup_exchange(
     task = await task_service.get_by_code(db, m_code.group(1))
     if task is None:
         return None
-    if not await task_service.staff_can_access_task(db, task, staff):
-        return "⚠️ Ye task sirf assigned staff ya manager update kar sakta hai."
+    if not await task_service.staff_can_update_task(db, task, staff):
+        return "⚠️ Ye task sirf assigned staff update kar sakta hai."
     return await task_service.confirm_pickup(
         db, task, done=bool(_PICKUP_YES_RE.search(payload)), by=staff.name or sender_label
     )
