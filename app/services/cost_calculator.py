@@ -73,9 +73,14 @@ def summarize_costs(expenses, order_rows, rates, period_label: str) -> dict:
                 unclassified += 1
                 continue
             service = _unit_key(str(item.get("service") or ""))
-            garment = _unit_key(str(item.get("garment") or item.get("type") or ""))
+            explicit_garment = _unit_key(str(item.get("garment") or ""))
+            type_key = _unit_key(str(item.get("type") or ""))
             explicit_unit = str(item.get("unit") or "").lower()
-            unit = explicit_unit if explicit_unit in {"pc", "kg"} else rate_units.get((service, garment))
+            unit = explicit_unit if explicit_unit in {"pc", "kg"} else (
+                rate_units.get((service, explicit_garment))
+                or rate_units.get((service, ""))
+                or rate_units.get((service, type_key))
+            )
             # Fallback only if the order line explicitly identifies a unit.
             if unit == "kg":
                 kilograms += qty
