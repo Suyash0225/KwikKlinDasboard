@@ -524,13 +524,13 @@ async def send_campaign(campaign_id) -> None:
                 else:
                     text = campaign.message_text.replace("{name}", cust.name or "ji")
                     if "{due_amount}" in text:
-                        due = (await db.execute(select(func.coalesce(func.sum(func.greatest(Order.total_amount - Order.amount_paid, 0)), 0)).where(Order.customer_id == cust.id))).scalar_one()
+                        due = (await db.execute(select(func.coalesce(func.sum(func.greatest(func.coalesce(Order.total_amount, 0) - func.coalesce(Order.amount_paid, 0), 0)), 0)).where(Order.customer_id == cust.id))).scalar_one()
                         text = text.replace("{due_amount}", f"{Decimal(str(due or 0)):.2f}")
                     if "{last_order_date}" in text:
                         last_order = (await db.execute(select(func.max(Order.created_at)).where(Order.customer_id == cust.id))).scalar_one()
                         text = text.replace("{last_order_date}", last_order.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%d %b %Y") if last_order else "your last order")
                     # Missing optional values never leak raw placeholders to customers.
-                    text = __import__("re").sub(r"\\{[a-zA-Z_]+\\}", "", text)
+                    text = __import__("re").sub(r"\{[a-zA-Z_]+\}", "", text)
                 # Shared outbound_policy reserves a tenant-wide send slot;
                 # no worker-local sleep can be bypassed by another campaign.
                 try:
