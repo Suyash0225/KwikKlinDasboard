@@ -227,6 +227,9 @@ async def test_gbp_auto_post_records_failure_retries_and_deduplicates(monkeypatc
     async def fake_connection(db):
         return {"refresh_token": "dummy", "account": "accounts/1", "location": "locations/2"}
 
+    async def fake_poster(db, now_ist, topic_key):
+        return "https://kwikklin.online/social/social-google-2026-10-10.png", None
+
     monkeypatch.setattr(gbp, "enabled", lambda: True)
     monkeypatch.setattr(gbp, "get_connection", fake_connection)
     monkeypatch.setattr(gbp_auto_post, "_generate_post", fake_generate)
