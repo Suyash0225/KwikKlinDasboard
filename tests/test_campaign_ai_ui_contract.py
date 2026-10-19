@@ -65,3 +65,9 @@ def test_ai_google_copy_gets_natural_local_search_context():
     assert len(long_copy) <= 700
     assert "varanasi" in long_copy.lower()
     assert "dry cleaning services in varanasi." in long_copy.lower()
+
+
+def test_ai_campaign_creative_uses_gemini_artwork_with_branded_fallback():
+    source = (ROOT / "app/routers/agent_admin.py").read_text(encoding="utf-8")
+    assert "await ai_poster.create_branded_campaign_poster(" in source
+    assert "draw_poster(" not in source[source.index("async def ai_campaign_draft"):source.index("@router.post(\"/campaigns\",")]

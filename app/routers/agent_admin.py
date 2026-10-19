@@ -707,7 +707,8 @@ async def ai_campaign_draft(
     draft["gmb_body"] = draft["gmb_body"].replace("\\n", " ")
     # Run the same deterministic phone/link/hashtag sanitizer used by daily GBP
     # posts. AI instructions alone are not a policy gate.
-    from app.services.social import check_google_image, draw_poster, enforce_google_rules
+    from app.services import ai_poster
+    from app.services.social import check_google_image, enforce_google_rules
     draft["gmb_body"] = enforce_google_rules(draft["gmb_body"])[:700]
     # Add one natural local-search phrase if AI omitted service/location context.
     # No keyword stuffing, fabricated addresses, reviews, or ranking claims.
@@ -716,8 +717,9 @@ async def ai_campaign_draft(
     )[:700]
     draft["gmb_title"] = enforce_google_rules(draft["gmb_title"])[:120]
     draft["gmb_cta"] = enforce_google_rules(draft["gmb_cta"])[:60]
-    # Generate a branded phone-free creative and validate it before exposing it
-    # as a reusable campaign image. A failed image check falls back to text.
+    # Build one Gemini-artwork poster per campaign draft. The actual Kwik Klin
+    # logo and policy-sensitive text are composited locally, never generated as
+    # image text. If Gemini is unavailable, ai_poster uses a branded fallback.
     creative_file = None
     try:
         from pathlib import Path
@@ -725,12 +727,13 @@ async def ai_campaign_draft(
         media_dir.mkdir(exist_ok=True)
         candidate = f"campaign-{uuid_module.uuid4().hex}.png"
         image_path = media_dir / candidate
-        draw_poster(
-            str(draft.get("gmb_title") or "Kwik Klin"),
-            str(draft.get("gmb_title") or "Fresh clothes, less hassle"),
-            str(draft.get("gmb_body") or "Book your next laundry service."),
+        logo_path = Path(__file__).resolve().parent.parent / "site" / "assets" / "img" / "logo.png"
+        await ai_poster.create_branded_campaign_poster(
             image_path,
-            show_phone=False,
+            logo_path,
+            str(draft.get("campaign_name") or "Kwik Klin Campaign"),
+            str(draft.get("gmb_title") or "Fresh clothes, less hassle"),
+            str(draft.get("gmb_body") or "Laundry and dry cleaning services in Varanasi"),
         )
         image_problems = check_google_image(image_path)
         if image_problems:

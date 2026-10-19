@@ -136,6 +136,9 @@ def compose_poster(
     subline: str,
 ) -> Path:
     """Overlay true logo and policy-safe copy on generated art; never print contact details."""
+    logo_path = Path(logo_path)
+    if not logo_path.is_file():
+        raise AIPosterError("Kwik Klin logo asset is missing")
     with Image.open(background_path) as source:
         background = source.convert("RGB")
     w = h = 1080
@@ -180,3 +183,48 @@ def compose_poster(
     draw.text((60, 906), "Explore Kwik Klin online", font=_font(45), fill=(110, 226, 241, 255))
     canvas.convert("RGB").save(out_path, "PNG", optimize=True)
     return out_path
+
+
+async def create_branded_campaign_poster(
+    out_path: Path,
+    logo_path: Path,
+    theme: str,
+    headline: str,
+    subline: str,
+) -> str:
+    """Create a campaign poster with Gemini artwork and locally rendered brand copy.
+
+    Returns 'gemini' when image generation succeeds, otherwise 'fallback'.
+    The fallback keeps campaigns usable when the image API is unavailable; the
+    caller still validates the final file before exposing it to the campaign UI.
+    """
+    import tempfile
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="kwikklin-campaign-art-") as tmp:
+        background = Path(tmp) / "background.png"
+        # Keep model output purely visual. Offer copy, logo, prices and contact
+        # details are always rendered locally from the sanitized draft.
+        prompt = (
+            "Create premium square 1:1 lifestyle background artwork for an Indian "
+            "laundry and dry-cleaning campaign. Show fresh folded garments and "
+            "tasteful fabric textures, realistic commercial photography, clean "
+            "natural light, navy and cyan accents, calm negative space. No text, "
+            "letters, numbers, logo, watermark, phone, signage, price, discount or offer. "
+            "Background only; all campaign copy is composited locally."
+        )
+        try:
+            await generate_background(prompt, background)
+            source = "gemini"
+        except Exception:
+            # Fail closed to a deterministic branded background, not a missing image.
+            create_fallback_background(background)
+            source = "fallback"
+        compose_poster(
+            background, Path(logo_path), out_path,
+            str(theme or "Laundry Care")[:42],
+            str(headline or "Fresh clothes, less hassle")[:180],
+            str(subline or "Laundry and dry cleaning services in Varanasi")[:700],
+        )
+    return source
