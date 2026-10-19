@@ -95,7 +95,7 @@ async def open_load(db: AsyncSession) -> dict:
 
 
 async def pick_staff(db: AsyncSession, role: str, order: Order | None = None) -> Staff | None:
-    """Is kaam ke liye kaun — order par laga aadmi, warna sabse khaali."""
+    """Pick one eligible worker, respecting both automation and WhatsApp switches."""
     from app.services import app_settings
 
     roles = ROLES[role]
@@ -109,14 +109,20 @@ async def pick_staff(db: AsyncSession, role: str, order: Order | None = None) ->
             if (
                 st is not None
                 and st.is_active
+                and st.ai_agent_enabled
                 and switches.get(str(st.id), True)
+                and st.role in roles
             ):
                 return st
     staff = (
-        await db.execute(select(Staff).where(Staff.is_active.is_(True), Staff.role.in_(roles)))
+        await db.execute(
+            select(Staff).where(
+                Staff.is_active.is_(True),
+                Staff.ai_agent_enabled.is_(True),
+                Staff.role.in_(roles),
+            )
+        )
     ).scalars().all()
-    # The per-staff agent switch must apply to every automatic assignment path,
-    # including order creation, due-task planning, status changes and rebalance.
     staff = [candidate for candidate in staff if switches.get(str(candidate.id), True)]
     if not staff:
         return None

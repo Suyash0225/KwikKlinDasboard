@@ -380,3 +380,34 @@ async def test_a_senior_washerman_can_be_a_manager_too(client) -> None:
     from app.services.staff_auth import MANAGER_ROLES
 
     assert StaffRole.SUPERVISOR in MANAGER_ROLES
+
+
+async def test_agent_assignment_toggle_is_independent_of_ai_whatsapp_toggle(client) -> None:
+    sid = await _create(client, CRUD_PHONE_10, "Agent Assignment Switch")
+    try:
+        response = await client.put(
+            f"/admin/api/staff/{sid}", headers=H, json={"agent_enabled": False}
+        )
+        assert response.status_code == 200, response.text
+        row = next(
+            item for item in (await client.get("/admin/api/staff", headers=H)).json()
+            if item["id"] == sid
+        )
+        assert row["agent_enabled"] is False
+        assert row["ai_agent_enabled"] is True
+        assert row["is_active"] is True
+
+        response = await client.put(
+            f"/admin/api/staff/{sid}", headers=H, json={"agent_enabled": True}
+        )
+        assert response.status_code == 200, response.text
+        row = next(
+            item for item in (await client.get("/admin/api/staff", headers=H)).json()
+            if item["id"] == sid
+        )
+        assert row["agent_enabled"] is True
+    finally:
+        async with async_session_factory() as db:
+            switches = await app_settings.get(db, "staff_agent_switches")
+            switches.pop(sid, None)
+            await app_settings.set_value(db, "staff_agent_switches", switches)

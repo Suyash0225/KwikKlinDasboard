@@ -334,3 +334,25 @@ async def test_agent_off_staff_is_never_selected_for_automatic_assignment(shop) 
         await app_settings.set_value(db, "staff_agent_switches", switches)
         selected = await ops_agent.pick_staff(db, "WASHER", await db.get(Order, order.id))
         assert selected is None
+
+
+async def test_work_order_resolver_sends_to_one_agent_enabled_worker(shop) -> None:
+    """Unassigned work must skip Agent-OFF staff and never broadcast."""
+    order = await _order()
+    async with async_session_factory() as db:
+        switches = await app_settings.get(db, "staff_agent_switches")
+        switches[str(shop["w1"])] = False
+        switches[str(shop["w2"])] = True
+        await app_settings.set_value(db, "staff_agent_switches", switches)
+        try:
+            saved = await db.get(Order, order.id)
+            saved.assigned_washer_id = shop["w1"]
+            await db.commit()
+            from app.services.work_orders import resolve_workers
+            recipients = await resolve_workers(db, saved, "WASHER")
+            assert [worker.id for worker in recipients] == [shop["w2"]]
+        finally:
+            switches = await app_settings.get(db, "staff_agent_switches")
+            switches.pop(str(shop["w1"]), None)
+            switches.pop(str(shop["w2"]), None)
+            await app_settings.set_value(db, "staff_agent_switches", switches)
