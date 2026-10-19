@@ -466,6 +466,31 @@ async def preview_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db))
     return {"total_in_audience":len(targets),"will_receive":len(recipients),"skipped":skipped,"recipients":recipients,"skipped_recipients":skipped_recipients}
 
 
+@router.post("/campaigns/test-send", dependencies=[Depends(require_feature("campaigns"))])
+async def test_campaign_send(body: CampaignIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Send the reviewed creative only to the configured manager/admin number."""
+    creative=body.creative_file or ""
+    if not body.message_text.strip() and not creative:
+        raise HTTPException(status_code=400,detail="Add message text or a supported image before test sending.")
+    if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\\.(?:png|jpg|jpeg)",creative):
+        raise HTTPException(status_code=400,detail="invalid campaign creative")
+    from app.services.tenant_context import manager_phone
+    from app.services.whatsapp import SendError, send_image, send_message
+    phone=normalize_phone(manager_phone())
+    if not phone: raise HTTPException(status_code=400,detail="No saved admin WhatsApp number is configured.")
+    try:
+        if creative:
+            media=Path(__file__).resolve().parent.parent/"media"/creative
+            if not media.is_file(): raise HTTPException(status_code=400,detail="Campaign image is no longer available; upload it again.")
+            wamid=await send_image(db,to_phone=phone,file_path=str(media),mime_type="image/jpeg" if media.suffix.lower() in (".jpg",".jpeg") else "image/png",caption=body.message_text,local_url=f"/admin/media/{creative}",sent_by="manager",intent="promotional")
+        else:
+            wamid=await send_message(db,to_phone=phone,text=body.message_text,category="marketing",sent_by="manager")
+    except SendError as exc:
+        raise HTTPException(status_code=502,detail="Test message could not be accepted. Review the number/provider status and retry safely.") from exc
+    await audit.record(actor_role="admin",actor="dashboard",action="campaign_test_send",args={"campaign_name":body.name,"destination":phone},result="provider accepted; delivery not confirmed")
+    return {"status":"accepted","message_id":wamid,"destination":phone,"note":"Provider accepted the request; delivery is not confirmed."}
+
+
 class CampaignAIDraftIn(BaseModel):
     segment: str
     goal: str = Field(default="increase repeat orders", max_length=120)
