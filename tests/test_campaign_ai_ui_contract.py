@@ -40,3 +40,23 @@ def test_campaign_image_preview_falls_back_to_local_upload_blob():
     assert "window.CAMPAIGN_PREVIEW_URL" in upload_function
     assert "onerror=" in upload_function
     assert "this.src=window.CAMPAIGN_PREVIEW_URL" in upload_function
+
+
+def test_ai_google_copy_gets_natural_local_search_context():
+    from app.routers.agent_admin import _ensure_gmb_local_search_context
+
+    body = _ensure_gmb_local_search_context("Fresh clothes, less hassle this week.")
+    assert "laundry" in body.lower()
+    assert "dry cleaning" in body.lower()
+    assert "varanasi" in body.lower()
+
+    body_with_service = _ensure_gmb_local_search_context("Book laundry service today.")
+    assert "varanasi" in body_with_service.lower()
+    assert body_with_service.lower().count("laundry") == 1
+
+    body_with_location = _ensure_gmb_local_search_context("Enjoy convenient pickup in Varanasi.")
+    assert "laundry and dry cleaning services" in body_with_location.lower()
+    assert body_with_location.lower().count("varanasi") == 1
+
+    complete = "Laundry and dry cleaning in Varanasi for fresh garments."
+    assert _ensure_gmb_local_search_context(complete) == complete
