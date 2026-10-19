@@ -1426,7 +1426,11 @@ async def _handle_inbound_message(
         # subsequent messages stay silent while the human takeover is active.
         was_agent_paused = customer.agent_paused
         reply_intent = "transactional"
-        reply_kind = "order_status" if ORDER_NUMBER_RE.search(spoken) else "service_reply"
+        reply_kind = (
+            "order_status"
+            if ORDER_NUMBER_RE.search(spoken) or ORDER_STATUS_QUERY_RE.search(spoken)
+            else "customer_agent_reply"
+        )
         reply = None
         try:
             if ORDER_NUMBER_RE.search(spoken) or ORDER_STATUS_QUERY_RE.search(spoken):
