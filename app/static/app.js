@@ -3809,13 +3809,16 @@ async function generateCampaignDraft(btn) {
       });
       if ($("camp-name")) $("camp-name").value = draft.campaign_name || "Kwik Klin campaign";
       if ($("camp-msg")) $("camp-msg").value = draft.message || "";
+      window.CAMPAIGN_CUSTOM_IMAGE = draft.creative_file || null;
       if (draft.creative_file) {
-        window.CAMPAIGN_CUSTOM_IMAGE = draft.creative_file;
         const url = "/admin/media/" + encodeURIComponent(draft.creative_file);
         if ($("camp-image-preview")) $("camp-image-preview").innerHTML =
           '<div class="camp-image-card"><img src="' + url + '" alt="AI campaign poster preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';
         if ($("camp-preview-image")) $("camp-preview-image").innerHTML =
           '<img src="' + url + '" alt="AI campaign poster">';
+      } else {
+        if ($("camp-image-preview")) $("camp-image-preview").innerHTML = "";
+        if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
       }
       const gmb = $("camp-ai-gmb-preview");
       if (gmb) gmb.hidden = false;
