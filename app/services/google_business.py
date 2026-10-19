@@ -249,13 +249,15 @@ async def get_connection(db) -> dict:
     return conn
 
 
-async def save_connection(db, conn: dict) -> None:
+async def save_connection(db, conn: dict, *, tenant_id=None) -> None:
     from app.services import app_settings
 
     stored = dict(conn)
     if stored.get("refresh_token"):
         stored["refresh_token"] = secrets.encrypt(stored["refresh_token"])
-    await app_settings.set_value(db, "gbp_connection", stored)
+    await app_settings.set_value(
+        db, "gbp_connection", stored, tenant_id=tenant_id
+    )
 
 
 async def sync(db) -> dict:
