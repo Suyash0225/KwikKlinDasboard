@@ -281,28 +281,43 @@ async def test_ready_order_asks_the_delivery_boy_for_a_time(boy, sent) -> None:
     assert any(task.code in c["text"] for c in sent if c["to"] == OWNER), "owner ko batao"
 
 
-async def test_free_text_delivery_eta_does_not_mutate_task_or_customer(boy, sent) -> None:
-    """Delivery ETA prose cannot write task fields or promise a time to customer."""
+async def test_delivery_eta_needs_explicit_save_button(boy, sent) -> None:
+    """A typed ETA is only a draft; explicit button saves it and tells customer."""
     async with async_session_factory() as db:
         order = await _ready_order(db)
-    sent.clear()
-
-    async with async_session_factory() as db:
-        await bill_agent.handle_staff_message(
-            db, sender_phone=BOY_PHONE, sender_label="Ajit Test",
-            text="sham 6 baje tak de dunga",
-        )
-
-    async with async_session_factory() as db:
         task = (
             await db.execute(
                 select(Task).where(Task.order_id == order.id, Task.kind == "delivery")
             )
         ).scalars().one()
-    assert task.eta_text is None
-    assert task.reply is None
-    assert task.status == "OPEN"
-    assert not any(c["to"] == TEST_CUSTOMER_PHONE for c in sent)
+    sent.clear()
+    try:
+        async with async_session_factory() as db:
+            await bill_agent.handle_staff_message(
+                db, sender_phone=BOY_PHONE, sender_label="Ajit Test",
+                text=f"[button:task:{task.code}:later] Delay",
+            )
+        async with async_session_factory() as db:
+            await bill_agent.handle_staff_message(
+                db, sender_phone=BOY_PHONE, sender_label="Ajit Test",
+                text="sham 6 baje tak de dunga",
+            )
+        async with async_session_factory() as db:
+            draft = await task_service.get_by_code(db, task.code)
+            assert draft.eta_text is None
+        assert not any(c["to"] == TEST_CUSTOMER_PHONE for c in sent)
+
+        async with async_session_factory() as db:
+            await bill_agent.handle_staff_message(
+                db, sender_phone=BOY_PHONE, sender_label="Ajit Test",
+                text=f"[button:task:{task.code}:save_eta] Save ETA",
+            )
+        async with async_session_factory() as db:
+            saved = await task_service.get_by_code(db, task.code)
+        assert saved.eta_text == "sham 6 baje tak de dunga"
+        assert any(c["to"] == TEST_CUSTOMER_PHONE for c in sent)
+    finally:
+        bill_agent._PENDING.pop(BOY_PHONE, None)
 
 
 async def test_yes_on_delivery_marks_the_order_delivered(boy, sent) -> None:
