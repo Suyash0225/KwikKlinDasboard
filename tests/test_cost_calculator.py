@@ -21,6 +21,7 @@ def test_cost_metrics_use_delivered_orders_and_decimal_math():
     assert result["cost_per_piece_proxy"] == Decimal("37.50")
     assert result["kilograms"] == Decimal("0")
     assert result["completed_orders"] == 1
+    assert "Shared-expense proxy" in result["cost_proxy_note"]
 
 
 def test_cost_metrics_do_not_count_cancelled_or_unknown_units():
@@ -38,6 +39,7 @@ def test_cost_metrics_do_not_count_cancelled_or_unknown_units():
     assert result["cost_per_piece_proxy"] is None
     assert result["unclassified_lines"] == 1
     assert result["has_expenses"] is False
+    assert "not zero" in result["cost_proxy_note"]
 
 
 def test_missing_expenses_do_not_become_zero_cost():
@@ -52,7 +54,7 @@ def test_missing_expenses_do_not_become_zero_cost():
     assert result["has_expenses"] is False
 
 
-def test_mixed_units_are_flagged_and_costs_are_only_proxies():
+def test_mixed_units_suppress_misleading_unit_cost_proxies():
     order = SimpleNamespace(
         status=OrderStatus.DELIVERED,
         items=[
@@ -68,5 +70,18 @@ def test_mixed_units_are_flagged_and_costs_are_only_proxies():
     assert result["pieces"] == Decimal("2")
     assert result["kilograms"] == Decimal("3")
     assert result["mixed_units"] is True
+    assert result["cost_per_piece_proxy"] is None
+    assert result["cost_per_kg_proxy"] is None
+    assert "suppressed" in result["cost_proxy_note"]
+
+
+def test_single_unit_proxy_is_available_with_expenses_and_classified_volume():
+    order = SimpleNamespace(
+        status=OrderStatus.DELIVERED,
+        items=[{"type": "shirt", "service": "wash_iron", "garment": "Shirt", "qty": 2}],
+    )
+    rate = SimpleNamespace(service="wash_iron", garment="Shirt", unit="pc")
+    result = summarize_costs([Decimal("100")], [order], [rate], "test")
     assert result["cost_per_piece_proxy"] == Decimal("50.00")
-    assert result["cost_per_kg_proxy"] == Decimal("33.33")
+    assert result["cost_per_kg_proxy"] is None
+    assert result["mixed_units"] is False
