@@ -314,9 +314,8 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
         return 0
     # Apply persisted rule flags during queueing; opt-outs are never bypassed.
     allow_active_orders=campaign.segment in ("selected","all_active") or campaign.campaign_type=="wish"
-    verdicts={}
+    verdicts=await _campaign_verdicts(db,[st["id"] for st in targets],campaign,allow_active_orders=allow_active_orders)
     for st in targets:
-        verdicts[st["id"]]=await _campaign_eligibility(db,st["id"],campaign,allow_active_orders=allow_active_orders)
         if st["id"] in winback_recent_ids:verdicts[st["id"]]=(False,"winback_30_day_cap")
     eligible_ids = [st["id"] for st in targets if verdicts.get(st["id"], (False, ""))[0]]
 
@@ -354,27 +353,54 @@ async def queue_campaign(db: AsyncSession, campaign: Campaign) -> int:
     return queued
 
 
-async def _campaign_eligibility(db: AsyncSession, customer_id, campaign: Campaign, *, allow_active_orders: bool) -> tuple[bool, str]:
-    """Campaign-scoped rules; opt-outs, inactive records and blocked test numbers are invariant safety gates."""
-    cust=await db.get(Customer,customer_id)
-    if cust is None or not cust.is_active:return False,"inactive"
-    if cust.opted_out or cust.marketing_opt_out:return False,"opted_out"
-    if _blocked_test_recipient(cust.phone):return False,"blocked_test_recipient"
-    flags=campaign.rule_flags or {};now=datetime.now(timezone.utc)
-    if flags.get("respect_frequency",True):
-        cap=int(await app_settings.get(db,"marketing_freq_cap_per_month"));gap=timedelta(days=max(1,30//max(cap,1)))
-        if cust.last_marketing_at and now-cust.last_marketing_at<gap:return False,"freq_cap"
-    if flags.get("skip_complaints",True):
-        n=(await db.execute(select(func.count()).select_from(Escalation).where(Escalation.customer_id==customer_id,Escalation.question.like("COMPLAINT:%"),Escalation.created_at>=now-timedelta(days=30)))).scalar_one()
-        if n:return False,"recent_complaint"
-    if not allow_active_orders:
-        from app.services.order_service import ACTIVE_STATUSES
-        n=(await db.execute(select(func.count()).select_from(Order).where(Order.customer_id==customer_id,Order.status.in_(ACTIVE_STATUSES)))).scalar_one()
-        if n:return False,"active_order"
+async def _campaign_verdicts(db: AsyncSession, customer_ids: list, campaign: Campaign, *, allow_active_orders: bool) -> dict:
+    """Batch eligibility checks for campaign queueing; preserve fixed-query segment behavior."""
     from app.models import AuditLog
-    n=(await db.execute(select(func.count()).select_from(AuditLog).where(AuditLog.action=="rating",AuditLog.at>=now-timedelta(days=30),AuditLog.actor==cust.phone,AuditLog.result.like("%agent paused%")))).scalar_one()
-    if n:return False,"recent_bad_rating"
-    return True,""
+    from app.services.order_service import ACTIVE_STATUSES
+    ids=list(customer_ids)
+    if not ids:return {}
+    flags=campaign.rule_flags or {}
+    now=datetime.now(timezone.utc)
+    customers={x.id:x for x in (await db.execute(select(Customer).where(Customer.id.in_(ids)))).scalars().all()}
+    complained=set()
+    if flags.get("skip_complaints",True):
+        complained=set((await db.execute(select(Escalation.customer_id).where(
+            Escalation.customer_id.in_(ids),Escalation.question.like("COMPLAINT:%"),
+            Escalation.created_at>=now-timedelta(days=30),
+        ).group_by(Escalation.customer_id))).scalars().all())
+    busy=set()
+    if not allow_active_orders:
+        busy=set((await db.execute(select(Order.customer_id).where(
+            Order.customer_id.in_(ids),Order.status.in_(ACTIVE_STATUSES)
+        ).group_by(Order.customer_id))).scalars().all())
+    phone_to_id={x.phone:cid for cid,x in customers.items() if x.phone}
+    bad_rated=set()
+    if phone_to_id:
+        bad_phones=(await db.execute(select(AuditLog.actor).where(
+            AuditLog.action=="rating",AuditLog.at>=now-timedelta(days=30),
+            AuditLog.actor.in_(tuple(phone_to_id)),AuditLog.result.like("%agent paused%"),
+        ).group_by(AuditLog.actor))).scalars().all()
+        bad_rated={phone_to_id[p] for p in bad_phones if p in phone_to_id}
+    min_gap=None
+    if flags.get("respect_frequency",True):
+        cap=int(await app_settings.get(db,"marketing_freq_cap_per_month"))
+        min_gap=timedelta(days=max(1,30//max(cap,1)))
+    verdicts={}
+    for cid in ids:
+        cust=customers.get(cid)
+        if cust is None or not cust.is_active: verdicts[cid]=(False,"inactive")
+        elif cust.opted_out or cust.marketing_opt_out: verdicts[cid]=(False,"opted_out")
+        elif _blocked_test_recipient(cust.phone): verdicts[cid]=(False,"blocked_test_recipient")
+        elif min_gap is not None and cust.last_marketing_at and now-cust.last_marketing_at<min_gap: verdicts[cid]=(False,"freq_cap")
+        elif cid in complained: verdicts[cid]=(False,"recent_complaint")
+        elif cid in busy: verdicts[cid]=(False,"active_order")
+        elif cid in bad_rated: verdicts[cid]=(False,"recent_bad_rating")
+        else: verdicts[cid]=(True,"")
+    return verdicts
+
+
+async def _campaign_eligibility(db: AsyncSession, customer_id, campaign: Campaign, *, allow_active_orders: bool) -> tuple[bool,str]:
+    return (await _campaign_verdicts(db,[customer_id],campaign,allow_active_orders=allow_active_orders)).get(customer_id,(False,"not_eligible"))
 
 
 def _in_quiet_hours_now() -> bool:
