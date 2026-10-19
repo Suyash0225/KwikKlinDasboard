@@ -769,20 +769,26 @@ async def test_opted_out_override_is_rejected(sent) -> None:
 
 
 async def test_campaign_image_only_content_is_accepted(sent) -> None:
+    from pathlib import Path
     from app.routers.agent_admin import CampaignIn, create_campaign
     from app.models import Campaign
     phone = "919800001203"
+    filename = "campaign-" + "a" * 32 + ".jpg"
+    media_dir = Path(__file__).resolve().parents[1] / "app" / "media"
+    media_dir.mkdir(exist_ok=True)
+    image_path = media_dir / filename
+    image_path.write_bytes(b"test-image")
     try:
         customer = await _make_marketing_customer(phone, "Image Only Campaign")
         async with async_session_factory() as db:
             result = await create_campaign(CampaignIn(
                 name="image-only", segment="selected", message_text=" ",
-                selected_customer_ids=[str(customer.id)],
-                creative_file="campaign-" + "a" * 32 + ".jpg",
+                selected_customer_ids=[str(customer.id)], creative_file=filename,
             ), db)
             saved = await db.get(Campaign, result["id"])
             assert saved is not None and saved.message_text == " "
     finally:
+        image_path.unlink(missing_ok=True)
         from tests.conftest import purge_phones
         await purge_phones(phone)
 
