@@ -23,7 +23,7 @@ async def tenant_b():
     async with async_session_factory() as db:
         t = Tenant(
             slug=SLUG_B, shop_name="Sched B", owner_name="B", plan="growth",
-            owner_phone=OWNER_B, status="active",
+            owner_phone=OWNER_B, status="active", onboarding_done=True,
         )
         db.add(t)
         await db.commit()
@@ -87,6 +87,18 @@ async def test_idempotency_keys_are_per_shop(tenant_b) -> None:
             )
         ).scalar_one()
     assert n == 2
+
+
+async def test_active_tenants_skips_unonboarded_shops(tenant_b) -> None:
+    """Active status alone is not enough: onboarding must be completed before proactive sends."""
+    ids = [t[0] for t in await tenant_context.active_tenants()]
+    assert tenant_b.id in ids
+    async with async_session_factory() as db:
+        t = await db.get(Tenant, tenant_b.id)
+        t.onboarding_done = False
+        await db.commit()
+    ids = [t[0] for t in await tenant_context.active_tenants()]
+    assert tenant_b.id not in ids
 
 
 async def test_active_tenants_skips_locked_shops(tenant_b) -> None:
