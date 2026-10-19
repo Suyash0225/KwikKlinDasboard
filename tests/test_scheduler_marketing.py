@@ -739,6 +739,73 @@ async def test_selected_campaign_empty_selection_cannot_start(sent) -> None:
         assert "no recipients" in str(exc.value.detail)
 
 
+async def test_campaign_empty_message_requires_image(sent) -> None:
+    from fastapi import HTTPException
+    from app.routers.agent_admin import CampaignIn, create_campaign
+    async with async_session_factory() as db:
+        with pytest.raises(HTTPException) as exc:
+            await create_campaign(CampaignIn(name="empty-text", segment="all_active", message_text="  \n "), db)
+        assert exc.value.status_code == 400
+
+
+async def test_campaign_type_and_frequency_flag_persist(sent) -> None:
+    from app.routers.agent_admin import CampaignIn, create_campaign
+    from app.models import Campaign
+    async with async_session_factory() as db:
+        result = await create_campaign(CampaignIn(name="wish-rules", segment="lapsed", message_text="Hello {name}", campaign_type="wish", respect_frequency=False), db)
+        saved = await db.get(Campaign, result["id"])
+        assert saved.campaign_type == "wish" and saved.segment == "all_active"
+        assert saved.rule_flags["respect_frequency"] is False
+        assert saved.rule_flags["skip_blocked"] is True
+
+
+async def test_opted_out_override_is_rejected(sent) -> None:
+    from fastapi import HTTPException
+    from app.routers.agent_admin import CampaignIn, create_campaign
+    async with async_session_factory() as db:
+        with pytest.raises(HTTPException) as exc:
+            await create_campaign(CampaignIn(name="optout-rule", segment="all_active", message_text="Hello", include_opted_out=True), db)
+        assert exc.value.status_code == 400
+
+
+async def test_campaign_image_only_content_is_accepted(sent) -> None:
+    from pathlib import Path
+    from app.routers.agent_admin import CampaignIn, create_campaign
+    from app.models import Campaign
+    phone = "919800001203"
+    filename = "campaign-" + "a" * 32 + ".jpg"
+    media_dir = Path(__file__).resolve().parents[1] / "app" / "media"
+    media_dir.mkdir(exist_ok=True)
+    image_path = media_dir / filename
+    image_path.write_bytes(b"test-image")
+    try:
+        customer = await _make_marketing_customer(phone, "Image Only Campaign")
+        async with async_session_factory() as db:
+            result = await create_campaign(CampaignIn(
+                name="image-only", segment="selected", message_text=" ",
+                selected_customer_ids=[str(customer.id)], creative_file=filename,
+            ), db)
+            saved = await db.get(Campaign, result["id"])
+            assert saved is not None and saved.message_text == " "
+    finally:
+        image_path.unlink(missing_ok=True)
+        from tests.conftest import purge_phones
+        await purge_phones(phone)
+
+
+async def test_future_campaign_is_scheduled_not_sent(sent) -> None:
+    from datetime import timedelta
+    from app.routers.agent_admin import CampaignIn, create_campaign
+    from app.models import Campaign
+    async with async_session_factory() as db:
+        result = await create_campaign(CampaignIn(
+            name="future-campaign", segment="all_active", message_text="Hello",
+            scheduled_at=datetime.now(timezone.utc) + timedelta(days=1),
+        ), db)
+        saved = await db.get(Campaign, result["id"])
+        assert saved.status == "scheduled" and saved.scheduled_at is not None
+
+
 async def test_selected_campaign_creation_persists_valid_customer_ids(sent) -> None:
     from app.routers.agent_admin import CampaignIn, create_campaign
 

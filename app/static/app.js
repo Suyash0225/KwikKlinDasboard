@@ -3653,6 +3653,11 @@ async function loadCampaigns() {
     if ($("camp-list")) $("camp-list").innerHTML = errBox(e.message, "loadCampaigns");
   }
 }
+function applyLeadTemplate(k){const name=($("manual-lead-name")?.value||"Customer").trim(),service=($("manual-lead-need")?.value||"laundry service").trim(),t={welcome:"Namaste {name} ji, aapki call ke follow-up mein Kwik Klin se message kar raha hoon. Aapko {service} mein kis cheez ki help chahiye?",offer:"Namaste {name} ji! Kwik Klin par {service} ke liye hum aapki help kar sakte hain. Details ke liye reply karein.",payment:"Namaste {name} ji, Kwik Klin se payment update ke liye message kar rahe hain."};if($("manual-lead-message"))$("manual-lead-message").value=(t[k]||"").replace(/\{name\}/g,name).replace(/\{service\}/g,service);updateLeadMessagePreview();}
+function updateLeadContext(){const name=($("manual-lead-name")?.value||"").trim(),phone=($("manual-lead-phone")?.value||"").trim(),service=($("manual-lead-need")?.value||"").trim(),root=$("manual-lead-context-summary");if(root)root.textContent=(name||"Lead name not entered")+" · "+(phone||"WhatsApp number not entered")+" · "+(service||"Service not specified");updateLeadMessagePreview();}
+function updateLeadMessagePreview(){const raw=$("manual-lead-message")?.value||"",name=($("manual-lead-name")?.value||"").trim(),service=($("manual-lead-need")?.value||"").trim(),v=raw.replace(/\{name\}/g,name||"").replace(/\{business_name\}/g,"Kwik Klin").replace(/\{service\}/g,service||"").replace(/\{due_amount\}/g,"").replace(/\{last_order_date\}/g,""),c=$("manual-lead-message-count");if(c)c.textContent=raw.length+"/1200";const p=$("manual-lead-message-preview");if(p)p.textContent=v.trim()||"Your reviewed WhatsApp message will appear here.";}
+function wrapLeadSelection(a,b){const x=$("manual-lead-message");if(!x)return;const s=x.selectionStart,e=x.selectionEnd,t=x.value.slice(s,e);x.setRangeText(a+t+b,s,e,"select");x.focus();updateLeadMessagePreview();}
+function insertLeadEmoji(){const e=prompt("Choose emoji: 😊 🎉 🌸 ✨ ❤️ 🙏 👕 🧺");if(!e)return;const x=$("manual-lead-message");if(!x)return;const s=x.selectionStart||x.value.length;x.setRangeText(e,s,x.selectionEnd||s,"end");x.focus();updateLeadMessagePreview();}
 function draftManualLeadMessage() {
   const name = ($("manual-lead-name")?.value || "").trim();
   const need = ($("manual-lead-need")?.value || "").trim();
@@ -3663,6 +3668,7 @@ function draftManualLeadMessage() {
   const message = "Namaste " + name + " ji, aapki call ke follow-up mein Kwik Klin se message kar raha hoon. Aapne " + need + " mein interest dikhaya tha. Aapko pricing, pickup timing ya service details mein kis cheez ki help chahiye? — Kwik Klin";
   $("manual-lead-message").value = message;
   $("manual-lead-message").focus();
+  updateLeadMessagePreview();
 }
 async function submitManualLead(sendWhatsApp) {
   const name = ($("manual-lead-name")?.value || "").trim();
@@ -3731,7 +3737,7 @@ async function loadManualLeads() {
 function renderSegments(segs) {
   const sel = $("camp-seg");
   if (sel) {
-    const keys = ["all_active","active_regular","lapsed","high_value"];
+    const keys = ["all_active","active_regular","lapsed","high_value","outstanding_dues"];
     sel.innerHTML = keys.filter((k) => segs.counts[k] != null)
       .map((k) => '<option value="' + k + '">' + esc(SEGMENT_LABEL[k] || k) + '</option>').join("") + '<option value="selected">Selected customers</option>';
   }
@@ -3750,15 +3756,19 @@ function renderCampaigns(camps) {
     const actions =
       '<details class="camp-actions"><summary aria-label="Campaign actions">⋮</summary><div>' +
       '<button onclick="openCampaignDetail(\'' + c.id + '\')">View details</button>' +
-      (["approved","sending"].includes(c.status) ? '<button onclick="cancelCampaign(\'' + c.id + '\')">Cancel campaign</button>' : "") +
-      (["approved","sending"].includes(c.status) ? "" : '<button class="danger" onclick="deleteCampaign(\'' + c.id + '\')">Delete campaign</button>') +
+      '<button onclick="duplicateCampaign(\'' + c.id + '\')">Duplicate</button>' +
+      (["approved","sending","scheduled"].includes(c.status) ? '<button onclick="cancelCampaign(\'' + c.id + '\')">Cancel campaign</button>' : "") +
+      (["approved","sending","scheduled"].includes(c.status) ? "" : '<button class="danger" onclick="deleteCampaign(\'' + c.id + '\')">Delete campaign</button>') +
       '</div></details>';
-    return '<article class="camp-history-item">' +
+    return '<article class="camp-history-item" data-campaign-status="'+esc(c.status)+'" data-campaign-name="'+esc((c.name||"").toLowerCase())+'">' +
       '<div class="camp-history-item-top"><div class="camp-history-name"><b>' + esc(c.name) + '</b><div class="muted">' +
-        esc(SEGMENT_LABEL[c.segment] || c.segment) + ' · ' + new Date(c.created_at).toLocaleString() + '</div></div>' +
+        esc(c.campaign_type||"promotion")+' · '+esc(SEGMENT_LABEL[c.segment] || c.segment) + ' · ' + new Date(c.created_at).toLocaleString() + '</div></div>' +
         '<div class="camp-history-actions"><span class="camp-badge ' + cls + '">' + esc(campaignStatusLabel(c.status)) + '</span>' + actions + '</div></div>' +
       img +
       '<div class="camp-history-msg">' + esc(c.message_text) + '</div>' +
+      (c.frequency_bypassed?'<span class="camp-badge draft">Frequency limit bypassed</span>':'') +
+      (c.complaints_bypassed?'<span class="camp-badge draft">Complaint suppression bypassed</span>':'') +
+      (c.scheduled_at?'<div class="camp-history-audience">Scheduled: <b>'+esc(fmtDate(c.scheduled_at))+'</b></div>':'') +
       '<div class="camp-history-meta">' +
         '<span>Recipients <b>' + (s.queued || s.sent || 0) + '</b></span>' +
         '<span>Sent <b>' + (s.sent || 0) + '</b></span><span>Delivered <b>' + (s.delivered || 0) + '</b></span>' +
@@ -3769,17 +3779,35 @@ function renderCampaigns(camps) {
       '</article>';
   }).join("");
 }
+const CAMPAIGN_MESSAGE_TEMPLATES={festival:"Namaste {name} ji! 🌸 Aapko aur aapke parivaar ko hardik shubhkamnayein. — Kwik Klin",offer:"Namaste {name} ji! ✨ Kwik Klin ke saath apne kapdon ko fresh rakhein.",payment:"Namaste {name} ji, aapke account mein ₹{due_amount} payment pending hai. — Kwik Klin",pickup:"Namaste {name} ji! 👕 Aapka Kwik Klin pickup schedule hai.",referral:"Namaste {name} ji! ❤️ Kwik Klin ko apne doston ke saath share karein."};
+function selectedCampaignType(){return document.querySelector('input[name="camp-type"]:checked')?.value||"promotion";}
+function campaignTypeChanged(){const t=selectedCampaignType();document.querySelectorAll(".camp-type-card").forEach(e=>e.classList.toggle("selected",Boolean(e.querySelector("input")?.checked)));if($("camp-rule-frequency")){$("camp-rule-frequency").checked=t==="promotion";$("camp-rule-frequency").disabled=t==="payment_reminder";}if($("camp-rule-complaints"))$("camp-rule-complaints").checked=true;const h=$("camp-type-help");if(h)h.textContent=t==="wish"?"Greeting targets all active customers and bypasses frequency limits; opt-outs and blocked numbers remain excluded.":t==="payment_reminder"?"Payment reminders target customers with outstanding dues.":"Promotion follows the selected audience and rules.";const l=$("camp-audience-lock-note");if(l){l.hidden=t==="promotion";l.textContent=t==="wish"?"Greeting uses all active customers.":"Payment reminders target customers with outstanding dues."}if(t==="wish")selectCampaignAudience("all_active",false);if(t==="payment_reminder")selectCampaignAudience("outstanding_dues",false);updateCampaignPreview();}
+function applyCampaignTemplate(k){let m=CAMPAIGN_MESSAGE_TEMPLATES[k];if(k?.startsWith("saved:")){try{m=JSON.parse(localStorage.getItem("kwikklin_campaign_templates_v1")||"[]")[Number(k.slice(6))]?.message}catch(_){}}if(!m)return;if($("camp-msg"))$("camp-msg").value=m;updateCampaignMsgCount();updateCampaignPreview();}
+function saveCampaignTemplate(){const m=$("camp-msg")?.value||"";if(!m.trim()){if($("camp-send-validation"))$("camp-send-validation").textContent="Write a message before saving a template.";return;}const n=prompt("Template name");if(!n?.trim())return;let a=[];try{a=JSON.parse(localStorage.getItem("kwikklin_campaign_templates_v1")||"[]")}catch(_){}a.push({name:n.trim().slice(0,80),message:m.slice(0,4000)});a=a.slice(-30);localStorage.setItem("kwikklin_campaign_templates_v1",JSON.stringify(a));const s=$("camp-template");if(s){const o=document.createElement("option");o.value="saved:"+(a.length-1);o.textContent=n.trim();s.appendChild(o);s.value=o.value;}}
+function wrapCampaignSelection(a,b){const x=$("camp-msg");if(!x)return;const s=x.selectionStart,e=x.selectionEnd,t=x.value.slice(s,e);x.setRangeText(a+t+b,s,e,"select");x.focus();updateCampaignMsgCount();updateCampaignPreview();}
+function insertCampaignEmoji(){const e=prompt("Choose emoji: 😊 🎉 🌸 ✨ ❤️ 🙏 👕 🧺");if(!e)return;const x=$("camp-msg");if(!x)return;const s=x.selectionStart||x.value.length;x.setRangeText(e,s,x.selectionEnd||s,"end");x.focus();updateCampaignMsgCount();updateCampaignPreview();}
+function toggleCampaignSchedule(){const later=document.querySelector('input[name="camp-send-mode"]:checked')?.value==="later",x=$("camp-scheduled-at");if(x){x.hidden=!later;if(later&&!x.value){const d=new Date(Date.now()+86400000);d.setHours(10,0,0,0);x.value=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}}updateCampaignPreview();}
+function filterCampaignHistory(){const s=$("camp-history-filter")?.value||"all",q=($("camp-history-search")?.value||"").toLowerCase();document.querySelectorAll("#camp-list [data-campaign-status]").forEach(e=>{const st=e.dataset.campaignStatus,matchStatus=s==="all"||(s==="sending"&&["approved","sending"].includes(st))||st===s;e.hidden=!matchStatus||!e.dataset.campaignName?.includes(q);});}
+async function previewCampaignRecipients(showList=true){const root=$("camp-recipient-preview");if(!root)return;if(showList){root.hidden=false;root.innerHTML='<p class="muted">Checking current audience and rules…</p>';}try{const type=selectedCampaignType(),segment=$("camp-seg")?.value||"all_active",body={name:($("camp-name")?.value||"Campaign preview").trim()||"Campaign preview",segment,message_text:$("camp-msg")?.value||"",creative_file:window.CAMPAIGN_CUSTOM_IMAGE||null,campaign_type:type,respect_frequency:Boolean($("camp-rule-frequency")?.checked),skip_complaints:Boolean($("camp-rule-complaints")?.checked),skip_blocked:true,include_opted_out:false,selected_customer_ids:segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.map(x=>x.ref):[]};const d=await api("/admin/api/campaigns/preview",{method:"POST",body});window.CAMPAIGN_PREVIEW_DATA=d;const b=$("camp-recipient-breakdown");if(b){const labels={opted_out:"opted out",freq_cap:"frequency limit",recent_complaint:"complaints",blocked_test_recipient:"blocked / test numbers",inactive:"inactive",active_order:"active order",recent_bad_rating:"negative rating"};b.innerHTML='<div class="camp-breakdown-row"><span>Total in audience</span><b>'+d.total_in_audience+'</b></div><div class="camp-breakdown-row"><span>✅ Will receive</span><b>'+d.will_receive+'</b></div>'+[["opted_out","opted out"],["freq_cap","frequency limit"],["recent_complaint","complaints"],["blocked_test_recipient","blocked / test numbers"]].map(([reason,label])=>{const n=Number((d.skipped||{})[reason]||0),off=(reason==="freq_cap"&&!body.respect_frequency)||(reason==="recent_complaint"&&!body.skip_complaints);return '<div class="camp-breakdown-row"><span>⏭ Skipped — '+label+'</span><span><b>'+(off?"0 (rule off)":n)+'</b> <button type="button" onclick="showSkippedRecipients(\''+reason+'\')">View</button></span></div>';}).join("");}if(showList)renderCampaignPreviewRows(d.recipients||[],"Final recipients");const send=$("camp-start-btn");if(send)send.disabled=!Boolean(($("camp-name")?.value||"").trim())||!Boolean(($("camp-msg")?.value||"").trim()||window.CAMPAIGN_CUSTOM_IMAGE)||d.will_receive<=0;}catch(e){if(showList)root.innerHTML='<p class="camp-inline-note">Could not preview recipients: '+esc(e.message||"Try again.")+'</p>';const note=$("camp-send-validation");if(note)note.textContent="Recipient eligibility preview failed. Retry preview before sending.";}}
+function renderCampaignPreviewRows(rows,title){const root=$("camp-recipient-preview");if(!root)return;root.hidden=false;root.innerHTML='<b>'+esc(title||"Recipients")+'</b><input type="search" placeholder="Search name or number…" oninput="filterCampaignPreview(this.value)"><div id="camp-preview-rows">'+(rows||[]).map(x=>'<div class="camp-recipient-row" data-search="'+esc((x.name+" "+x.phone+" "+(x.reason||"")).toLowerCase())+'"><span><b>'+esc(x.name)+'</b><br>'+esc(x.phone||"")+'</span><span>'+esc(x.last_order_date||"Last order unavailable")+(x.reason?"<br>"+esc(x.reason.replaceAll("_"," ")):"")+'</span></div>').join("")+'</div>';}
+function showSkippedRecipients(reason){const d=window.CAMPAIGN_PREVIEW_DATA||{};renderCampaignPreviewRows((d.skipped_recipients||[]).filter(x=>x.reason===reason),"Skipped — "+reason.replaceAll("_"," "));}
+function scheduleCampaignPreview(){clearTimeout(window.CAMPAIGN_PREVIEW_TIMER);const name=($("camp-name")?.value||"").trim(),content=Boolean(($("camp-msg")?.value||"").trim()||window.CAMPAIGN_CUSTOM_IMAGE),segment=$("camp-seg")?.value||"";if(!name||!content||!segment)return;window.CAMPAIGN_PREVIEW_TIMER=setTimeout(()=>previewCampaignRecipients(false),450);}
+function filterCampaignPreview(q){const v=(q||"").toLowerCase();document.querySelectorAll("#camp-preview-rows [data-search]").forEach(e=>e.hidden=!e.dataset.search.includes(v));}
+async function duplicateCampaign(id){try{const c=await api("/admin/api/campaigns/"+id);if($("camp-name"))$("camp-name").value=(c.name||"Campaign")+" copy";if($("camp-msg"))$("camp-msg").value=c.message_text||"";const t=document.querySelector('input[name="camp-type"][value="'+(c.campaign_type||"promotion")+'"]');if(t)t.checked=true;if($("camp-rule-frequency"))$("camp-rule-frequency").checked=(c.rule_flags||{}).respect_frequency!==false;if($("camp-rule-complaints"))$("camp-rule-complaints").checked=(c.rule_flags||{}).skip_complaints!==false;if(c.creative_file){window.CAMPAIGN_CUSTOM_IMAGE=c.creative_file;const url="/admin/media/"+encodeURIComponent(c.creative_file);if($("camp-image-preview"))$("camp-image-preview").innerHTML='<div class="camp-image-card"><img src="'+url+'" alt="Campaign image preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';if($("camp-preview-image"))$("camp-preview-image").innerHTML='<img src="'+url+'" alt="Campaign image">';}if(c.segment==="selected"){const d=await api("/admin/api/campaigns/"+id+"/recipients");CAMPAIGN_SELECTED_CUSTOMERS=d.recipients.filter(x=>x.status!=="skipped").map(x=>({ref:x.customer_id,name:x.name,phone:x.phone}));renderCampaignSelectedCustomers();selectCampaignAudience("selected",false);}else{selectCampaignAudience(c.segment,false);}campaignTypeChanged();updateCampaignMsgCount();updateCampaignPreview();window.scrollTo({top:0,behavior:"smooth"});toast("Campaign copied into the editor. Review recipients before sending.");}catch(e){toast("Could not duplicate campaign: "+(e.message||"retry"),true);}}
 function updateCampaignMsgCount() {
   const el = $("camp-msg"), count = $("camp-msg-count");
   if (el && count) count.textContent = el.value.length + "/4000";
+  updateCampaignPreview();
 }
 function updateCampaignPreview() {
-  const msg = $("camp-msg")?.value.trim();
-  if ($("camp-preview-text")) $("camp-preview-text").textContent = msg || "Your campaign message will appear here…";
+  const raw=$("camp-msg")?.value||"",msg=raw.replace(/\{name\}/g,"Aarav").replace(/\{due_amount\}/g,"620").replace(/\{last_order_date\}/g,"12 Oct 2026").trim();
+  if ($("camp-preview-text")) $("camp-preview-text").textContent = msg || (window.CAMPAIGN_CUSTOM_IMAGE?"Image-only campaign":"Your campaign message will appear here…");
   if ($("camp-summary-name")) $("camp-summary-name").textContent = $("camp-name")?.value.trim() || "—";
   if ($("camp-summary-image")) $("camp-summary-image").textContent = window.CAMPAIGN_CUSTOM_IMAGE ? "1 image attached" : "No image";
   if ($("camp-preview-time")) $("camp-preview-time").textContent = new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
   updateCampaignAudienceCount();
+  const n=$("camp-seg")?.value==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.length:Number(window.CAMPAIGN_SEG_COUNTS?.[$("camp-seg")?.value||"all_active"]||0),est=$("camp-send-estimate");if(est)est.textContent="~"+n+" messages · about "+Math.ceil(n*17.5/60)+" minutes";
+  const name=Boolean(($("camp-name")?.value||"").trim()),content=Boolean(($("camp-msg")?.value||"").trim()||window.CAMPAIGN_CUSTOM_IMAGE),aud=n>0,send=$("camp-start-btn");if(send)send.disabled=!(name&&content&&aud);const note=$("camp-send-validation");if(note)note.textContent=!name?"Enter a campaign name.":!content?"Add message text or a supported image.":!aud?"Choose an audience with at least one customer.":"Ready to review; server re-checks eligibility.";scheduleCampaignPreview();
 }
 function resetCampaignForm() {
   CAMPAIGN_SELECTED_CUSTOMERS = [];
@@ -3788,6 +3816,7 @@ function resetCampaignForm() {
   window.CAMPAIGN_CUSTOM_IMAGE = null;
   if ($("camp-name")) $("camp-name").value = "";
   if ($("camp-msg")) $("camp-msg").value = "";
+  const promo=document.querySelector('input[name="camp-type"][value="promotion"]');if(promo)promo.checked=true;if($("camp-rule-frequency")){$("camp-rule-frequency").checked=true;$("camp-rule-frequency").disabled=false;}if($("camp-rule-complaints"))$("camp-rule-complaints").checked=true;
   if ($("camp-image")) $("camp-image").value = "";
   if ($("camp-image-preview")) $("camp-image-preview").innerHTML = "";
   if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
@@ -3834,21 +3863,20 @@ function removeCampaignImage() {
   if(window.CAMPAIGN_PREVIEW_URL){URL.revokeObjectURL(window.CAMPAIGN_PREVIEW_URL);window.CAMPAIGN_PREVIEW_URL=null;}
   updateCampaignPreview();
 }
+async function testCampaignSend(btn){const name=($("camp-name")?.value||"Test campaign").trim(),message=$("camp-msg")?.value||"",segment=$("camp-seg")?.value||"all_active",creative=window.CAMPAIGN_CUSTOM_IMAGE||null;if(!message.trim()&&!creative){if($("camp-send-validation"))$("camp-send-validation").textContent="Add message text or an image before test sending.";return;}confirmDialog("Send this exact message"+(creative?" and image":"")+" to the saved admin WhatsApp number? This sends only one test message; delivery is not guaranteed.",async()=>{await busy(btn,async()=>{try{const result=await api("/admin/api/campaigns/test-send",{method:"POST",body:{name,segment,message_text:message,creative_file:creative,campaign_type:selectedCampaignType()}});if($("camp-send-validation"))$("camp-send-validation").textContent="Test send accepted by provider for "+(result.destination||"the saved admin number")+"; delivery is not confirmed.";toast("Test send accepted; delivery not confirmed.");}catch(e){if($("camp-send-validation"))$("camp-send-validation").textContent="Test send failed: "+(e.message||"Check the saved admin number and retry.");}});});}
 async function createCampaign(btn) {
-  const name=$("camp-name").value.trim(), message=$("camp-msg").value.trim(), segment=$("camp-seg").value;
-  if(!name){toast("Give the campaign a name",true);return;}
-  if(!message){toast("Paste your campaign message first",true);return;}
-  if(!segment){toast("Select an audience",true);return;}
+  const name=$("camp-name").value.trim(),message=$("camp-msg").value,segment=$("camp-seg").value,campaignType=selectedCampaignType();
+  if(!name){if($("camp-send-validation"))$("camp-send-validation").textContent="Give the campaign a name.";return;}
+  if(!message.trim()&&!window.CAMPAIGN_CUSTOM_IMAGE){if($("camp-send-validation"))$("camp-send-validation").textContent="Add message text or upload an image; empty text-only campaigns cannot be sent.";return;}
+  if(!segment){if($("camp-send-validation"))$("camp-send-validation").textContent="Select an audience.";return;}
   const count=segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.length:(window.CAMPAIGN_SEG_COUNTS?.[segment]||0);
   if(!count){toast(segment==="selected"?"Select at least one customer":"No customers are available in this audience",true);return;}
   confirmDialog("Start this campaign now? Only eligible customers will be messaged. The existing 15–20 second sending gap and opt-out rules remain active.",async()=>{
     await busy(btn,async()=>{
-      const draft=await api("/admin/api/campaigns",{method:"POST",body:{
-        name,segment,message_text:message,
-        selected_customer_ids:segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.map(x=>x.ref):[],
-        coupon_code:null,creative_file:window.CAMPAIGN_CUSTOM_IMAGE||null
-      }});
+      const later=document.querySelector('input[name="camp-send-mode"]:checked')?.value==="later",sv=$("camp-scheduled-at")?.value||"";if(later&&(!sv||new Date(sv)<=new Date())){if($("camp-send-validation"))$("camp-send-validation").textContent="Choose a future date and time.";return;}
+      const draft=await api("/admin/api/campaigns",{method:"POST",body:{name,segment,message_text:message,selected_customer_ids:segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.map(x=>x.ref):[],coupon_code:null,creative_file:window.CAMPAIGN_CUSTOM_IMAGE||null,campaign_type:campaignType,respect_frequency:Boolean($("camp-rule-frequency")?.checked),skip_complaints:Boolean($("camp-rule-complaints")?.checked),skip_blocked:true,include_opted_out:false,scheduled_at:later?new Date(sv).toISOString():null}});
       try{
+        if(later){toast("Campaign scheduled; no messages sent yet.");resetCampaignForm();loadCampaigns();return;}
         const result=await api("/admin/api/campaigns/"+draft.id+"/approve",{method:"POST"});
         toast("Campaign started successfully — "+result.queued+" customers queued");
         resetCampaignForm(); loadCampaigns();
@@ -3952,6 +3980,7 @@ function updateCampaignAudienceCount() {
   const count=segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.length:window.CAMPAIGN_SEG_COUNTS?.[segment];
   if($("camp-summary-count-label"))$("camp-summary-count-label").textContent=segment==="selected"?"Selected customers":"Recipients";
   if($("camp-summary-count"))$("camp-summary-count").textContent=count==null?"—":segment==="selected"?String(count):"~ "+count+" customers";
+  document.querySelectorAll(".camp-audience[data-segment]").forEach(card=>{const k=card.dataset.segment,n=k==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.length:Number(window.CAMPAIGN_SEG_COUNTS?.[k]||0);let badge=card.querySelector(".camp-live-count");if(!badge){badge=document.createElement("span");badge.className="camp-live-count";card.appendChild(badge)}badge.textContent=String(n);});
 }
 function prefillCampaign(seg) {
   selectCampaignAudience(seg,false);

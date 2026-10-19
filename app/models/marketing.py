@@ -66,6 +66,10 @@ class Campaign(Base, TenantScoped):
     name: Mapped[str] = mapped_column(String(120))
     # RFM segment key ('lapsed', 'high_value', ...) or 'custom'
     segment: Mapped[str] = mapped_column(String(40))
+    campaign_type: Mapped[str] = mapped_column(String(24), default="promotion", server_default="promotion", index=True)
+    rule_flags: Mapped[dict | None] = mapped_column(JSONB, default=dict)
+    override_confirmed_by: Mapped[str | None] = mapped_column(String(80))
+    override_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # message body (window) / template name (outside window)
     message_text: Mapped[str] = mapped_column(Text)
     template_name: Mapped[str | None] = mapped_column(String(80))
