@@ -33,3 +33,4 @@
 {"id":"other_hi_03","msg":"kya leather jacket polish karte ho","intent":"OTHER","language":"hi","tags":["service_availability","knowledge"]}
 {"id":"other_hi_04","msg":"I need help with a question unrelated to an order","intent":"OTHER","language":"en","tags":["other","english"]}
 {"id":"amb_01","msg":"kurta ka rate batao aur pickup bhi book karna hai","intent_any":["PRICE_QUERY","NEW_ORDER"],"language":"hi","tags":["ambiguous","price","new_order"]}
+{"id":"other_en_05","msg":"Do you provide pickup outside your service area?","intent":"OTHER","language":"en","tags":["service_area","english"]}
