@@ -1661,6 +1661,35 @@ async def tenant_gbp_location(
     return {"ok": True}
 
 
+@router.post("/api/tenants/{slug}/google-business/locations/refresh")
+async def tenant_gbp_refresh_locations(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Refresh all listings for the existing Google connection and target all for daily posts."""
+    from app.services import google_business as gbp, integrations
+
+    t = await _tenant_or_404(db, slug)
+    async with integrations.tenant_db(t.id) as tdb:
+        conn = await gbp.get_connection(tdb)
+        if not conn.get("refresh_token"):
+            raise HTTPException(status_code=400, detail="Connect Google first")
+        try:
+            locations = await gbp.list_locations(conn["refresh_token"])
+        except gbp.GBPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        if not locations:
+            raise HTTPException(status_code=400, detail="This Google account manages no Business Profile locations")
+        primary = next((loc for loc in locations if loc["location"] == conn.get("location")), locations[0])
+        conn.update(primary)
+        conn["all_locations"] = locations
+        conn["post_locations"] = locations
+        conn.pop("choices", None)
+        conn["last_error"] = ""
+        await gbp.save_connection(tdb, conn)
+    await _audit_integration(request=None, t=t, action="google_business_locations_refresh",
+                             details={"locations": len(locations)})
+    return {"ok": True, "location_count": len(locations),
+            "locations": [{"title": x.get("title", ""), "location": x["location"]} for x in locations]}
+
+
 @router.post("/api/tenants/{slug}/google-business/sync")
 async def tenant_gbp_sync(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
     from app.services import google_business as gbp, integrations
