@@ -3794,6 +3794,49 @@ function renderCampaigns(camps) {
   }).join("");
 }
 const CAMPAIGN_MESSAGE_TEMPLATES={festival:"Namaste {name} ji! 🌸 Aapko aur aapke parivaar ko hardik shubhkamnayein. — Kwik Klin",offer:"Namaste {name} ji! ✨ Kwik Klin ke saath apne kapdon ko fresh rakhein.",payment:"Namaste {name} ji, aapke account mein ₹{due_amount} payment pending hai. — Kwik Klin",pickup:"Namaste {name} ji! 👕 Aapka Kwik Klin pickup schedule hai.",referral:"Namaste {name} ji! ❤️ Kwik Klin ko apne doston ke saath share karein."};
+async function generateCampaignDraft(btn) {
+  const status = $("camp-ai-status");
+  const type = selectedCampaignType();
+  const currentSegment = $("camp-seg")?.value || "all_active";
+  const segment = type === "payment_reminder" ? "outstanding_dues"
+    : (type === "wish" ? "all_active" : (currentSegment === "selected" ? "all_active" : currentSegment));
+  if (status) status.textContent = "Generating a draft… no messages will be sent.";
+  try {
+    await busy(btn, async () => {
+      const draft = await api("/admin/api/campaigns/ai-draft", {
+        method: "POST",
+        body: { segment, goal: ($("camp-ai-goal")?.value || "increase repeat orders").trim().slice(0, 120) }
+      });
+      if ($("camp-name")) $("camp-name").value = draft.campaign_name || "Kwik Klin campaign";
+      if ($("camp-msg")) $("camp-msg").value = draft.message || "";
+      if (draft.creative_file) {
+        window.CAMPAIGN_CUSTOM_IMAGE = draft.creative_file;
+        const url = "/admin/media/" + encodeURIComponent(draft.creative_file);
+        if ($("camp-image-preview")) $("camp-image-preview").innerHTML =
+          '<div class="camp-image-card"><img src="' + url + '" alt="AI campaign poster preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';
+        if ($("camp-preview-image")) $("camp-preview-image").innerHTML =
+          '<img src="' + url + '" alt="AI campaign poster">';
+      }
+      const gmb = $("camp-ai-gmb-preview");
+      if (gmb) gmb.hidden = false;
+      if ($("camp-ai-gmb-title")) $("camp-ai-gmb-title").textContent = draft.gmb_title || "";
+      if ($("camp-ai-gmb-body")) $("camp-ai-gmb-body").textContent = draft.gmb_body || "";
+      if ($("camp-ai-gmb-cta")) $("camp-ai-gmb-cta").textContent = draft.gmb_cta || "Learn more";
+      if ($("camp-ai-offer")) $("camp-ai-offer").textContent =
+        (draft.offer_type || "no_discount") + " · " + Number(draft.discount_value || 0) +
+        (draft.offer_type === "percent" ? "% off" : "") + " · minimum order ₹" +
+        Number(draft.min_order || 0) + " · " + Number(draft.validity_days || 7) + " day(s) · code " +
+        (draft.coupon_code || "not set") + " (suggestion only; verify before use)";
+      if ($("camp-ai-rationale")) $("camp-ai-rationale").textContent = draft.rationale || "";
+      updateCampaignMsgCount();
+      updateCampaignPreview();
+      if (status) status.textContent = "Draft ready. Review the WhatsApp copy, poster and Google text, then preview recipients. Nothing has been sent.";
+      toast("AI draft ready for review.");
+    });
+  } catch (e) {
+    if (status) status.textContent = "AI draft failed: " + (e.message || "Please retry.");
+  }
+}
 function selectedCampaignType(){return document.querySelector('input[name="camp-type"]:checked')?.value||"promotion";}
 function campaignTypeChanged(){const t=selectedCampaignType();document.querySelectorAll(".camp-type-card").forEach(e=>e.classList.toggle("selected",Boolean(e.querySelector("input")?.checked)));if($("camp-rule-frequency")){$("camp-rule-frequency").checked=t==="promotion";$("camp-rule-frequency").disabled=t==="payment_reminder";}if($("camp-rule-complaints"))$("camp-rule-complaints").checked=true;const h=$("camp-type-help");if(h)h.textContent=t==="wish"?"Greeting targets all active customers and bypasses frequency limits; opt-outs and blocked numbers remain excluded.":t==="payment_reminder"?"Payment reminders target customers with outstanding dues.":"Promotion follows the selected audience and rules.";const l=$("camp-audience-lock-note");if(l){l.hidden=t==="promotion";l.textContent=t==="wish"?"Greeting uses all active customers.":"Payment reminders target customers with outstanding dues."}if(t==="wish")selectCampaignAudience("all_active",false);if(t==="payment_reminder")selectCampaignAudience("outstanding_dues",false);updateCampaignPreview();}
 function applyCampaignTemplate(k){let m=CAMPAIGN_MESSAGE_TEMPLATES[k];if(k?.startsWith("saved:")){try{m=JSON.parse(localStorage.getItem("kwikklin_campaign_templates_v1")||"[]")[Number(k.slice(6))]?.message}catch(_){}}if(!m)return;if($("camp-msg"))$("camp-msg").value=m;updateCampaignMsgCount();updateCampaignPreview();}
