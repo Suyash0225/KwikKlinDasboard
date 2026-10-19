@@ -650,26 +650,34 @@ async def ai_campaign_draft(
     for key in ("message", "gmb_title", "gmb_body", "gmb_cta", "creative_brief", "rationale"):
         draft[key] = str(draft.get(key) or "").strip()
     draft["gmb_body"] = draft["gmb_body"].replace("\\n", " ")
-    # Phone-free Google copy is a hard rule, not an AI instruction.
-    import re as _re
-    draft["gmb_body"] = _re.sub(r"(?:\+?91[-\s]?)?[6-9]\d{9}", "", draft["gmb_body"]).strip()
-    draft["gmb_title"] = _re.sub(r"(?:\+?91[-\s]?)?[6-9]\d{9}", "", draft["gmb_title"]).strip()
-    # Generate the actual branded Google-safe creative now. This is deterministic
-    # PIL rendering (logo/brand/offer layout), not a fake AI-generated shop photo.
+    # Run the same deterministic phone/link/hashtag sanitizer used by daily GBP
+    # posts. AI instructions alone are not a policy gate.
+    from app.services.social import check_google_image, draw_poster, enforce_google_rules
+    draft["gmb_body"] = enforce_google_rules(draft["gmb_body"])[:700]
+    draft["gmb_title"] = enforce_google_rules(draft["gmb_title"])[:120]
+    draft["gmb_cta"] = enforce_google_rules(draft["gmb_cta"])[:60]
+    # Generate a branded phone-free creative and validate it before exposing it
+    # as a reusable campaign image. A failed image check falls back to text.
     creative_file = None
     try:
         from pathlib import Path
-        from app.services.social import draw_poster
         media_dir = Path(__file__).resolve().parent.parent / "media"
         media_dir.mkdir(exist_ok=True)
-        creative_file = f"campaign-{uuid_module.uuid4().hex}.png"
+        candidate = f"campaign-{uuid_module.uuid4().hex}.png"
+        image_path = media_dir / candidate
         draw_poster(
             str(draft.get("gmb_title") or "Kwik Klin"),
             str(draft.get("gmb_title") or "Fresh clothes, less hassle"),
             str(draft.get("gmb_body") or "Book your next laundry service."),
-            media_dir / creative_file,
+            image_path,
             show_phone=False,
         )
+        image_problems = check_google_image(image_path)
+        if image_problems:
+            log.warning("campaign_creative_validation_failed", problems=image_problems)
+            image_path.unlink(missing_ok=True)
+        else:
+            creative_file = candidate
     except Exception:
         log.exception("campaign_creative_generation_failed")
     draft["creative_file"] = creative_file
