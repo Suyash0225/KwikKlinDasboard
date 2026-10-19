@@ -768,6 +768,38 @@ async def test_opted_out_override_is_rejected(sent) -> None:
         assert exc.value.status_code == 400
 
 
+async def test_campaign_image_only_content_is_accepted(sent) -> None:
+    from app.routers.agent_admin import CampaignIn, create_campaign
+    from app.models import Campaign
+    phone = "919800001203"
+    try:
+        customer = await _make_marketing_customer(phone, "Image Only Campaign")
+        async with async_session_factory() as db:
+            result = await create_campaign(CampaignIn(
+                name="image-only", segment="selected", message_text=" ",
+                selected_customer_ids=[str(customer.id)],
+                creative_file="campaign-" + "a" * 32 + ".jpg",
+            ), db)
+            saved = await db.get(Campaign, result["id"])
+            assert saved is not None and saved.message_text == " "
+    finally:
+        from tests.conftest import purge_phones
+        await purge_phones(phone)
+
+
+async def test_future_campaign_is_scheduled_not_sent(sent) -> None:
+    from datetime import timedelta
+    from app.routers.agent_admin import CampaignIn, create_campaign
+    from app.models import Campaign
+    async with async_session_factory() as db:
+        result = await create_campaign(CampaignIn(
+            name="future-campaign", segment="all_active", message_text="Hello",
+            scheduled_at=datetime.now(timezone.utc) + timedelta(days=1),
+        ), db)
+        saved = await db.get(Campaign, result["id"])
+        assert saved.status == "scheduled" and saved.scheduled_at is not None
+
+
 async def test_selected_campaign_creation_persists_valid_customer_ids(sent) -> None:
     from app.routers.agent_admin import CampaignIn, create_campaign
 
