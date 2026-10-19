@@ -81,7 +81,7 @@ async def _queue_retry(payload: dict, to_phone: str, fixture_data: dict) -> uuid
     now = datetime.now(timezone.utc)
     # The queue drain only takes the oldest 30 rows. Put these guard rows ahead
     # of leftovers from other tests so the assertions exercise the retry path.
-    created_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    created_at = datetime(1900, 1, 1, tzinfo=timezone.utc)
     async with tenant_context.as_system_context():
         async with async_session_factory() as db:
             db.add(
