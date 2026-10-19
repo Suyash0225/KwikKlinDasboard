@@ -318,9 +318,14 @@ async def _build_poster_url(db, now_ist: datetime, topic_key: str) -> tuple[str 
                 logo_path = Path(__file__).resolve().parent.parent / "site" / "assets" / "img" / "logo.png"
                 ai_poster.compose_poster(background, logo_path, path, theme, headline, subline)
         except Exception as exc:
-            poster_issue = f"ai_artwork_unavailable: {type(exc).__name__}; branded template used"
+            poster_issue = f"ai_artwork_unavailable: {type(exc).__name__}; branded fallback used"
             log.warning("gbp_ai_poster_fallback", error=type(exc).__name__)
-            social.draw_poster(theme, headline, subline, path, show_phone=False)
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix="kwikklin-gbp-fallback-") as tmp:
+                background = Path(tmp) / "background.png"
+                ai_poster.create_fallback_background(background)
+                logo_path = Path(__file__).resolve().parent.parent / "site" / "assets" / "img" / "logo.png"
+                ai_poster.compose_poster(background, logo_path, path, theme, headline, subline)
 
         problems = social.check_google_image(path)
         if problems:
