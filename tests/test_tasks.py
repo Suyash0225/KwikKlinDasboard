@@ -203,6 +203,27 @@ async def test_unknown_code_is_not_a_crash(worker, sent) -> None:
     assert reply and "nahi mila" in reply
 
 
+async def test_free_text_eta_does_not_write_task_database(worker, sent) -> None:
+    """Even after a Pending button, free-text ETA cannot mutate task fields."""
+    async with async_session_factory() as db:
+        task = await _mk(db, worker, title="ETA is dashboard-only", notify=False)
+        code = task.code
+    bill_agent._PENDING[TASK_STAFF_PHONE] = bill_agent.PendingTaskEta(code=code)
+    try:
+        async with async_session_factory() as db:
+            await bill_agent.handle_staff_message(
+                db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
+                text="kal 5 baje",
+            )
+        async with async_session_factory() as db:
+            saved = await task_service.get_by_code(db, code)
+            assert saved.eta_text is None
+            assert saved.reply is None
+            assert saved.status == TASK_OPEN
+    finally:
+        bill_agent._PENDING.pop(TASK_STAFF_PHONE, None)
+
+
 async def test_free_text_never_updates_task_record(worker, sent) -> None:
     """Natural language may be understood/reported, but cannot write task fields."""
     async with async_session_factory() as db:
