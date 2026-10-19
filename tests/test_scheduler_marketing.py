@@ -739,6 +739,35 @@ async def test_selected_campaign_empty_selection_cannot_start(sent) -> None:
         assert "no recipients" in str(exc.value.detail)
 
 
+async def test_campaign_empty_message_requires_image(sent) -> None:
+    from fastapi import HTTPException
+    from app.routers.agent_admin import CampaignIn, create_campaign
+    async with async_session_factory() as db:
+        with pytest.raises(HTTPException) as exc:
+            await create_campaign(CampaignIn(name="empty-text", segment="all_active", message_text="  \n "), db)
+        assert exc.value.status_code == 400
+
+
+async def test_campaign_type_and_frequency_flag_persist(sent) -> None:
+    from app.routers.agent_admin import CampaignIn, create_campaign
+    from app.models import Campaign
+    async with async_session_factory() as db:
+        result = await create_campaign(CampaignIn(name="wish-rules", segment="lapsed", message_text="Hello {name}", campaign_type="wish", respect_frequency=False), db)
+        saved = await db.get(Campaign, result["id"])
+        assert saved.campaign_type == "wish" and saved.segment == "all_active"
+        assert saved.rule_flags["respect_frequency"] is False
+        assert saved.rule_flags["skip_blocked"] is True
+
+
+async def test_opted_out_override_is_rejected(sent) -> None:
+    from fastapi import HTTPException
+    from app.routers.agent_admin import CampaignIn, create_campaign
+    async with async_session_factory() as db:
+        with pytest.raises(HTTPException) as exc:
+            await create_campaign(CampaignIn(name="optout-rule", segment="all_active", message_text="Hello", include_opted_out=True), db)
+        assert exc.value.status_code == 400
+
+
 async def test_selected_campaign_creation_persists_valid_customer_ids(sent) -> None:
     from app.routers.agent_admin import CampaignIn, create_campaign
 
