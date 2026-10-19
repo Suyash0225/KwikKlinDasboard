@@ -81,23 +81,39 @@ async def test_pickup_task_asks_the_boy_and_tells_the_owner(boy, sent) -> None:
     assert any(task.code in c["text"] for c in to_owner)
 
 
-async def test_boys_free_text_eta_does_not_change_task_or_customer_promise(boy, sent) -> None:
-    """ETA from prose is not persisted or forwarded; use dashboard/task actions."""
-    task, _num = await _new_pickup()
+async def test_eta_requires_explicit_save_button_before_customer_update(boy, sent) -> None:
+    """Free text stages an ETA draft; only Save ETA persists/sends it."""
+    task, num = await _new_pickup()
     sent.clear()
+    try:
+        async with async_session_factory() as db:
+            await bill_agent.handle_staff_message(
+                db, sender_phone=PICKUP_STAFF_PHONE, sender_label="Ajitram",
+                text=f"[button:task:{task.code}:later] Delay",
+            )
+        async with async_session_factory() as db:
+            await bill_agent.handle_staff_message(
+                db, sender_phone=PICKUP_STAFF_PHONE, sender_label="Ajitram",
+                text="sham tak kar dunga",
+            )
+        async with async_session_factory() as db:
+            draft = await task_service.get_by_code(db, task.code)
+            assert draft.eta_text is None
+            assert draft.reply == "Pending — follow-up required"
+        assert not any(c["to"] == TEST_CUSTOMER_PHONE for c in sent)
 
-    async with async_session_factory() as db:
-        await bill_agent.handle_staff_message(
-            db, sender_phone=PICKUP_STAFF_PHONE, sender_label="Ajitram",
-            text="sham tak kar dunga",
-        )
-
-    async with async_session_factory() as db:
-        saved = await task_service.get_by_code(db, task.code)
-    assert saved.eta_text is None
-    assert saved.reply is None
-    assert saved.status == "OPEN"
-    assert not any(c["to"] == TEST_CUSTOMER_PHONE for c in sent)
+        async with async_session_factory() as db:
+            await bill_agent.handle_staff_message(
+                db, sender_phone=PICKUP_STAFF_PHONE, sender_label="Ajitram",
+                text=f"[button:task:{task.code}:save_eta] Save ETA",
+            )
+        async with async_session_factory() as db:
+            saved = await task_service.get_by_code(db, task.code)
+        assert saved.eta_text == "sham tak kar dunga"
+        assert any(c["to"] == TEST_CUSTOMER_PHONE for c in sent)
+        assert num in next(c["text"] for c in sent if c["to"] == TEST_CUSTOMER_PHONE)
+    finally:
+        bill_agent._PENDING.pop(PICKUP_STAFF_PHONE, None)
 
 
 async def test_staff_messages_do_not_update_tasks_without_button(boy, sent, monkeypatch) -> None:
