@@ -443,7 +443,7 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
                 await db.commit()
                 stuck=(await db.execute(select(Campaign).where(Campaign.status.in_(("approved","sending"))))).scalars().all()
                 for c in due:await queue_campaign(db,c)
-            for c in stuck+due:asyncio.create_task(send_campaign(c.id))
+            for c in stuck:asyncio.create_task(send_campaign(c.id))
     except Exception:
         log.exception("campaign_resume_failed")
 

@@ -37,6 +37,7 @@ from app.models import (
 from app.routers.orders import require_admin_owner, require_feature
 from app.services import app_settings, audit, wa_templates
 from app.services.marketing import (
+    _campaign_eligibility,
     campaign_stats,
     compute_segments,
     queue_campaign,
@@ -433,6 +434,33 @@ class CampaignIn(BaseModel):
     skip_blocked: bool = True
     include_opted_out: bool = False
     scheduled_at: datetime | None = None
+
+
+@router.post("/campaigns/preview", dependencies=[Depends(require_feature("campaigns"))])
+async def preview_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Read-only audience estimate; it never writes recipient rows or sends messages."""
+    if not body.message_text.strip() and not body.creative_file:
+        raise HTTPException(status_code=400, detail="Add message text or a supported image before previewing.")
+    if body.include_opted_out:
+        raise HTTPException(status_code=400, detail="Opted-out customers cannot be included in campaigns.")
+    segment="all_active" if body.campaign_type=="wish" else ("outstanding_dues" if body.campaign_type=="payment_reminder" else body.segment)
+    temp=Campaign(name=body.name,segment=segment,message_text=body.message_text,campaign_type=body.campaign_type,rule_flags={"respect_frequency":body.respect_frequency,"skip_complaints":body.skip_complaints,"skip_blocked":True})
+    if segment=="selected":
+        try: ids=[uuid_module.UUID(x) for x in body.selected_customer_ids]
+        except (ValueError,TypeError): raise HTTPException(status_code=400,detail="invalid selected customer")
+        rows=(await db.execute(select(Customer).where(Customer.id.in_(ids),Customer.is_active))).scalars().all()
+        if len(rows)!=len(set(ids)): raise HTTPException(status_code=400,detail="selected customers are invalid or inactive")
+        targets=[{"id":x.id,"name":x.name or "Customer","phone":x.phone,"last_order_at":None} for x in rows]
+    else:
+        segs=await compute_segments(db); targets=segs.get(segment,[])
+    allow_active=segment in ("selected","all_active") or body.campaign_type=="wish"
+    recipients=[]; skipped={}
+    for row in targets:
+        ok,reason=await _campaign_eligibility(db,row["id"],temp,allow_active_orders=allow_active)
+        item={"name":row.get("name") or "Customer","phone":row.get("phone") or "","last_order_date":row.get("last_order_at").isoformat() if row.get("last_order_at") else None,"reason":reason}
+        if ok: recipients.append(item)
+        else: skipped[reason]=skipped.get(reason,0)+1
+    return {"total_in_audience":len(targets),"will_receive":len(recipients),"skipped":skipped,"recipients":recipients}
 
 
 class CampaignAIDraftIn(BaseModel):

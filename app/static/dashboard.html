@@ -341,7 +341,7 @@
         </div>
         <div class="camp-field" style="margin-top:8px"><label for="manual-lead-notes">Call notes</label><textarea id="manual-lead-notes" rows="2" maxlength="2000" placeholder="Budget, pickup area, preferred date, questions…"></textarea></div>
         <div style="display:flex;justify-content:flex-end;margin:8px 0"><button type="button" class="btn ghost sm" onclick="draftManualLeadMessage()">✍ Prepare WhatsApp draft</button></div>
-        <div class="camp-field"><label for="manual-lead-message">WhatsApp message (review/edit before sending)</label><textarea id="manual-lead-message" rows="4" maxlength="1200" placeholder="Prepare a draft, then review it here…"></textarea></div>
+        <div class="camp-field"><label for="manual-lead-template">Saved message template</label><select id="manual-lead-template" onchange="applyLeadTemplate(this.value)"><option value="">Choose a template…</option><option value="welcome">Welcome / follow-up</option><option value="offer">Service offer</option><option value="payment">Payment reminder</option></select></div><div class="camp-field"><label for="manual-lead-message">WhatsApp message (review/edit before sending)</label><div class="camp-format-toolbar"><button type="button" class="btn ghost sm" onclick="wrapLeadSelection('*','*')">Bold</button><button type="button" class="btn ghost sm" onclick="wrapLeadSelection('_','_')">Italic</button><button type="button" class="btn ghost sm" onclick="insertLeadEmoji()">😊 Emoji</button></div><textarea id="manual-lead-message" rows="4" maxlength="1200" placeholder="Prepare a draft, then review it here…" oninput="updateLeadMessagePreview()"></textarea><div class="camp-count"><small>Preview uses entered lead details.</small><small id="manual-lead-message-count">0/1200</small></div><div id="manual-lead-message-preview" class="camp-lead-preview" aria-live="polite">Your reviewed WhatsApp message will appear here.</div></div>
         <label style="display:flex;align-items:flex-start;gap:9px;margin:10px 0;font-size:12px"><input id="manual-lead-consent" type="checkbox" style="margin-top:2px;flex:0 0 auto"><span>Customer explicitly agreed to receive WhatsApp follow-up. Required to send the message.</span></label>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           <button type="button" class="btn ghost" onclick="submitManualLead(false)">Save lead only</button>
@@ -377,12 +377,10 @@
       <div class="camp-live-grid">
         <div class="camp-main-card">
           <div class="camp-step"><span>1</span><div><b>Campaign Content</b><small>Message, image and campaign name.</small></div></div>
+          <fieldset class="camp-type-field"><legend>Campaign type *</legend><div class="camp-type-grid"><label class="camp-type-card"><input type="radio" name="camp-type" value="wish" onchange="campaignTypeChanged()"><span>🎉 <b>Wish / Greeting</b><small>Festival, birthday, thank-you</small></span></label><label class="camp-type-card selected"><input type="radio" name="camp-type" value="promotion" checked onchange="campaignTypeChanged()"><span>📢 <b>Promotion / Offer</b><small>Normal promotion rules</small></span></label><label class="camp-type-card"><input type="radio" name="camp-type" value="payment_reminder" onchange="campaignTypeChanged()"><span>💰 <b>Payment reminder</b><small>Customers with dues</small></span></label></div><small id="camp-type-help" class="muted">Promotion follows existing eligibility rules.</small></fieldset>
           <div class="camp-field"><label for="camp-name">Campaign name <em>*</em></label><input id="camp-name" placeholder="October Freshness Offer" maxlength="120" oninput="updateCampaignPreview()"><small>Only used internally. Customers will not see this name.</small></div>
-          <div class="camp-field">
-            <label for="camp-msg">WhatsApp message <em>*</em></label>
-            <textarea id="camp-msg" rows="12" maxlength="4000" placeholder="Type your complete WhatsApp message here…" oninput="updateCampaignMsgCount();updateCampaignPreview()"></textarea>
-            <div class="camp-count"><small>Use <b>{name}</b> to insert the customer's name.</small><small id="camp-msg-count">0/4000</small></div>
-          </div>
+          <div class="camp-field"><label for="camp-template">Use template</label><div class="camp-template-row"><select id="camp-template" onchange="applyCampaignTemplate(this.value)"><option value="">Choose template…</option><option value="festival">Festival wish</option><option value="offer">Offer</option><option value="payment">Payment reminder</option><option value="pickup">Pickup reminder</option><option value="referral">Referral</option></select><button type="button" class="btn ghost sm" onclick="saveCampaignTemplate()">Save current message as template</button></div></div>
+          <div class="camp-field"><label for="camp-msg">WhatsApp message <span class="muted">(optional with image)</span></label><div class="camp-format-toolbar"><button type="button" class="btn ghost sm" onclick="wrapCampaignSelection('*','*')">Bold</button><button type="button" class="btn ghost sm" onclick="wrapCampaignSelection('_','_')">Italic</button><button type="button" class="btn ghost sm" onclick="insertCampaignEmoji()">😊 Emoji</button></div><textarea id="camp-msg" rows="8" maxlength="4000" placeholder="Type your WhatsApp message…" oninput="updateCampaignMsgCount();updateCampaignPreview()"></textarea><div class="camp-count"><small>Placeholders: {name}, {due_amount}, {last_order_date}</small><small id="camp-msg-count">0/4000</small></div></div>
           <div class="camp-field">
             <label>Campaign image <span class="muted">(optional)</span></label>
             <div class="camp-upload-row">
@@ -390,7 +388,7 @@
               <div id="camp-image-preview" class="camp-image-preview"></div>
             </div>
           </div>
-          <div class="camp-note">🔒 Existing WhatsApp sending rules, opt-outs and the 15–20 second sending gap remain unchanged.</div>
+          <details class="camp-rules-panel"><summary>Advanced: sending rules</summary><div class="camp-rule-list"><label><input type="checkbox" id="camp-rule-frequency" checked onchange="updateCampaignPreview()"> Respect frequency limit (last N days)</label><label><input type="checkbox" id="camp-rule-complaints" checked onchange="updateCampaignPreview()"> Skip customers with complaints</label><label><input type="checkbox" id="camp-rule-blocked" checked disabled> Skip blocked / test numbers (required)</label><label><input type="checkbox" id="camp-rule-optout" disabled> Include opted-out customers (cannot override STOP / opt-out)</label></div><small class="muted">Greeting mode starts with frequency limit off. Opt-outs and blocked numbers always remain excluded.</small></details><div class="camp-note">🔒 Existing 15–20 second sending gap and recipient tracking remain enabled.</div>
         </div>
 
         <div class="camp-preview-card camp-live-preview">
@@ -413,7 +411,7 @@
 
       <div class="camp-bottom-grid">
         <div class="camp-card">
-          <div class="camp-step"><span class="blue">2</span><div><b>Select Audience</b><small>Use an existing segment or choose exact customers.</small></div></div>
+          <div class="camp-step"><span class="blue">2</span><div><b>Select Audience</b><small>Use an existing segment or choose exact customers.</small></div></div><div id="camp-audience-lock-note" class="camp-inline-note" hidden></div>
           <div class="camp-audience-grid">
             <button type="button" class="camp-audience active" data-segment="all_active" onclick="selectCampaignAudience('all_active')"><span>👥</span><b>All Eligible Customers</b><small>Every active customer who passes send-safety checks</small></button>
             <button type="button" class="camp-audience" data-segment="active_regular" onclick="selectCampaignAudience('active_regular')"><span>👑</span><b>Regular Customers</b><small>Customers with 2+ orders</small></button>
@@ -439,10 +437,10 @@
         </div>
       </div>
 
-      <button class="camp-start" id="camp-start-btn" onclick="createCampaign(this)">➤ <span>Start Campaign</span><small>Automatic sending · 15–20 sec gap</small></button>
+      <div class="camp-review-card"><div class="camp-step"><span class="blue">3</span><div><b>Review &amp; Send</b><small>Check audience and rules before sending.</small></div></div><div class="camp-review-grid"><div><h4>Recipient breakdown</h4><div id="camp-recipient-breakdown" class="camp-breakdown"></div><button type="button" class="btn ghost sm" onclick="previewCampaignRecipients()">Preview recipients</button><div id="camp-recipient-preview" class="camp-recipient-preview" hidden></div></div><div><h4>Schedule</h4><label class="camp-schedule-option"><input type="radio" name="camp-send-mode" value="now" checked onchange="toggleCampaignSchedule()"> Send now</label><label class="camp-schedule-option"><input type="radio" name="camp-send-mode" value="later" onchange="toggleCampaignSchedule()"> Schedule for later</label><input type="datetime-local" id="camp-scheduled-at" hidden><small id="camp-send-estimate" class="muted"></small></div></div></div><button class="camp-start" id="camp-start-btn" onclick="createCampaign(this)">➤ <span>Review &amp; Send</span><small>Automatic sending · 15–20 sec gap</small></button><p id="camp-send-validation" class="camp-inline-note" role="status">Add a campaign name, message or image, and an audience.</p>
 
       <div id="camp-history" class="camp-history">
-        <div class="camp-section-head"><div><h3>Campaign History</h3><p>Open a campaign for detailed recipient tracking.</p></div></div>
+        <div class="camp-section-head"><div><h3>Campaign History</h3><p>Open a campaign for detailed recipient tracking.</p></div></div><div class="camp-history-filters"><select id="camp-history-filter" onchange="filterCampaignHistory()"><option value="all">All</option><option value="sending">Running</option><option value="sent">Completed</option><option value="draft">Draft</option><option value="scheduled">Scheduled</option><option value="cancelled">Cancelled</option></select><input id="camp-history-search" type="search" placeholder="Search campaign name…" oninput="filterCampaignHistory()"></div>
         <div id="camp-list"></div>
       </div>
       <div id="seg-cards" style="display:none"></div>
