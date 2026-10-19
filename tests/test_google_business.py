@@ -422,3 +422,34 @@ def test_gbp_poster_copy_uses_local_service_keywords_without_contact_details() -
     assert "@" not in combined
     assert "http" not in combined
     assert "96968" not in combined
+
+
+
+def test_post_location_statuses_reports_each_location_and_latest_attempt() -> None:
+    from app.routers.google_business import _post_location_statuses
+
+    locations = [
+        {"account": "accounts/1", "location": "locations/101", "title": "Kwik Klin Lanka", "address": "Varanasi"},
+        {"account": "accounts/1", "location": "locations/102", "title": "Kwik Klin Sigra", "address": "Varanasi"},
+        {"account": "accounts/1", "location": "locations/103", "title": "Kwik Klin Bhelupur", "address": "Varanasi"},
+    ]
+    history = [
+        {"account": "accounts/1", "location": "locations/101", "date": "2026-10-18", "status": "published",
+         "post_name": "posts/old"},
+        {"account": "accounts/1", "location": "locations/101", "date": "2026-10-19", "status": "failed",
+         "error": "temporary error", "attempted_at": "2026-10-19T10:00:00+00:00"},
+        {"account": "accounts/1", "location": "locations/102", "date": "2026-10-19", "status": "published",
+         "post_name": "posts/new", "poster_attached": True},
+    ]
+
+    statuses = _post_location_statuses(locations, history)
+    assert len(statuses) == 3
+    assert [x["title"] for x in statuses] == [
+        "Kwik Klin Lanka", "Kwik Klin Sigra", "Kwik Klin Bhelupur"
+    ]
+    assert statuses[0]["status"] == "failed"
+    assert statuses[0]["error"] == "temporary error"
+    assert statuses[1]["status"] == "published"
+    assert statuses[1]["poster_attached"] is True
+    assert statuses[2]["status"] == "not_posted"
+    assert all("refresh_token" not in item for item in statuses)
