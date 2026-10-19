@@ -246,6 +246,18 @@ async def test_free_text_eta_does_not_write_task_database(worker, sent) -> None:
             assert saved.eta_text is None
             assert saved.reply is None
             assert saved.status == TASK_OPEN
+            draft = bill_agent._PENDING[TASK_STAFF_PHONE]
+            assert draft.draft_text == "kal 5 baje"
+
+        # The button, not the message, is the write authorization.
+        async with async_session_factory() as db:
+            await bill_agent.handle_staff_message(
+                db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
+                text=f"[button:task:{code}:save_eta] Save ETA",
+            )
+        async with async_session_factory() as db:
+            saved = await task_service.get_by_code(db, code)
+            assert saved.eta_text == "kal 5 baje"
     finally:
         bill_agent._PENDING.pop(TASK_STAFF_PHONE, None)
 
