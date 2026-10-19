@@ -266,12 +266,23 @@ async def test_a_worker_sees_only_his_own_work(client, two_shops, sent) -> None:
     assert r.status_code == 403
 
 
-async def test_manager_sees_the_whole_shop_but_only_his_shop(client, two_shops, sent) -> None:
+async def test_manager_sees_the_whole_shop_but_cannot_complete_unassigned_task(client, two_shops, sent) -> None:
     a1 = await _task_for(two_shops["a"], two_shops["a_wash"], CUST_A, "Washer ka")
     await _login(client, A_MGR_PHONE)
     body = (await client.get("/staff/api/tasks?tab=pending")).json()
     assert body["is_manager"] is True
     assert a1 in [t["code"] for t in body["tasks"]]
+
+    # Manager has visibility, but task completion belongs to the assignee.
+    denied = await client.post(f"/staff/api/tasks/{a1}/done", json={"note": ""})
+    assert denied.status_code == 403, denied.text
+    token = tenant_context.current_tenant_id.set(two_shops["a"])
+    try:
+        async with async_session_factory() as db:
+            saved = await task_service.get_by_code(db, a1)
+            assert saved.status == TASK_OPEN
+    finally:
+        tenant_context.current_tenant_id.reset(token)
 
 
 async def test_manager_status_update_uses_customer_notifications_only_at_delivery_milestones(client, two_shops, sent) -> None:
