@@ -11,7 +11,8 @@ import pytest
 from sqlalchemy import text as sqltext
 
 from app.database import async_session_factory
-from app.models import Staff, StaffRole, Task
+from app.models import TASK_OPEN, Staff, StaffRole, Task
+from app.services import tasks as task_service
 from app.models.tenant import Tenant
 from app.services import staff_auth, tenant_context
 from app.services.order_service import create_order
