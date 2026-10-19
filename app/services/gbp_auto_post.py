@@ -254,8 +254,12 @@ async def _generate_post(db, now_ist: datetime) -> dict:
         out = await llm_client.ask_json(system=_SYSTEM, user_text=prompt, schema=_POST_SCHEMA,
                                          model=llm_client.MODEL_CHEAP, max_tokens=350)
     summary = " ".join(str(out.get("summary") or "").split()).strip()
+    # Reuse the existing GBP-specific sanitizer as a deterministic second
+    # policy check: strip phone numbers, URLs, hashtags and dangling contact CTAs.
+    from app.services import social
+    summary = social.enforce_google_rules(summary)
     if not summary:
-        raise llm_client.LLMError("AI returned an empty GBP post")
+        raise llm_client.LLMError("AI returned an empty GBP post after policy checks")
     topic_type = out.get("topic_type") if out.get("topic_type") in {"STANDARD", "OFFER"} else "STANDARD"
     if topic_type == "OFFER" and "offer" not in facts.lower():
         topic_type = "STANDARD"

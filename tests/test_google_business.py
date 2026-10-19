@@ -269,7 +269,7 @@ async def test_gbp_daily_post_uses_tenant_shop_name(monkeypatch) -> None:
 
     async def fake_ask_json(*, system, user_text, schema, model, max_tokens):
         captured["prompt"] = user_text
-        return {"summary": "Daily laundry care tip", "topic_type": "STANDARD"}
+        return {"summary": "Laundry care in Varanasi. Call +91 96968 56069 https://example.com #Laundry", "topic_type": "STANDARD"}
 
     monkeypatch.setattr(gbp_auto_post.llm_client, "ask_json", fake_ask_json)
     try:
@@ -278,11 +278,14 @@ async def test_gbp_daily_post_uses_tenant_shop_name(monkeypatch) -> None:
                 tenant = await db.get(Tenant, other)
                 tenant.shop_name = "Test Laundry Varanasi"
                 await db.commit()
-                await gbp_auto_post._generate_post(
+                generated = await gbp_auto_post._generate_post(
                     db, datetime(2026, 10, 7, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
                 )
 
         assert "- shop_name: Test Laundry Varanasi" in captured["prompt"]
+        assert "96968" not in generated["summary"]
+        assert "http" not in generated["summary"].lower()
+        assert "#" not in generated["summary"]
     finally:
         async with async_session_factory() as db:
             await db.execute(sqltext("DELETE FROM settings_kv WHERE tenant_id = :t"), {"t": other})
@@ -376,6 +379,7 @@ async def test_gbp_auto_post_publishes_to_all_selected_locations(monkeypatch) ->
     monkeypatch.setattr(gbp, "enabled", lambda: True)
     monkeypatch.setattr(gbp, "get_connection", fake_connection)
     monkeypatch.setattr(gbp_auto_post, "_generate_post", fake_generate)
+    monkeypatch.setattr(gbp_auto_post, "_build_poster_url", fake_poster)
     monkeypatch.setattr(gbp_auto_post, "_api_post", fake_publish)
     now = datetime(2026, 10, 10, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
     try:
