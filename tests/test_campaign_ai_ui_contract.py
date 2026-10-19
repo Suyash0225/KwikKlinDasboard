@@ -16,3 +16,10 @@ def test_campaign_editor_wires_ai_draft_without_auto_sending():
     draft_function = js[start:end]
     assert "/approve" not in draft_function
     assert "test-send" not in draft_function
+
+
+def test_ai_google_copy_uses_policy_sanitizer_and_validates_poster():
+    source = (ROOT / "app/routers/agent_admin.py").read_text(encoding="utf-8")
+    assert "enforce_google_rules(draft[\"gmb_body\"])" in source
+    assert "enforce_google_rules(draft[\"gmb_title\"])" in source
+    assert "check_google_image(image_path)" in source
