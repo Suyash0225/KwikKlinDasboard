@@ -472,11 +472,14 @@ async def test_campaign_send(body: CampaignIn, db: AsyncSession = Depends(get_db
     creative=body.creative_file or ""
     if not body.message_text.strip() and not creative:
         raise HTTPException(status_code=400,detail="Add message text or a supported image before test sending.")
-    if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\\.(?:png|jpg|jpeg)",creative):
+    if creative and not re.fullmatch(r"campaign-[a-f0-9]{32}\.(?:png|jpg|jpeg)",creative):
         raise HTTPException(status_code=400,detail="invalid campaign creative")
+    from pathlib import Path
     from app.services.tenant_context import manager_phone
     from app.services.whatsapp import SendError, send_image, send_message
-    phone=normalize_phone(manager_phone())
+    raw_phone=manager_phone()
+    if not raw_phone: raise HTTPException(status_code=400,detail="No saved admin WhatsApp number is configured.")
+    phone=normalize_phone(raw_phone)
     if not phone: raise HTTPException(status_code=400,detail="No saved admin WhatsApp number is configured.")
     try:
         if creative:
