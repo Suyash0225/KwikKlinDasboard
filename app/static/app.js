@@ -4697,22 +4697,28 @@ function renderRateMatrix() {
   const garments = [...new Set([...pc.map((r) => r.garment), ...RM_EXTRA_G])].filter(Boolean).sort();
   const cell = (g, s) => {
     const r = pc.find((x) => x.garment === g && x.service === s);
-    return `<td><input type="number" step="0.5" style="max-width:86px" value="${r ? r.rate : ""}"
-      placeholder="—" onchange="rmCell('${esc(g)}','${esc(s)}',this.value,'${r ? r.id : ""}')"></td>`;
+    const margin = r && r.cost_rate != null && Number(r.rate) > 0
+      ? `${Math.max(0, (Number(r.rate) - Number(r.cost_rate)) / Number(r.rate) * 100).toFixed(1)}% gross contribution`
+      : "Cost not set";
+    return `<td><div style="display:grid;gap:4px;min-width:100px">
+      <input aria-label="${esc(g)} ${esc(s)} selling rate" title="Customer selling rate (₹/unit)" type="number" step="0.5" style="max-width:100px" value="${r ? r.rate : ""}"
+        placeholder="Sell ₹" onchange="rmCell('${esc(g)}','${esc(s)}',this.value,'${r ? r.id : ""}')">
+      <input aria-label="${esc(g)} ${esc(s)} internal cost" title="Internal cost per unit (optional)" type="number" min="0" step="0.5" style="max-width:100px" value="${r && r.cost_rate != null ? r.cost_rate : ""}"
+        placeholder="Cost ₹" ${r ? "" : "disabled"} onchange="rmCellCost(this.value,'${r ? r.id : ""}')">
+      <small class="muted">${margin}</small></div></td>`;
   };
-  // Header (service ke naam) aur pehla column (kapde ka naam) chipke rehte
-  // hain — neeche/daayein scroll par bhi pata rahe ki kaunsa daam kis ka hai.
-  // Har service/kapde par ✕: galti se bana ho to poora column/row hat jaata hai.
   const x = (fn, arg, title) => `<button type="button" class="rm-x" title="${esc(title)}" aria-label="${esc(title)}" onclick="${fn}('${esc(arg)}')">✕</button>`;
   $("rate-matrix").innerHTML = `
-    <table class="tbl keep" style="min-width:${180 + services.length * 110}px"><thead><tr>
-      <th>Laundry garment name</th>${services.map((s) => `<th><span class="rm-h">${esc(s)} (₹)${x("rmDeleteService", s, `Remove service ${s}`)}</span></th>`).join("")}
+    <p class="muted" style="margin:0 0 8px">Sell ₹ is the customer price; Cost ₹ is your optional internal variable cost per unit. When every active rate has a cost, AI campaign discounts are capped at the smallest gross contribution. Shared overhead is excluded.</p>
+    <table class="tbl keep" style="min-width:${180 + services.length * 125}px"><thead><tr>
+      <th>Laundry garment name</th>${services.map((s) => `<th><span class="rm-h">${esc(s)}<small style="display:block">Sell ₹ / Cost ₹</small>${x("rmDeleteService", s, `Remove service ${s}`)}</span></th>`).join("")}
     </tr></thead><tbody>
       ${garments.map((g) => `<tr><td><span class="rm-h"><b style="font-size:13px;text-transform:none;letter-spacing:0">${esc(g)}</b>${x("rmDeleteGarment", g, `Remove ${g}`)}</span></td>${services.map((s) => cell(g, s)).join("")}</tr>`).join("")}
     </tbody></table>`;
   $("rate-kg").innerHTML = kg.map((r) => `
-    <div class="sumrow"><span>${esc(r.service)}</span>
-      <span style="max-width:110px"><input type="number" step="0.5" value="${r.rate}" onchange="updRate('${r.id}', this.value, null)"></span></div>`).join("")
+    <div class="sumrow"><span>${esc(r.service)}<small class="muted" style="display:block">${r.cost_rate != null ? `₹${(Number(r.rate)-Number(r.cost_rate)).toFixed(2)} gross contribution/kg` : "Cost not set"}</small></span>
+      <span style="display:grid;gap:4px;max-width:120px"><input aria-label="${esc(r.service)} selling rate per kg" title="Selling rate per kg" type="number" step="0.5" value="${r.rate}" onchange="updRate('${r.id}', this.value, null)">
+      <input aria-label="${esc(r.service)} internal cost per kg" title="Internal cost per kg (optional)" type="number" min="0" step="0.5" placeholder="Cost ₹" value="${r.cost_rate ?? ""}" onchange="updCostRate('${r.id}', this.value)"></span></div>`).join("")
     || `<p class="muted">No per-kg services yet.</p>`;
 }
 async function rmCell(garment, service, value, id) {
@@ -4720,13 +4726,36 @@ async function rmCell(garment, service, value, id) {
   try {
     if (id) {
       if (!(v > 0)) { await api(`/admin/api/rates/${id}`, { method: "PUT", body: { is_active: false } }); toast("Rate disabled"); }
-      else { await api(`/admin/api/rates/${id}`, { method: "PUT", body: { rate: v, is_active: true } }); toast("Rate saved — new bills only"); }
+      else { await api(`/admin/api/rates/${id}`, { method: "PUT", body: { rate: v, is_active: true } }); toast("Selling rate saved — new bills only"); }
     } else if (v > 0) {
       await api("/admin/api/rates", { method: "POST", body: { service, garment, unit: "pc", rate: v } });
       toast("Rate added");
     }
     RM_RATES = await api("/admin/api/rates");
     renderRateMatrix();
+  } catch (e) { toast(e.message, true); }
+}
+async function rmCellCost(value, id) {
+  if (!id) return;
+  const raw = String(value).trim();
+  const cost = raw === "" ? null : Number(raw);
+  if (cost !== null && (!Number.isFinite(cost) || cost < 0)) { toast("Enter a non-negative internal cost or clear the field.", true); return; }
+  try {
+    await api(`/admin/api/rates/${id}`, { method: "PUT", body: { cost_rate: cost } });
+    RM_RATES = await api("/admin/api/rates");
+    renderRateMatrix();
+    toast(cost === null ? "Internal cost cleared." : "Internal unit cost saved.");
+  } catch (e) { toast(e.message, true); }
+}
+async function updCostRate(id, value) {
+  const raw = String(value).trim();
+  const cost = raw === "" ? null : Number(raw);
+  if (cost !== null && (!Number.isFinite(cost) || cost < 0)) { toast("Enter a non-negative internal cost or clear the field.", true); return; }
+  try {
+    await api(`/admin/api/rates/${id}`, { method: "PUT", body: { cost_rate: cost } });
+    RM_RATES = await api("/admin/api/rates");
+    renderRateMatrix();
+    toast(cost === null ? "Internal cost cleared." : "Internal unit cost saved.");
   } catch (e) { toast(e.message, true); }
 }
 async function rmDeleteGroup(kind, name) {

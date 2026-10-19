@@ -588,17 +588,19 @@ async def ai_campaign_draft(
     history = {str(k): int(v) for k, v in prev}
     rates = (
         await db.execute(
-            select(Rate.service, Rate.garment, Rate.rate, Rate.unit)
+            select(Rate.service, Rate.garment, Rate.rate, Rate.unit, Rate.cost_rate)
             .where(Rate.is_active.is_(True))
             .order_by(Rate.service, Rate.garment)
-            .limit(80)
         )
     ).all()
     rate_card = [
-        {"service": s, "garment": g, "rate": float(r), "unit": u}
-        for s, g, r, u in rates
+        {"service": s, "garment": g, "rate": float(r), "unit": u,
+         "cost_rate": float(c) if c is not None else None}
+        for s, g, r, u, c in rates
     ]
-    max_discount = float(await app_settings.get(db, "marketing_max_discount_percent"))
+    configured_max_discount = float(await app_settings.get(db, "marketing_max_discount_percent"))
+    from app.services.unit_costing import effective_discount_cap
+    max_discount, cost_guard_applied = effective_discount_cap(configured_max_discount, rate_card)
     month = now.month
     season = {
         9: "festival/Diwali preparation and home linen cleaning",
@@ -619,8 +621,11 @@ async def ai_campaign_draft(
         "You are Kwik Klin's marketing strategist. Recommend an offer using the "
         "actual segment, customer value, previous campaign outcomes, season and rate card. "
         "Do not invent services, prices, margins or customer facts. Prefer non-discount "
-        "value when it can work. Never exceed the supplied max discount. Keep WhatsApp "
-        "copy <= 3 short lines. For Google Business local discovery, naturally mention "
+        "value when it can work. Never exceed the supplied max discount. If every rate "
+        "has an internal cost, the supplied cap is already limited by the smallest gross "
+        "contribution; shared overhead is excluded, so do not call it net profit. If any "
+        "cost is missing, do not claim margin safety is verified. Keep WhatsApp copy <= 3 "
+        "short lines. For Google Business local discovery, naturally mention "
         "a relevant laundry/dry-cleaning service and Varanasi where it fits; avoid keyword "
         "stuffing. Google Business copy must not include a phone number, fake address, "
         "fake review, or fabricated claim. Return only JSON matching the schema."
@@ -633,6 +638,8 @@ async def ai_campaign_draft(
         "season": season,
         "previous_campaign_status_counts": history,
         "max_discount_percent": max_discount,
+        "configured_max_discount_percent": configured_max_discount,
+        "cost_guard_applied": cost_guard_applied,
         "rate_card": rate_card,
         "shop_name": "Kwik Klin",
     }
@@ -671,6 +678,11 @@ async def ai_campaign_draft(
     draft["discount_value"] = max(0.0, min(float(draft.get("discount_value") or 0), max_discount))
     if draft.get("offer_type") == "percent" and draft["discount_value"] > max_discount:
         draft["discount_value"] = max_discount
+    if cost_guard_applied and max_discount < configured_max_discount:
+        draft["rationale"] = str(draft.get("rationale") or "").strip() + (
+            f" Discount capped at {max_discount:g}% by configured per-unit costs; "
+            "shared overhead is excluded from this gross-contribution guard."
+        )
     draft["validity_days"] = max(1, min(int(draft.get("validity_days") or 7), 30))
     draft["min_order"] = max(0.0, float(draft.get("min_order") or 0))
     draft["coupon_code"] = str(draft.get("coupon_code") or f"KK{body.segment[:5].upper()}{now.strftime('%d%m')}").upper()[:30]

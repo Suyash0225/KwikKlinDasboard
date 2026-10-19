@@ -1226,10 +1226,12 @@ class RateIn(BaseModel):
     garment: str = Field(default="", max_length=60)
     unit: str = Field(default="pc", pattern="^(pc|kg)$")
     rate: Decimal = Field(gt=0)
+    cost_rate: Decimal | None = Field(default=None, ge=0)
 
 
 class RateUpdateIn(BaseModel):
     rate: Decimal | None = Field(default=None, gt=0)
+    cost_rate: Decimal | None = Field(default=None, ge=0)
     is_active: bool | None = None
 
 
@@ -1240,7 +1242,9 @@ async def rates_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
     ).scalars().all()
     return [
         {"id": str(r.id), "service": r.service, "garment": r.garment,
-         "unit": r.unit, "rate": str(r.rate), "is_active": r.is_active}
+         "unit": r.unit, "rate": str(r.rate),
+         "cost_rate": str(r.cost_rate) if r.cost_rate is not None else None,
+         "is_active": r.is_active}
         for r in rows
     ]
 
@@ -1253,6 +1257,9 @@ async def rate_create(body: RateIn, db: AsyncSession = Depends(get_db)) -> dict:
         rate, revived = await add_rate(
             db, service=body.service, garment=body.garment, unit=body.unit, rate=body.rate
         )
+        if body.cost_rate is not None:
+            rate.cost_rate = body.cost_rate
+            await db.commit()
     except DuplicateRate as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     site_rates.invalidate_cache()
@@ -1272,6 +1279,8 @@ async def rate_update(rate_id: str, body: RateUpdateIn, db: AsyncSession = Depen
         raise HTTPException(status_code=404, detail="rate not found")
     if body.rate is not None:
         rate.rate = body.rate
+    if "cost_rate" in body.model_fields_set:
+        rate.cost_rate = body.cost_rate
     if body.is_active is not None:
         rate.is_active = body.is_active
     await db.commit()
