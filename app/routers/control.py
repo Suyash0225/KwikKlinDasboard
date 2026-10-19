@@ -1761,7 +1761,7 @@ async def tenant_gbp_refresh_locations(
     slug: str, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict:
     """Refresh all listings for the existing Google connection and target all for daily posts."""
-    from app.services import google_business as gbp, integrations
+    from app.services import app_settings, google_business as gbp, integrations
 
     t = await _tenant_or_404(db, slug)
     async with integrations.tenant_db(t.id) as tdb:
@@ -1781,6 +1781,9 @@ async def tenant_gbp_refresh_locations(
         conn.pop("choices", None)
         conn["last_error"] = ""
         await gbp.save_connection(tdb, conn)
+        # The Control button says "Refresh locations + enable all". Make that
+        # promise real even if the owner previously disabled scheduled posts.
+        await app_settings.set_value(tdb, "gbp_auto_post_enabled", True)
     await _audit_integration(request, t, "google_business_locations_refresh",
                              {"locations": len(locations)})
     return {"ok": True, "location_count": len(locations),
