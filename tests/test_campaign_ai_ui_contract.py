@@ -31,3 +31,12 @@ def test_control_panel_shows_per_location_google_post_results():
     assert 'p.status === "published"' in control
     assert 'p.status === "failed"' in control
     assert "p.error" in control
+
+def test_campaign_image_preview_falls_back_to_local_upload_blob():
+    js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    start = js.index("async function uploadCampaignImage")
+    end = js.index("function removeCampaignImage", start)
+    upload_function = js[start:end]
+    assert "window.CAMPAIGN_PREVIEW_URL" in upload_function
+    assert "onerror=" in upload_function
+    assert "this.src=window.CAMPAIGN_PREVIEW_URL" in upload_function
