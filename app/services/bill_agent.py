@@ -167,9 +167,10 @@ class PendingPayment:
 
 @dataclass
 class PendingTaskEta:
-    """Staff ne "⏳ Time lagega" dabaya — agla message uska ETA hai."""
+    """Staff ne Delay dabaya; typed ETA is a draft until an explicit Save button."""
 
     code: str
+    draft_text: str | None = None
     at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
@@ -334,7 +335,7 @@ _EXTRACT_SYSTEM = (
 # hone par bhi kaunsa kaam hai ye kabhi galat nahi hota. Jise likhna hai wo
 # likh sakta hai; ye sirf sabse aam jawab ka shortcut hai.
 _TASK_BTN_RE = re.compile(
-    r"^\s*\[button:task:(T-?\d+):(done|later|problem|wash|dry|iron|ready|pending)\]",
+    r"^\s*\[button:task:(T-?\d+):(done|later|problem|wash|dry|iron|ready|pending|save_eta|cancel_eta)\]",
     re.I,
 )
 # WAHA list menus use row IDs rather than Meta button IDs.
@@ -390,8 +391,23 @@ async def _handle_task_button(
         return "⚠️ Task update ke liye registered active staff number zaroori hai."
     if not await task_service.staff_can_update_task(db, task, staff):
         return "⚠️ Ye task sirf assigned staff update kar sakta hai."
+    pending_eta = _PENDING.get(sender_phone)
+    if action == "cancel_eta":
+        if isinstance(pending_eta, PendingTaskEta) and pending_eta.code == code:
+            _PENDING.pop(sender_phone, None)
+        return f"ℹ️ *{code}* ka ETA draft cancel kar diya; task record unchanged hai."
     if task.status != task_service.TASK_OPEN:
         return await task_service.completion_message(db, task, by=staff.name)
+
+    if action == "save_eta":
+        if (
+            not isinstance(pending_eta, PendingTaskEta)
+            or pending_eta.code != code
+            or not pending_eta.draft_text
+        ):
+            return "⚠️ ETA draft expire ho gaya. Task ka Delay button dobara dabayein."
+        _PENDING.pop(sender_phone, None)
+        return await task_service.record_pickup_eta(db, task, pending_eta.draft_text)
 
     role = staff.role.name
 
@@ -831,6 +847,31 @@ async def _handle_task_followup(
         return None
     if text.startswith("["):          # media/button — ye jawab nahi hai
         return None
+
+    if isinstance(pending, PendingTaskEta):
+        # A second free-text message must not overwrite an already staged ETA.
+        if pending.draft_text:
+            return f"ETA [{pending.code}] ka draft ready hai. Use save/cancel button se confirm karein."
+        task = await __import__("app.services.tasks", fromlist=["get_by_code"]).get_by_code(db, pending.code)
+        if task is None:
+            _PENDING.pop(sender_phone, None)
+            return None
+        draft = text.strip()[:120]
+        if not draft:
+            return "ETA blank hai. Expected time likh kar bhejein."
+        _PENDING[sender_phone] = PendingTaskEta(code=pending.code, draft_text=draft)
+        from app.services.work_orders import Button
+
+        fallback = await _send_with_buttons(
+            db, sender_phone,
+            f"ETA draft for [{task.code}]: {draft}\nDatabase/customer update abhi nahi hua. Confirm karein:",
+            [
+                Button(f"task:{task.code}:save_eta", "Save ETA"),
+                Button(f"task:{task.code}:cancel_eta", "Cancel"),
+            ],
+        )
+        return fallback or "ETA draft ready hai. Task/customer update sirf Save ETA button dabane par hoga."
+
     _PENDING.pop(sender_phone, None)
 
     # "Ajit ko kya bhejun?" ka jawab — ab bhejne wale ke apne shabd hain
@@ -873,14 +914,7 @@ async def _handle_task_followup(
     task = await task_service.get_by_code(db, pending.code)
     if task is None:
         return None
-    # A follow-up can alert the owner, but it must not write any task field.
-    if isinstance(pending, PendingTaskEta):
-        await team.notify_admins(
-            db,
-            f"⏳ {sender_label} sent a free-text ETA for [{task.code}] {task.title}: "
-            f"{text.strip()[:120]}. Task record unchanged; update it from the dashboard.",
-        )
-        return "Message owner ko bhej diya. Task database update nahi hua; status dashboard ya task button se update karein."
+    # The issue description is notification context only; do not write it to task fields.
     await team.notify_admins(
         db, f"❗ {sender_label} ki dikkat [{task.code}]: {text.strip()[:300]}"
     )
