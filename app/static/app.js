@@ -3905,8 +3905,14 @@ async function uploadCampaignImage(input) {
     const d = await api("/admin/api/campaigns/upload-image", {method:"POST",body:fd});
     window.CAMPAIGN_CUSTOM_IMAGE = d.creative_file;
     const url = "/admin/media/" + encodeURIComponent(d.creative_file);
-    $("camp-image-preview").innerHTML = '<div class="camp-image-card"><img src="' + url + '" alt="Campaign image preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';
-    $("camp-preview-image").innerHTML = '<img src="' + url + '" alt="Campaign image">';
+    // Keep the local object URL as a visual fallback if the authenticated media
+    // GET is briefly rejected by a stale session/proxy. The uploaded file remains
+    // the canonical creative used for preview/send after this editor session.
+    const localFallback = window.CAMPAIGN_PREVIEW_URL
+      ? ' onerror="if(window.CAMPAIGN_PREVIEW_URL){this.onerror=null;this.src=window.CAMPAIGN_PREVIEW_URL;}"'
+      : "";
+    $("camp-image-preview").innerHTML = '<div class="camp-image-card"><img src="' + url + '" alt="Campaign image preview"' + localFallback + '><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';
+    $("camp-preview-image").innerHTML = '<img src="' + url + '" alt="Campaign image"' + localFallback + '>';
     updateCampaignPreview(); toast("Campaign image uploaded");
   } catch(e) {
     input.value=""; window.CAMPAIGN_CUSTOM_IMAGE=null;
