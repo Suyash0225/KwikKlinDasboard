@@ -104,7 +104,14 @@ function openModal(html) {
   if (!modalOpen() && !(history.state && history.state.kk === "modal")) history.pushState({ kk: "modal" }, "");
   $("modal-body").innerHTML = html; $("modal-ov").classList.add("open");
 }
-function closeModal() { $("modal-ov").classList.remove("open"); }   // history entry rehti hai; agla popup use reuse karta hai, back use kha jaata hai
+function closeModal() {
+  $("modal-ov").classList.remove("open");
+  // Explicit close must consume the modal history state, not leave a stale
+  // entry that causes the next mobile back gesture to leave the work screen.
+  if (history.state && history.state.kk === "modal") {
+    history.replaceState({ kk: "nav", nav: NAV }, "");
+  }
+}
 $("modal-ov").addEventListener("click", (e) => { if (e.target.id === "modal-ov") closeModal(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
 let EXITING = false;
