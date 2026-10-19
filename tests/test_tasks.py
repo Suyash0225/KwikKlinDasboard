@@ -195,6 +195,32 @@ async def test_assigned_staff_button_updates_task_in_database(worker, sent) -> N
         assert saved.completed_at is not None
 
 
+async def test_pending_button_saves_only_its_task_to_database(worker, sent) -> None:
+    """A button carries its task code, so multiple open tasks are never guessed."""
+    async with async_session_factory() as db:
+        target = await _mk(db, worker, title="Target task", notify=False)
+        other = await _mk(db, worker, title="Other task", notify=False)
+        code, other_code = target.code, other.code
+
+    try:
+        async with async_session_factory() as db:
+            reply = await bill_agent.handle_staff_message(
+                db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
+                text=f"[button:task:{code}:pending] Pending",
+            )
+            assert "pending" in (reply or "").lower()
+
+        async with async_session_factory() as db:
+            target = await task_service.get_by_code(db, code)
+            other = await task_service.get_by_code(db, other_code)
+            assert target.reply == "Pending"
+            assert other.reply is None
+            assert target.status == TASK_OPEN
+            assert other.status == TASK_OPEN
+    finally:
+        bill_agent._PENDING.pop(TASK_STAFF_PHONE, None)
+
+
 async def test_unknown_code_is_not_a_crash(worker, sent) -> None:
     async with async_session_factory() as db:
         reply = await bill_agent.handle_staff_message(
