@@ -6,7 +6,7 @@ Turn Kwik Klin's existing Gemini owner agent into a measurable business workflow
 
 ## Existing capabilities to reuse
 
-- Owner tools in `app/services/agent_tools.py`: orders, customer history, tasks, expenses, money, cost analysis, garment demand, marketing draft creation, and the new read-only `growth_review` cohort summary.
+- Owner tools in `app/services/agent_tools.py`: orders, customer history, tasks, expenses, money, cost analysis, garment demand, marketing draft creation, and the new read-only `growth_review` cohort summary plus `ai_health` aggregate observability report.
 - Central Gemini client and budget controls in `app/services/llm_client.py` and `app/services/quota.py`.
 - Deterministic action rules in `app/services/action_policy.py`.
 - Shared WhatsApp promotional policy in `app/services/outbound_policy.py`.
@@ -19,8 +19,9 @@ Do not build duplicate tables, a second LLM client, or a separate marketing send
 ## Implemented in this change
 
 - Adds `growth_review(7d|30d)` as a read-only owner tool. It summarizes orders created in the selected window, billed total, paid-to-date against that order cohort, outstanding balance, and lead counts/current converted stage by source.
+- Adds `ai_health(7d|30d)` as a read-only owner tool reporting aggregate AI calls, failures, latency, token volume, and failure rate by purpose without customer identifiers or message content.
 - The tool explicitly labels cohort metrics so it does not misrepresent paid-to-date as money collected during the selected window. It does not send messages or create campaigns.
-- Adds an offline intent/language evaluation scorer and 35 synthetic golden cases. The scorer measures attempt accuracy, stable-case rate, flakiness, missing outputs, and per-tag accuracy without calling an LLM.
+- Adds an offline intent/language evaluation scorer and 36 synthetic golden cases. The scorer measures attempt accuracy, stable-case rate, flakiness, missing outputs, and per-tag accuracy without calling an LLM.
 
 ## Growth workflow
 

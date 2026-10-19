@@ -42,6 +42,11 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # docs are the #1 cause of a model guessing instead of looking up.
 TOOL_SPECS = [
     {
+        "name": "ai_health",
+        "when": "owner asks AI ka status, AI cost/latency/failures, Gemini errors, tokens ya pichhle hafte AI quality/health",
+        "args": "7d | 30d (default 7d); read-only, no messages sent",
+    },
+    {
         "name": "growth_review",
         "when": "owner asks business kaise badhe, growth review, marketing ka result, leads se kitne orders bane, 7 ya 30 din ka business summary; read-only, no messages sent",
         "args": "7d | 30d (default 30d)",
@@ -1329,7 +1334,64 @@ async def _growth_review(db: AsyncSession, args: str) -> str:
     )
 
 
+async def _ai_health(db: AsyncSession, args: str) -> str:
+    """Read-only AI operational health summary, excluding all customer PII."""
+    period = (args or "").strip().lower()
+    days = 30 if period in {"30", "30d", "month", "monthly"} else 7
+    start = datetime.now(IST) - timedelta(days=days)
+
+    summary = (
+        await db.execute(
+            select(
+                func.count(LlmUsage.id),
+                func.coalesce(
+                    func.sum(case((LlmUsage.ok.is_(False), 1), else_=0)), 0
+                ),
+                func.coalesce(func.avg(LlmUsage.latency_ms), 0),
+                func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+            ).where(LlmUsage.at >= start)
+        )
+    ).one()
+    calls, failures, avg_latency, input_tokens, output_tokens = summary
+    calls = int(calls or 0)
+    failures = int(failures or 0)
+    failure_pct = failures * 100 / calls if calls else 0.0
+
+    purpose_rows = (
+        await db.execute(
+            select(
+                LlmUsage.purpose,
+                func.count(LlmUsage.id),
+                func.coalesce(
+                    func.sum(case((LlmUsage.ok.is_(False), 1), else_=0)), 0
+                ),
+                func.coalesce(func.avg(LlmUsage.latency_ms), 0),
+            )
+            .where(LlmUsage.at >= start)
+            .group_by(LlmUsage.purpose)
+            .order_by(func.count(LlmUsage.id).desc())
+            .limit(8)
+        )
+    ).all()
+    by_purpose = [
+        f"- {str(purpose or 'other')[:24]}: {int(count or 0)} calls, "
+        f"{int(failed or 0)} failed, average {float(latency or 0):.0f} ms"
+        for purpose, count, failed, latency in purpose_rows
+    ] or ["- No recorded AI calls in this period."]
+
+    return (
+        f"AI health — last {days} days (read-only)\n"
+        f"Recorded calls: {calls}; failures: {failures} ({failure_pct:.1f}%)\n"
+        f"Average recorded latency: {float(avg_latency or 0):.0f} ms\n"
+        f"Tokens: {int(input_tokens or 0)} input + {int(output_tokens or 0)} output\n"
+        "By purpose:\n" + "\n".join(by_purpose)
+        + "\nThis report contains aggregate metrics only. Token counts are not currency; use the AI usage cost dashboard for estimated spend."
+    )
+
+
 _TOOLS = {
+    "ai_health": _ai_health,
     "growth_review": _growth_review,
     "assign_task": _assign_task,
     "add_expense": _add_expense,
