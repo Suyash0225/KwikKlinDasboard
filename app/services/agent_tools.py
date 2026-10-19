@@ -43,8 +43,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 TOOL_SPECS = [
     {
         "name": "growth_review",
-        "when": "owner asks business kaise badhe, growth review, marketing ka result, leads se kitne orders bane, 7 ya 30 din ka business summary",
-        "args": "7d | 30d (default 30d); read-only, no messages sent",
+        "when": "owner asks business kaise badhe, growth review, marketing ka result, leads se kitne orders bane, 7 ya 30 din ka business summary; read-only, no messages sent",
+        "args": "7d | 30d (default 30d)",
     },
     {
         "name": "order_detail",
@@ -132,84 +132,7 @@ TOOL_SPECS = [
 
 # Tools that CHANGE data. The assistant may only claim something is done if
 # one of these actually ran — see bill_agent's unbacked-claim check.
-WRITE
-async def _growth_review(db: AsyncSession, args: str) -> str:
-    """Read-only owner growth summary from tenant-scoped leads and orders.
-
-    This is a cohort view: it counts orders created in the selected window and
-    the amount paid against those orders to date. It does not claim that those
-    payments were collected during the window, and it never sends outreach.
-    """
-    period = (args or "").strip().lower()
-    days = 7 if period in {"7", "7d", "week", "weekly"} else 30
-    now = datetime.now(IST)
-    start = now - timedelta(days=days)
-
-    order_row = (
-        await db.execute(
-            select(
-                func.count(Order.id),
-                func.coalesce(func.sum(Order.total_amount), 0),
-                func.coalesce(func.sum(Order.amount_paid), 0),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                Order.total_amount > Order.amount_paid,
-                                Order.total_amount - Order.amount_paid,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ),
-            ).where(Order.created_at >= start)
-        )
-    ).one()
-    order_count, billed, paid_to_date, outstanding = order_row
-
-    lead_rows = (
-        await db.execute(
-            select(
-                Lead.source,
-                func.count(Lead.id),
-                func.sum(case((Lead.stage == "CONVERTED", 1), else_=0)),
-            )
-            .where(Lead.created_at >= start)
-            .group_by(Lead.source)
-            .order_by(func.count(Lead.id).desc())
-            .limit(8)
-        )
-    ).all()
-    lead_count = sum(int(row[1] or 0) for row in lead_rows)
-    converted_current = sum(int(row[2] or 0) for row in lead_rows)
-    conversion_pct = (converted_current * 100 / lead_count) if lead_count else 0.0
-
-    source_lines = [
-        f"- {str(source or 'unknown')[:40]}: {int(count or 0)} leads, "
-        f"{int(converted or 0)} currently converted"
-        for source, count, converted in lead_rows
-    ]
-    if not source_lines:
-        source_lines = ["- Is period mein koi recorded lead nahi mila."]
-
-    return (
-        f"Growth review — last {days} days (read-only)\n"
-        f"Orders created: {int(order_count or 0)}\n"
-        f"Billed total for these orders: {_money_fmt(billed)}\n"
-        f"Paid against these orders to date: {_money_fmt(paid_to_date)}\n"
-        f"Outstanding on these orders: {_money_fmt(outstanding)}\n"
-        f"Leads created: {lead_count}; current converted stage: {converted_current} "
-        f"({conversion_pct:.1f}% of this lead cohort)\n"
-        "Leads by source (conversion is current stage, not necessarily a conversion event in this window):\n"
-        + "\n".join(source_lines)
-        + "\nNext step: compare sources and repeat-customer opportunities, then create a campaign draft for owner review. "
-        "Do not infer profit from billed revenue or send any message from this report."
-    )
-
-
-_TOOLS = {
-    "growth_review": _growth_review,
+WRITE_TOOLS = {
     "add_expense", "add_customer", "set_shop_info", "assign_task", "ping_staff",
     "billing_adjustment", "marketing_followup",
 }
@@ -1331,7 +1254,83 @@ async def _set_shop_info(db: AsyncSession, args: str) -> str:
     )
 
 
+async def _growth_review(db: AsyncSession, args: str) -> str:
+    """Read-only owner growth summary from tenant-scoped leads and orders.
+
+    This is a cohort view: it counts orders created in the selected window and
+    the amount paid against those orders to date. It does not claim that those
+    payments were collected during the window, and it never sends outreach.
+    """
+    period = (args or "").strip().lower()
+    days = 7 if period in {"7", "7d", "week", "weekly"} else 30
+    now = datetime.now(IST)
+    start = now - timedelta(days=days)
+
+    order_row = (
+        await db.execute(
+            select(
+                func.count(Order.id),
+                func.coalesce(func.sum(Order.total_amount), 0),
+                func.coalesce(func.sum(Order.amount_paid), 0),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                Order.total_amount > Order.amount_paid,
+                                Order.total_amount - Order.amount_paid,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+            ).where(Order.created_at >= start)
+        )
+    ).one()
+    order_count, billed, paid_to_date, outstanding = order_row
+
+    lead_rows = (
+        await db.execute(
+            select(
+                Lead.source,
+                func.count(Lead.id),
+                func.sum(case((Lead.stage == "CONVERTED", 1), else_=0)),
+            )
+            .where(Lead.created_at >= start)
+            .group_by(Lead.source)
+            .order_by(func.count(Lead.id).desc())
+            .limit(8)
+        )
+    ).all()
+    lead_count = sum(int(row[1] or 0) for row in lead_rows)
+    converted_current = sum(int(row[2] or 0) for row in lead_rows)
+    conversion_pct = (converted_current * 100 / lead_count) if lead_count else 0.0
+
+    source_lines = [
+        f"- {str(source or 'unknown')[:40]}: {int(count or 0)} leads, "
+        f"{int(converted or 0)} currently converted"
+        for source, count, converted in lead_rows
+    ]
+    if not source_lines:
+        source_lines = ["- Is period mein koi recorded lead nahi mila."]
+
+    return (
+        f"Growth review — last {days} days (read-only)\n"
+        f"Orders created: {int(order_count or 0)}\n"
+        f"Billed total for these orders: {_money_fmt(billed)}\n"
+        f"Paid against these orders to date: {_money_fmt(paid_to_date)}\n"
+        f"Outstanding on these orders: {_money_fmt(outstanding)}\n"
+        f"Leads created: {lead_count}; current converted stage: {converted_current} "
+        f"({conversion_pct:.1f}% of this lead cohort)\n"
+        "Leads by source (conversion is current stage, not necessarily a conversion event in this window):\n"
+        + "\n".join(source_lines)
+        + "\nNext step: compare sources and repeat-customer opportunities, then create a campaign draft for owner review. "
+        "Do not infer profit from billed revenue or send any message from this report."
+    )
+
+
 _TOOLS = {
+    "growth_review": _growth_review,
     "assign_task": _assign_task,
     "add_expense": _add_expense,
     "add_customer": _add_customer,
