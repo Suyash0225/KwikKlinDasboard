@@ -1330,6 +1330,7 @@ class StaffUpdateIn(BaseModel):
     role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY|SUPERVISOR|MANAGER|ADMIN)$")
     is_active: bool | None = None
     ai_agent_enabled: bool | None = None
+    agent_enabled: bool | None = None
 
 
 async def _active_order_count(db: AsyncSession, staff_id: uuid_module.UUID) -> int:
@@ -1403,6 +1404,9 @@ async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
 
     default_washer = await app_settings.get(db, "default_washer_phone")
     default_delivery = await app_settings.get(db, "default_delivery_phone")
+    agent_switches = await app_settings.get(db, "staff_agent_switches")
+    if not isinstance(agent_switches, dict):
+        agent_switches = {}
     # Jo number customer list mein bhi hai — uske message staff ke maane
     # jate hain, customer ka AI jawab band. Ye sirf save ke waqt batana
     # kaafi nahi; list mein hamesha dikhna chahiye.
@@ -1422,6 +1426,7 @@ async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
                 "id": str(s.id), "name": s.name, "phone": s.phone,
                 "role": s.role.name, "is_active": s.is_active,
                 "ai_agent_enabled": s.ai_agent_enabled,
+                "agent_enabled": bool(agent_switches.get(str(s.id), True)),
                 # the UI needs these to explain WHY delete is blocked
                 "active_orders": await _active_order_count(db, s.id),
                 "is_default": s.phone in (default_washer, default_delivery),
@@ -1509,6 +1514,13 @@ async def staff_update(staff_id: str, body: StaffUpdateIn, db: AsyncSession = De
         staff.is_active = body.is_active
     if body.ai_agent_enabled is not None:
         staff.ai_agent_enabled = body.ai_agent_enabled
+    if body.agent_enabled is not None:
+        from app.services import app_settings
+        switches = await app_settings.get(db, "staff_agent_switches")
+        if not isinstance(switches, dict):
+            switches = {}
+        switches[str(staff.id)] = body.agent_enabled
+        await app_settings.set_value(db, "staff_agent_switches", switches)
     await db.commit()
     log.info("staff_updated_via_settings", staff_id=staff_id)
     return {"ok": True, "ready": _staff_ready_note(staff), "warning": warning}
