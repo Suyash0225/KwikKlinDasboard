@@ -261,7 +261,7 @@ async def _generate_post(db, now_ist: datetime) -> dict:
     return {"summary": summary[:700], "topic_type": topic_type, **strategy}
 
 async def auto_post_daily(db, now_ist: datetime) -> dict:
-    """Publish at most one post per IST calendar day for this tenant."""
+    """Publish today's AI post to every selected GBP location, independently."""
     if not gbp.enabled():
         return {"ok": False, "skipped": True, "reason": "google_business_not_configured"}
     enabled = await app_settings.get(db, _ENABLED_KEY)
@@ -271,10 +271,43 @@ async def auto_post_daily(db, now_ist: datetime) -> dict:
     if not (conn.get("refresh_token") and conn.get("account") and conn.get("location")):
         return {"ok": False, "skipped": True, "reason": "google_not_connected"}
 
+    # Reviews still use the single primary location; daily posts target all
+    # explicitly selected locations. Existing connections remain single-location
+    # until the owner reconnects/selects locations in the Control panel.
+    targets = conn.get("post_locations") or [{
+        "account": conn["account"], "location": conn["location"],
+        "title": conn.get("title", ""), "address": conn.get("address", ""),
+    }]
+    unique_targets = []
+    seen = set()
+    for target in targets:
+        if not isinstance(target, dict) or not target.get("account") or not target.get("location"):
+            continue
+        key = (str(target["account"]), str(target["location"]))
+        if key not in seen:
+            seen.add(key)
+            unique_targets.append(target)
+    if not unique_targets:
+        return {"ok": False, "skipped": True, "reason": "no_post_locations_selected"}
+
     day = now_ist.strftime("%Y-%m-%d")
     history = list(await app_settings.get(db, _POSTS_KEY) or [])
-    if any(str(x.get("date")) == day and x.get("status") == "published" for x in history):
-        return {"ok": True, "skipped": True, "reason": "already_published", "date": day}
+    pending = []
+    for target in unique_targets:
+        loc = str(target["location"])
+        acc = str(target["account"])
+        already = any(
+            str(item.get("date")) == day
+            and item.get("status") == "published"
+            and str(item.get("location") or conn.get("location")) == loc
+            and str(item.get("account") or conn.get("account")) == acc
+            for item in history
+        )
+        if not already:
+            pending.append(target)
+    if not pending:
+        return {"ok": True, "skipped": True, "reason": "already_published_all_locations",
+                "date": day, "location_count": len(unique_targets), "published_count": 0}
 
     post = await _generate_post(db, now_ist)
     topic_key = str(post.get("topic_key") or _topic_key(now_ist.weekday()))
@@ -290,34 +323,61 @@ async def auto_post_daily(db, now_ist: datetime) -> dict:
     poster_url = _public_poster_url(await app_settings.get(db, "gbp_public_poster_url"))
     if poster_url:
         payload["media"] = [{"mediaFormat": "PHOTO", "sourceUrl": poster_url}]
-    try:
-        created = await _api_post(conn["refresh_token"], conn["account"], conn["location"], payload)
-    except Exception as exc:
-        history.append({"date": day, "status": "failed", "error": str(exc)[:300],
-                        "topic_key": topic_key, "campaign": campaign,
-                        "attempted_at": datetime.now(timezone.utc).isoformat()})
-        await app_settings.set_value(db, _POSTS_KEY, history[-_MAX_HISTORY:])
-        await audit.record(actor_role="system", actor="gbp_auto_post", action="gbp_daily_post_failed",
-                           args={"date": day, "topic_key": topic_key, "campaign": campaign},
-                           result=str(exc)[:300], ok=False)
-        raise
 
-    entry = {
-        "date": day, "status": "published", "post_name": created.get("name", ""),
-        "summary": post["summary"], "topic_key": topic_key, "campaign": campaign,
-        "source_tag": source_tag, "cta_url": cta_url,
-        "performance_28d": post.get("performance", {"leads": 0, "orders": 0, "collected_revenue": 0.0}),
-        "published_at": datetime.now(timezone.utc).isoformat(),
-    }
-    history.append(entry)
+    published, failures = [], []
+    for target in pending:
+        loc, acc = str(target["location"]), str(target["account"])
+        title = str(target.get("title") or loc)
+        try:
+            created = await _api_post(conn["refresh_token"], acc, loc, payload)
+        except Exception as exc:
+            entry = {
+                "date": day, "status": "failed", "error": str(exc)[:300],
+                "topic_key": topic_key, "campaign": campaign,
+                "account": acc, "location": loc, "location_title": title,
+                "attempted_at": datetime.now(timezone.utc).isoformat(),
+            }
+            history.append(entry)
+            failures.append({"location": loc, "title": title, "error": str(exc)[:200]})
+            await audit.record(actor_role="system", actor="gbp_auto_post",
+                               action="gbp_daily_post_failed",
+                               args={"date": day, "topic_key": topic_key, "location": loc},
+                               result=str(exc)[:300], ok=False)
+            log.warning("gbp_daily_post_location_failed", date=day, location=loc, error=str(exc)[:200])
+            continue
+
+        entry = {
+            "date": day, "status": "published", "post_name": created.get("name", ""),
+            "summary": post["summary"], "topic_key": topic_key, "campaign": campaign,
+            "source_tag": source_tag, "cta_url": cta_url,
+            "performance_28d": post.get("performance", {"leads": 0, "orders": 0, "collected_revenue": 0.0}),
+            "account": acc, "location": loc, "location_title": title,
+            "published_at": datetime.now(timezone.utc).isoformat(),
+        }
+        history.append(entry)
+        published.append({"location": loc, "title": title, "post_name": entry["post_name"]})
+        await audit.record(actor_role="system", actor="gbp_auto_post",
+                           action="gbp_daily_post_published",
+                           args={"date": day, "topic_key": topic_key, "campaign": campaign,
+                                 "location": loc, "post_name": entry["post_name"]},
+                           result="published")
+        log.info("gbp_daily_post_published", date=day, location=loc,
+                 post_name=entry["post_name"], topic_key=topic_key)
+
     await app_settings.set_value(db, _POSTS_KEY, history[-_MAX_HISTORY:])
     await app_settings.set_value(db, _ENABLED_KEY, True)
-    await audit.record(actor_role="system", actor="gbp_auto_post", action="gbp_daily_post_published",
-                       args={"date": day, "topic_key": topic_key, "campaign": campaign,
-                             "post_name": entry["post_name"]},
-                       result="published")
-    log.info("gbp_daily_post_published", date=day, post_name=entry["post_name"], topic_key=topic_key)
-    return {"ok": True, "published": True, **entry}
+    return {
+        "ok": bool(published) and not failures,
+        "published": bool(published),
+        "date": day,
+        "location_count": len(unique_targets),
+        "published_count": len(published),
+        "published_locations": published,
+        "failed_locations": failures,
+        "topic_key": topic_key,
+        "summary": post["summary"],
+    }
+
 
 async def status(db) -> dict:
     history = list(await app_settings.get(db, _POSTS_KEY) or [])

@@ -237,14 +237,16 @@ async def test_gbp_auto_post_records_failure_retries_and_deduplicates(monkeypatc
             async with async_session_factory() as db:
                 await app_settings.set_value(db, "gbp_auto_post_enabled", True)
                 await app_settings.set_value(db, "gbp_auto_posts", [])
-                with pytest.raises(gbp.GBPError, match="temporary Google error"):
-                    await gbp_auto_post.auto_post_daily(db, now)
+                first = await gbp_auto_post.auto_post_daily(db, now)
+                assert first["published_count"] == 0
+                assert len(first["failed_locations"]) == 1
                 history = await app_settings.get(db, "gbp_auto_posts")
                 assert history[-1]["status"] == "failed"
                 result = await gbp_auto_post.auto_post_daily(db, now)
                 assert result["published"] is True
+                assert result["published_count"] == 1
                 again = await gbp_auto_post.auto_post_daily(db, now)
-                assert again["reason"] == "already_published"
+                assert again["reason"] == "already_published_all_locations"
                 history = await app_settings.get(db, "gbp_auto_posts")
                 assert [item["status"] for item in history] == ["failed", "published"]
         assert calls == {"publish": 2, "generate": 2}
@@ -338,3 +340,53 @@ def test_gbp_poster_url_rejects_non_public_or_non_https_urls() -> None:
     assert gbp_auto_post._public_poster_url("https://localhost/poster.png") is None
     assert gbp_auto_post._public_poster_url("https://127.0.0.1/poster.png") is None
     assert gbp_auto_post._public_poster_url("https://cdn.example.com/poster.png") == "https://cdn.example.com/poster.png"
+
+
+async def test_gbp_auto_post_publishes_to_all_selected_locations(monkeypatch) -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app.services import gbp_auto_post
+
+    other = await _tenant("gbp-post-multi-location-shop")
+    calls = []
+
+    async def fake_generate(db, now_ist):
+        return {"summary": "A useful laundry care tip", "topic_type": "STANDARD", "topic_key": "stain-care"}
+
+    async def fake_publish(refresh_token, account, location, payload):
+        calls.append((account, location, payload["summary"]))
+        return {"name": f"{account}/{location}/localPosts/post-{len(calls)}"}
+
+    async def fake_connection(db):
+        return {
+            "refresh_token": "dummy", "account": "accounts/1", "location": "locations/1",
+            "post_locations": [
+                {"account": "accounts/1", "location": "locations/1", "title": "Kwik Klin - A"},
+                {"account": "accounts/1", "location": "locations/2", "title": "Kwik Klin - B"},
+                {"account": "accounts/2", "location": "locations/3", "title": "Kwik Klin - C"},
+            ],
+        }
+
+    monkeypatch.setattr(gbp, "enabled", lambda: True)
+    monkeypatch.setattr(gbp, "get_connection", fake_connection)
+    monkeypatch.setattr(gbp_auto_post, "_generate_post", fake_generate)
+    monkeypatch.setattr(gbp_auto_post, "_api_post", fake_publish)
+    now = datetime(2026, 10, 10, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    try:
+        async with tenant_context.as_tenant(other):
+            async with async_session_factory() as db:
+                await app_settings.set_value(db, "gbp_auto_post_enabled", True)
+                await app_settings.set_value(db, "gbp_auto_posts", [])
+                result = await gbp_auto_post.auto_post_daily(db, now)
+                assert result["published_count"] == 3
+                assert result["location_count"] == 3
+                assert len(result["published_locations"]) == 3
+                assert len({call[1] for call in calls}) == 3
+                again = await gbp_auto_post.auto_post_daily(db, now)
+                assert again["reason"] == "already_published_all_locations"
+        assert len(calls) == 3
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(sqltext("DELETE FROM settings_kv WHERE tenant_id = :t"), {"t": other})
+            await db.execute(sqltext("DELETE FROM tenants WHERE id = :t"), {"t": other})
+            await db.commit()

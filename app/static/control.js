@@ -1163,6 +1163,8 @@ async function tabIntegrations(box, slug) {
     return;
   }
   if (gb.choices && gb.choices.length) {
+    gsec.appendChild(el("p", "muted",
+      "Choose the primary listing for website reviews. Daily AI posts will be sent to ALL locations managed by this Google account."));
     const sel = el("select");
     for (const c of gb.choices) {
       const o = el("option", null, c.title + (c.address ? ` — ${c.address}` : ""));
@@ -1170,16 +1172,23 @@ async function tabIntegrations(box, slug) {
       sel.appendChild(o);
     }
     gsec.appendChild(sel);
-    buttonRow(gsec, [{ label: "Use this listing", cls: "btn-primary", onClick: async () => {
+    buttonRow(gsec, [{ label: "Use primary listing + post to all", cls: "btn-primary", onClick: async () => {
       const r = await act(() => api(`/control/api/tenants/${slug}/google-business/location`,
         { method: "POST", body: { location: sel.value } }));
-      toast(r.ok ? "Listing connected — reviews synced" : r.error, r.ok ? "ok" : "err");
+      toast(r.ok ? "Primary listing saved — daily posts enabled for all managed locations" : r.error, r.ok ? "ok" : "err");
       reopen(slug, "integrations");
     } }]);
     return;
   }
-  gsec.appendChild(el("p", null, `Connected: ${gb.title || "Google listing"}` +
+  gsec.appendChild(el("p", null, `Primary review listing: ${gb.title || "Google listing"}` +
     (gb.rating ? ` · ${Number(gb.rating).toFixed(1)} ★ · ${gb.count} reviews · ${gb.stored} on website` : "")));
+  gsec.appendChild(el("p", "muted",
+    `Daily AI posts: ${gb.auto_post_location_count || 1} location(s) selected · scheduled for 10:15 AM IST`));
+  buttonRow(gsec, [{ label: "Refresh locations + enable all 3", cls: "btn-primary", onClick: async () => {
+    const r = await act(() => api(`/control/api/tenants/${slug}/google-business/locations/refresh`, { method: "POST" }));
+    if (r && r.ok) toast(`Daily AI posting enabled for ${r.location_count} Google location(s)`, "ok");
+    reopen(slug, "integrations");
+  } }]);
   gsec.appendChild(el("p", "muted", `Last sync: ${gb.synced_at ? fmtWhen(gb.synced_at) : "not yet"}`));
   buttonRow(gsec, [
     { label: "Sync now", onClick: async () => {
