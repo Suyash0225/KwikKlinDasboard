@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import structlog
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -23,6 +23,8 @@ from app.models import (
     Customer,
     Direction,
     Expense,
+    Lead,
+    LlmUsage,
     Order,
     OrderStatus,
     OrderStatusHistory,
@@ -40,6 +42,16 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # What the model is told it can do. Keep descriptions concrete — vague tool
 # docs are the #1 cause of a model guessing instead of looking up.
 TOOL_SPECS = [
+    {
+        "name": "ai_health",
+        "when": "owner asks AI ka status, AI cost/latency/failures, Gemini errors, tokens ya pichhle hafte AI quality/health",
+        "args": "7d | 30d (default 7d); read-only, no messages sent",
+    },
+    {
+        "name": "growth_review",
+        "when": "owner asks business kaise badhe, growth review, marketing ka result, leads se kitne orders bane, 7 ya 30 din ka business summary; read-only, no messages sent",
+        "args": "7d | 30d (default 30d)",
+    },
     {
         "name": "order_detail",
         "when": "owner asks about ONE order (KK-...): status, kab tak, kisne kya kiya, paisa",
@@ -1248,7 +1260,140 @@ async def _set_shop_info(db: AsyncSession, args: str) -> str:
     )
 
 
+async def _growth_review(db: AsyncSession, args: str) -> str:
+    """Read-only owner growth summary from tenant-scoped leads and orders.
+
+    This is a cohort view: it counts orders created in the selected window and
+    the amount paid against those orders to date. It does not claim that those
+    payments were collected during the window, and it never sends outreach.
+    """
+    period = (args or "").strip().lower()
+    days = 7 if period in {"7", "7d", "week", "weekly"} else 30
+    now = datetime.now(IST)
+    start = now - timedelta(days=days)
+
+    order_row = (
+        await db.execute(
+            select(
+                func.count(Order.id),
+                func.coalesce(func.sum(Order.total_amount), 0),
+                func.coalesce(func.sum(Order.amount_paid), 0),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                Order.total_amount > Order.amount_paid,
+                                Order.total_amount - Order.amount_paid,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+            ).where(Order.created_at >= start)
+        )
+    ).one()
+    order_count, billed, paid_to_date, outstanding = order_row
+
+    lead_rows = (
+        await db.execute(
+            select(
+                Lead.source,
+                func.count(Lead.id),
+                func.sum(case((Lead.stage == "CONVERTED", 1), else_=0)),
+            )
+            .where(Lead.created_at >= start)
+            .group_by(Lead.source)
+            .order_by(func.count(Lead.id).desc())
+            .limit(8)
+        )
+    ).all()
+    lead_count = sum(int(row[1] or 0) for row in lead_rows)
+    converted_current = sum(int(row[2] or 0) for row in lead_rows)
+    conversion_pct = (converted_current * 100 / lead_count) if lead_count else 0.0
+
+    source_lines = [
+        f"- {str(source or 'unknown')[:40]}: {int(count or 0)} leads, "
+        f"{int(converted or 0)} currently converted"
+        for source, count, converted in lead_rows
+    ]
+    if not source_lines:
+        source_lines = ["- Is period mein koi recorded lead nahi mila."]
+
+    return (
+        f"Growth review — last {days} days (read-only)\n"
+        f"Orders created: {int(order_count or 0)}\n"
+        f"Billed total for these orders: {_money_fmt(billed)}\n"
+        f"Paid against these orders to date: {_money_fmt(paid_to_date)}\n"
+        f"Outstanding on these orders: {_money_fmt(outstanding)}\n"
+        f"Leads created: {lead_count}; current converted stage: {converted_current} "
+        f"({conversion_pct:.1f}% of this lead cohort)\n"
+        "Leads by source (conversion is current stage, not necessarily a conversion event in this window):\n"
+        + "\n".join(source_lines)
+        + "\nNext step: compare sources and repeat-customer opportunities, then create a campaign draft for owner review. "
+        "Do not infer profit from billed revenue or send any message from this report."
+    )
+
+
+async def _ai_health(db: AsyncSession, args: str) -> str:
+    """Read-only AI operational health summary, excluding all customer PII."""
+    period = (args or "").strip().lower()
+    days = 30 if period in {"30", "30d", "month", "monthly"} else 7
+    start = datetime.now(IST) - timedelta(days=days)
+
+    summary = (
+        await db.execute(
+            select(
+                func.count(LlmUsage.id),
+                func.coalesce(
+                    func.sum(case((LlmUsage.ok.is_(False), 1), else_=0)), 0
+                ),
+                func.coalesce(func.avg(LlmUsage.latency_ms), 0),
+                func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+            ).where(LlmUsage.at >= start)
+        )
+    ).one()
+    calls, failures, avg_latency, input_tokens, output_tokens = summary
+    calls = int(calls or 0)
+    failures = int(failures or 0)
+    failure_pct = failures * 100 / calls if calls else 0.0
+
+    purpose_rows = (
+        await db.execute(
+            select(
+                LlmUsage.purpose,
+                func.count(LlmUsage.id),
+                func.coalesce(
+                    func.sum(case((LlmUsage.ok.is_(False), 1), else_=0)), 0
+                ),
+                func.coalesce(func.avg(LlmUsage.latency_ms), 0),
+            )
+            .where(LlmUsage.at >= start)
+            .group_by(LlmUsage.purpose)
+            .order_by(func.count(LlmUsage.id).desc())
+            .limit(8)
+        )
+    ).all()
+    by_purpose = [
+        f"- {str(purpose or 'other')[:24]}: {int(count or 0)} calls, "
+        f"{int(failed or 0)} failed, average {float(latency or 0):.0f} ms"
+        for purpose, count, failed, latency in purpose_rows
+    ] or ["- No recorded AI calls in this period."]
+
+    return (
+        f"AI health — last {days} days (read-only)\n"
+        f"Recorded calls: {calls}; failures: {failures} ({failure_pct:.1f}%)\n"
+        f"Average recorded latency: {float(avg_latency or 0):.0f} ms\n"
+        f"Tokens: {int(input_tokens or 0)} input + {int(output_tokens or 0)} output\n"
+        "By purpose:\n" + "\n".join(by_purpose)
+        + "\nThis report contains aggregate metrics only. Token counts are not currency; use the AI usage cost dashboard for estimated spend."
+    )
+
+
 _TOOLS = {
+    "ai_health": _ai_health,
+    "growth_review": _growth_review,
     "assign_task": _assign_task,
     "add_expense": _add_expense,
     "add_customer": _add_customer,
