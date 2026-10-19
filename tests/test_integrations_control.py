@@ -210,3 +210,38 @@ async def test_production_refuses_to_start_with_security_gaps(monkeypatch) -> No
     with pytest.raises(RuntimeError, match="secure_setup"):
         async with main_mod.lifespan(main_mod.app):
             pass
+
+
+async def test_refreshing_google_locations_enables_daily_posts(client, shops, monkeypatch) -> None:
+    from app.services import app_settings
+
+    async with integrations.tenant_db(shops["a"]) as db:
+        await gbp.save_connection(db, {
+            "refresh_token": "refresh-for-test",
+            "account": "accounts/1",
+            "location": "locations/9",
+            "title": "Integ A Laundry",
+        })
+        await app_settings.set_value(db, "gbp_auto_post_enabled", False)
+
+    async def fake_locations(refresh):
+        assert refresh == "refresh-for-test"
+        return [
+            {"account": "accounts/1", "location": "locations/9", "title": "Integ A Laundry"},
+            {"account": "accounts/1", "location": "locations/10", "title": "Integ A Laundry - B"},
+            {"account": "accounts/2", "location": "locations/11", "title": "Integ A Laundry - C"},
+        ]
+
+    monkeypatch.setattr(gbp, "list_locations", fake_locations)
+    response = await client.post(
+        f"/control/api/tenants/{A}/google-business/locations/refresh",
+        headers=CTL,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["location_count"] == 3
+
+    async with integrations.tenant_db(shops["a"]) as db:
+        connection = await gbp.get_connection(db)
+        enabled = await app_settings.get(db, "gbp_auto_post_enabled")
+    assert len(connection["post_locations"]) == 3
+    assert enabled is True
