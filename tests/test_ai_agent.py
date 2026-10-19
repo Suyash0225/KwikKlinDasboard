@@ -115,9 +115,9 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
         calls += 1
         # build_ai_reply routes tools before composing a customer response.
         # Keep tool-router calls separate from the compose response.
-        if calls in {1, 3}:
-            return {"tool_calls": []}
-        if calls == 2:
+        # The first call composes the reply on the current path; later calls
+        # provide the saved profile details returned by the model.
+        if calls == 1:
             return {
                 "reply": "Ji, apna naam bata dijiye.",
                 "intent": "NEW_ORDER", "language": "hi",
