@@ -530,6 +530,28 @@ _CAMPAIGN_AI_SCHEMA = {
 }
 
 
+def _ensure_gmb_local_search_context(body: str) -> str:
+    """Add one natural laundry/location phrase if AI copy omitted local context."""
+    text = (body or "").strip()
+    lowered = text.casefold()
+    has_service = any(
+        term in lowered
+        for term in ("laundry", "dry clean", "dry-clean", "wash and fold", "garment care")
+    )
+    has_location = "varanasi" in lowered
+    if has_service and has_location:
+        return text
+    if not has_service and not has_location:
+        suffix = " Laundry and dry cleaning services in Varanasi."
+    elif not has_service:
+        suffix = " Laundry and dry cleaning services."
+    else:
+        suffix = " Serving Varanasi."
+    if suffix.strip().casefold() not in lowered:
+        text = (text.rstrip(" .") + suffix) if text else suffix.strip()
+    return text
+
+
 @router.post("/campaigns/ai-draft", dependencies=[Depends(require_feature("campaigns"))])
 async def ai_campaign_draft(
     body: CampaignAIDraftIn, db: AsyncSession = Depends(get_db)
@@ -656,23 +678,11 @@ async def ai_campaign_draft(
     # posts. AI instructions alone are not a policy gate.
     from app.services.social import check_google_image, draw_poster, enforce_google_rules
     draft["gmb_body"] = enforce_google_rules(draft["gmb_body"])[:700]
-    # Add lightweight local-search context when the model omits it. Keep this
-    # to one natural service/location phrase; never repeat keywords or fabricate
-    # a street address, ranking claim, review, or service not in our rate card.
-    seo_body = draft["gmb_body"]
-    lowered = seo_body.casefold()
-    has_service = any(term in lowered for term in ("laundry", "dry clean", "dry-clean", "wash and fold", "garment care"))
-    has_location = "varanasi" in lowered
-    if not has_service or not has_location:
-        if not has_service and not has_location:
-            suffix = " Laundry and dry cleaning services in Varanasi."
-        elif not has_service:
-            suffix = " Laundry and dry cleaning services."
-        else:
-            suffix = " Serving Varanasi."
-        if suffix.strip().casefold() not in lowered:
-            seo_body = (seo_body.rstrip(" .") + suffix) if seo_body else suffix.strip()
-    draft["gmb_body"] = enforce_google_rules(seo_body)[:700]
+    # Add one natural local-search phrase if AI omitted service/location context.
+    # No keyword stuffing, fabricated addresses, reviews, or ranking claims.
+    draft["gmb_body"] = enforce_google_rules(
+        _ensure_gmb_local_search_context(draft["gmb_body"])
+    )[:700]
     draft["gmb_title"] = enforce_google_rules(draft["gmb_title"])[:120]
     draft["gmb_cta"] = enforce_google_rules(draft["gmb_cta"])[:60]
     # Generate a branded phone-free creative and validate it before exposing it
