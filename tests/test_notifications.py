@@ -363,11 +363,11 @@ async def test_foreign_order_number_not_leaked(client, sent) -> None:
         await purge_phones("+919999900044")
 
 
-async def test_no_orders_falls_back_to_ack(client, sent) -> None:
+async def test_no_orders_falls_back_to_failover_ack(client, sent) -> None:
     r = await _post_text(client, "hello ji", "wamid.TESTN-5")
     assert r.status_code == 200
     assert len(sent) == 1
-    assert sent[0]["text"] == get_message("ack_received")
+    assert sent[0]["text"] == get_message("ai_failover_ack")
 
 
 @pytest.mark.requires_independent_sessions
