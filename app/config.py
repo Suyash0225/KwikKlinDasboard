@@ -88,6 +88,8 @@ class Settings(BaseSettings):
     # The application intentionally has one LLM provider: paid Gemini.
     # Provider selection and cross-provider failover are not configurable.
     GEMINI_API_KEY: str = ""
+    # Image-capable Gemini model for optional AI poster artwork; copy/logo are composited locally.
+    GEMINI_IMAGE_MODEL: str = "gemini-3.1-flash-image"
 
     # --- People ---
     # Manager's WhatsApp number in E.164 form, e.g. +919876543210.

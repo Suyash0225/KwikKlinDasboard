@@ -284,21 +284,49 @@ def _poster_copy(topic_key: str) -> tuple[str, str, str]:
 
 
 async def _build_poster_url(db, now_ist: datetime, topic_key: str) -> tuple[str | None, str | None]:
-    """Generate and validate a phone-free branded poster and return its public URL.
+    """Create a policy-safe branded poster, preferring Gemini-generated artwork.
 
-    Google fetches media from a stable public URL; a local file alone is not
-    sufficient. If the public host is not configured, keep the text post
-    working and expose the reason in the run result.
+    The exact Kwik Klin logo and text are overlaid locally. If the image model
+    is unavailable/quota-limited, use the existing deterministic poster rather
+    than blocking a text post. No phone number or direct contact details appear.
     """
-    from app.services import google_auth, social
+    from app.services import google_auth, social, ai_poster
 
     theme, headline, subline = _poster_copy(topic_key)
     day = now_ist.strftime("%Y-%m-%d")
     filename = f"social-google-{day}.png"
     path = social.MEDIA_DIR / filename
+    poster_issue = None
     try:
         social.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-        social.draw_poster(theme, headline, subline, path, show_phone=False)
+        # One bounded image-generation call per daily campaign, shared by the
+        # selected GBP locations. Model must create artwork only, not text/logo.
+        try:
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix="kwikklin-gbp-art-") as tmp:
+                background = Path(tmp) / "background.png"
+                prompt = (
+                    "Create a premium square 1:1 commercial lifestyle photograph for an Indian "
+                    "laundry and dry-cleaning brand in Varanasi. Show neatly folded fresh clothes, "
+                    "soft clean fabric textures and a tasteful laundry-care setting. Modern, "
+                    "trustworthy, realistic photography; deep navy and cyan accents; balanced "
+                    "natural light; uncluttered composition with generous calm negative space. "
+                    "No text, no letters, no numbers, no logo, no watermark, no phone, no signage, "
+                    "no prices, no discounts, no offers. This is background artwork only."
+                )
+                await ai_poster.generate_background(prompt, background)
+                logo_path = Path(__file__).resolve().parent.parent / "site" / "assets" / "img" / "logo.png"
+                ai_poster.compose_poster(background, logo_path, path, theme, headline, subline)
+        except Exception as exc:
+            poster_issue = f"ai_artwork_unavailable: {type(exc).__name__}; branded fallback used"
+            log.warning("gbp_ai_poster_fallback", error=type(exc).__name__)
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix="kwikklin-gbp-fallback-") as tmp:
+                background = Path(tmp) / "background.png"
+                ai_poster.create_fallback_background(background)
+                logo_path = Path(__file__).resolve().parent.parent / "site" / "assets" / "img" / "logo.png"
+                ai_poster.compose_poster(background, logo_path, path, theme, headline, subline)
+
         problems = social.check_google_image(path)
         if problems:
             return None, "poster_validation_failed: " + "; ".join(problems)
@@ -309,10 +337,10 @@ async def _build_poster_url(db, now_ist: datetime, topic_key: str) -> tuple[str 
             return None, "poster_url_unavailable: " + problem
         if not _public_poster_url(url):
             return None, "poster_url_unavailable: URL failed HTTPS/public-host validation"
-        return url, None
+        return url, poster_issue
     except Exception as exc:
-        log.warning("gbp_poster_generation_failed", error=str(exc)[:200])
-        return None, "poster_generation_failed: " + str(exc)[:200]
+        log.warning("gbp_poster_generation_failed", error=type(exc).__name__)
+        return None, "poster_generation_failed: " + type(exc).__name__
 
 async def auto_post_daily(db, now_ist: datetime) -> dict:
     """Publish today's AI post to every selected GBP location, independently."""
