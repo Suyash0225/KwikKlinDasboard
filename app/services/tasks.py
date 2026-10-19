@@ -36,12 +36,17 @@ QUIET_START, QUIET_END = settings.QUIET_HOURS_START, settings.QUIET_HOURS_END
 # inspect and administer tasks within the active tenant; tenant context/RLS
 # remains the outer boundary for all task queries.
 async def staff_can_access_task(db: AsyncSession, task: Task, staff: Staff) -> bool:
-    """Return whether this active staff member may access/update a task."""
+    """Read access: managers can view the tenant queue; staff see assigned tasks."""
     if not staff.is_active:
         return False
     if staff.role.name in {"ADMIN", "MANAGER"}:
         return True
     return task.assigned_staff_id == staff.id
+
+
+async def staff_can_update_task(db: AsyncSession, task: Task, staff: Staff) -> bool:
+    """Write access: only the active assignee may change a task via WhatsApp."""
+    return bool(staff.is_active and task.assigned_staff_id == staff.id)
 
 
 
