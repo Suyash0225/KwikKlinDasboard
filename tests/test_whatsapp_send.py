@@ -79,19 +79,27 @@ async def test_automated_customer_send_requires_explicit_intent(open_window) -> 
 
 async def test_unknown_staff_recipient_is_rejected(open_window, monkeypatch) -> None:
     """An unknown phone must not be treated as an authorized staff recipient."""
+    from app.services import tenant_context
+
     async def _must_not_send(*args, **kwargs):
         raise AssertionError("WAHA transport must not be called for an unknown recipient")
 
     monkeypatch.setattr(waha, "_post", _must_not_send)
-    async with async_session_factory() as db:
-        with pytest.raises(SendError, match="recipient is not a tenant customer or lead"):
-            await send_message(
-                db,
-                to_phone="+919876543299",
-                text="This must never be sent",
-                sent_by="manager",
-                intent="transactional",
-            )
+    tenant_id = await tenant_context.get_home_tenant_id()
+    assert tenant_id is not None
+    token = tenant_context.current_tenant_id.set(tenant_id)
+    try:
+        async with async_session_factory() as db:
+            with pytest.raises(SendError, match="recipient is not a tenant customer or lead"):
+                await send_message(
+                    db,
+                    to_phone="+919876543299",
+                    text="This must never be sent",
+                    sent_by="manager",
+                    intent="transactional",
+                )
+    finally:
+        tenant_context.current_tenant_id.reset(token)
 
 
 async def test_list_payload_matches_waha_shape(open_window, monkeypatch) -> None:
