@@ -23,7 +23,13 @@
   </div>
 </header>
 
-<!-- Sign-in: credentials are exchanged once for an httpOnly session cookie. -->
+<!-- Google OAuth is an allowlisted alternative; password login remains as recovery. -->
+<section class="toolbar" aria-label="Google sign in">
+  <a id="btn-google-signin" class="btn-primary" href="/control/auth/google">Continue with Google</a>
+  <span class="muted">Only the configured Google account can open this panel.</span>
+</section>
+
+<!-- Credentials are exchanged once for an httpOnly session cookie. -->
 <form id="signin" class="toolbar" autocomplete="on">
   <label class="sr-only" for="login">Control Room login ID</label>
   <input id="login" name="username" type="text" placeholder="Login ID" autofocus
