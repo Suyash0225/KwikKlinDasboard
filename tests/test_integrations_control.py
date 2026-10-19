@@ -246,3 +246,41 @@ async def test_refreshing_google_locations_enables_daily_posts(client, shops, mo
         enabled = await app_settings.get(db, "gbp_auto_post_enabled")
     assert len(connection["post_locations"]) == 3
     assert enabled is True
+
+@pytest.mark.requires_independent_sessions
+async def test_choosing_primary_google_location_enables_daily_posts(client, shops, monkeypatch) -> None:
+    from app.services import app_settings
+
+    locations = [
+        {"account": "accounts/1", "location": "locations/9", "title": "Integ A Laundry"},
+        {"account": "accounts/1", "location": "locations/10", "title": "Integ A Laundry - B"},
+        {"account": "accounts/2", "location": "locations/11", "title": "Integ A Laundry - C"},
+    ]
+    async with integrations.tenant_db(shops["a"]) as db:
+        await gbp.save_connection(db, {
+            "refresh_token": "refresh-for-test",
+            "account": "accounts/1",
+            "location": "locations/9",
+            "title": "Integ A Laundry",
+            "choices": locations,
+        })
+        await app_settings.set_value(db, "gbp_auto_post_enabled", False)
+
+    async def fake_sync(db):
+        return {"stored": 0}
+
+    monkeypatch.setattr(gbp, "sync", fake_sync)
+    response = await client.post(
+        f"/control/api/tenants/{A}/google-business/location",
+        headers=CTL,
+        json={"location": "locations/10"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["ok"] is True
+
+    async with integrations.tenant_db(shops["a"]) as db:
+        connection = await gbp.get_connection(db)
+        enabled = await app_settings.get(db, "gbp_auto_post_enabled")
+    assert connection["location"] == "locations/10"
+    assert len(connection["post_locations"]) == 3
+    assert enabled is True
