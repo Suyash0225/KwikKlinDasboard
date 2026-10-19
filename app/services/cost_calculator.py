@@ -8,7 +8,7 @@ clearly-labelled ratios without pretending shared costs are allocated correctly.
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Expense, Order, OrderStatus, Rate
@@ -47,8 +47,10 @@ def summarize_costs(expenses, order_rows, rates, period_label: str) -> dict:
     expense_total = sum((_decimal(e) for e in expenses), ZERO)
     rate_units = {}
     for rate in rates:
-        key = (_unit_key(str(getattr(rate, "service", "") or "")),
-               _unit_key(str(getattr(rate, "garment", "") or "")))
+        key = (
+            _unit_key(str(getattr(rate, "service", "") or "")),
+            _unit_key(str(getattr(rate, "garment", "") or "")),
+        )
         rate_units[key] = str(getattr(rate, "unit", "pc") or "pc").lower()
 
     pieces = ZERO
@@ -56,7 +58,6 @@ def summarize_costs(expenses, order_rows, rates, period_label: str) -> dict:
     unclassified = ZERO
     completed_orders = 0
     for row in order_rows:
-        # rows may be Order objects or (items, created_at) tuples from SQL.
         order = row[0] if isinstance(row, tuple) else row
         if getattr(order, "status", None) != OrderStatus.DELIVERED:
             continue
@@ -81,13 +82,40 @@ def summarize_costs(expenses, order_rows, rates, period_label: str) -> dict:
                 or rate_units.get((service, ""))
                 or rate_units.get((service, type_key))
             )
-            # Fallback only if the order line explicitly identifies a unit.
             if unit == "kg":
                 kilograms += qty
             elif unit == "pc":
                 pieces += qty
             else:
                 unclassified += 1
+
+    mixed_units = pieces > 0 and kilograms > 0
+    # The same shared expense pool cannot safely be divided independently by
+    # pieces and kilograms. Suppress both ratios for mixed-unit periods rather
+    # than presenting two misleading unit-cost figures.
+    can_show_unit_proxy = bool(expenses) and not mixed_units
+    cost_per_piece = (
+        (expense_total / pieces).quantize(Decimal("0.01"))
+        if can_show_unit_proxy and pieces > 0 else None
+    )
+    cost_per_kg = (
+        (expense_total / kilograms).quantize(Decimal("0.01"))
+        if can_show_unit_proxy and kilograms > 0 else None
+    )
+    if not expenses:
+        proxy_note = "No expenses recorded; unit cost is unavailable, not zero."
+    elif mixed_units:
+        proxy_note = (
+            "Mixed piece and kg volumes share one expense pool; unit-cost proxies "
+            "are suppressed until expenses are allocated by unit/service."
+        )
+    elif pieces > 0 or kilograms > 0:
+        proxy_note = (
+            "Shared-expense proxy only; expenses are not allocated by service "
+            "and this is not an audited unit cost or margin."
+        )
+    else:
+        proxy_note = "No classifiable delivered volume; unit-cost proxy is unavailable."
 
     return {
         "period": period_label,
@@ -96,11 +124,12 @@ def summarize_costs(expenses, order_rows, rates, period_label: str) -> dict:
         "pieces": pieces,
         "kilograms": kilograms,
         "unclassified_lines": int(unclassified),
-        "cost_per_piece_proxy": (expense_total / pieces).quantize(Decimal("0.01")) if pieces and expenses else None,
-        "cost_per_kg_proxy": (expense_total / kilograms).quantize(Decimal("0.01")) if kilograms and expenses else None,
-        "mixed_units": pieces > 0 and kilograms > 0,
+        "cost_per_piece_proxy": cost_per_piece,
+        "cost_per_kg_proxy": cost_per_kg,
+        "mixed_units": mixed_units,
         "expense_rows": len(expenses),
         "has_expenses": bool(expenses),
+        "cost_proxy_note": proxy_note,
     }
 
 

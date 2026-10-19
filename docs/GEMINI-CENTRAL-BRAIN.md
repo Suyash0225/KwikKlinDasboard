@@ -18,14 +18,19 @@ Python services remain the authority for persisted facts, calculations, and acti
   outbound messages, campaigns, task status changes, and financial changes retain
   their existing explicit confirmation, audit, tenant/RLS, and outbound-policy gates.
 
-## Cost calculator limits
+## Cost calculator limits and safe interpretation
 The owner-only `cost_analysis` tool uses tenant-scoped Expense, Order, and Rate rows.
 It counts delivered-order volume only, excludes structured billing adjustments, uses
 Decimal arithmetic, and reports missing/unclassified data. Expense records do not yet
 carry an allocation basis, and historical line quantities may lack explicit units.
-Therefore per-piece and per-kg ratios are labelled **shared-expense proxies**, not
-audited unit costs or service margins. Do not recommend price changes from these
-ratios until expense allocation and reliable production-volume capture are added.
+
+A mixed period containing both per-piece and per-kg volume has one shared expense pool.
+Dividing that entire pool separately by pieces and kilograms produces misleading
+numbers, so the calculator suppresses both unit-cost proxies in mixed-unit periods.
+A single-unit ratio remains a **shared-expense proxy**, not an audited unit cost or
+service margin. Missing expenses are never presented as zero cost. Do not recommend
+price changes from these ratios until expense allocation and reliable production-volume
+capture are added.
 
 ## Verification and rollout
 - Run focused tests plus the complete CI suite before merge.
