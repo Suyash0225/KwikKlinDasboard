@@ -426,10 +426,11 @@
           <button class="btn ghost sm" onclick="loadManualLeads()">↻ Refresh leads</button>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:12px">
-          <div class="camp-field"><label for="manual-lead-name">Customer name *</label><input id="manual-lead-name" maxlength="120" placeholder="Customer name" oninput="updateLeadContext()"></div>
-          <div class="camp-field"><label for="manual-lead-phone">WhatsApp number *</label><input id="manual-lead-phone" inputmode="tel" maxlength="24" placeholder="+91 98765 43210" oninput="updateLeadContext()"></div>
-          <div class="camp-field"><label for="manual-lead-need">Interested service *</label><input id="manual-lead-need" maxlength="300" placeholder="Dry cleaning, bulk laundry…" oninput="updateLeadContext()"></div>
+          <div class="camp-field"><label for="manual-lead-name">Customer name *</label><input id="manual-lead-name" maxlength="120" placeholder="Customer name" oninput="updateLeadContext()" oninput="updateLeadContext()"></div>
+          <div class="camp-field"><label for="manual-lead-phone">WhatsApp number *</label><input id="manual-lead-phone" inputmode="tel" maxlength="24" placeholder="+91 98765 43210" oninput="updateLeadContext()" oninput="updateLeadContext()"></div>
+          <div class="camp-field"><label for="manual-lead-need">Interested service *</label><input id="manual-lead-need" maxlength="300" placeholder="Dry cleaning, bulk laundry…" oninput="updateLeadContext()" oninput="updateLeadContext()"></div>
         </div>
+        <div class="camp-lead-context" aria-live="polite"><h4>Lead context</h4><div id="manual-lead-context-summary">Enter lead details to preview the recipient.</div><div class="camp-lead-status-row"><span>Source: Phone call</span><span>Status: New lead</span><span>Last contact: Not available</span></div><div class="camp-lead-timeline"><b>Conversation history</b><p>No previous WhatsApp messages are available for this new lead.</p></div></div>
         <div class="camp-lead-context" aria-live="polite"><h4>Lead context</h4><div id="manual-lead-context-summary">Enter lead details to preview the recipient.</div><div class="camp-lead-status-row"><span>Source: Phone call</span><span>Status: New lead</span><span>Last contact: Not available</span></div><div class="camp-lead-timeline"><b>Conversation history</b><p>No previous WhatsApp messages are available for this new lead.</p></div></div>
         <div class="camp-field" style="margin-top:8px"><label for="manual-lead-notes">Call notes</label><textarea id="manual-lead-notes" rows="2" maxlength="2000" placeholder="Budget, pickup area, preferred date, questions…"></textarea></div>
         <div style="display:flex;justify-content:flex-end;margin:8px 0"><button type="button" class="btn ghost sm" onclick="draftManualLeadMessage()">✍ Prepare WhatsApp draft</button></div>
