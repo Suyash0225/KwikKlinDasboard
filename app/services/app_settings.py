@@ -18,7 +18,9 @@ from app.services.secrets import decrypt, encrypt
 
 log = structlog.get_logger()
 
-_SECRET_SETTINGS = set()
+# Secret scalar settings are encrypted at rest. Structured OAuth connections (GBP/GA4)
+# encrypt their refresh_token field in their owning service instead.
+_SECRET_SETTINGS = {"ig_access_token"}
 
 # Single source of defaults — also drives the Settings UI.
 DEFAULTS: dict[str, Any] = {
@@ -286,7 +288,10 @@ async def get_many(db: AsyncSession, *keys: str) -> dict[str, Any]:
     ).scalars().all()
     for r in rows:
         if r.key in out:
-            out[r.key] = r.value.get("v", out[r.key])
+            value = r.value.get("v", out[r.key])
+            # Match get(): callers using the batched path must not receive an
+            # encrypted token blob (or bypass legacy plaintext compatibility).
+            out[r.key] = (decrypt(value or "") or "") if r.key in _SECRET_SETTINGS else value
     return out
 
 
