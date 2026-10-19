@@ -3755,8 +3755,8 @@ function renderCampaigns(camps) {
     const actions =
       '<details class="camp-actions"><summary aria-label="Campaign actions">⋮</summary><div>' +
       '<button onclick="openCampaignDetail(\'' + c.id + '\')">View details</button>' +
-      (["approved","sending"].includes(c.status) ? '<button onclick="cancelCampaign(\'' + c.id + '\')">Cancel campaign</button>' : "") +
-      (["approved","sending"].includes(c.status) ? "" : '<button class="danger" onclick="deleteCampaign(\'' + c.id + '\')">Delete campaign</button>') +
+      (["approved","sending","scheduled"].includes(c.status) ? '<button onclick="cancelCampaign(\'' + c.id + '\')">Cancel campaign</button>' : "") +
+      (["approved","sending","scheduled"].includes(c.status) ? "" : '<button class="danger" onclick="deleteCampaign(\'' + c.id + '\')">Delete campaign</button>') +
       '</div></details>';
     return '<article class="camp-history-item" data-campaign-status="'+esc(c.status)+'" data-campaign-name="'+esc((c.name||"").toLowerCase())+'">' +
       '<div class="camp-history-item-top"><div class="camp-history-name"><b>' + esc(c.name) + '</b><div class="muted">' +
