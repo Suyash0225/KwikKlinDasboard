@@ -3816,7 +3816,7 @@ function resetCampaignForm() {
   window.CAMPAIGN_CUSTOM_IMAGE = null;
   if ($("camp-name")) $("camp-name").value = "";
   if ($("camp-msg")) $("camp-msg").value = "";
-  const promo=document.querySelector('input[name="camp-type"][value="promotion"]');if(promo)promo.checked=true;
+  const promo=document.querySelector('input[name="camp-type"][value="promotion"]');if(promo)promo.checked=true;if($("camp-rule-frequency")){$("camp-rule-frequency").checked=true;$("camp-rule-frequency").disabled=false;}if($("camp-rule-complaints"))$("camp-rule-complaints").checked=true;
   if ($("camp-image")) $("camp-image").value = "";
   if ($("camp-image-preview")) $("camp-image-preview").innerHTML = "";
   if ($("camp-preview-image")) $("camp-preview-image").innerHTML = "";
