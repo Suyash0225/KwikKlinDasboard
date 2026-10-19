@@ -26,6 +26,44 @@ router = APIRouter(
 )
 
 
+def _post_location_statuses(locations: list[dict], history: list[dict], primary_location: str = "") -> list[dict]:
+    """Return the latest post result for each selected location, without credentials."""
+    latest = {}
+    for item in reversed(history):
+        if not isinstance(item, dict):
+            continue
+        location = str(item.get("location") or primary_location)
+        account = str(item.get("account") or "*")
+        if location and (account, location) not in latest:
+            latest[(account, location)] = item
+
+    result = []
+    seen = set()
+    for target in locations:
+        if not isinstance(target, dict) or not target.get("location"):
+            continue
+        location = str(target["location"])
+        account = str(target.get("account") or "")
+        key = (account, location)
+        if key in seen:
+            continue
+        seen.add(key)
+        item = latest.get(key) or latest.get(("*", location))
+        result.append({
+            "location": location,
+            "title": str(target.get("title") or location),
+            "address": str(target.get("address") or ""),
+            "status": str(item.get("status") or "not_posted") if item else "not_posted",
+            "date": str(item.get("date") or "") if item else "",
+            "updated_at": str(item.get("published_at") or item.get("attempted_at") or "") if item else "",
+            "post_name": str(item.get("post_name") or "") if item else "",
+            "error": str(item.get("error") or "")[:240] if item else "",
+            "poster_attached": bool(item.get("poster_attached")) if item else False,
+            "poster_issue": str(item.get("poster_issue") or "")[:180] if item else "",
+        })
+    return result
+
+
 async def status_for(db: AsyncSession) -> dict:
     """Current tenant ka Google haal — token kabhi nahi."""
     conn = await gbp.get_connection(db)
@@ -34,6 +72,12 @@ async def status_for(db: AsyncSession) -> dict:
     reauth_required = (
         "refresh token expired or was revoked" in str(last_error).lower()
         or "oauth refresh token" in str(last_error).lower()
+    )
+    auto_post = await __import__("app.services.gbp_auto_post", fromlist=["status"]).status(db)
+    post_locations = conn.get("post_locations") or (
+        [{"account": conn.get("account", ""), "location": conn.get("location", ""),
+          "title": conn.get("title", ""), "address": conn.get("address", "")}]
+        if conn.get("location") else []
     )
     return {
         "configured": gbp.enabled(),
@@ -47,8 +91,11 @@ async def status_for(db: AsyncSession) -> dict:
         "count": data.get("count"),
         "stored": len(data.get("reviews") or []),
         "synced_at": data.get("synced_at", ""),
-        "auto_post": await __import__("app.services.gbp_auto_post", fromlist=["status"]).status(db),
-        "auto_post_location_count": len(conn.get("post_locations") or ([{"location": conn.get("location")}] if conn.get("location") else [])),
+        "auto_post": auto_post,
+        "auto_post_locations": _post_location_statuses(
+            post_locations, auto_post.get("history") or [], str(conn.get("location") or "")
+        ),
+        "auto_post_location_count": len(post_locations),
     }
 
 

@@ -1184,6 +1184,14 @@ async function tabIntegrations(box, slug) {
     (gb.rating ? ` · ${Number(gb.rating).toFixed(1)} ★ · ${gb.count} reviews · ${gb.stored} on website` : "")));
   gsec.appendChild(el("p", "muted",
     `Daily AI posts: ${gb.auto_post_location_count || 1} location(s) selected · scheduled for 10:15 AM IST`));
+  for (const p of (gb.auto_post_locations || [])) {
+    const published = p.status === "published";
+    const failed = p.status === "failed";
+    const state = published ? "Published" : (failed ? "Failed" : "Not posted yet");
+    const detail = [p.address, p.date, p.poster_attached ? "poster attached" : ""].filter(Boolean).join(" · ");
+    gsec.appendChild(el("p", failed ? "error-text" : "muted",
+      `${p.title || "Google location"}: ${state}${detail ? " · " + detail : ""}${p.error ? " — " + p.error : ""}`));
+  }
   buttonRow(gsec, [{ label: "Refresh locations + enable all", cls: "btn-primary", onClick: async () => {
     const r = await act(() => api(`/control/api/tenants/${slug}/google-business/locations/refresh`, { method: "POST" }));
     if (r && r.ok) toast(`Daily AI posting enabled for ${r.location_count} Google location(s)`, "ok");

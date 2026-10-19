@@ -355,6 +355,12 @@
           <div class="camp-step"><span>1</span><div><b>Campaign Content</b><small>Message, image and campaign name.</small></div></div>
           <fieldset class="camp-type-field"><legend>Campaign type *</legend><div class="camp-type-grid"><label class="camp-type-card"><input type="radio" name="camp-type" value="wish" onchange="campaignTypeChanged()"><span>🎉 <b>Wish / Greeting</b><small>Festival, birthday, thank-you</small></span></label><label class="camp-type-card selected"><input type="radio" name="camp-type" value="promotion" checked onchange="campaignTypeChanged()"><span>📢 <b>Promotion / Offer</b><small>Normal promotion rules</small></span></label><label class="camp-type-card"><input type="radio" name="camp-type" value="payment_reminder" onchange="campaignTypeChanged()"><span>💰 <b>Payment reminder</b><small>Customers with dues</small></span></label></div><small id="camp-type-help" class="muted">Promotion follows existing eligibility rules.</small></fieldset>
           <div class="camp-field"><label for="camp-name">Campaign name <em>*</em></label><input id="camp-name" placeholder="October Freshness Offer" maxlength="120" oninput="updateCampaignPreview()"><small>Only used internally. Customers will not see this name.</small></div>
+          <div class="camp-field camp-ai-draft">
+            <label for="camp-ai-goal">AI campaign goal</label>
+            <div class="camp-template-row"><input id="camp-ai-goal" maxlength="120" value="increase repeat orders" placeholder="e.g. promote pickup convenience"><button type="button" class="btn ghost sm" id="camp-ai-draft-btn" onclick="generateCampaignDraft(this)">✨ Generate AI draft</button></div>
+            <small class="muted">AI suggests campaign copy, offer strategy, a branded phone-free poster and Google Business copy. It will not send anything; review the draft first.</small>
+            <p id="camp-ai-status" class="camp-inline-note" role="status"></p>
+          </div>
           <div class="camp-field"><label for="camp-template">Use template</label><div class="camp-template-row"><select id="camp-template" onchange="applyCampaignTemplate(this.value)"><option value="">Choose template…</option><option value="festival">Festival wish</option><option value="offer">Offer</option><option value="payment">Payment reminder</option><option value="pickup">Pickup reminder</option><option value="referral">Referral</option></select><button type="button" class="btn ghost sm" onclick="saveCampaignTemplate()">Save current message as template</button></div></div>
           <div class="camp-field"><label for="camp-msg">WhatsApp message <span class="muted">(optional with image)</span></label><div class="camp-format-toolbar"><button type="button" class="btn ghost sm" onclick="wrapCampaignSelection('*','*')">Bold</button><button type="button" class="btn ghost sm" onclick="wrapCampaignSelection('_','_')">Italic</button><button type="button" class="btn ghost sm" onclick="insertCampaignEmoji()">😊 Emoji</button></div><textarea id="camp-msg" rows="8" maxlength="4000" placeholder="Type your WhatsApp message…" oninput="updateCampaignMsgCount();updateCampaignPreview()"></textarea><div class="camp-count"><small>Placeholders: {name}, {due_amount}, {last_order_date}</small><small id="camp-msg-count">0/4000</small></div></div>
           <div class="camp-field">
@@ -363,6 +369,14 @@
               <label class="camp-drop" for="camp-image"><span class="camp-upload-icon">☁️</span><b>Upload campaign image</b><small>JPG, PNG or WEBP · max 8MB</small><span class="btn ghost sm">Choose image</span><input id="camp-image" type="file" accept="image/jpeg,image/png,image/webp" onchange="uploadCampaignImage(this)"></label>
               <div id="camp-image-preview" class="camp-image-preview"></div>
             </div>
+          </div>
+          <div id="camp-ai-gmb-preview" class="camp-note" hidden>
+            <b>📍 Google Business draft (phone-free)</b>
+            <p><b>Title:</b> <span id="camp-ai-gmb-title"></span></p>
+            <p><b>Post:</b> <span id="camp-ai-gmb-body"></span></p>
+            <p><b>Button:</b> <span id="camp-ai-gmb-cta"></span></p>
+            <p><b>Offer strategy:</b> <span id="camp-ai-offer"></span></p>
+            <p><b>Why:</b> <span id="camp-ai-rationale"></span></p>
           </div>
           <details class="camp-rules-panel"><summary>Advanced: sending rules</summary><div class="camp-rule-list"><label><input type="checkbox" id="camp-rule-frequency" checked onchange="updateCampaignPreview()"> Respect frequency limit (last N days)</label><label><input type="checkbox" id="camp-rule-complaints" checked onchange="updateCampaignPreview()"> Skip customers with complaints</label><label><input type="checkbox" id="camp-rule-blocked" checked disabled> Skip blocked / test numbers (required)</label><label><input type="checkbox" id="camp-rule-optout" disabled> Include opted-out customers (cannot override STOP / opt-out)</label></div><small class="muted">Greeting mode starts with frequency limit off. Opt-outs and blocked numbers always remain excluded.</small></details><div class="camp-note">🔒 Existing 15–20 second sending gap and recipient tracking remain enabled.</div>
         </div>
