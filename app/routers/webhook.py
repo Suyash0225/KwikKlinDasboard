@@ -57,8 +57,8 @@ log = structlog.get_logger()
 ORDER_NUMBER_RE = re.compile(r"\bKK-\d{8}-\d{2,}\b", re.IGNORECASE)
 # Keep routine order-status questions deterministic when the LLM is unavailable.
 ORDER_STATUS_QUERY_RE = re.compile(
-    r"\\b(?:status|tracking)\\b|\\b(?:my|mera|mere|the)?\\s*(?:order|orders|kapde|clothes)\\b.*"
-    r"\\b(?:kahan|where|status|update|ready|delivered|delivery|pahuncha|kab milega|mil gaya)\\b",
+    r"\b(?:status|tracking)\b|\b(?:my|mera|mere|the)?\s*(?:order|orders|kapde|clothes)\b.*"
+    r"\b(?:kahan|where|status|update|ready|delivered|delivery|pahuncha|kab milega|mil gaya)\b",
     re.IGNORECASE,
 )
 
