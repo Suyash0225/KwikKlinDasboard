@@ -77,7 +77,7 @@ TOOL_SPECS = [
     },
     {
         "name": "cost_analysis",
-        "when": "owner asks per-cloth/per-kg cost, operating cost per unit, completed volume, or whether current rates cover costs",
+        "when": "owner asks per-cloth/per-kg cost, operating cost per unit, or completed volume",
         "args": "period (today|week|month|all; default month)",
     },
     {
