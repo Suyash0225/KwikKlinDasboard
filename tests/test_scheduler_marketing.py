@@ -406,9 +406,24 @@ async def test_holdout_group_is_carved_out_and_never_messaged(
     monkeypatch.setattr(outbound_policy.asyncio, "sleep", lambda s: real_sleep(0))
     try:
         await _seed_lapsed_crowd(HOLDOUT_PHONES)
+        from uuid import uuid4
+        from app.services.marketing import _is_holdout
+
         async with async_session_factory() as db:
             await app_settings.set_value(db, "marketing_holdout_percent", 20)
+            customer_ids = (
+                await db.execute(
+                    select(Customer.id).where(Customer.phone.in_(HOLDOUT_PHONES))
+                )
+            ).scalars().all()
+            # A 20% random split can legitimately have zero members by chance.
+            # Pick a deterministic campaign ID for this seeded crowd that has at
+            # least one holdout, so this test checks the behavior rather than luck.
+            campaign_id = uuid4()
+            while not any(_is_holdout(campaign_id, customer_id, 20) for customer_id in customer_ids):
+                campaign_id = uuid4()
             campaign = Campaign(
+                id=campaign_id,
                 name="test-holdout", segment="lapsed",
                 message_text="Namaste {name}! — Kwik Klin",
                 status="approved", created_by="test",
