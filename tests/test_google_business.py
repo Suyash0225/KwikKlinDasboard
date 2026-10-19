@@ -230,7 +230,6 @@ async def test_gbp_auto_post_records_failure_retries_and_deduplicates(monkeypatc
     monkeypatch.setattr(gbp, "enabled", lambda: True)
     monkeypatch.setattr(gbp, "get_connection", fake_connection)
     monkeypatch.setattr(gbp_auto_post, "_generate_post", fake_generate)
-    monkeypatch.setattr(gbp_auto_post, "_build_poster_url", fake_poster)
     monkeypatch.setattr(gbp_auto_post, "_api_post", fake_publish)
     now = datetime(2026, 10, 10, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
     try:
@@ -379,6 +378,7 @@ async def test_gbp_auto_post_publishes_to_all_selected_locations(monkeypatch) ->
     monkeypatch.setattr(gbp, "enabled", lambda: True)
     monkeypatch.setattr(gbp, "get_connection", fake_connection)
     monkeypatch.setattr(gbp_auto_post, "_generate_post", fake_generate)
+    monkeypatch.setattr(gbp_auto_post, "_build_poster_url", fake_poster)
     monkeypatch.setattr(gbp_auto_post, "_api_post", fake_publish)
     now = datetime(2026, 10, 10, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
     try:
