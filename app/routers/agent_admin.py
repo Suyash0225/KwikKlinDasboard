@@ -530,7 +530,7 @@ _CAMPAIGN_AI_SCHEMA = {
 }
 
 
-def _ensure_gmb_local_search_context(body: str) -> str:
+def _ensure_gmb_local_search_context(body: str, max_chars: int = 700) -> str:
     """Add one natural laundry/location phrase if AI copy omitted local context."""
     text = (body or "").strip()
     lowered = text.casefold()
@@ -540,7 +540,7 @@ def _ensure_gmb_local_search_context(body: str) -> str:
     )
     has_location = "varanasi" in lowered
     if has_service and has_location:
-        return text
+        return text[:max_chars]
     if not has_service and not has_location:
         suffix = " Laundry and dry cleaning services in Varanasi."
     elif not has_service:
@@ -548,8 +548,11 @@ def _ensure_gmb_local_search_context(body: str) -> str:
     else:
         suffix = " Serving Varanasi."
     if suffix.strip().casefold() not in lowered:
-        text = (text.rstrip(" .") + suffix) if text else suffix.strip()
-    return text
+        # Reserve room for the complete phrase rather than slicing it off at
+        # the old 700-character limit.
+        prefix = text.rstrip(" .")[:max(0, max_chars - len(suffix))]
+        text = prefix + suffix if prefix else suffix.strip()[:max_chars]
+    return text[:max_chars]
 
 
 @router.post("/campaigns/ai-draft", dependencies=[Depends(require_feature("campaigns"))])
