@@ -524,10 +524,15 @@ async def _handle_task_button(
             db, staff.id, "Pending — follow-up required",
             by=staff.name, task_code=code,
         )
+        if task.kind not in {"pickup", "delivery"}:
+            return (
+                f"⏳ *{code}* — pending status database mein save hai.\n"
+                "Due date dashboard se update karein."
+            )
         _PENDING[sender_phone] = PendingTaskEta(code=code)
         return (
             f"⏳ *{code}* — pending status database mein save hai.\n"
-            "Expected time dashboard se update karein; free text task ko change nahi karega."
+            "Expected time likhein; database/customer update ke liye baad mein Save ETA button dabana hoga."
         )
 
     # problem button: persist the button event, then alert the owner. The
@@ -852,10 +857,14 @@ async def _handle_task_followup(
         # A second free-text message must not overwrite an already staged ETA.
         if pending.draft_text:
             return f"ETA [{pending.code}] ka draft ready hai. Use save/cancel button se confirm karein."
-        task = await __import__("app.services.tasks", fromlist=["get_by_code"]).get_by_code(db, pending.code)
+        from app.services import tasks as task_service
+        task = await task_service.get_by_code(db, pending.code)
         if task is None:
             _PENDING.pop(sender_phone, None)
             return None
+        if task.kind not in {"pickup", "delivery"}:
+            _PENDING.pop(sender_phone, None)
+            return "Is task ke ETA ko dashboard se update karein; task record abhi change nahi hua."
         draft = text.strip()[:120]
         if not draft:
             return "ETA blank hai. Expected time likh kar bhejein."
