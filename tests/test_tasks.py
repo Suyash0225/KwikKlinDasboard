@@ -246,8 +246,7 @@ async def test_free_text_eta_does_not_write_task_database(worker, sent) -> None:
             assert saved.eta_text is None
             assert saved.reply is None
             assert saved.status == TASK_OPEN
-            draft = bill_agent._PENDING[TASK_STAFF_PHONE]
-            assert draft.draft_text == "kal 5 baje"
+            assert TASK_STAFF_PHONE not in bill_agent._PENDING
 
     finally:
         bill_agent._PENDING.pop(TASK_STAFF_PHONE, None)
