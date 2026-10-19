@@ -7,7 +7,7 @@ from sqlalchemy import select, text as sqltext
 from app.database import async_session_factory
 from app.models import Order, OrderStatus, Staff, Task
 from app.services import order_service, tasks as task_service, tenant_context
-from tests.test_staff_panel import A_DEL_PHONE, CUST_A, _login, _panel_rate
+from tests.test_staff_panel import A_DEL_PHONE, CUST_A, _login, _panel_rate, two_shops
 
 
 async def test_pickup_bill_reuses_old_order_and_is_visible_in_recent_bills(
