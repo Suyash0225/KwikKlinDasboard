@@ -4568,8 +4568,21 @@ async function gbpLoad() {
   }
   const when = s.synced_at ? new Date(s.synced_at).toLocaleString("en-IN") : "not yet";
   const stat = s.rating ? `<b>${Number(s.rating).toFixed(1)} ★</b> · ${s.count} reviews on Google · ${s.stored} shown on website` : "No reviews synced yet";
+  const postLocations = s.auto_post_locations || [];
+  const postRows = postLocations.map((p) => {
+    const published = p.status === "published";
+    const failed = p.status === "failed";
+    const label = published ? "Published" : (failed ? "Failed" : "Not posted yet");
+    const color = published ? "#15803d" : (failed ? "#b91c1c" : "var(--muted,#64748b)");
+    const detail = p.date ? ` · ${esc(p.date)}` : "";
+    const error = failed && p.error ? `<small style="display:block;color:#b91c1c;margin-top:3px">${esc(p.error)}</small>` : "";
+    const poster = published ? (p.poster_attached ? " · poster attached" : (p.poster_issue ? " · poster not attached" : "")) : "";
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--border,#e5e7eb)"><b>${esc(p.title || "Google location")}</b><span style="float:right;color:${color};font-weight:600">${label}</span><small class="muted" style="display:block">${esc(p.address || p.location || "")}${detail}${poster ? esc(poster) : ""}</small>${error}</div>`;
+  }).join("");
+  const postStatus = `<section style="margin-top:14px;padding:12px;border:1px solid var(--border,#e5e7eb);border-radius:10px"><b>📣 Daily Google posts</b><p class="muted" style="margin:4px 0 8px">${postLocations.length} location(s) selected · ${s.auto_post?.enabled === false ? "posting paused" : "daily posting enabled"}</p>${postRows || '<p class="muted">No Google locations selected yet.</p>'}</section>`;
   box.innerHTML = `${err}<p style="color:var(--ink,#131820)">✅ Connected: <b>${esc(s.title || "Google listing")}</b></p>
     <p style="margin:4px 0">${stat}</p><small class="muted">Last sync: ${esc(when)} · refreshes every 6 hours</small>
+    ${postStatus}
     <div class="filters" style="margin-top:10px">
       <a class="btn ghost" href="/#reviews" target="_blank" rel="noopener">View on website</a>
     </div>`;
