@@ -411,7 +411,9 @@ async def _handle_task_button(
 
     if action == "pending":
         staff_id = staff.id if staff is not None else task.assigned_staff_id
-        await task_service.note_reply(db, staff_id, "Pending", by=staff.name if staff else sender_label)
+        await task_service.note_reply(
+            db, staff_id, "Pending", by=staff.name, task_code=code,
+        )
         if task.kind in {"pickup", "delivery"}:
             _PENDING[sender_phone] = PendingTaskEta(code=code)
             await team.notify_admins(
@@ -1416,7 +1418,10 @@ async def handle_staff_message(
                 if staff is None or not await task_service.staff_can_update_task(db, task, staff):
                     return "⚠️ Ye task sirf assigned staff update kar sakta hai."
                 answer = "Yes" if choice == "yes" else "No"
-                await task_service.note_reply(db, staff.id, f"{answer} — fixed-choice reply", by=staff.name)
+                await task_service.note_reply(
+                    db, staff.id, f"{answer} — fixed-choice reply",
+                    by=staff.name, task_code=code,
+                )
                 if answer == "Yes":
                     await task_service.complete_task(
                         db, task, reply=f"{answer} — fixed-choice reply", by=staff.name,
