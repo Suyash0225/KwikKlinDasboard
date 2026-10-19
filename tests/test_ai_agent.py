@@ -113,24 +113,31 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
     async def fake_ask_json(**kw):
         nonlocal calls
         calls += 1
-        # Each inbound message receives one compose response; the model
-        # extracts any newly supplied profile fields from that message.
+        # One compose response per inbound message. The first message asks for
+        # the missing name; the follow-up extracts both supplied profile fields.
+        if calls == 1:
+            return {
+                "reply": "Ji, apna naam bata dijiye.",
+                "intent": "NEW_ORDER", "language": "hi",
+                "action": "CREATE_LEAD", "action_reason": "new enquiry",
+                "escalate": False, "escalation_reason": "", "admin_note": "",
+                "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+            }
         return {
             "reply": "Ji, main aapki request note kar leta hoon. — Kwik Klin",
             "intent": "NEW_ORDER", "language": "hi",
             "action": "CREATE_LEAD", "action_reason": "profile complete",
             "escalate": False, "escalation_reason": "", "admin_note": "",
             "intake": {
-                "name": "Rahul Sharma" if calls > 1 else "",
-                "address": "12 Lanka, Varanasi" if calls > 1 else "",
+                "name": "Rahul Sharma", "address": "12 Lanka, Varanasi",
                 "items_text": "", "pickup_date": "", "ready": False,
             },
         }
 
     monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
-    # The deterministic read-tool selector normally needs no router call;
-    # keep it explicit here so the mock isolates profile extraction behavior.
-    monkeypatch.setattr(agent_module, "_select_customer_tools", lambda *args, **kwargs: {})
+    async def no_selected_tools(*args, **kwargs):
+        return {}
+    monkeypatch.setattr(agent_module, "_select_customer_tools", no_selected_tools)
     async with async_session_factory() as s:
         cust = Customer(phone=PHONE, name=None, address=None)
         s.add(cust)
