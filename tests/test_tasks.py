@@ -946,8 +946,8 @@ async def test_task_reminder_repeats_the_status_menu(sent, worker, awake) -> Non
     finally:
         await purge_phones(customer_phone)
 
-async def test_operational_team_shares_queue_and_first_completion_wins(worker, sent) -> None:
-    """Any active washer can complete a shared task using its explicit button."""
+async def test_operational_task_is_assignee_only_and_first_completion_wins(worker, sent) -> None:
+    """Same-role workers cannot see/update another person's task."""
     second_phone = "+919999900089"
     async with async_session_factory() as db:
         second = Staff(
@@ -957,32 +957,36 @@ async def test_operational_team_shares_queue_and_first_completion_wins(worker, s
         db.add(second)
         await db.commit()
         second_id = second.id
-        task = await _mk(db, worker, title="Shared washing queue task", notify=False)
+        task = await _mk(db, worker, title="Assigned-only washing task", notify=False)
         code = task.code
 
     try:
         async with async_session_factory() as db:
             visible = await task_service.open_tasks_for_staff(db, second_id)
-            assert any(t.code == code for t in visible)
+            assert all(t.code != code for t in visible)
 
-        async with async_session_factory() as db:
-            reply = await bill_agent.handle_staff_message(
+            denied = await bill_agent.handle_staff_message(
                 db, sender_phone=second_phone, sender_label="Taskram Two",
                 text=f"[button:task:{code}:done] Done",
             )
-            assert "closed" in (reply or "").lower() or code in (reply or "")
+            assert "assigned" in (denied or "").lower()
+
+        async with async_session_factory() as db:
+            unchanged = await task_service.get_by_code(db, code)
+            assert unchanged.status == TASK_OPEN
+            assert unchanged.completed_at is None
+
+        async with async_session_factory() as db:
+            accepted = await bill_agent.handle_staff_message(
+                db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
+                text=f"[button:task:{code}:done] Done",
+            )
+            assert accepted is not None
 
         async with async_session_factory() as db:
             done = await task_service.get_by_code(db, code)
             assert done.status == TASK_DONE
-            assert done.reply is None or "done" in (done.reply or "").lower()
-
-        async with async_session_factory() as db:
-            duplicate = await bill_agent.handle_staff_message(
-                db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
-                text=f"[button:task:{code}:done] Done",
-            )
-            assert "already complete" in (duplicate or "").lower()
+            assert done.completed_at is not None
     finally:
         async with async_session_factory() as db:
             await db.execute(delete(Task).where(Task.code == code))
@@ -1004,18 +1008,13 @@ async def test_menu_response_is_saved_as_ai_readable_context() -> None:
     )
 
 
-async def test_waha_display_text_task_status_stays_deterministic(sent) -> None:
-    """WAHA list replies without an id must not fall through to the LLM."""
-    from app.services import bill_agent
-
+async def test_waha_display_text_is_not_a_task_button(sent) -> None:
+    """Visible row text is not an action ID and must never mutate a task."""
     phone = f"+919999{uuid.uuid4().int % 1_000_000:06d}"
     async with async_session_factory() as db:
         staff = Staff(
-            phone=phone,
-            name="Delivery Display Test",
-            role=StaffRole.DELIVERY,
-            is_active=True,
-            last_message_at=datetime.now(timezone.utc),
+            phone=phone, name="Delivery Display Test", role=StaffRole.DELIVERY,
+            is_active=True, last_message_at=datetime.now(timezone.utc),
         )
         db.add(staff)
         await db.commit()
@@ -1028,27 +1027,21 @@ async def test_waha_display_text_task_status_stays_deterministic(sent) -> None:
         db.add(customer)
         await db.commit()
         task = await _mk(
-            db,
-            sid,
-            title="Pickup for Display Test",
-            kind="pickup",
-            customer=customer,
-            notify=False,
+            db, sid, title="Pickup for Display Test", kind="pickup",
+            customer=customer, notify=False,
         )
         code = task.code
 
     try:
         async with async_session_factory() as db:
-            reply = await bill_agent._handle_task_menu_display_text(
-                db,
-                phone,
-                "Delivery Display Test",
-                "Done Pickup or delivery completed",
+            await bill_agent.handle_staff_message(
+                db, sender_phone=phone, sender_label="Delivery Display Test",
+                text="Done Pickup or delivery completed",
             )
-            assert reply is not None
-            updated = await task_service.get_by_code(db, code)
-            assert updated.status == TASK_DONE
-            assert code in reply or "done" in reply.lower()
+        async with async_session_factory() as db:
+            saved = await task_service.get_by_code(db, code)
+            assert saved.status == TASK_OPEN
+            assert saved.eta_text is None
     finally:
         async with async_session_factory() as db:
             await db.execute(delete(Task).where(Task.code == code))
