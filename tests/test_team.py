@@ -281,17 +281,17 @@ async def test_ready_order_asks_the_delivery_boy_for_a_time(boy, sent) -> None:
     assert any(task.code in c["text"] for c in sent if c["to"] == OWNER), "owner ko batao"
 
 
-async def test_his_delivery_time_is_stored_and_the_owner_told(boy, sent) -> None:
+async def test_free_text_delivery_eta_does_not_mutate_task_or_customer(boy, sent) -> None:
+    """Delivery ETA prose cannot write task fields or promise a time to customer."""
     async with async_session_factory() as db:
         order = await _ready_order(db)
     sent.clear()
 
     async with async_session_factory() as db:
-        reply = await bill_agent.handle_staff_message(
+        await bill_agent.handle_staff_message(
             db, sender_phone=BOY_PHONE, sender_label="Ajit Test",
             text="sham 6 baje tak de dunga",
         )
-    assert reply and "sham 6 baje" in reply
 
     async with async_session_factory() as db:
         task = (
@@ -299,12 +299,10 @@ async def test_his_delivery_time_is_stored_and_the_owner_told(boy, sent) -> None
                 select(Task).where(Task.order_id == order.id, Task.kind == "delivery")
             )
         ).scalars().one()
-    assert task.eta_text == "sham 6 baje tak de dunga", "samay DB mein likha jana chahiye"
-
-    owner = [c["text"] for c in sent if c["to"] == OWNER]
-    assert any("sham 6 baje" in t for t in owner), owner
-    customer = [c["text"] for c in sent if c["to"] == TEST_CUSTOMER_PHONE]
-    assert any("sham 6 baje" in t for t in customer), "customer ko bhi samay pata chale"
+    assert task.eta_text is None
+    assert task.reply is None
+    assert task.status == "OPEN"
+    assert not any(c["to"] == TEST_CUSTOMER_PHONE for c in sent)
 
 
 async def test_yes_on_delivery_marks_the_order_delivered(boy, sent) -> None:
