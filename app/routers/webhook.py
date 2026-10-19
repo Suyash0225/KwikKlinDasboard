@@ -55,6 +55,12 @@ log = structlog.get_logger()
 
 # Matches order numbers like KK-20260801-01 anywhere in a message.
 ORDER_NUMBER_RE = re.compile(r"\bKK-\d{8}-\d{2,}\b", re.IGNORECASE)
+# Keep routine order-status questions deterministic when the LLM is unavailable.
+ORDER_STATUS_QUERY_RE = re.compile(
+    r"\b(?:status|tracking)\b|\b(?:my|mera|mere|the)?\s*(?:order|orders|kapde|clothes)\b.*"
+    r"\b(?:kahan|where|status|update|ready|delivered|delivery|pahuncha|kab milega|mil gaya)\b",
+    re.IGNORECASE,
+)
 
 # AI signature ab whatsapp.send_message ke andar centrally lagta hai
 # (app/services/whatsapp.py: sign_ai) — har automated customer message
@@ -1423,12 +1429,15 @@ async def _handle_inbound_message(
         reply_kind = "order_status" if reply_intent else None
         reply = None
         try:
-            if ORDER_NUMBER_RE.search(spoken):
+            if ORDER_NUMBER_RE.search(spoken) or ORDER_STATUS_QUERY_RE.search(spoken):
                 reply = await _build_customer_reply(db, customer, spoken)
             elif batch_followup:
                 log.info("reply_deferred_to_followup", phone=phone)
             else:
                 reply = await build_ai_reply(db, customer, spoken, conversation_id=convo.id)
+                # Empty string means the fixed AI-failure acknowledgement was
+                # already sent within the customer's one-hour cooldown. Do not
+                # replace it with another rule-based reply.
                 if reply is None:
                     reply = await _build_customer_reply(db, customer, spoken)
                 if reply and await _newer_inbound_exists(db, customer.id, convo):

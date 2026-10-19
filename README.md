@@ -193,7 +193,9 @@ Rules that matter:
 - **Dashboard** (127.0.0.1:8000/admin): full English, mobile-first, sign-in
   required; new pages: Campaigns, AI training, Activity (audit trail).
 
-**Env**: see `.env` — `LLM_PROVIDER=gemini` + `GEMINI_API_KEY`. AI uses paid Gemini only; there is no Anthropic/OpenRouter failover.
+**Env**: see `.env` — `LLM_PROVIDER=gemini` + `GEMINI_API_KEY`.
+
+**AI failover**: Paid Gemini smart model → Gemini flash-lite; `llm_monthly_budget_usd` is a hard application-side spend gate using conservative reservations, customer failures get the fixed acknowledgement at most once/hour and enter `open_questions`, and 3+ failures in 5 minutes trigger one owner WhatsApp alert/hour. No Anthropic/OpenRouter fallback.
 `ESCALATION_CC_PHONE` is deprecated; AI/customer escalation alerts are sent to admin numbers only.
 
 **Migrations**: `alembic upgrade head` (latest: payments ledger, audit_log,
