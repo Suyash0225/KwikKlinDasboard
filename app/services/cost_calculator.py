@@ -17,6 +17,11 @@ IST = timezone(timedelta(hours=5, minutes=30))
 ZERO = Decimal("0")
 
 
+def _unit_key(value: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", "", (value or "").casefold())
+
+
 def _period_start(period: str, now: datetime | None = None):
     current = (now or datetime.now(IST)).astimezone(IST)
     value = (period or "month").strip().lower()
@@ -42,8 +47,8 @@ def summarize_costs(expenses, order_rows, rates, period_label: str) -> dict:
     expense_total = sum((_decimal(e) for e in expenses), ZERO)
     rate_units = {}
     for rate in rates:
-        key = (str(getattr(rate, "service", "") or "").casefold(),
-               str(getattr(rate, "garment", "") or "").casefold())
+        key = (_unit_key(str(getattr(rate, "service", "") or "")),
+               _unit_key(str(getattr(rate, "garment", "") or "")))
         rate_units[key] = str(getattr(rate, "unit", "pc") or "pc").lower()
 
     pieces = ZERO
@@ -67,8 +72,8 @@ def summarize_costs(expenses, order_rows, rates, period_label: str) -> dict:
             if qty <= 0:
                 unclassified += 1
                 continue
-            service = str(item.get("service") or "").casefold()
-            garment = str(item.get("garment") or item.get("type") or "").casefold()
+            service = _unit_key(str(item.get("service") or ""))
+            garment = _unit_key(str(item.get("garment") or item.get("type") or ""))
             explicit_unit = str(item.get("unit") or "").lower()
             unit = explicit_unit if explicit_unit in {"pc", "kg"} else rate_units.get((service, garment))
             # Fallback only if the order line explicitly identifies a unit.
