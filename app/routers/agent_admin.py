@@ -455,13 +455,15 @@ async def preview_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db))
     else:
         segs=await compute_segments(db); targets=segs.get(segment,[])
     allow_active=segment in ("selected","all_active") or body.campaign_type=="wish"
-    recipients=[]; skipped={}
+    recipients=[]; skipped={}; skipped_recipients=[]
     for row in targets:
         ok,reason=await _campaign_eligibility(db,row["id"],temp,allow_active_orders=allow_active)
-        item={"name":row.get("name") or "Customer","phone":row.get("phone") or "","last_order_date":row.get("last_order_at").isoformat() if row.get("last_order_at") else None,"reason":reason}
+        item={"customer_id":str(row["id"]),"name":row.get("name") or "Customer","phone":row.get("phone") or "","last_order_date":row.get("last_order_at").isoformat() if row.get("last_order_at") else None,"reason":reason}
         if ok: recipients.append(item)
-        else: skipped[reason]=skipped.get(reason,0)+1
-    return {"total_in_audience":len(targets),"will_receive":len(recipients),"skipped":skipped,"recipients":recipients}
+        else:
+            skipped[reason]=skipped.get(reason,0)+1
+            skipped_recipients.append(item)
+    return {"total_in_audience":len(targets),"will_receive":len(recipients),"skipped":skipped,"recipients":recipients,"skipped_recipients":skipped_recipients}
 
 
 class CampaignAIDraftIn(BaseModel):
