@@ -453,3 +453,13 @@ def test_post_location_statuses_reports_each_location_and_latest_attempt() -> No
     assert statuses[1]["poster_attached"] is True
     assert statuses[2]["status"] == "not_posted"
     assert all("refresh_token" not in item for item in statuses)
+
+    # Old single-location history has no account/location fields; it still
+    # belongs to the primary location, not every profile.
+    legacy = _post_location_statuses(
+        locations,
+        [{"date": "2026-10-17", "status": "published", "post_name": "legacy/post"}],
+        primary_location="locations/103",
+    )
+    assert legacy[0]["status"] == "not_posted"
+    assert legacy[2]["status"] == "published"
