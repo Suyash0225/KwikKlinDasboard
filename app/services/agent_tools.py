@@ -24,6 +24,7 @@ from app.models import (
     Direction,
     Expense,
     Lead,
+    LlmUsage,
     Order,
     OrderStatus,
     OrderStatusHistory,
