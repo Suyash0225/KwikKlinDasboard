@@ -2,7 +2,7 @@ from app.services.unit_costing import effective_discount_cap
 
 
 def test_cost_guard_caps_discount_at_smallest_configured_gross_contribution():
-    cap, guarded = effective_discount_cap(20, [
+    cap, guarded = effective_discount_cap(30, [
         {"rate": "100", "cost_rate": "65"},
         {"rate": "200", "cost_rate": "150"},
     ])
