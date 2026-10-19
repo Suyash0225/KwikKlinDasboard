@@ -85,6 +85,22 @@ async def test_pickup_bill_reuses_old_order_and_is_visible_in_recent_bills(
             ],
             "advance": 20,
         }
+        # Invalid bill input must not save a partial order or close the pickup.
+        invalid_payload = {**payload, "items": [{
+            "service": "MissingService", "garment": "Shirt", "qty": 2
+        }]}
+        invalid = await client.post("/staff/api/bills", json=invalid_payload)
+        assert invalid.status_code == 400, invalid.text
+        async with async_session_factory() as db:
+            unchanged = (
+                await db.execute(select(Order).where(Order.id == original_order_id))
+            ).scalar_one()
+            still_open = (
+                await db.execute(select(Task).where(Task.code == code))
+            ).scalar_one()
+            assert unchanged.total_amount is None
+            assert still_open.status == "OPEN"
+
         r = await client.post("/staff/api/bills", json=payload)
         assert r.status_code == 201, r.text
         body = r.json()

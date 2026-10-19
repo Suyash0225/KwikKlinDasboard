@@ -1642,7 +1642,7 @@ async def my_bills(
     )
     sel = select(Order).where(
         or_(Order.created_at >= since, Order.id.in_(recent_pickups))
-    ).order_by(Order.created_at.desc())
+    ).order_by(Order.updated_at.desc(), Order.created_at.desc())
     # Worker ko sirf apne banaye bill. Manager ko poori dukaan ke — wahi
     # to dekh-rekh karta hai — aur mine=1 se wo bhi apne tak simat sakta hai.
     if not p.is_manager or mine:
