@@ -136,6 +136,9 @@ def compose_poster(
     subline: str,
 ) -> Path:
     """Overlay true logo and policy-safe copy on generated art; never print contact details."""
+    logo_path = Path(logo_path)
+    if not logo_path.is_file():
+        raise AIPosterError("Kwik Klin logo asset is missing")
     with Image.open(background_path) as source:
         background = source.convert("RGB")
     w = h = 1080
