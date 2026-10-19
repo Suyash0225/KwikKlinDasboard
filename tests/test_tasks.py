@@ -141,6 +141,41 @@ async def test_typed_done_code_does_not_close_task(worker, sent) -> None:
         assert task.reply is None
 
 
+async def test_unassigned_staff_cannot_update_task_with_button(worker, sent) -> None:
+    """Only the assignee can update; matching role/team is not authorization."""
+    other_phone = "+919999900089"
+    async with async_session_factory() as db:
+        other = Staff(
+            phone=other_phone, name="Taskram Two", role=StaffRole.WASHER,
+            is_active=True, last_message_at=datetime.now(timezone.utc),
+        )
+        db.add(other)
+        await db.commit()
+        task = await _mk(db, worker, title="Assigned-only task", notify=False)
+        code = task.code
+        other_id = other.id
+
+    try:
+        async with async_session_factory() as db:
+            visible = await task_service.open_tasks_for_staff(db, other_id)
+            assert all(t.code != code for t in visible)
+            reply = await bill_agent.handle_staff_message(
+                db, sender_phone=other_phone, sender_label="Taskram Two",
+                text=f"[button:task:{code}:done] Done",
+            )
+            assert "assigned" in (reply or "").lower()
+
+        async with async_session_factory() as db:
+            task = await task_service.get_by_code(db, code)
+            assert task.status == TASK_OPEN
+            assert task.completed_at is None
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(delete(Task).where(Task.code == code))
+            await db.execute(delete(Staff).where(Staff.id == other_id))
+            await db.commit()
+
+
 async def test_unknown_code_is_not_a_crash(worker, sent) -> None:
     async with async_session_factory() as db:
         reply = await bill_agent.handle_staff_message(
@@ -149,16 +184,23 @@ async def test_unknown_code_is_not_a_crash(worker, sent) -> None:
     assert reply and "nahi mila" in reply
 
 
-async def test_staff_words_are_recorded_on_the_task(worker) -> None:
+async def test_free_text_never_updates_task_record(worker, sent) -> None:
+    """Natural language may be understood/reported, but cannot write task fields."""
     async with async_session_factory() as db:
         task = await _mk(db, worker)
         code = task.code
-        await task_service.note_reply(db, worker, "machine kharab hai, kal karunga")
+
+    async with async_session_factory() as db:
+        await bill_agent.handle_staff_message(
+            db, sender_phone=TASK_STAFF_PHONE, sender_label="Taskram",
+            text="machine kharab hai, kal karunga",
+        )
 
     async with async_session_factory() as db:
         task = await task_service.get_by_code(db, code)
-    assert task.reply == "machine kharab hai, kal karunga"
-    assert task.status == TASK_OPEN, "an excuse is not a completion"
+    assert task.reply is None
+    assert task.eta_text is None
+    assert task.status == TASK_OPEN
 
 
 # --- following up ---
