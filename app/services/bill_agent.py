@@ -2567,7 +2567,14 @@ async def _answer_manager_query(db: AsyncSession, text: str) -> str | None:
         "leave answer empty, OR leave tool empty and write the final answer. "
         "Use a tool whenever the SNAPSHOT does not already contain the exact "
         "detail asked for — guessing or deflecting is not allowed. After a "
-        "tool result, answer from it."
+        "tool result, answer from it. You are Kwik Klin's central business "
+        "reasoning layer: use the domain tools for live orders, staff, money, "
+        "expenses, marketing drafts, tasks, and cost analysis. Python/database "
+        "results are the source of truth; never invent business facts, rates, "
+        "quantities, or profit. For incomplete records, say what is missing "
+        "and label estimates clearly. Never claim a write, message, campaign, "
+        "or task update happened unless its tool result confirms it. Do not "
+        "bypass existing approval, tenant, audit, or outbound-policy gates."
     )
     convo = f"SNAPSHOT:\n{facts}\n\nOWNER'S MESSAGE:\n{text[:500]}"
     used: list[str] = []

@@ -76,6 +76,11 @@ TOOL_SPECS = [
         "args": "period (today|week|month)",
     },
     {
+        "name": "cost_analysis",
+        "when": "owner asks per-cloth/per-kg cost, operating cost per unit, or completed volume",
+        "args": "period (today|week|month|all; default month)",
+    },
+    {
         "name": "billing_adjustment",
         "when": "owner explicitly asks to add or remove an extra charge/additional due on a specific bill",
         "args": "add | order_number | label | amount | extra_charge|due_charge | note(optional); remove | order_number | adjustment_id",
@@ -596,6 +601,45 @@ async def _money_report(db: AsyncSession, args: str) -> str:
 
 def _money_fmt(v) -> str:
     return f"₹{Decimal(v or 0):.0f}"
+
+
+async def _cost_analysis(db: AsyncSession, args: str) -> str:
+    """Read-only per-piece/per-kg expense proxy using deterministic calculations."""
+    from app.services.cost_calculator import calculate_cost_metrics
+
+    period = (args or "month").strip().lower()
+    if period not in {"today", "aaj", "week", "7d", "7 din", "month", "all", "all-time", "lifetime"}:
+        period = "month"
+    result = await calculate_cost_metrics(db, period)
+    money = lambda value: f"₹{Decimal(value or 0):,.2f}"
+    lines = [
+        f"Cost report — {result['period']}",
+        f"- Recorded expenses: {money(result['expense_total'])} across {result['expense_rows']} expense records",
+        f"- Delivered orders counted: {result['completed_orders']}",
+        f"- Classified volume: {result['pieces']} pieces; {result['kilograms']} kg",
+    ]
+    if result["cost_per_piece_proxy"] is not None:
+        lines.append(f"- Shared-expense proxy per piece: {money(result['cost_per_piece_proxy'])}")
+    elif not result["has_expenses"]:
+        lines.append("- Per-piece proxy: unavailable (no expense records; missing expenses are not zero)")
+    else:
+        lines.append("- Per-piece proxy: unavailable (no classified completed pieces)")
+    if result["cost_per_kg_proxy"] is not None:
+        lines.append(f"- Shared-expense proxy per kg: {money(result['cost_per_kg_proxy'])}")
+    elif not result["has_expenses"]:
+        lines.append("- Per-kg proxy: unavailable (no expense records; missing expenses are not zero)")
+    else:
+        lines.append("- Per-kg proxy: unavailable (no classified completed kg)")
+    if result["mixed_units"]:
+        lines.append("⚠️ Piece and kg volume are mixed. The same expense pool is shown against each denominator; these are NOT allocated unit costs.")
+    if not result["has_expenses"]:
+        lines.append("⚠️ No expense records found for this period. Missing expenses are not assumed to be ₹0.")
+    else:
+        lines.append("⚠️ Expense records may be incomplete; this is a shared-expense estimate, not audited cost or profit.")
+    if result["unclassified_lines"]:
+        lines.append(f"⚠️ {result['unclassified_lines']} item line(s) had missing/unknown units and were excluded from volume.")
+    lines.append("Use this for a first estimate only. Reliable pricing decisions need complete expenses and explicit cost allocation.")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------
@@ -1217,6 +1261,7 @@ _TOOLS = {
     "garment_demand": _garment_demand,
     "marketing_followup": _marketing_followup,
     "money": _money_report,
+    "cost_analysis": _cost_analysis,
     "billing_adjustment": _billing_adjustment,
     "ping_staff": _ping_staff,
 }
