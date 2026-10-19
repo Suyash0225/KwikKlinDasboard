@@ -161,6 +161,8 @@ DEFAULTS: dict[str, Any] = {
     # Ops agent (services/ops_agent.py): bill bante hi washerman/delivery boy
     # chunkar order-linked kaam banata hai, sabse kam load wale ko
     "agent_auto_assign": True,
+    # Per-staff automatic assignment switch; absent staff default to enabled.
+    "staff_agent_switches": {},
     # Turnaround (services/turnaround.py): har stage ki hadd GHANTON mein —
     # isse zyada ruka to stage reminder/warning tight hota hai. Customer-facing
     # "Delayed" dashboard count sirf expected delivery date cross hone par hota hai.

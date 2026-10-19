@@ -99,15 +99,25 @@ async def pick_staff(db: AsyncSession, role: str, order: Order | None = None) ->
     from app.services import app_settings
 
     roles = ROLES[role]
+    switches = await app_settings.get(db, "staff_agent_switches")
+    if not isinstance(switches, dict):
+        switches = {}
     if order is not None:
         sid = getattr(order, _ORDER_FIELD[role])
         if sid is not None:
             st = await db.get(Staff, sid)
-            if st is not None and st.is_active:
+            if (
+                st is not None
+                and st.is_active
+                and switches.get(str(st.id), True)
+            ):
                 return st
     staff = (
         await db.execute(select(Staff).where(Staff.is_active.is_(True), Staff.role.in_(roles)))
     ).scalars().all()
+    # The per-staff agent switch must apply to every automatic assignment path,
+    # including order creation, due-task planning, status changes and rebalance.
+    staff = [candidate for candidate in staff if switches.get(str(candidate.id), True)]
     if not staff:
         return None
     try:

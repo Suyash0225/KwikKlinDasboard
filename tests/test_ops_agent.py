@@ -312,3 +312,25 @@ async def test_duplicate_order_stage_request_reuses_open_task_without_second_pin
     assert len(sent) == sends_before
     final = await _tasks(o.id)
     assert len([t for t in final if t.kind == "wash" and t.status == "OPEN"]) == 1
+
+
+
+async def test_agent_off_staff_is_never_selected_for_automatic_assignment(shop) -> None:
+    async with async_session_factory() as db:
+        await app_settings.set_value(db, "staff_agent_switches", {
+            str(shop["w1"]): False,
+            str(shop["w2"]): True,
+            str(shop["d1"]): True,
+        })
+
+    order = await _order()
+    async with async_session_factory() as db:
+        saved = await db.get(Order, order.id)
+        assert saved.assigned_washer_id == shop["w2"]
+
+    async with async_session_factory() as db:
+        switches = await app_settings.get(db, "staff_agent_switches")
+        switches[str(shop["w2"])] = False
+        await app_settings.set_value(db, "staff_agent_switches", switches)
+        selected = await ops_agent.pick_staff(db, "WASHER", await db.get(Order, order.id))
+        assert selected is None
