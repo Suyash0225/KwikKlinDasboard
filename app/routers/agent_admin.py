@@ -344,6 +344,7 @@ async def campaign_detail(campaign_id: str, db: AsyncSession = Depends(get_db)) 
     } for rec, cust in rows]
     return {
         "id": str(campaign.id), "name": campaign.name, "segment": campaign.segment,
+        "campaign_type": getattr(campaign,"campaign_type","promotion"), "rule_flags": campaign.rule_flags or {},
         "status": campaign.status, "message_text": campaign.message_text,
         "created_by": campaign.created_by,
         "created_at": campaign.created_at.isoformat() if campaign.created_at else None,
