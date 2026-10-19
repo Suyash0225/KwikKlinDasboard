@@ -151,5 +151,10 @@ async def enforce_outbound_policy(
         raise SendError("transactional send blocked: customer opted out", transient=False)
     if kind in {"payment_reminder", "payment_reminder_firm"} and not customer.payment_reminders_enabled:
         raise SendError("transactional send blocked: payment reminders not enabled", transient=False)
-    if not urgent and _quiet_now():
+    # Customer-initiated support replies must be timely, including outside
+    # business hours. This exception is limited to the explicit inbound-agent
+    # reply kinds; payment reminders and other transactional sends still obey
+    # quiet hours unless separately marked urgent.
+    customer_initiated_reply = kind in {"customer_agent_reply", "order_status"}
+    if not urgent and not customer_initiated_reply and _quiet_now():
         raise SendError("transactional send blocked: quiet hours", transient=False)
