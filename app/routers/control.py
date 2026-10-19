@@ -1610,15 +1610,20 @@ async def tenant_gbp_callback(
             return await fail(str(exc))
         if not locations:
             return await fail("This Google account does not manage any Business Profile listing.")
+        conn["all_locations"] = locations
         if len(locations) == 1:
             conn.update(locations[0])
+            conn["post_locations"] = locations
             await gbp.save_connection(tdb, conn)
             try:
                 await gbp.sync(tdb)
             except gbp.GBPError:
                 pass  # error gbp_reviews mein likha gaya — status dikhayega
         else:
+            # The dropdown still chooses the primary listing for review sync.
+            # Daily AI posting defaults to every managed location on this account.
             conn["choices"] = locations
+            conn["post_locations"] = locations
             await gbp.save_connection(tdb, conn)
     await _audit_integration(request, t, "google_business_connect", {"listings": len(locations)})
     return resp
@@ -1637,10 +1642,15 @@ async def tenant_gbp_location(
     t = await _tenant_or_404(db, slug)
     async with integrations.tenant_db(t.id) as tdb:
         conn = await gbp.get_connection(tdb)
-        pick = next((c for c in conn.get("choices") or [] if c["location"] == body.location), None)
+        choices = conn.get("choices") or conn.get("all_locations") or []
+        pick = next((c for c in choices if c["location"] == body.location), None)
         if not conn.get("refresh_token") or pick is None:
             raise HTTPException(status_code=400, detail="Pick one of the listings from the Google account")
         conn.update(pick)
+        # Keep every managed location as the daily-post target list; the selected
+        # primary location is only used for website review sync.
+        conn["all_locations"] = choices
+        conn["post_locations"] = choices
         conn.pop("choices", None)
         conn["last_error"] = ""
         await gbp.save_connection(tdb, conn)
