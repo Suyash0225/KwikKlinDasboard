@@ -1425,8 +1425,8 @@ async def _handle_inbound_message(
         # The first complaint acknowledgement must still reach the customer;
         # subsequent messages stay silent while the human takeover is active.
         was_agent_paused = customer.agent_paused
-        reply_intent = "transactional" if ORDER_NUMBER_RE.search(spoken) else None
-        reply_kind = "order_status" if reply_intent else None
+        reply_intent = "transactional"
+        reply_kind = "order_status" if ORDER_NUMBER_RE.search(spoken) else "service_reply"
         reply = None
         try:
             if ORDER_NUMBER_RE.search(spoken) or ORDER_STATUS_QUERY_RE.search(spoken):
