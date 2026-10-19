@@ -504,13 +504,22 @@ async def _handle_task_button(
         )
 
     if action == "later":
+        await task_service.note_reply(
+            db, staff.id, "Pending — follow-up required",
+            by=staff.name, task_code=code,
+        )
         _PENDING[sender_phone] = PendingTaskEta(code=code)
         return (
-            f"⏳ *{code}* — please tell me the expected completion time.\n"
-            "Example: 2 baje / sham tak / kal subah."
+            f"⏳ *{code}* — pending status database mein save hai.\n"
+            "Expected time dashboard se update karein; free text task ko change nahi karega."
         )
 
-    # problem: owner ko turant khabar, aur staff se wajah poochho
+    # problem button: persist the button event, then alert the owner. The
+    # following free-text explanation is notification context only.
+    await task_service.note_reply(
+        db, staff.id, "Issue reported — manager notified",
+        by=staff.name, task_code=code,
+    )
     _PENDING[sender_phone] = PendingTaskIssue(code=code)
     await team.notify_admins(
         db,
