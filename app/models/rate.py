@@ -37,6 +37,8 @@ class Rate(Base, TenantScoped):
     garment: Mapped[str] = mapped_column(String(60), default="")
     unit: Mapped[str] = mapped_column(String(2), default="pc")  # 'pc' | 'kg'
     rate: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    # NULL means unknown, not zero; this is an internal variable cost per unit.
+    cost_rate: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
