@@ -1,45 +1,39 @@
-"""Regression tests for per-staff AI work-order routing."""
+"""Regression tests for work-order recipient resolution."""
 
 from types import SimpleNamespace
 import uuid
 
 import pytest
 
-from app.models import Staff
+from app.services import ops_agent
 from app.services.work_orders import resolve_workers
 
 
 class _FakeDB:
-    def __init__(self, staff):
-        self.staff = staff
-
-    async def get(self, model, key):
-        assert model is Staff
-        return self.staff if key == self.staff.id else None
+    pass
 
 
-@pytest.mark.parametrize(
-    ("role", "assignment_field", "enabled"),
-    [
-        ("WASHER", "assigned_washer_id", False),
-        ("WASHER", "assigned_washer_id", True),
-        ("DELIVERY", "assigned_delivery_id", False),
-        ("DELIVERY", "assigned_delivery_id", True),
-    ],
-)
-async def test_assigned_staff_ai_toggle_controls_work_order_routing(
-    role, assignment_field, enabled
+@pytest.mark.parametrize("role", ["WASHER", "DELIVERY"])
+@pytest.mark.parametrize("selected", [None, "staff"])
+async def test_resolve_workers_returns_only_the_central_picker_recipient(
+    monkeypatch, role, selected
 ):
-    """Assigned active staff receive automated work only when their AI toggle is ON."""
-    staff = SimpleNamespace(
-        id=uuid.uuid4(),
-        is_active=True,
-        ai_agent_enabled=enabled,
-        phone="+919999900091",
+    """The resolver must delegate eligibility and fallback decisions centrally."""
+    staff = SimpleNamespace(id=uuid.uuid4(), phone="+919999900091")
+    order = SimpleNamespace(
+        assigned_washer_id=staff.id,
+        assigned_delivery_id=staff.id,
     )
-    order = SimpleNamespace(assigned_washer_id=None, assigned_delivery_id=None)
-    setattr(order, assignment_field, staff.id)
+    calls = []
 
-    resolved = await resolve_workers(_FakeDB(staff), order, role)
+    async def fake_pick_staff(db, requested_role, requested_order):
+        calls.append((db, requested_role, requested_order))
+        return staff if selected == "staff" else None
 
-    assert resolved == ([staff] if enabled else [])
+    monkeypatch.setattr(ops_agent, "pick_staff", fake_pick_staff)
+    db = _FakeDB()
+
+    resolved = await resolve_workers(db, order, role)
+
+    assert resolved == ([staff] if selected == "staff" else [])
+    assert calls == [(db, role, order)]
