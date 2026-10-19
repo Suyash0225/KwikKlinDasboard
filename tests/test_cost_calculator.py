@@ -40,6 +40,18 @@ def test_cost_metrics_do_not_count_cancelled_or_unknown_units():
     assert result["has_expenses"] is False
 
 
+def test_missing_expenses_do_not_become_zero_cost():
+    order = SimpleNamespace(
+        status=OrderStatus.DELIVERED,
+        items=[{"type": "shirt", "garment": "Shirt", "service": "wash_iron", "qty": 2}],
+    )
+    rate = SimpleNamespace(service="wash_iron", garment="Shirt", unit="pc")
+    result = summarize_costs([], [order], [rate], "test")
+    assert result["pieces"] == Decimal("2")
+    assert result["cost_per_piece_proxy"] is None
+    assert result["has_expenses"] is False
+
+
 def test_mixed_units_are_flagged_and_costs_are_only_proxies():
     order = SimpleNamespace(
         status=OrderStatus.DELIVERED,
