@@ -113,23 +113,16 @@ async def test_unknown_lead_collects_name_and_address_before_answer(monkeypatch)
     async def fake_ask_json(**kw):
         nonlocal calls
         calls += 1
-        # This path has one composition call per inbound message. Return
-        # profile extraction on the second message without touching live LLM.
-        if calls == 1:
-            return {
-                "reply": "Ji, apna naam bata dijiye.",
-                "intent": "NEW_ORDER", "language": "hi",
-                "action": "CREATE_LEAD", "action_reason": "new enquiry",
-                "escalate": False, "escalation_reason": "", "admin_note": "",
-                "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
-            }
+        # Each inbound message receives one compose response; the model
+        # extracts any newly supplied profile fields from that message.
         return {
             "reply": "Ji, main aapki request note kar leta hoon. — Kwik Klin",
             "intent": "NEW_ORDER", "language": "hi",
             "action": "CREATE_LEAD", "action_reason": "profile complete",
             "escalate": False, "escalation_reason": "", "admin_note": "",
             "intake": {
-                "name": "Rahul Sharma", "address": "12 Lanka, Varanasi",
+                "name": "Rahul Sharma" if calls > 1 else "",
+                "address": "12 Lanka, Varanasi" if calls > 1 else "",
                 "items_text": "", "pickup_date": "", "ready": False,
             },
         }
