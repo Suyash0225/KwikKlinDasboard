@@ -11,7 +11,7 @@ import pytest
 import app.services.whatsapp as whatsapp_module
 from app.database import async_session_factory
 from sqlalchemy import select
-from app.models import Customer, Conversation
+from app.models import Customer, Conversation, Staff, StaffRole
 from app.services import waha
 from app.services.whatsapp import Button, ListRow, SendError, send_message
 from tests.conftest import TEST_CUSTOMER_PHONE
@@ -46,6 +46,29 @@ async def _capture(monkeypatch) -> list[dict]:
 
     monkeypatch.setattr(waha, "_post", _post)
     return seen
+
+
+async def test_inactive_staff_is_not_an_outbound_recipient() -> None:
+    """Disabled staff accounts must not receive retries or automated notifications."""
+    from app.services.whatsapp import _find_recipient
+
+    phone = "+919999901987"
+    async with async_session_factory() as db:
+        staff = Staff(phone=phone, name="Inactive Staff Guard", role=StaffRole.WASHER, is_active=False)
+        db.add(staff)
+        await db.commit()
+        staff_id = staff.id
+    try:
+        async with async_session_factory() as db:
+            customer, resolved_staff = await _find_recipient(db, phone)
+        assert customer is None
+        assert resolved_staff is None
+    finally:
+        async with async_session_factory() as db:
+            staff = await db.get(Staff, staff_id)
+            if staff is not None:
+                await db.delete(staff)
+                await db.commit()
 
 
 async def test_automated_customer_send_requires_explicit_intent(open_window) -> None:

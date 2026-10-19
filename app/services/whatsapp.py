@@ -634,7 +634,7 @@ async def _find_recipient(
     try:
         staff = (
             await db.execute(
-                select(Staff).where(Staff.phone == phone).order_by(Staff.created_at.asc())
+                select(Staff).where(Staff.phone == phone, Staff.is_active.is_(True)).order_by(Staff.created_at.asc())
             )
         ).scalars().first()
         if staff:
