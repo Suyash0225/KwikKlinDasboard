@@ -21,3 +21,15 @@ def test_pickup_billing_backend_is_linked_to_existing_bill_endpoint():
     assert 'if body.pickup_task_code.strip():' in source
     assert 'OrderStatus.PICKED_UP' in source
     assert '"pickup_completed": pickup_task is not None' in source
+
+
+
+def test_campaign_editor_wires_ai_draft_without_auto_sending():
+    html = (ROOT / "app/static/dashboard.html").read_text(encoding="utf-8")
+    js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    assert 'id="camp-ai-goal"' in html
+    assert 'onclick="generateCampaignDraft(this)"' in html
+    assert 'id="camp-ai-gmb-preview"' in html
+    assert 'api("/admin/api/campaigns/ai-draft"' in js
+    assert "Nothing has been sent" in js
+    assert 'api("/admin/api/campaigns/" + draft.id + "/approve"' not in js
