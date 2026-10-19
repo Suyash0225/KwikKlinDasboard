@@ -1780,10 +1780,13 @@ async def tenant_gbp_refresh_locations(
         conn["post_locations"] = locations
         conn.pop("choices", None)
         conn["last_error"] = ""
-        await gbp.save_connection(tdb, conn)
+        # Persist the refreshed target list after toggling the setting as well.
+        # Both writes commit independently; saving the connection last ensures
+        # the complete multi-location target list remains the final persisted state.
         # The Control button says "Refresh locations + enable all". Make that
         # promise real even if the owner previously disabled scheduled posts.
         await app_settings.set_value(tdb, "gbp_auto_post_enabled", True)
+        await gbp.save_connection(tdb, conn)
     await _audit_integration(request, t, "google_business_locations_refresh",
                              {"locations": len(locations)})
     return {"ok": True, "location_count": len(locations),
