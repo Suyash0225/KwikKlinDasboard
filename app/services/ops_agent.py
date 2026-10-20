@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Order, OrderStatus, Staff, StaffRole, Task
 from app.models.task import TASK_OPEN
 from app.services import audit
+from app.utils.dates import today_ist
 
 log = structlog.get_logger()
 
@@ -177,7 +178,7 @@ async def on_order_created(db: AsyncSession, order: Order) -> dict:
                         order.status in (OrderStatus.RECEIVED, OrderStatus.IN_WASH)
                         and (
                             order.expected_delivery is None
-                            or order.expected_delivery <= date.today() + timedelta(days=3)
+                            or order.expected_delivery <= today_ist() + timedelta(days=3)
                         )
                     )
                 ):
@@ -225,7 +226,7 @@ async def plan_due_wash_tasks(db: AsyncSession, *, today=None) -> int:
     from app.services import tasks as task_service
     from app.services.work_orders import items_summary
 
-    today = today or date.today()
+    today = today or today_ist()
     cutoff = today + timedelta(days=3)
     rows = (
         await db.execute(
@@ -300,7 +301,7 @@ async def _ensure_stage_task(db: AsyncSession, order: Order, status: OrderStatus
         order.priority == "urgent"
         or (
             order.expected_delivery is not None
-            and order.expected_delivery <= date.today() + timedelta(days=1)
+            and order.expected_delivery <= today_ist() + timedelta(days=1)
         )
     )
     return await task_service.create_task(
@@ -426,7 +427,7 @@ async def rebalance(db: AsyncSession) -> int:
             await db.execute(
                 select(Task, Staff)
                 .join(Staff, Staff.id == Task.assigned_staff_id)
-                .where(Task.status == TASK_OPEN, Task.kind.in_(("wash", "pickup", "delivery")),
+                .where(Task.status == TASK_OPEN, Task.kind.in_(("wash", "dry", "iron", "pickup", "delivery")),
                        Staff.is_active.is_(False))
             )
         ).all()

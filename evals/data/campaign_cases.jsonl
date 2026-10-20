@@ -1,0 +1,5 @@
+# campaign suite — synthetic cases only (no real customers). See evals/README.md.
+{"id": "winter_lapsed", "tags": ["copy"], "critical": true, "context": {"segment": "lapsed (winter blankets plus wedding garments)", "offer": "15% off on orders of ₹700 or more, valid till 31 Oct"}, "expect": {"copy_all": ["15%"]}}
+{"id": "no_discount_value", "tags": ["copy", "no_offer"], "critical": true, "context": {"segment": "high_value", "offer": "Free doorstep pickup this week, no discount"}, "expect": {"copy_all": []}}
+{"id": "diwali", "tags": ["copy", "festival"], "critical": true, "context": {"segment": "all_active (Diwali preparation)", "offer": "Curtains and sofa covers: ₹50 off per piece, valid till 1 Nov"}, "expect": {"copy_all": ["50"]}}
+{"id": "owner_style", "tags": ["copy", "style"], "context": {"segment": "lapsed", "offer": "10% off your next order", "style": "Hamesha 'Namaste ji' se shuru karo, emoji kam."}, "expect": {"copy_all": ["Namaste", "10%"]}}

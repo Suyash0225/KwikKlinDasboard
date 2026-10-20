@@ -1,0 +1,54 @@
+name: AI evals (live Gemini)
+
+# Manual only: every run makes real, billed Gemini calls (~56 cases x attempts).
+# Needs the repository secret GEMINI_API_KEY. Nothing is sent or written —
+# no database, no WhatsApp; the harness replaces DB reads with case data.
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "all | customer | owner | bill | campaign"
+        default: "all"
+      attempts:
+        description: "Calls per case (3 shows flaky answers)"
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Settings must validate; none of these are contacted by the evals.
+      DATABASE_URL: postgresql+asyncpg://unused:unused@localhost:5432/unused
+      MANAGER_PHONE: "+919999000000"
+      ADMIN_API_KEY: evals-not-a-secret
+      VENDOR_API_KEY: evals-not-a-secret
+      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      SHOP_NAME: "Kwik Klin"
+      ENVIRONMENT: development
+      WHATSAPP_PROVIDER: waha
+      WAHA_BASE_URL: http://127.0.0.1:3000
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Run evals
+        run: |
+          python -m evals.run --suite "${{ inputs.suite }}" --attempts "${{ inputs.attempts }}" \
+            --save eval-outputs.jsonl --report eval-report.json
+      - name: Keep outputs for replay
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: |
+            eval-outputs.jsonl
+            eval-report.json

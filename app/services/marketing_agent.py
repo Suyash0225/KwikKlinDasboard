@@ -12,6 +12,8 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from app.utils.dates import today_ist
+from app.services import shop_identity
+from app.services.copy_guard import copy_problems
 
 import structlog
 from sqlalchemy import case, func, select
@@ -94,7 +96,7 @@ _SEASONS = {
 }
 
 _COPY_SYSTEM = (
-    "You write a polished WhatsApp marketing campaign for Kwik Klin laundry, Varanasi. "
+    "You write a polished WhatsApp marketing campaign for <<SHOP>> laundry<<WHERE>>. "
     "Do NOT compress it into 3 lines. Use the campaign format below, adapting it naturally "
     "to the supplied season, segment and offer. Preserve every supplied offer detail exactly "
     "and never invent a discount, price, validity date, phone number, link or guarantee. "
@@ -109,7 +111,7 @@ _COPY_SYSTEM = (
     "🚚 [Pickup/delivery or service benefit only if supported by business policy]\n"
     "✨ [Second service benefit if supported]\n"
     "📞 [CTA — ask customer to order/reply; never invent contact details]\n\n"
-    "Kwik Klin – Fresh Clothes. Better Care.\n\n"
+    "<<SHOP>> – Fresh Clothes. Better Care.\n\n"
     "[Validity only when supplied]\n\n"
     "Use line breaks exactly so it is easy to scan in WhatsApp. "
     "Do not add {name} unless personalization is explicitly requested."
@@ -223,15 +225,18 @@ async def weekly_suggestion() -> None:
         target_seg, offer = pick["segment"], pick["offer"]
         season = _SEASONS.get(date.today().month, "")
         is_winback = target_seg == "normal_late"
+        shop = await shop_identity.current(db)
         if is_winback:
             # Deterministic template: no LLM call, so budget exhaustion cannot
             # degrade into a paid call and no invented discount is sent.
             copy = (
                 "Namaste {name} ji! Pichhli baar aapne {usual_items} diye the. "
-                "Jab laundry ki zarurat ho, Kwik Klin yaad rakhein."
+                f"Jab laundry ki zarurat ho, {shop.name} yaad rakhein."
             )
         else:
-            copy = await _draft_copy(f"{target_seg} ({season})" if season else target_seg, offer)
+            copy = await _draft_copy(
+                f"{target_seg} ({season})" if season else target_seg, offer, shop=shop
+            )
 
         campaign = Campaign(
             name=f"{target_seg}-{date.today().isoformat()}",
@@ -329,7 +334,22 @@ def _rationale(pick: dict) -> str:
     )
 
 
-async def _draft_copy(segment: str, offer: str) -> str:
+def _copy_system(shop: shop_identity.ShopIdentity, extra: str = "") -> str:
+    """Campaign-copy system prompt — pure, so evals use the real one."""
+    return (shop_identity.render(_COPY_SYSTEM, shop)
+            + f"\n\nBusiness policy:\n{business_policy_text()}"
+            + (f"\nOwner's style rules (follow them): {extra}" if extra else ""))
+
+
+async def _draft_copy(segment: str, offer: str, shop: shop_identity.ShopIdentity | None = None) -> str:
+    """Campaign copy from the model, or a safe template if it fails the checks.
+
+    On autopilot this goes to customers unread, so code — not the prompt —
+    rejects invented discounts, numbers and links, and cut-off messages.
+    """
+    if shop is None:
+        async with async_session_factory() as db:
+            shop = await shop_identity.current(db)
     season_hint = _SEASONS.get(date.today().month, "fresh clothes and professional care")
     fallback = (
         f"🍂 {season_hint.title()}\n\n"
@@ -338,28 +358,39 @@ async def _draft_copy(segment: str, offer: str) -> str:
         "🧺 Quality laundry & dry cleaning\n"
         "🚚 Pickup & delivery available\n\n"
         "📞 Order karne ke liye WhatsApp karein.\n\n"
-        "Kwik Klin – Fresh Clothes. Better Care."
+        f"{shop.name} – Fresh Clothes. Better Care."
     )
     # owner's style rules from AI training (hot-reloaded, optional)
     extra = ""
+    contact = ""
     try:
         async with async_session_factory() as db:
             extra = (await app_settings.get(db, "marketing_instructions") or "").strip()
+            contact = str(await app_settings.get(db, "shop_contact_phone") or "").strip()
     except Exception:
         pass
-    system = (_COPY_SYSTEM + f"\n\nBusiness policy:\n{business_policy_text()}"
-               + (f"\nOwner's style rules (follow them): {extra}" if extra else ""))
+    system = _copy_system(shop, extra)
     try:
         with llm_client.track("marketing"):
             copy = await llm_client.ask(
                 system=system,
                 user_text=f"Segment: {segment}. Offer: {offer}. Draft the message.",
                 model=llm_client.MODEL_SMART,
-                max_tokens=200,
+                # The format above runs ~120-180 words of Hinglish; 200
+                # tokens cut it off mid-offer.
+                max_tokens=900,
             )
-        return copy.strip() or fallback
     except LLMError:
         return fallback
+    copy = (copy or "").strip()
+    problems = copy_problems(
+        copy, allowed_text=f"{offer} {contact} {business_policy_text()}",
+        must_include=shop.name, min_chars=80,
+    )
+    if problems:
+        log.warning("campaign_copy_rejected", segment=segment, problems=problems)
+        return fallback
+    return copy
 
 
 async def preview_suggestion(db) -> str:
@@ -374,9 +405,10 @@ async def preview_suggestion(db) -> str:
             "campaign nahi banta. Jaise hi customers badhenge, Monday ko khud bhejunga."
         )
     if pick["segment"] == "normal_late":
+        shop = await shop_identity.current(db)
         copy = (
             "Namaste {name} ji! Pichhli baar aapne {usual_items} diye the. "
-            "Jab laundry ki zarurat ho, Kwik Klin yaad rakhein. "
+            f"Jab laundry ki zarurat ho, {shop.name} yaad rakhein. "
             "Offer sirf tab jab aap apne usual gap ke 2.5× late hon."
         )
     else:

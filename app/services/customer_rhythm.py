@@ -136,3 +136,16 @@ async def load_customer_rhythms(db: AsyncSession) -> dict[UUID, dict[str, Any]]:
         )
     ).mappings().all()
     return build_customer_rhythms([dict(row) for row in rows])
+
+
+async def load_customer_rhythm(db: AsyncSession, customer_id: UUID) -> dict[str, Any] | None:
+    """One customer's rhythm — what the reply agent needs on every turn."""
+    rows = (
+        await db.execute(
+            select(Order.customer_id, Order.created_at, Order.items)
+            .where(Order.customer_id == customer_id, Order.status != OrderStatus.CANCELLED)
+            .order_by(Order.created_at.desc())
+            .limit(50)
+        )
+    ).mappings().all()
+    return build_customer_rhythms([dict(row) for row in rows]).get(customer_id)

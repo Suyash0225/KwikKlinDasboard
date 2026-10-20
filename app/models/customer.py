@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TenantScoped
@@ -27,6 +27,9 @@ class Customer(Base, TenantScoped):
     # Compact private service memory refreshed asynchronously from recent chat/orders.
     ai_memory: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_memory_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The pickup summary the AI last asked this customer to confirm. "haan"
+    # creates the order from THIS copy, never from a fresh model extraction.
+    ai_pending_intake: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # When THEY last messaged US — this is what the 24h window check reads.
     # Indexed: the customers list sorts on it.

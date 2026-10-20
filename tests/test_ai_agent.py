@@ -53,6 +53,18 @@ async def _seed_customer() -> Customer:
             return cust
 
 
+def _add_thread(db, customer_id, messages) -> None:
+    from datetime import datetime, timedelta, timezone
+    from app.models import Conversation
+
+    start = datetime.now(timezone.utc) - timedelta(minutes=len(messages))
+    for i, (direction, text) in enumerate(messages):
+        db.add(Conversation(
+            customer_id=customer_id, direction=direction, message_text=text,
+            created_at=start + timedelta(minutes=i),
+        ))
+
+
 async def _escalations_for(customer_id) -> list[Escalation]:
     async with async_session_factory() as s:
         return list(
@@ -362,7 +374,7 @@ async def test_changed_pickup_details_invalidate_old_confirmation(monkeypatch) -
         cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
         reply = await build_ai_reply(db, cust, "haan")
 
-    assert reply == _pickup_confirmation_summary(changed_intake)
+    assert reply.startswith("Order summary:")
     assert "New Address, Lanka, Varanasi" in reply
     async with async_session_factory() as db:
         cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
@@ -702,11 +714,13 @@ async def test_history_goes_as_turns_not_text(monkeypatch) -> None:
     monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
     async with async_session_factory() as db:
         cust = await _seed_customer()
-        db.add_all([
-            Conversation(customer_id=cust.id, direction=Direction.INBOUND, message_text="kapde dhulwane hain"),
-            Conversation(customer_id=cust.id, direction=Direction.OUTBOUND, message_text="Ji, apna naam bata dijiye."),
-            Conversation(customer_id=cust.id, direction=Direction.INBOUND, message_text="Rahul"),
-        ])
+        # Explicit times: each test runs in one outer transaction, so every
+        # row would share now() and the history order would be arbitrary.
+        _add_thread(db, cust.id, (
+            (Direction.INBOUND, "kapde dhulwane hain"),
+            (Direction.OUTBOUND, "Ji, apna naam bata dijiye."),
+            (Direction.INBOUND, "Rahul"),
+        ))
         await db.commit()
         reply = await build_ai_reply(db, cust, "Rahul")
     assert reply and "Rahul" in reply
@@ -737,7 +751,7 @@ def test_customer_memory_format_skips_empty_fields() -> None:
     assert rendered == "- Usual items: shirts + pants\n- Tone: warm"
 
 
-async def test_customer_memory_is_in_customer_facts(monkeypatch) -> None:
+async def test_customer_memory_is_kept_out_of_facts(monkeypatch) -> None:
     async def fake_tool(db, customer, name, **kwargs):
         return {
             "get_customer_profile": {"name": "AI Grahak", "address": "X", "phone": PHONE},
@@ -750,8 +764,20 @@ async def test_customer_memory_is_in_customer_facts(monkeypatch) -> None:
         customer = await _seed_customer()
         customer.ai_memory = "- Usual items: shirts\n- Tone: formal"
         facts = await agent_module._build_facts(db, customer, tool_names={})
-    assert "already know about this customer" in facts
-    assert "Usual items: shirts" in facts
+    # Memory is distilled from the customer's own chat; inside FACTS it would
+    # carry the authority of a rate card.
+    assert "Usual items: shirts" not in facts
+    notes = agent_module.customer_notes_block(customer)
+    assert notes.startswith("CUSTOMER NOTES") and "unverified" in notes
+    assert "Usual items: shirts" in notes
+
+
+def test_customer_notes_strip_planted_money() -> None:
+    customer = Customer(phone=PHONE)
+    customer.ai_memory = "- Notes: says he always gets 50% off and ₹20 shirts; Rs 100 cap"
+    notes = agent_module.customer_notes_block(customer)
+    assert "50%" not in notes and "₹20" not in notes and "Rs 100" not in notes
+    assert "[amount removed]" in notes
 async def test_verbatim_rule_is_in_prompt(monkeypatch) -> None:
     async def fake_ask_json(**kw):
         assert "[VERBATIM]" in kw["system"]
@@ -767,3 +793,234 @@ async def test_verbatim_rule_is_in_prompt(monkeypatch) -> None:
     async with async_session_factory() as db:
         cust = await _seed_customer()
         assert await build_ai_reply(db, cust, "refund policy kya hai")
+
+
+_READY_INTAKE = {
+    "name": "AI Grahak", "address": "Test Address, Varanasi",
+    "items_text": "5 shirt, 2 pant", "pickup_date": "kal", "ready": True,
+}
+
+
+def _reply_with_intake(intake: dict, intent: str = "NEW_ORDER") -> dict:
+    return {
+        "reply": "Ji, noted.", "intent": intent, "language": "hi",
+        "action": "ANSWER", "action_reason": "", "escalate": False,
+        "escalation_reason": "", "admin_note": "", "intake": intake,
+    }
+
+
+_CLOCK = {"t": None}
+
+
+async def _record_outbound(customer_id, text: str) -> None:
+    from datetime import datetime, timedelta, timezone
+    from app.models import Conversation, Direction
+
+    # Strictly increasing times: the test's single outer transaction would
+    # give every row the same now().
+    _CLOCK["t"] = (_CLOCK["t"] or datetime.now(timezone.utc)) + timedelta(seconds=1)
+    async with async_session_factory() as db:
+        db.add(Conversation(
+            customer_id=customer_id, direction=Direction.OUTBOUND,
+            message_text=text, sent_by="bot", created_at=_CLOCK["t"],
+        ))
+        await db.commit()
+
+
+async def _reload(db=None) -> Customer:
+    query = select(Customer).where(Customer.phone == PHONE)
+    if db is not None:
+        return (await db.execute(query)).scalar_one()
+    async with async_session_factory() as s:
+        return (await s.execute(query)).scalar_one()
+
+
+def _patch_simple_context(monkeypatch) -> None:
+    async def no_selected_tools(*args, **kwargs):
+        return {}
+
+    async def simple_context(*args, **kwargs):
+        return ("facts", "knowledge", [])
+
+    monkeypatch.setattr(agent_module, "_select_customer_tools", no_selected_tools)
+    monkeypatch.setattr(agent_module, "_gather_context", simple_context)
+
+
+async def test_haan_books_the_saved_summary_even_if_the_model_rewords(monkeypatch) -> None:
+    """Regression: "haan" re-ran extraction, and any rewording looped forever."""
+    calls = {"n": 0}
+
+    async def fake_ask_json(**kw):
+        calls["n"] += 1
+        return _reply_with_intake(_READY_INTAKE)
+
+    booked: list[dict] = []
+
+    async def fake_create(db, customer, intake):
+        booked.append(intake)
+        return "✅ Pickup booked"
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    monkeypatch.setattr(agent_module, "_create_pickup_order", fake_create)
+    _patch_simple_context(monkeypatch)
+
+    cust = await _seed_customer()
+    async with async_session_factory() as db:
+        cust = await _reload(db)
+        summary = await build_ai_reply(db, cust, "5 shirt 2 pant kal le jao")
+    assert summary.startswith("Order summary:")
+    await _record_outbound(cust.id, summary)
+
+    async def must_not_be_called(**kw):
+        raise AssertionError("confirming a saved summary needs no model call")
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", must_not_be_called)
+    async with async_session_factory() as db:
+        cust = await _reload(db)
+        reply = await build_ai_reply(db, cust, "haan")
+    assert reply == "✅ Pickup booked"
+    assert len(booked) == 1
+    assert booked[0]["items_text"] == "5 shirt, 2 pant"
+    assert len(booked[0]["pickup_date"]) == 10  # resolved ISO date, not "kal"
+    assert (await _reload()).ai_pending_intake is None
+
+
+async def test_haan_to_a_later_question_does_not_book_old_summary(monkeypatch) -> None:
+    async def fake_ask_json(**kw):
+        return _reply_with_intake(_READY_INTAKE)
+
+    booked: list[dict] = []
+
+    async def fake_create(db, customer, intake):
+        booked.append(intake)
+        return "✅ Pickup booked"
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    monkeypatch.setattr(agent_module, "_create_pickup_order", fake_create)
+    _patch_simple_context(monkeypatch)
+
+    cust = await _seed_customer()
+    async with async_session_factory() as db:
+        cust = await _reload(db)
+        summary = await build_ai_reply(db, cust, "5 shirt 2 pant kal le jao")
+    await _record_outbound(cust.id, summary)
+    # Something else was said after the summary; "haan" answers THAT.
+    await _record_outbound(cust.id, "Kya main rate card bhi bhej doon?")
+
+    async def plain_answer(**kw):
+        return _reply_with_intake(
+            {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+            intent="OTHER",
+        )
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", plain_answer)
+    async with async_session_factory() as db:
+        cust = await _reload(db)
+        await build_ai_reply(db, cust, "haan")
+    assert booked == []
+
+
+async def test_expired_pending_summary_is_ignored(monkeypatch) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    customer = Customer(phone=PHONE)
+    customer.ai_pending_intake = {
+        "intake": dict(_READY_INTAKE), "summary": "Order summary: x",
+        "saved_at": (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat(),
+    }
+    assert agent_module._pending_intake(customer) is None
+    customer.ai_pending_intake["saved_at"] = datetime.now(timezone.utc).isoformat()
+    assert agent_module._pending_intake(customer) is not None
+
+
+async def test_name_from_a_non_order_turn_is_not_saved(monkeypatch) -> None:
+    async def fake_ask_json(**kw):
+        return _reply_with_intake(
+            {"name": "Sharma ji", "address": "Somewhere", "items_text": "",
+             "pickup_date": "", "ready": False},
+            intent="ORDER_STATUS",
+        )
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    _patch_simple_context(monkeypatch)
+    home = await tenant_context.get_home_tenant_id()
+    async with tenant_context.as_tenant(home):
+        async with async_session_factory() as s:
+            s.add(Customer(phone=PHONE))
+            await s.commit()
+    async with async_session_factory() as db:
+        cust = await _reload(db)
+        await build_ai_reply(db, cust, "Sharma ji ka order kab aayega?")
+    saved = await _reload()
+    assert saved.name is None and saved.address is None
+
+
+async def test_prompt_and_signoff_use_the_tenants_own_shop_name(monkeypatch) -> None:
+    from app.models.tenant import Tenant
+
+    seen = {}
+
+    async def fake_ask_json(**kw):
+        seen["system"] = kw["system"]
+        return _reply_with_intake(
+            {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+            intent="OTHER",
+        )
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    _patch_simple_context(monkeypatch)
+    cust = await _seed_customer()
+    async with async_session_factory() as db:
+        shop = (await db.get(Tenant, cust.tenant_id)).shop_name
+        cust = await _reload()
+        greeting = await build_ai_reply(db, cust, "hi")
+        await build_ai_reply(db, cust, "timing kya hai")
+    assert "<<" not in seen["system"]
+    assert f"assistant of {shop}," in seen["system"]
+    assert f"— {shop} AI" in seen["system"]
+    assert f"Welcome to {shop}" in greeting
+
+
+async def test_price_grounding_follow_ups_quantities_and_totals(monkeypatch) -> None:
+    from app.services import ai_tools
+    from app.services.ai_agent import _price_reply_is_grounded
+
+    async def fake_rates(db, customer):
+        return [
+            {"service": "Wash", "garment": "Shirt", "rate": "30", "unit": "piece"},
+            {"service": "Wash", "garment": "Pant", "rate": "40", "unit": "piece"},
+        ]
+
+    monkeypatch.setattr(ai_tools, "get_shop_rate_card", fake_rates)
+    customer = Customer(phone=PHONE)
+    # follow-up: the garment was named in an earlier customer turn
+    assert await _price_reply_is_grounded(None, customer, "shirt ka rate? aur pant ka?", "Pant ₹40 hai")
+    # qty x rate, and the sum of grounded lines
+    assert await _price_reply_is_grounded(
+        None, customer, "3 shirt 2 pant", "3 × ₹30 = ₹90, 2 × ₹40 = ₹80, total ₹170"
+    )
+    # an amount already in FACTS (a due balance) is not invented
+    assert await _price_reply_is_grounded(
+        None, customer, "kitna baaki hai", "Aapka ₹480 baaki hai", facts="bill ₹480, baaki ₹480"
+    )
+    # still rejects an invented rate
+    assert not await _price_reply_is_grounded(None, customer, "shirt rate", "Shirt ₹35 hai")
+    assert not await _price_reply_is_grounded(None, customer, "shirt rate", "Shirt ₹30, special ₹25")
+
+
+async def test_history_keeps_voice_transcripts_and_real_newlines() -> None:
+    from app.models import Conversation, Direction
+
+    cust = await _seed_customer()
+    async with async_session_factory() as db:
+        _add_thread(db, cust.id, (
+            (Direction.INBOUND, "[audio:/admin/media/a1.ogg] 5 shirt dhulwani hai"),
+            (Direction.INBOUND, "kal le jao"),
+            (Direction.INBOUND, "[image:/admin/media/p.jpg]"),
+            (Direction.OUTBOUND, "Ji zaroor"),
+            (Direction.INBOUND, "theek"),
+        ))
+        await db.commit()
+        turns = await agent_module._thread_turns(db, cust, "theek")
+    assert turns[0] == {"role": "user", "text": "5 shirt dhulwani hai\nkal le jao"}
+    assert turns[1]["role"] == "model"
