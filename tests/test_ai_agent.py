@@ -420,3 +420,41 @@ async def test_simple_greeting_does_not_call_llm(monkeypatch) -> None:
             reply = await build_ai_reply(db, cust, "  Hello!! ")
 
     assert reply and "Welcome to Kwik Klin" in reply
+
+
+def test_runtime_block_resolves_kal_to_iso() -> None:
+    from datetime import datetime
+
+    now = datetime(2026, 10, 20, 14, 0, tzinfo=agent_module._IST)
+    block = agent_module._runtime_block(now)
+    assert "Today (aaj) = 2026-10-20" in block
+    assert "kal/tomorrow = 2026-10-21" in block
+    assert "parso = 2026-10-22" in block
+
+
+def test_pickup_date_must_be_iso_and_near() -> None:
+    from datetime import timedelta
+
+    today = agent_module._dt.now(agent_module._IST).date()
+    assert agent_module._parse_pickup_date("kal") is None
+    assert agent_module._parse_pickup_date("") is None
+    assert agent_module._parse_pickup_date((today - timedelta(days=1)).isoformat()) is None
+    assert agent_module._parse_pickup_date((today + timedelta(days=60)).isoformat()) is None
+    assert agent_module._parse_pickup_date((today + timedelta(days=1)).isoformat()) == today + timedelta(days=1)
+
+
+async def test_prompt_carries_runtime_date(monkeypatch) -> None:
+    async def fake_ask_json(**kw):
+        assert kw["user_text"].startswith("RUNTIME:\\nNow:")
+        assert "kal/tomorrow = " in kw["user_text"]
+        return {
+            "reply": "Ji — Kwik Klin AI", "intent": "OTHER", "language": "hi",
+            "action": "ANSWER", "action_reason": "", "escalate": False,
+            "escalation_reason": "", "admin_note": "",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        assert await build_ai_reply(db, cust, "kal kapde le lo?")
