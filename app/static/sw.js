@@ -3,8 +3,8 @@
    offline for a moment. API calls and the webhook are NEVER intercepted —
    the app's own offline outbox handles unsent messages. */
 
-const CACHE = "kk-shell-v1";
-const SHELL = ["/admin/static/app.css", "/admin/static/app.js"];
+const CACHE = "kk-shell-v2";
+const SHELL = ["/admin/static/app.css", "/admin/static/ui-v2.css", "/admin/static/app.js"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

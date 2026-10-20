@@ -7,6 +7,7 @@
 <title>Kwik Klin — Staff</title>
 <link rel="stylesheet" href="/admin/static/tokens.css?v=s8">
 <link rel="stylesheet" href="/admin/static/staff.css?v=s13">
+<link rel="stylesheet" href="/admin/static/staff-ui2.css?v=1">
 <link rel="manifest" href="/staff/manifest.webmanifest">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="KK Staff">
@@ -43,8 +44,8 @@
   <header class="top">
     <div class="who"><b id="who">—</b><span id="whoRole"></span></div>
     <div class="acts">
-      <button id="btn-bell" class="iconbtn" aria-label="Replies">🔔<span id="bellN" class="bell-n" hidden>0</span></button>
-      <button id="btn-refresh" class="iconbtn" aria-label="Refresh">↻</button>
+      <button id="btn-bell" class="iconbtn" aria-label="Replies"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-bell"/></svg><span id="bellN" class="bell-n" hidden>0</span></button>
+      <button id="btn-refresh" class="iconbtn" aria-label="Refresh"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-refresh"/></svg></button>
     </div>
   </header>
 
@@ -72,6 +73,6 @@
 <div id="toasts" class="toasts" aria-live="polite"></div>
 <pre id="receipt" aria-hidden="true"></pre>
 
-<script src="/admin/static/staff.js?v=s14" defer></script>
+<script src="/admin/static/staff.js?v=s15" defer></script>
 </body>
 </html>

@@ -70,7 +70,9 @@
    * nahi hai (media=print + onload), isliye system stack fallback sach
    * mein dikhta hai jab tak font aata hai — usme napa-tula farq ho, isliye
    * fallback wahi hai jo staff panel pehle se use karta hai. */
-  --font: "Poppins", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  /* Inter (UI v2): drawn for screens, with tabular figures for the money
+   * columns. Same three weights plus 500. */
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
   /* Staff panel jaan-boojh kar webfont NAHI utaarta: wo app 3G par, sasti
    * screen par, dukaan ke aadmi ke phone par chalti hai. Uske liye alag
    * token — taaki wo faisla galti se "sab jagah Poppins" karte waqt na
