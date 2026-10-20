@@ -227,6 +227,7 @@ async def test_numeric_price_reply_must_match_requested_active_rate(monkeypatch)
     assert await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Blazer ₹150 hai")
     assert not await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Blazer ₹120 hai")
     assert not await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Shirt ₹30 hai")
+    assert not await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Blazer ₹150 hai, special ₹200")
     assert await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Main rate verify karke batata hoon")
 
 async def test_pickup_confirmation_requires_latest_exact_summary(monkeypatch) -> None:
