@@ -140,3 +140,89 @@ input, select, textarea { border: 1px solid var(--rule); border-radius: 12px; }
 /* screens that render cards inside the list (new bill, expense, you):
    the list already supplies the side gutter */
 .list .card { margin-inline: 0; }
+
+/* ═══ New bill — built for one hand on a 5.5" phone ═══════════════════ */
+.vh { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.billsteps {
+  display: flex; gap: 6px; margin: 4px 0 12px; overflow-x: auto; scrollbar-width: none;
+}
+.billsteps::-webkit-scrollbar { display: none; }
+.billsteps span {
+  flex: 1 0 auto; text-align: center; font-size: 12px; font-weight: 650; color: var(--ink-3);
+  padding: 7px 10px; border-radius: 999px; background: #e9edf3; white-space: nowrap;
+}
+.billsteps span.on { background: var(--ink); color: #fff; }
+
+.pickup-banner {
+  display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px;
+  padding: 12px 14px; border-radius: 16px; color: #fff;
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  box-shadow: 0 10px 22px -12px rgba(79, 70, 229, .8);
+}
+.pickup-banner b { font-size: 15px; }
+.pickup-banner span { font-size: 12.5px; opacity: .9; }
+
+.card h3 { display: flex; align-items: center; gap: 9px; font-size: 16px; }
+.stepn {
+  font-style: normal; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px;
+  background: var(--brand-soft, #fff7ed); color: var(--brand-strong); font-size: 13px; font-weight: 700;
+}
+
+/* service: one tap, swipe for more */
+.svcchips {
+  display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none;
+  margin: 2px -15px 10px; padding: 2px 15px 4px;
+}
+.svcchips::-webkit-scrollbar { display: none; }
+.svcchips button {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+  min-height: 42px; padding: 8px 15px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--rule); background: var(--sheet); color: var(--ink-2);
+  font: inherit; font-size: 14.5px; font-weight: 650; white-space: nowrap;
+}
+.svcchips button.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.svcchips button i {
+  font-style: normal; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+  display: grid; place-items: center; font-size: 11.5px; background: var(--brand); color: #fff;
+}
+
+/* item list: bigger rows, inline − n + once in the cart */
+.item-list { border-radius: 14px; max-height: 52vh; }
+.item-row { min-height: 54px; padding: 8px 10px 8px 14px; }
+.ir-name { font-size: 15.5px; }
+.ir-price { font-size: 14px; }
+.ir-add { min-width: 38px; height: 34px; border-radius: 12px; font-size: 18px; }
+.ir-step {
+  display: inline-flex; align-items: center; flex: 0 0 auto;
+  border-radius: 12px; background: var(--brand); color: #fff; overflow: hidden; height: 36px;
+}
+.ir-step > span { display: grid; place-items: center; width: 36px; height: 36px; font-size: 19px; font-weight: 700; }
+.ir-step .ir-minus { background: rgba(0, 0, 0, .14); }
+.ir-step b { min-width: 26px; text-align: center; font-size: 15px; }
+.item-row.in { background: #fff7ed; }
+
+/* payment: quick "Nothing" / "Full ₹X" next to the amount */
+.advrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
+.advrow .btn.sm { min-height: 46px; white-space: nowrap; }
+.pick { gap: 8px; }
+.pickbtn { border-radius: 12px; min-height: 46px; }
+
+/* the total bar: one glance, one thumb */
+.paybar { padding: 10px 10px 10px 16px; gap: 10px; }
+.paybar-sum b { font-size: 22px; }
+.paybar .btn.go { min-height: 50px; padding: 0 18px; font-size: 15.5px; border-radius: 14px; }
+
+/* 5.5" Android (~360px wide): no wasted gutter, nothing wraps awkwardly */
+@media (max-width: 380px) {
+  :root { --gutter: 10px; }
+  .card { padding: 13px; }
+  .svcchips { margin-inline: -13px; padding-inline: 13px; }
+  .svcchips button { padding: 8px 12px; font-size: 14px; }
+  .advrow { grid-template-columns: minmax(0, 1fr) auto; }
+  .advrow [data-advq="0"] { display: none; }
+  .paybar .btn.go { padding: 0 14px; font-size: 14.5px; }
+  .billsteps span { font-size: 11.5px; padding: 6px 8px; }
+  .today b { font-size: 19px; }
+  .row { grid-template-columns: 4px 46px 1fr; gap: 0 9px; }
+}

@@ -23,8 +23,8 @@
      it wins ties; app.css keeps layout and behaviour. -->
 <link rel="stylesheet" href="/admin/static/ui-v2.css?v=1">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
-<script src="/admin/static/app.js?v=ui2-2" defer></script>
-<script src="/admin/static/gbp-poster.js?v=2" defer></script>
+<script src="/admin/static/app.js?v=ui2-3" defer></script>
+<script src="/admin/static/gbp-poster.js?v=3" defer></script>
 </head>
 <body>
 <div class="shell">
@@ -116,16 +116,17 @@
       <!-- Inbox UI change: keep the existing sidebar drawer reachable on phones. -->
       <div class="pagehead"><button class="inbox-mobile-burger" onclick="toggleSidebar()" aria-label="Open menu" title="Open menu"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-menu"/></svg></button><div class="inbox-title"><h2>Inbox</h2><p>WhatsApp — see and reply yourself</p></div>
         <div class="actions">
-          <button class="btn" onclick="newChatModal()">➕ New chat</button>
-          <button class="btn ghost" onclick="loadThreads()">↻ Refresh</button>
+          <button class="btn ghost ib-ico" onclick="loadThreads()" aria-label="Refresh chats"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-refresh"/></svg></button>
+          <button class="btn ib-ico" onclick="newChatModal()" aria-label="New chat"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-plus"/></svg></button>
         </div></div>
       <div class="inboxwrap">
         <div class="threads">
           <div class="th-head">
-            <div class="kkav">KK</div>
+            <b class="th-title">Chats</b>
             <div class="spacer"></div>
-            <button class="th-ico" onclick="newChatModal()" title="New chat" aria-label="New chat">✚</button>
-            <button class="th-ico" onclick="bulkImportModal()" title="Bulk import numbers" aria-label="Bulk import numbers">⋮</button>
+            <button class="th-ico" onclick="loadThreads()" title="Refresh" aria-label="Refresh chats"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-refresh"/></svg></button>
+            <button class="th-ico" onclick="bulkImportModal()" title="Import numbers" aria-label="Import numbers"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-upload"/></svg></button>
+            <button class="th-ico th-new" onclick="newChatModal()" title="New chat" aria-label="New chat"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-plus"/></svg></button>
           </div>
           <div class="th-search"><input id="th-search" type="search" aria-label="Search chats" placeholder="Search name, number…" oninput="threadSearch(this.value)"></div>
           <div class="th-filters" role="group" aria-label="Filter conversations">
@@ -164,14 +165,14 @@
 
     <!-- New bill -->
     <section id="sec-newbill" style="display:none">
-      <div class="pagehead"><div><h2>New bill</h2><p>Fast entry at the counter — Enter moves you along</p></div></div>
+      <div class="pagehead"><div><h2>New bill</h2><p>Customer, tap the clothes, save — the customer gets it on WhatsApp</p></div></div>
       <div id="nb-wa-notice" class="notice" style="display:none">
         📵 WhatsApp is not connected — customers won't get automatic bill/status messages.
         Use <b>Share on WhatsApp</b> after each bill, or <a href="/welcome">connect your number</a>.
       </div>
       <div class="billgrid">
-        <div class="card">
-          <b>Customer</b>
+        <div class="card nb-main">
+          <h3 class="nb-h"><i class="nb-n">1</i>Customer</h3>
           <div class="split2" style="margin-top:8px">
             <div class="autocomplete">
               <label>Mobile number *</label>
@@ -185,12 +186,13 @@
               <div class="acp" id="nb-ac-name"></div>
             </div>
           </div>
-          <hr class="hr"><b>Items</b>
+          <hr class="hr"><h3 class="nb-h"><i class="nb-n">2</i>Clothes</h3>
           <!-- Phone: tap to add. Service chips, then items with their price;
                a tap adds one, another tap makes it two. Desktop keeps the
                row editor below. Both write the same LINES. -->
           <div class="nb-quick">
             <div class="nbq-svcs" id="nbq-svcs" role="tablist" aria-label="Service"></div>
+            <label class="nbq-search"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-search"/></svg><input id="nbq-q" type="search" placeholder="Find an item — e.g. shirt" aria-label="Find an item" oninput="renderQuick()" autocomplete="off"></label>
             <div class="nbq-items" id="nbq-items"></div>
             <div class="nb-cart" id="nb-cart"></div>
           </div>
@@ -206,7 +208,8 @@
           <hr class="hr">
           <!-- Where are the clothes? Collect = the order goes to the delivery
                boy as a pickup (PICKUP_ASSIGNED), exactly like the staff panel. -->
-          <b>Where are the clothes?</b>
+          <h3 class="nb-h"><i class="nb-n">3</i>Pickup &amp; delivery</h3>
+          <label style="margin-top:6px">Where are the clothes?</label>
           <div class="nb-pick" role="radiogroup" aria-label="Where are the clothes">
             <button type="button" class="nb-pickbtn on" id="nb-at-shop" role="radio" aria-checked="true" onclick="nbSetPickup(false)">🏪 At the shop</button>
             <button type="button" class="nb-pickbtn" id="nb-collect" role="radio" aria-checked="false" onclick="nbSetPickup(true)">🛵 Collect from customer</button>
@@ -233,8 +236,8 @@
             <small class="muted" id="nb-urg-note"></small>
           </div>
         </div>
-        <div class="card">
-          <b>Totals</b>
+        <div class="card nb-summary">
+          <h3 class="nb-h">Bill summary</h3>
           <div class="sumrow" style="margin-top:8px"><span>Subtotal</span><span class="money" id="nb-sub">₹0</span></div>
           <div class="sumrow" id="nb-urg-sum" hidden><span>⚡ Urgent charge</span><span class="money" id="nb-urg-sumamt">₹0</span></div>
           <!-- Most bills need none of these. On a phone they stay folded;
@@ -292,10 +295,19 @@
 
     <!-- Customers -->
     <section id="sec-customers" style="display:none">
-      <div class="pagehead"><div><h2>Customers</h2><p>Ledger — sorted by highest outstanding first</p></div>
-        <div class="actions"><button class="btn ghost" onclick="bulkImportModal()">📥 Bulk import numbers</button></div></div>
-      <div class="filters"><input id="cust-search" type="search" aria-label="Search customers" placeholder="Search name or number…" oninput="custSearchDeb()"></div>
-      <div class="card listcard"><div id="cust-list"></div></div>
+      <div class="pagehead"><div><h2>Customers</h2><p>Who they are, what they owe, when they last came</p></div>
+        <div class="actions">
+          <button class="btn ghost" id="cust-select-btn" onclick="toggleCustSelectMode()">Select</button>
+          <button class="btn ghost" onclick="bulkImportModal()">📥 Import numbers</button>
+        </div></div>
+      <div class="grid kpis cust-kpis" id="cust-kpis"></div>
+      <div class="card cust-card">
+        <div class="doc-head">
+          <div class="chips cust-chips" id="cust-chips"></div>
+          <label class="searchbox"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-search"/></svg><input id="cust-search" type="search" aria-label="Search customers" placeholder="Search name or number…" oninput="custSearchDeb()"></label>
+        </div>
+        <div class="listcard" id="cust-list"></div>
+      </div>
     </section>
 
     <!-- Expenses -->
@@ -508,55 +520,65 @@
 
     <!-- AI training -->
     <section id="sec-training" style="display:none">
-      <div class="pagehead"><div><h2>AI training</h2><p>Everything here goes live immediately — no restart</p></div></div>
-      <div class="card" style="margin-bottom:14px">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-          <b>🤖 Agent master switch</b>
-          <label style="display:flex;align-items:center;gap:8px;margin:0"><input type="checkbox" id="agent-toggle"> Agent replies to customers</label>
+      <div class="pagehead"><div><h2>AI training</h2><p>Teach the assistant how your shop talks — changes go live immediately</p></div></div>
+
+      <div class="card tr-hero">
+        <div class="tr-hero-l">
+          <span class="sec-ico"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-agent"/></svg></span>
+          <div><h3>WhatsApp assistant</h3><p class="muted">Replies to customers on its own. Turn off to answer everything yourself.</p></div>
         </div>
-        <div class="split2" style="margin-top:10px">
-          <div><label>Extra instructions — customer replies</label>
-            <textarea id="tr-cust-inst" rows="3" placeholder="e.g. Always mention we pick up and deliver free within 3 km."></textarea></div>
-          <div><label>Extra instructions — staff/owner commands</label>
-            <textarea id="tr-staff-inst" rows="3" placeholder="e.g. Always confirm the delivery date when creating bills."></textarea></div>
+        <label class="switch big"><input type="checkbox" id="agent-toggle"><i></i><span>Replies to customers</span></label>
+      </div>
+
+      <div class="card tr-card">
+        <div class="sec-h"><span class="sec-ico"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-training"/></svg></span><div><h3>Instructions</h3><p class="muted">Short, plain rules. They are added to every reply.</p></div></div>
+        <div class="tr-grid">
+          <div class="tr-field"><label for="tr-cust-inst">Customer replies</label>
+            <textarea id="tr-cust-inst" rows="4" placeholder="e.g. Always mention we pick up and deliver free within 3 km."></textarea></div>
+          <div class="tr-field"><label for="tr-staff-inst">Staff &amp; owner commands</label>
+            <textarea id="tr-staff-inst" rows="4" placeholder="e.g. Always confirm the delivery date when creating bills."></textarea></div>
+          <div class="tr-field tr-wide"><label for="tr-mkt-inst">Campaign message style</label>
+            <textarea id="tr-mkt-inst" rows="3" placeholder="e.g. Always address customers respectfully, mention festivals, keep messages short."></textarea></div>
         </div>
-        <div style="margin-top:10px"><label>Marketing message style (campaign copy)</label>
-          <textarea id="tr-mkt-inst" rows="2" placeholder="e.g. Always address customers respectfully, mention festivals, keep messages short."></textarea></div>
-        <p class="muted" style="margin-top:6px">Locked rules always win: no invented prices, no other customer's data, no unapproved discounts, no promises the database doesn't support.</p>
-        <button class="btn" style="margin-top:8px" onclick="saveAgentSettings(this)">Save</button>
-      </div>
-      <div class="card" style="margin-bottom:14px">
-        <b>🙋 Teach me — questions the agent could not answer (<span id="teach-count">0</span>)</b>
-        <div id="teach-list" style="margin-top:10px"></div>
-      </div>
-      <div class="card" style="margin-bottom:14px">
-        <b>📄 Documents — upload a PDF/TXT/CSV and the agent reads it</b>
-        <p class="muted" style="margin-top:4px">Price lists, policies, service brochures — the agent pulls the matching part into its answers. Re-uploading a file with the same name replaces it.</p>
-        <div class="filters" style="margin-top:8px">
-          <label class="btn ghost" style="cursor:pointer">⬆ Choose file<input type="file" accept=".pdf,.txt,.csv,.md" style="display:none" onchange="uploadDoc(this)"></label>
-          <span class="muted" id="doc-status"></span>
+        <div class="tr-foot">
+          <p class="tr-lock">🔒 Locked rules always win: no invented prices, no other customer's data, no unapproved discounts, no promises the records don't support.</p>
+          <button class="btn" onclick="saveAgentSettings(this)">Save instructions</button>
         </div>
-        <div id="doc-list" style="margin-top:10px"></div>
       </div>
-      <div class="split2">
-        <div class="card">
-          <b>📚 Knowledge (FAQ)</b>
-          <div class="frm" style="margin-top:8px">
+
+      <div class="card tr-card">
+        <div class="sec-h"><span class="sec-ico amber"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-inbox"/></svg></span><div><h3>Teach me <span class="cnt-badge" id="teach-count">0</span></h3><p class="muted">Questions the assistant could not answer. Reply once and it learns.</p></div></div>
+        <div id="teach-list"></div>
+      </div>
+
+      <div class="card tr-card">
+        <div class="sec-h"><span class="sec-ico blue"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-ledger"/></svg></span><div><h3>Documents</h3><p class="muted">Price lists, policies, brochures — the assistant reads the matching part when it answers. Same file name replaces the old one.</p></div></div>
+        <label class="tr-drop">
+          <input type="file" accept=".pdf,.txt,.csv,.md" onchange="uploadDoc(this)" aria-label="Upload a document">
+          <b>⬆ Upload a PDF, TXT or CSV</b><span id="doc-status" class="muted">Tap to choose a file</span>
+        </label>
+        <div id="doc-list"></div>
+      </div>
+
+      <div class="split2 tr-pair">
+        <div class="card tr-card">
+          <div class="sec-h"><span class="sec-ico green"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-task"/></svg></span><div><h3>Knowledge (FAQ)</h3><p class="muted">Facts the assistant can quote.</p></div></div>
+          <div class="frm">
             <input id="faq-q" placeholder="Question — e.g. What are your timings?" aria-label="FAQ question">
             <textarea id="faq-a" rows="2" placeholder="Answer — e.g. 9am to 9pm, all days" aria-label="FAQ answer"></textarea>
-            <div class="filters"><select id="faq-aud" aria-label="FAQ audience"><option value="customer">For customers</option><option value="staff">For staff</option><option value="all">Everyone</option></select>
-            <button class="btn sm" onclick="addFaq(this)">Add</button></div>
+            <div class="tr-row"><select id="faq-aud" aria-label="FAQ audience"><option value="customer">For customers</option><option value="staff">For staff</option><option value="all">Everyone</option></select>
+            <button class="btn" onclick="addFaq(this)">Add</button></div>
           </div>
-          <div id="faq-list" style="margin-top:8px"></div>
+          <div id="faq-list"></div>
         </div>
-        <div class="card">
-          <b>✏️ Corrections — “when asked X, reply like Y”</b>
-          <div class="frm" style="margin-top:8px">
+        <div class="card tr-card">
+          <div class="sec-h"><span class="sec-ico"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-activity"/></svg></span><div><h3>Corrections</h3><p class="muted">“When asked X, reply like Y.”</p></div></div>
+          <div class="frm">
             <input id="corr-q" placeholder="When a customer asks…" aria-label="When a customer asks">
             <textarea id="corr-a" rows="2" placeholder="The reply should be…" aria-label="The reply should be"></textarea>
-            <button class="btn sm" onclick="addCorr(this)">Add</button>
+            <div class="tr-row"><span></span><button class="btn" onclick="addCorr(this)">Add</button></div>
           </div>
-          <div id="corr-list" style="margin-top:8px"></div>
+          <div id="corr-list"></div>
         </div>
       </div>
     </section>
@@ -661,8 +683,8 @@
 
     <!-- Settings -->
     <section id="sec-settings" style="display:none">
-      <div class="pagehead"><div><h2>System Configuration Settings</h2><p>Business profile, pricing, messages and agent behaviour</p></div></div>
-      <div class="chips" style="margin-bottom:16px">
+      <div class="pagehead"><div><h2>Settings</h2><p>Business profile, pricing, messages and agent behaviour</p></div></div>
+      <div class="chips set-tabs" role="tablist" aria-label="Settings sections">
         <span class="chip on" data-st="profile" onclick="stTab('profile')">🏪 Business Profile & Invoices</span>
         <span class="chip" data-st="pricing" onclick="stTab('pricing')">🔥 Pricing rates matrix</span>
         <span class="chip" data-st="messages" onclick="stTab('messages')">✉️ Message formats</span>

@@ -1320,8 +1320,12 @@ async function showNewBill() {
     return;
   }
   $("list").innerHTML = `
+    <div class="billsteps" aria-hidden="true">
+      <span class="on">1 · Customer</span><span id="bs-2">2 · Clothes</span><span id="bs-3">3 · Payment</span>
+    </div>
+    <div class="pickup-banner" id="b-pickup-banner" hidden></div>
     <div class="card">
-      <h3>Customer</h3>
+      <h3><i class="stepn">1</i>Customer</h3>
       <label for="b-name">Name</label>
       <div class="ac-wrap">
         <input id="b-name" type="text" placeholder="Start typing a name" maxlength="60" autocomplete="off">
@@ -1334,9 +1338,10 @@ async function showNewBill() {
     </div>
 
     <div class="card">
-      <h3>Items</h3>
-      <label for="b-svc">Service</label>
-      <select id="b-svc"></select>
+      <h3><i class="stepn">2</i>Clothes</h3>
+      <!-- One tap per service; the select stays for keyboards and old code paths. -->
+      <div class="svcchips" id="b-svcchips" role="tablist" aria-label="Service"></div>
+      <select id="b-svc" class="vh" aria-label="Service" tabindex="-1"></select>
       <label for="b-q" id="b-qlabel">Item</label>
       <input id="b-q" type="search" placeholder="Search item — e.g. shirt" autocomplete="off" enterkeyhint="done">
       <div class="item-list" id="b-items" aria-live="polite"></div>
@@ -1344,7 +1349,8 @@ async function showNewBill() {
     </div>
 
     <div class="card" id="b-pay" hidden>
-      <h3>Where are the clothes?</h3>
+      <h3><i class="stepn">3</i>Payment &amp; delivery</h3>
+      <label>Where are the clothes?</label>
       <div class="pick">
         <button type="button" class="pickbtn on" data-pickup="0">At the shop</button>
         <button type="button" class="pickbtn" data-pickup="1">Collect from customer</button>
@@ -1374,9 +1380,12 @@ async function showNewBill() {
         </div>
       </details>
 
-      <h3 class="mt-lg">Payment</h3>
-      <label for="b-adv">Received now (₹)</label>
-      <input id="b-adv" type="number" inputmode="decimal" value="0" min="0">
+      <label for="b-adv" class="mt-lg">Received now (₹)</label>
+      <div class="advrow">
+        <input id="b-adv" type="number" inputmode="decimal" value="0" min="0">
+        <button type="button" class="btn ghost sm" data-advq="0">Nothing</button>
+        <button type="button" class="btn ghost sm" data-advq="full" id="b-advfull">Full</button>
+      </div>
     </div>
 
     <!-- Kul rakam hamesha aankh ke saamne. Counter par sabse zaroori number
@@ -1437,6 +1446,12 @@ async function showNewBill() {
   $("b-disc").onfocus = () => $("b-disc").select();
   $("b-adv").onfocus = () => $("b-adv").select();
   $("b-adv").oninput = renderCart;
+  $("list").querySelectorAll("[data-advq]").forEach((b) => {
+    b.onclick = () => {
+      $("b-adv").value = b.dataset.advq === "full" ? String(billMath().total) : "0";
+      renderCart();
+    };
+  });
   // Kapde kahan hain — yahi tay karta hai ki bill washer ki kataar mein
   // jayega ya delivery wale ke raaste mein. Pehle ye sawaal poocha hi
   // nahi jaata tha, isliye har bill washer ko jaata tha aur phone par
@@ -1467,6 +1482,9 @@ async function showNewBill() {
     $("b-picked").textContent = `🛵 Pickup ${ctx.order_number} · ${ctx.customer_name || "Customer"}`;
     NEEDS_PICKUP = false;
     $("b-pickhint").textContent = "Pickup task linked — this bill completes the collection. No second pickup will be created.";
+    $("b-pickup-banner").hidden = false;
+    $("b-pickup-banner").innerHTML = `<b>🛵 Pickup ${esc(ctx.order_number)}</b><span>${esc(ctx.customer_name || "Customer")} · add the clothes you collected, then create the bill</span>`;
+    $("b-save").textContent = "Create bill & finish pickup";
   }
   renderCart();
 }
@@ -1497,6 +1515,16 @@ function renderPicker() {
     sel.dataset.sig = sig;
   }
   sel.value = PICK_SVC;
+  const chipsBox = $("b-svcchips");
+  if (chipsBox) {
+    chipsBox.innerHTML = svcs.map((sv) => {
+      const n = CART.filter((x) => x.service === sv).reduce((a, x) => a + (x.unit === "kg" ? 1 : x.qty), 0);
+      return `<button type="button" role="tab" aria-selected="${sv === PICK_SVC}" class="${sv === PICK_SVC ? "on" : ""}" data-svc="${esc(sv)}">${esc(sv)}${n ? `<i>${n}</i>` : ""}</button>`;
+    }).join("");
+    chipsBox.querySelectorAll("[data-svc]").forEach((b) => {
+      b.onclick = () => { PICK_SVC = b.dataset.svc; $("b-q").value = ""; renderPicker(); };
+    });
+  }
 
   const raw = ($("b-q").value || "").trim().replace(/\s+/g, " ");
   const q = raw.toLowerCase();
@@ -1511,10 +1539,15 @@ function renderPicker() {
   const line = (r, n, showSvc) => {
     const inCart = CART.find((x) => x.service === r.service && x.garment === r.garment);
     const badge = inCart ? (r.unit === "kg" ? `${inCart.qty} kg` : `× ${inCart.qty}`) : "";
+    // In the cart: − count + right on the row, so a miscount is one tap to fix
+    // without scrolling down to the cart.
+    const step = inCart && r.unit !== "kg"
+      ? `<span class="ir-step"><span class="ir-minus" data-minus="${n}" role="button" aria-label="One less">−</span><b>${inCart.qty}</b><span class="ir-plus" aria-hidden="true">＋</span></span>`
+      : `<span class="ir-add${badge ? " n" : ""}">${badge ? esc(badge) : "＋"}</span>`;
     return `<button type="button" class="item-row${inCart ? " in" : ""}" data-tile="${n}">
       <span class="ir-name">${esc(r.garment || "By weight")}${showSvc ? ` <small>${esc(r.service)}</small>` : ""}</span>
       <span class="ir-price">${money(r.rate)}${r.unit === "kg" ? "/kg" : ""}</span>
-      <span class="ir-add${badge ? " n" : ""}">${badge ? esc(badge) : "＋"}</span>
+      ${step}
     </button>`;
   };
   let html = here.map((r, n) => line(r, n, false)).join("");
@@ -1532,7 +1565,11 @@ function renderPicker() {
   }
   box.innerHTML = html;
   box.querySelectorAll("[data-tile]").forEach((b) => {
-    b.onclick = () => tapItem(rows[parseInt(b.dataset.tile, 10)]);
+    b.onclick = (ev) => {
+      const r = rows[parseInt(b.dataset.tile, 10)];
+      if (ev.target.closest("[data-minus]")) return untapItem(r);
+      tapItem(r);
+    };
   });
   const create = box.querySelector("[data-create]");
   if (create) create.onclick = () => newRateModal(PICK_SVC, raw);
@@ -1623,6 +1660,16 @@ function addPiece(name) {
   if (searched) $("b-q").focus();
 }
 
+function untapItem(r) {
+  if (!r) return;
+  const idx = CART.findIndex((x) => x.service === r.service && x.garment === r.garment);
+  if (idx < 0) return;
+  if (CART[idx].qty <= 1) CART.splice(idx, 1);
+  else CART[idx].qty = Math.round((CART[idx].qty - 1) * 100) / 100;
+  renderCart();
+  if (navigator.vibrate) navigator.vibrate(8);
+}
+
 function tapItem(r) {
   if (!r) return;
   let idx = CART.findIndex((x) => x.service === r.service && x.garment === r.garment);
@@ -1646,7 +1693,8 @@ function tapItem(r) {
   } else if (searched) {
     $("b-q").focus();
   }
-  toast(`${r.garment || r.service} added`, false, 1200);
+  // No toast: the row itself now shows − n +, and a stack of "added" toasts
+  // covered the very list being tapped on a small phone.
 }
 
 /* Grahak aisa kapda laaya jo rate card par nahi. Bill chhod kar owner ko
@@ -1809,7 +1857,11 @@ function paintCart(box) {
   const empty = CART.length === 0;
   $("b-pay").hidden = empty;
   $("b-bar").hidden = empty;
-  if (empty) { box.innerHTML = ""; return; }
+  if (empty) {
+    box.innerHTML = "";
+    if ($("bs-2")) { $("bs-2").classList.remove("on"); $("bs-3").classList.remove("on"); }
+    return;
+  }
 
   const m = billMath();
   // Har line ka daam badla ja sakta hai. Rate card ka daam saath dikhta
@@ -2003,6 +2055,11 @@ function paintBar() {
     $("b-discsum").textContent = m.discount > 0
       ? `−${money(m.discount)}${DISC.mode === "pct" ? ` (${DISC.value}%)` : ""}` : "none";
   }
+  if ($("bs-2")) {
+    $("bs-2").classList.toggle("on", CART.length > 0);
+    $("bs-3").classList.toggle("on", CART.length > 0 && m.adv > 0);
+  }
+  if ($("b-advfull")) $("b-advfull").textContent = `Full ${money(m.total)}`;
   bar.innerHTML = PREV_DUE > 0
     ? `<b>${money(m.grand)}</b><span>${money(m.due)} is bill ka + ${money(PREV_DUE)} purana</span>`
     : `<b>${money(m.due)}</b><span>${CART.length} item${CART.length > 1 ? "s" : ""}${

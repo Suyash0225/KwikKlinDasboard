@@ -40,6 +40,17 @@ async def upload_poster(
     return {"ok": True, "poster_url": poster_url, "uploaded_at": await app_settings.get(db, "gbp_owner_poster_uploaded_at")}
 
 
+LOG_KEEP = 30
+
+
+async def _log_attempt(db: AsyncSession, **entry) -> None:
+    """Remember every publish attempt, so the owner can see what went out
+    (and what did not, and why) after the dialog is closed."""
+    log = list(await app_settings.get(db, "gbp_owner_post_log") or [])
+    log.append({"at": datetime.now(timezone.utc).isoformat(), **entry})
+    await app_settings.set_value(db, "gbp_owner_post_log", log[-LOG_KEEP:])
+
+
 @router.post("/publish")
 async def publish_poster(
     caption: str = Form(..., min_length=3, max_length=1200),
@@ -50,6 +61,8 @@ async def publish_poster(
     if not poster_url.startswith("https://"):
         raise HTTPException(409, "Upload a poster before publishing.")
     if not gbp.enabled():
+        await _log_attempt(db, poster_url=poster_url, caption=caption[:300], status="failed",
+                           published=[], failed=["Google Business Profile is not configured"])
         raise HTTPException(503, "Google Business Profile is not configured.")
     try:
         polished, action = gbp_owner_post._caption_and_cta(caption)
@@ -58,5 +71,20 @@ async def publish_poster(
             raise ValueError("Caption is empty after Google Business Profile policy checks.")
         result = await gbp_owner_post.publish_owner_post(db, polished, poster_url, action)
     except ValueError as exc:
+        await _log_attempt(db, poster_url=poster_url, caption=caption[:300], status="failed",
+                           published=[], failed=[str(exc)[:200]])
         raise HTTPException(422, str(exc)) from exc
-    return {"ok": not result.get("failed"), **result}
+    published, failed = list(result.get("published") or []), list(result.get("failed") or [])
+    await _log_attempt(
+        db, poster_url=poster_url, caption=polished[:300], action=action,
+        status="published" if published and not failed else "partial" if published else "failed",
+        published=published[:20], failed=[str(x)[:200] for x in failed[:20]],
+    )
+    return {"ok": not failed, **result}
+
+
+@router.get("/history")
+async def poster_history(db: AsyncSession = Depends(get_db)) -> dict:
+    """Recent poster publishes, newest first — the dialog's tracking list."""
+    log = list(await app_settings.get(db, "gbp_owner_post_log") or [])
+    return {"items": list(reversed(log))}
