@@ -212,6 +212,23 @@ def test_order_confirmation_requires_standalone_explicit_affirmative() -> None:
     assert not _is_explicit_order_confirmation("haan, lekin rate batao")
     assert not _is_explicit_order_confirmation("nahi")
 
+async def test_numeric_price_reply_must_match_requested_active_rate(monkeypatch) -> None:
+    from app.services import ai_tools
+    from app.services.ai_agent import _price_reply_is_grounded
+
+    async def fake_rates(db, customer):
+        return [
+            {"service": "Dry Clean", "garment": "Blazer", "rate": "150.00", "unit": "piece"},
+            {"service": "Wash", "garment": "Shirt", "rate": "30", "unit": "piece"},
+        ]
+
+    monkeypatch.setattr(ai_tools, "get_shop_rate_card", fake_rates)
+    customer = Customer(phone=PHONE, name="Test", address="Varanasi")
+    assert await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Blazer ₹150 hai")
+    assert not await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Blazer ₹120 hai")
+    assert not await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Shirt ₹30 hai")
+    assert await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Main rate verify karke batata hoon")
+
 def test_customer_fact_selection_handles_common_hinglish_without_keyword_flood() -> None:
     """Select relevant facts for common Hinglish wording; unrelated questions stay minimal."""
     cases = {
