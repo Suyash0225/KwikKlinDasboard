@@ -25,6 +25,13 @@ const WA_TEXT = {
   franchise: "Hello Kwik Klin, I am interested in a franchise. Please share the details.",
   crm: "Hello Kwik Klin, I run a laundry and would like a demo of the CRM.",
 };
+// Track direct phone-link intent separately from WhatsApp leads. This is a click event,
+// not proof that a call connected; customer PII is deliberately excluded.
+document.addEventListener("click", (event) => {
+  const link = event.target && event.target.closest ? event.target.closest('a[href^="tel:"]') : null;
+  if (link) trackLeadEvent("phone_click", {cta_type: link.dataset.ctaType || "phone_link"});
+});
+
 document.querySelectorAll("[data-wa]").forEach((a) => {
   a.href = wa(WA_TEXT[a.dataset.wa] + "\n" + attributionText());
   a.target = "_blank"; a.rel = "noopener";
