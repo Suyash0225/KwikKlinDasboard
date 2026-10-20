@@ -228,11 +228,24 @@ async def handle_owner_image_message(db: AsyncSession, sender: str, payload: dic
             and str((payload.get("media") or {}).get("mimetype") or "").lower().startswith("image/")):
         return False
     body = str(payload.get("body") or "").strip()
+    # Owners commonly send only a poster and a short command such as
+    # "post karo" / "ise post kro". These are instructions, not post copy.
     caption, action = _caption_and_cta(body)
+    instruction = re.fullmatch(
+        r"(?:please\\s+)?(?:ise|isey|isko|this)?\\s*(?:post|publish|upload)\\s*"
+        r"(?:kar(?:o|na|dena|do)?|karo|kr(?:o|na)?|it|please)?[.! ]*",
+        caption,
+        re.I,
+    )
+    if instruction or caption.lower() in {"", "post it", "post this", "publish it", "publish this"}:
+        caption = ""
     try:
         if not caption:
-            raise ValueError("Image mil gayi, lekin caption missing hai. Image ke saath caption bhejein. CTA ke liye 'CALL NOW: caption' ya 'WEBSITE: caption' likhein.")
-        caption = await _interpret_owner_caption(caption)
+            # Safe, concise fallback when no copy is supplied. Never send an
+            # image-analysis dump or invent offers/prices/guarantees.
+            caption = "Kwik Klin laundry care in Varanasi. Visit our website to learn more."
+        else:
+            caption = await _interpret_owner_caption(caption)
         blob = await _download_owner_image(payload)
         poster_url = await _save_public_poster(db, blob)
         # Persist before publishing so the 10 AM daily job can reuse the latest owner poster.
