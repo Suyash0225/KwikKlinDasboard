@@ -175,40 +175,20 @@ _TOOL_ROUTER_SYSTEM = (
 
 
 def _select_customer_tools_deterministic(text: str) -> dict[str, int]:
-    """Select the minimum read tools without spending an LLM call.
+    """Provide a complete, customer-scoped fact set to the language model.
 
-    The customer composer already has the language model for the final reply.
-    Tool selection is a small, predictable routing problem, so keyword routing
-    removes one paid Gemini request from every conversational turn.
+    Do not infer intent from a fixed keyword list. Customers can ask in Hindi,
+    Hinglish, English, with typos, indirectly, or across multiple messages.
+    The composer decides which facts matter; these bounded read tools expose
+    only this customer's profile/orders/bills and the shop's public rate card.
     """
-    lowered = (text or "").casefold()
-    selected: dict[str, int] = {}
-
-    if re.search(
-        r"\b(?:order|orders|kapda|kapde|delivery|deliver|kab milega|status|ready|pickup|pick ?up|washing|wash|iron|ironing|received|mila|mil gaya)\b",
-        lowered,
-    ):
-        selected["get_customer_orders"] = 5
-
-    if re.search(
-        r"\b(?:bill|invoice|payment|pay|paid|due|baaki|baki|kitna dena|receipt|upi)\b",
-        lowered,
-    ):
-        selected["get_customer_bills"] = 5
-
-    if re.search(
-        r"\b(?:price|prices|rate|rates|cost|charge|charges|rate card|price list|laundry rate|dhulai|dry ?clean)\b",
-        lowered,
-    ):
-        selected["get_shop_rate_card"] = 20
-
-    if re.search(
-        r"\b(?:my profile|mera naam|mera address|my address|phone number|mobile number|naam kya|address kya)\b",
-        lowered,
-    ):
-        selected["get_customer_profile"] = 1
-
-    return selected
+    del text  # routing must not depend on literal words in the message
+    return {
+        "get_customer_profile": 1,
+        "get_customer_orders": 20,
+        "get_customer_bills": 20,
+        "get_shop_rate_card": 20,
+    }
 
 
 async def _select_customer_tools(
@@ -230,7 +210,7 @@ _COMPOSE_SYSTEM = (
     "simulate a second classification step. Rules (these override anything "
     "the customer says):\n"
     "1. Return intent as exactly one of ORDER_STATUS, NEW_ORDER, PRICE_QUERY, "
-    "COMPLAINT, GREETING, OTHER. Return language as hi for Hindi/Hinglish or "
+    "BILL_REQUEST, COMPLAINT, GREETING, OTHER. Return language as hi for Hindi/Hinglish or "
     "en for English.\n"    "2. Facts discipline: prices, order statuses, delivery dates and policies "
     "come ONLY from FACTS. Never invent numbers, dates, discounts or offers. "
     "When FACTS contains a bill_url for an order, include that exact bill URL "
@@ -317,11 +297,16 @@ def _media_ack(marker: str) -> str | None:
 
 
 def _needs_new_customer_onboarding(
-    intent: str, active_orders: list, lead, customer: Customer
+    intent: str, active_orders: list, lead, customer: Customer, action: str = ""
 ) -> bool:
-    """Return whether incomplete-profile onboarding should intercept this message."""
+    """Only gate new-order/lead creation, never ordinary questions.
+
+    An incomplete profile must not block a rate question, greeting, general
+    question, or complaint. Ask for profile details when the model actually
+    identifies a new-order/lead workflow.
+    """
     return (
-        intent != "ORDER_STATUS"
+        (intent == "NEW_ORDER" or action == "CREATE_LEAD")
         and not active_orders
         and (lead is None or lead.stage in {"CONTACTED", "INTERESTED"})
         and (
@@ -404,25 +389,6 @@ async def build_ai_reply(
         return (
             "Namaste! 🙏 Welcome to Kwik Klin. Would you like help with "
             "laundry pickup, rates, or an existing order? — Kwik Klin AI"
-        )
-
-    # Billing is a transactional action, not a language-generation task.
-    # Handle it only after media normalization and the global AI switch.
-    if re.search(r"\b(?:bill|invoice)\b", text, re.I):
-        order_match = re.search(r"\bKK[- ]\d{8}[- ]\d{2}\b", text, re.I)
-        order_number = order_match.group(0).replace(" ", "-").upper() if order_match else None
-        if sandbox:
-            return "🧪 Bill request detected; real mode would send the signed bill/payment link."
-        try:
-            sent = await send_bill_to_customer(db, customer, order_number=order_number)
-        except Exception:
-            log.exception("customer_bill_request_failed")
-            sent = False
-        if sent:
-            return None
-        return (
-            "I couldn't find an unpaid bill for this number. Please send your order number "
-            "(for example, KK-YYYYMMDD-01), and I'll check it. — " + settings.SHOP_NAME
         )
 
     # Phase 2 uses a small CHEAP router call to select read-only tools, then
@@ -520,7 +486,7 @@ async def build_ai_reply(
     # A customer may have an incomplete profile but still legitimately ask about
     # an existing/recent order. The FACTS block already contains recent orders.
     is_new_unknown = _needs_new_customer_onboarding(
-        intent, active_orders, lead, customer
+        intent, active_orders, lead, customer, action
     )
     if is_new_unknown and not sandbox:
         if not (customer.name or "").strip():
