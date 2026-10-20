@@ -953,3 +953,6 @@ body.inbox-mode #sec-inbox .composer > .btn:not(.ghost) { width: 44px; height: 4
 .lang-pick button span { font-size: 12.5px; color: var(--ink-3); }
 .lang-pick button.on { border-color: var(--brand); background: var(--brand-soft); box-shadow: 0 0 0 1px var(--brand); }
 @media (max-width: 480px) { .lang-pick { grid-template-columns: 1fr; } }
+.rev-src { margin: 14px 0 4px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: #f8fafc; }
+.rev-src label { margin-bottom: 6px; }
+.rev-src small { display: block; margin-top: 6px; }

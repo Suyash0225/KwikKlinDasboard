@@ -4801,12 +4801,33 @@ async function gbpLoad() {
     return `<div style="padding:8px 0;border-bottom:1px solid var(--border,#e5e7eb)"><b>${esc(p.title || "Google location")}</b><span style="float:right;color:${color};font-weight:600">${label}</span><small class="muted" style="display:block">${esc(p.address || p.location || "")}${detail}${poster ? esc(poster) : ""}</small>${error}</div>`;
   }).join("");
   const postStatus = `<section style="margin-top:14px;padding:12px;border:1px solid var(--border,#e5e7eb);border-radius:10px"><b>📣 Daily Google posts</b><p class="muted" style="margin:4px 0 8px">${postLocations.length} location(s) selected · ${s.auto_post?.enabled === false ? "posting paused" : "daily posting enabled"}</p>${postRows || '<p class="muted">No Google locations selected yet.</p>'}</section>`;
+  const locs = s.review_locations || [];
+  const srcPicker = locs.length > 1 ? `
+    <div class="rev-src">
+      <label for="gbp-review-source">Reviews shown on your website</label>
+      <select id="gbp-review-source" onchange="gbpSetReviewSource(this)">
+        <option value="" ${!s.review_source ? "selected" : ""}>Main listing — ${esc((locs[0] || {}).title || "Google listing")}</option>
+        ${locs.slice(1).map((l) => `<option value="${esc(l.location)}" ${s.review_source === l.location ? "selected" : ""}>${esc(l.title || l.location)}${l.address ? " — " + esc(l.address) : ""}</option>`).join("")}
+        <option value="all" ${s.review_source === "all" ? "selected" : ""}>All ${locs.length} listings combined</option>
+      </select>
+      <small class="muted">Combined shows every listing's reviews, newest first, with a rating weighted by review count.</small>
+    </div>` : "";
   box.innerHTML = `${err}<p style="color:var(--ink,#131820)">✅ Connected: <b>${esc(s.title || "Google listing")}</b></p>
     <p style="margin:4px 0">${stat}</p><small class="muted">Last sync: ${esc(when)} · refreshes every 6 hours</small>
+    ${srcPicker}
     ${postStatus}
     <div class="filters" style="margin-top:10px">
       <a class="btn ghost" href="/#reviews" target="_blank" rel="noopener">View on website</a>
     </div>`;
+}
+
+async function gbpSetReviewSource(sel) {
+  sel.disabled = true;
+  try {
+    const r = await api("/admin/api/google-business/review-source", { method: "PUT", body: { source: sel.value } });
+    toast(r.synced ? "Website reviews updated" : "Saved — reviews will refresh on the next sync", !r.synced);
+    gbpLoad();
+  } catch (e) { toast(e.message, true); sel.disabled = false; }
 }
 
 async function saveProfile(btn) {
