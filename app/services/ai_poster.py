@@ -239,7 +239,7 @@ async def create_branded_campaign_poster(
             "hierarchy, generous negative space for typography to be overlaid later, "
             "and restrained navy/cyan brand accents where appropriate. Make the "
             "visual clearly fit this particular occasion, not a generic laundry stock image. "
-            "Background artwork only: absolutely no text, letters, numbers, logo, "
+            "Background artwork only. No text, letters, numbers, logo, "
             "watermark, phone, signage, price, discount, coupon, offer badge, or UI. "
             "All text and the real brand logo will be added locally after generation."
         )
