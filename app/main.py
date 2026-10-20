@@ -331,8 +331,10 @@ app.include_router(staff_panel_router)
 
 # Google Business Profile: saare Google reviews website par (Settings se connect)
 from app.routers.google_business import router as google_business_router
+from app.routers.gbp_poster_admin import router as gbp_poster_admin_router
 
 app.include_router(google_business_router)
+app.include_router(gbp_poster_admin_router)
 
 # Google Analytics 4 OAuth + realtime reporting connection
 app.include_router(google_analytics_router)
