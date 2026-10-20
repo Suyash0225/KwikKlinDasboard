@@ -502,3 +502,19 @@ async def test_facts_always_carry_rate_card_and_orders(monkeypatch) -> None:
         facts = await agent_module._build_facts(db, cust, tool_names={})
     assert "Rate card" in facts and "Shirt" in facts
     assert "recent orders: none" in facts
+
+async def test_verbatim_rule_is_in_prompt(monkeypatch) -> None:
+    async def fake_ask_json(**kw):
+        assert "[VERBATIM]" in kw["system"]
+        assert "EXACTLY as written" in kw["system"]
+        return {
+            "reply": "Ji — Kwik Klin AI", "intent": "OTHER", "language": "hi",
+            "action": "ANSWER", "action_reason": "", "escalate": False,
+            "escalation_reason": "", "admin_note": "",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        assert await build_ai_reply(db, cust, "refund policy kya hai")
