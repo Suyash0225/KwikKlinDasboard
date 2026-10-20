@@ -50,7 +50,7 @@ def _is_explicit_order_confirmation(text: str) -> bool:
     """Only a clear, standalone affirmative can confirm a prepared pickup."""
     return bool(_ORDER_CONFIRMATION_RE.fullmatch(text or ""))
 
-_PRICE_AMOUNT_RE = re.compile(r"(?:₹|\\bINR\\s*|\\bRs\\.?\\s*)(\\d+(?:\\.\\d{1,2})?)|\\b(\\d+(?:\\.\\d{1,2})?)\\s*(?:rupees|rs\\.?)\\b", re.I)
+_PRICE_AMOUNT_RE = re.compile(r"(?:₹|\bINR\s*|\bRs\.?\s*)(\\d+(?:\.\\d{1,2})?)|\b(\\d+(?:\.\\d{1,2})?)\s*(?:rupees|rs\.?)\b", re.I)
 
 
 async def _price_reply_is_grounded(db: AsyncSession, customer: Customer, question: str, reply: str) -> bool:
@@ -77,8 +77,8 @@ async def _price_reply_is_grounded(db: AsyncSession, customer: Customer, questio
         service = re.sub(r"[^a-z0-9]+", " ", str(row.get("service") or "").casefold()).strip()
         # A rate is relevant only when the customer explicitly named this garment
         # or service. Ambiguous aliases must be clarified rather than guessed.
-        named = bool(garment and re.search(r"\\b" + re.escape(garment) + r"\\b", normalized_question))
-        named = named or bool(service and re.search(r"\\b" + re.escape(service) + r"\\b", normalized_question))
+        named = bool(garment and re.search(r"\b" + re.escape(garment) + r"\b", normalized_question))
+        named = named or bool(service and re.search(r"\b" + re.escape(service) + r"\b", normalized_question))
         amount = canonical_amount(str(row.get("rate") or ""))
         if named and amount in quoted:
             return True
