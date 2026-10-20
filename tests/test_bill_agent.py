@@ -702,7 +702,7 @@ async def test_llm_down_notifies_manager_but_not_staff(monkeypatch) -> None:
             db, sender_phone=SENDER, sender_label="Ravi", text="Sharma 2 kurta"
         )
     assert manager_reply is not None and "AI response" in manager_reply
-    assert staff_reply is None
+    assert staff_reply is not None and "Message mil gaya" in staff_reply
 
 
 # --- "order details do" — staff apna kaam poochh raha hai ------------------
