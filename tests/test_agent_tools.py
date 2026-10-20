@@ -204,10 +204,10 @@ async def test_loop_runs_tool_then_answers(monkeypatch) -> None:
         return steps.pop(0)
 
     async def fake_tool(db, name, args):
-        return "TOOL-OUTPUT: status READY, baaki 250"
+        return True, "TOOL-OUTPUT: status READY, baaki 250"
 
     monkeypatch.setattr(ba.llm_client, "ask_json", fake_ask_json)
-    monkeypatch.setattr(at, "run_tool", fake_tool)
+    monkeypatch.setattr(at, "run_tool_checked", fake_tool)
 
     async with async_session_factory() as db:
         ans = await ba._answer_manager_query(db, "KK-1 ka kya hua")
@@ -228,11 +228,11 @@ async def test_loop_stops_after_max_rounds(monkeypatch) -> None:
         return "Jo mila usse: 2 order active hain."
 
     async def fake_tool(db, name, args):
-        return "2 active"
+        return True, "2 active"
 
     monkeypatch.setattr(ba.llm_client, "ask_json", always_tool)
     monkeypatch.setattr(ba.llm_client, "ask", fake_ask)
-    monkeypatch.setattr(at, "run_tool", fake_tool)
+    monkeypatch.setattr(at, "run_tool_checked", fake_tool)
 
     async with async_session_factory() as db:
         ans = await ba._answer_manager_query(db, "kya chal raha hai")
