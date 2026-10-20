@@ -52,9 +52,9 @@ def _runtime_block(now: _dt | None = None) -> str:
     kal = now + timedelta(days=1)
     parso = now + timedelta(days=2)
     return (
-        "RUNTIME:\\n"
-        f"Now: {now:%A, %d %b %Y, %H:%M} IST\\n"
-        f"Today (aaj) = {now:%Y-%m-%d}; kal/tomorrow = {kal:%Y-%m-%d}; parso = {parso:%Y-%m-%d}.\\n"
+        "RUNTIME:\n"
+        f"Now: {now:%A, %d %b %Y, %H:%M} IST\n"
+        f"Today (aaj) = {now:%Y-%m-%d}; kal/tomorrow = {kal:%Y-%m-%d}; parso = {parso:%Y-%m-%d}.\n"
         "intake.pickup_date MUST be an ISO date YYYY-MM-DD resolved from these "
         "(never the words aaj/kal/parso). If the customer gave no day, leave it ''."
     )
