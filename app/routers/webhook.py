@@ -446,11 +446,18 @@ async def receive_waha_webhook(
                             await _mark_event(db, event_key, "processed")
                             return JSONResponse({"status": "received"})
     
-                    msg = _waha_to_meta_shape(payload, resolved_from=resolved_from)
-                    await _handle_inbound_message(
-                        msg, db,
-                        profile_name=str((payload.get("_data") or {}).get("notifyName") or ""),
+                    # The owner can publish a GBP post by sending a poster image + caption
+                    # from the verified owner number. Other senders continue through normal inbox flow.
+                    from app.services import gbp_owner_post
+                    handled_owner_post = await gbp_owner_post.handle_owner_image_message(
+                        db, resolved_from, payload
                     )
+                    if not handled_owner_post:
+                        msg = _waha_to_meta_shape(payload, resolved_from=resolved_from)
+                        await _handle_inbound_message(
+                            msg, db,
+                            profile_name=str((payload.get("_data") or {}).get("notifyName") or ""),
+                        )
             elif event_name == "message.ack":
                 status = _waha_ack_status(payload)
                 if status:
