@@ -12,7 +12,10 @@ Safety design — every rule enforced in CODE, not just in the prompt:
 """
 
 import re
-from datetime import datetime as _dt, timezone as _tz
+from datetime import date as _date, datetime as _dt, timedelta, timezone as _tz
+from zoneinfo import ZoneInfo
+
+_IST = ZoneInfo("Asia/Kolkata")
 
 import structlog
 from sqlalchemy import select
@@ -41,6 +44,32 @@ _SIMPLE_GREETING_RE = re.compile(
 def _is_simple_greeting(text: str) -> bool:
     """Cheap deterministic check for greetings; avoid wasting LLM calls."""
     return bool(_SIMPLE_GREETING_RE.fullmatch(text or ""))
+
+
+def _runtime_block(now: _dt | None = None) -> str:
+    """Current date in IST so relative pickup dates resolve to real dates."""
+    now = now or _dt.now(_IST)
+    kal = now + timedelta(days=1)
+    parso = now + timedelta(days=2)
+    return (
+        "RUNTIME:\\n"
+        f"Now: {now:%A, %d %b %Y, %H:%M} IST\\n"
+        f"Today (aaj) = {now:%Y-%m-%d}; kal/tomorrow = {kal:%Y-%m-%d}; parso = {parso:%Y-%m-%d}.\\n"
+        "intake.pickup_date MUST be an ISO date YYYY-MM-DD resolved from these "
+        "(never the words aaj/kal/parso). If the customer gave no day, leave it ''."
+    )
+
+
+def _parse_pickup_date(value: str) -> _date | None:
+    """ISO date from intake, or None. Code decides readiness, not the model."""
+    try:
+        d = _date.fromisoformat((value or "").strip()[:10])
+    except ValueError:
+        return None
+    today = _dt.now(_IST).date()
+    if d < today or d > today + timedelta(days=30):
+        return None
+    return d
 
 _REPLY_SCHEMA = {
     "type": "object",
@@ -255,8 +284,9 @@ _COMPOSE_SYSTEM = (
     "the next missing detail needed to complete that order.\n"
     "   - New order / pickup requests -> collect exactly FOUR things across "
     "the conversation: (a) name, (b) full address+landmark, (c) which "
-    "clothes (note heavy items like blanket/curtain/saree), (d) pickup day "
-    "(aaj/kal). Ask ONLY for what's missing. Fill the intake object from "
+    "clothes (note heavy items like blanket/curtain/saree), (d) pickup day. "
+    "Resolve the pickup day to a real ISO date using the RUNTIME block "
+    "(aaj/kal/parso/weekday names). Ask ONLY for what's missing. Fill the "
     "everything known so far (use the conversation history); set "
     "intake.ready=true ONLY when all four are known — the system then "
     "creates the order and arranges pickup itself.\n"
@@ -461,7 +491,7 @@ async def build_ai_reply(
                     if _needs_smart_customer_reply(text)
                     else llm_client.MODEL_CHEAP
                 ),
-                max_tokens=450,
+                max_tokens=1024,  # thinking tokens count toward this cap; 512 truncated JSON before
             )
     except LLMError as exc:
         log.warning("ai_compose_failed", error=str(exc)[:150])
@@ -577,9 +607,16 @@ async def build_ai_reply(
         return out.get("reply") or get_message("escalated_ack", lang)
 
     # Pickup intake complete -> the agent CREATES the order itself
-    if intake.get("ready") and all(
-        (intake.get(k) or "").strip() for k in ("name", "address", "items_text", "pickup_date")
+    pickup_day = _parse_pickup_date(intake.get("pickup_date") or "")
+    if intake.get("ready") and pickup_day is None and (intake.get("pickup_date") or "").strip():
+        # Model said ready but gave 'kal' or a bad date — don't create an order
+        # on a guess; its own reply (which asks/confirms) goes out instead.
+        log.warning("intake_pickup_date_invalid", value=str(intake.get("pickup_date"))[:20])
+    if intake.get("ready") and pickup_day is not None and all(
+        (intake.get(k) or "").strip() for k in ("name", "address", "items_text")
     ):
+        intake = {**intake, "pickup_date": pickup_day.isoformat(),
+                  "pickup_label": pickup_day.strftime("%a %d %b")}
         if sandbox:
             return (out.get("reply") or "") + (
                 f"\n🧪 (real mein: order ban jata — {intake['name']}, "
@@ -654,13 +691,13 @@ def _needs_smart_customer_reply(text: str) -> bool:
 
 def _build_prompt(ctx: tuple[str, str, str], text: str, lang: str) -> str:
     facts, kb, history = ctx
-    parts = [f"BUSINESS ACTION POLICY:\n{business_policy_text()}\n\n{ACTION_EXECUTION_RULES}", f"FACTS:\n{facts}"]
+    parts = [_runtime_block(), f"BUSINESS ACTION POLICY:\n{business_policy_text()}\n\n{ACTION_EXECUTION_RULES}", f"FACTS:\n{facts}"]
     if kb:
         parts.append(kb)
     if history:
         parts.append(history)
     parts.append(f"CUSTOMER MESSAGE (language={lang}; infer language if auto):\n{text[:1000]}")
-    return "\n".join(parts)
+    return "\n\n".join(parts)
 
 
 async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dict) -> str | None:
@@ -730,7 +767,7 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
             "pickup_confirmed_customer",
             name=intake["name"].split()[0] if intake["name"].split() else "ji",
             order_number=order.order_number,
-            pickup=intake["pickup_date"],
+            pickup=intake.get("pickup_label") or intake["pickup_date"],
             sla=str(sla),
         )
     except Exception:
