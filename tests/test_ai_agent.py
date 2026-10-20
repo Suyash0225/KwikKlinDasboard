@@ -502,3 +502,29 @@ async def test_facts_always_carry_rate_card_and_orders(monkeypatch) -> None:
         facts = await agent_module._build_facts(db, cust, tool_names={})
     assert "Rate card" in facts and "Shirt" in facts
     assert "recent orders: none" in facts
+
+
+
+def test_customer_memory_format_skips_empty_fields() -> None:
+    rendered = agent_module._format_memory({
+        "usual_items": "shirts + pants", "preferences": "", "open_issue": "",
+        "tone": "warm", "notes": "",
+    })
+    assert rendered == "- Usual items: shirts + pants\n- Tone: warm"
+
+
+async def test_customer_memory_is_in_customer_facts(monkeypatch) -> None:
+    async def fake_tool(db, customer, name, **kwargs):
+        return {
+            "get_customer_profile": {"name": "AI Grahak", "address": "X", "phone": PHONE},
+            "get_customer_orders": [],
+            "get_shop_rate_card": [],
+        }[name]
+
+    monkeypatch.setattr(agent_module, "run_customer_tool", fake_tool)
+    async with async_session_factory() as db:
+        customer = await _seed_customer()
+        customer.ai_memory = "- Usual items: shirts\n- Tone: formal"
+        facts = await agent_module._build_facts(db, customer, tool_names={})
+    assert "already know about this customer" in facts
+    assert "Usual items: shirts" in facts
