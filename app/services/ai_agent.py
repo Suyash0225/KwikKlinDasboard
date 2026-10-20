@@ -52,7 +52,7 @@ def _is_explicit_order_confirmation(text: str) -> bool:
 
 
 _ORDER_CANCELLATION_RE = re.compile(
-    r"^\\s*(?:nahi(?:\\s+ji)?|nahin(?:\\s+ji)?|no|cancel|cancel karo|cancel kar do|mat karo|rehne do|chhodo|chod do)\\s*[!.🙏👍✅]*\\s*$",
+    r"^\s*(?:nahi(?:\s+ji)?|nahin(?:\s+ji)?|no|cancel|cancel karo|cancel kar do|mat karo|rehne do|chhodo|chod do)\s*[!.🙏👍✅]*\s*$",
     re.I,
 )
 
