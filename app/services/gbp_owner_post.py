@@ -49,6 +49,49 @@ def _caption_and_cta(raw: str) -> tuple[str, str]:
     return social.enforce_google_rules(text)[:700], action
 
 
+OWNER_CAPTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "description": "A polished Google Business Profile caption, maximum 700 characters."},
+    },
+    "required": ["summary"],
+    "additionalProperties": False,
+}
+
+
+async def _interpret_owner_caption(raw_caption: str) -> str:
+    """Understand the owner's instruction and polish copy without inventing claims."""
+    source = social.enforce_google_rules(" ".join(str(raw_caption or "").split()))[:1200]
+    if not source:
+        raise ValueError("Caption is empty after Google Business Profile policy checks")
+    try:
+        from app.services import llm_client
+        result = await llm_client.ask_json(
+            system=(
+                "You are Kwik Klin's Google Business Profile copy editor. "
+                "Interpret the owner's instruction and return one concise, natural "
+                "Hinglish or English caption suitable for Google Search/Maps. "
+                "Use only claims explicitly present in the owner's message. "
+                "Never invent a discount, price, date, guarantee, phone number, "
+                "address, certification, rating, or service. Do not add hashtags. "
+                "Do not include a CTA button instruction in the caption. Return JSON only."
+            ),
+            user_text=(
+                "Owner's WhatsApp caption/instruction (business content only):\n" + source
+            ),
+            schema=OWNER_CAPTION_SCHEMA,
+            model=llm_client.MODEL_SMART,
+            max_tokens=500,
+        )
+        polished = social.enforce_google_rules(
+            " ".join(str(result.get("summary") or "").split())
+        )[:700]
+        return polished or source[:700]
+    except Exception as exc:
+        log.warning("gbp_owner_caption_ai_fallback", error=str(exc)[:180])
+        return source[:700]
+
+
 async def _download_owner_image(payload: dict) -> bytes:
     media = payload.get("media") or {}
     if not isinstance(media, dict):
@@ -189,6 +232,7 @@ async def handle_owner_image_message(db: AsyncSession, sender: str, payload: dic
     try:
         if not caption:
             raise ValueError("Image mil gayi, lekin caption missing hai. Image ke saath caption bhejein. CTA ke liye 'CALL NOW: caption' ya 'WEBSITE: caption' likhein.")
+        caption = await _interpret_owner_caption(caption)
         blob = await _download_owner_image(payload)
         poster_url = await _save_public_poster(db, blob)
         # Persist before publishing so the 10 AM daily job can reuse the latest owner poster.
