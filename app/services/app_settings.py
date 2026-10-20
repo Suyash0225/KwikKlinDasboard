@@ -128,6 +128,8 @@ DEFAULTS: dict[str, Any] = {
     "gbp_owner_post_log": [],
     # owner-edited customer message formats {message_key: text}
     "message_overrides": {},
+    # language of customer-facing messages: "en" (default) or "hi" (Hinglish)
+    "customer_language": "en",
     # this shop's own names for rate-card garments {alias_key: garment_key},
     # learned when staff correct an unknown bill line (garment_aliases.py)
     "garment_aliases": {},

@@ -149,13 +149,8 @@
           <div class="replybar" id="reply-bar"></div>
           <div class="composer" style="position:relative">
             <div class="emojis" id="emoji-pal"></div>
-            <button class="btn ghost sm" onclick="tplSendModal()" title="Send a template (works even when the window is closed)" aria-label="Send a template">📑</button>
             <button class="btn ghost sm" onclick="toggleEmojis()" title="Emoji" aria-label="Emoji picker">😊</button>
             <label class="btn ghost sm" style="cursor:pointer" title="Attach a photo" aria-label="Attach a photo">📎<input type="file" accept="image/*" style="display:none" onchange="sendMedia(this)" aria-label="Photo to send"></label>
-            <select id="chat-intent" aria-label="Message policy" title="Choose the policy for a customer send" style="max-width:130px;font-size:11px">
-              <option value="transactional">Service update</option>
-              <option value="promotional">Promotional</option>
-            </select>
             <textarea id="chat-input" aria-label="Message" enterkeyhint="send" placeholder="Type a message" rows="1" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendChat()}" oninput="this.style.height='44px';this.style.height=Math.min(this.scrollHeight,140)+'px'"></textarea>
             <button class="btn" onclick="sendChat()" title="Send" aria-label="Send">➤</button>
           </div>
@@ -958,6 +953,15 @@
 
       <div id="st-messages" style="display:none">
       <div class="card" style="margin-bottom:14px">
+        <b>Customer message language</b>
+        <p class="muted" style="margin-top:4px">Bills, status updates, reminders and thank-you messages go to customers in this language. The AI chat replies always follow the customer's own language.</p>
+        <div class="lang-pick" role="radiogroup" aria-label="Customer message language">
+          <button type="button" role="radio" data-lang="hi" onclick="setCustomerLang('hi', this)"><b>Hinglish</b><span>"Namaste! Aapka order mil gaya 🧺"</span></button>
+          <button type="button" role="radio" data-lang="en" onclick="setCustomerLang('en', this)"><b>English</b><span>"Hello! Your order is received 🧺"</span></button>
+        </div>
+        <p class="muted" style="margin-top:8px;font-size:12px">Messages you rewrote yourself below stay exactly as you wrote them.</p>
+      </div>
+      <div class="card" style="margin-bottom:14px">
         <b>✉️ Message formats — write them your way</b>
         <p class="muted" style="margin-top:4px">These go to customers as free-form messages (while the 24h window is open). Edit freely — changes apply instantly, no approval needed. <b>{placeholders}</b> are replaced with real values.</p>
         <div class="filters" style="margin-top:8px">
@@ -979,38 +983,64 @@
 
     <!-- External polisher ledger -->
     <section id="sec-polisher" style="display:none">
-      <div class="pagehead"><div><h2>External polisher</h2><p>Track sarees sent, returned, payments and vendor WhatsApp updates.</p></div><button class="btn ghost" onclick="loadPolisher()">↻ Refresh</button></div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px">
-        <div class="card"><small class="muted">Sarees sent</small><h2 id="pol-sent">—</h2></div>
-        <div class="card"><small class="muted">Returned</small><h2 id="pol-returned">—</h2></div>
-        <div class="card"><small class="muted">Pending return</small><h2 id="pol-pending">—</h2></div>
-        <div class="card"><small class="muted">Polishing cost (returned)</small><h2 id="pol-accrued">—</h2></div>
-        <div class="card"><small class="muted">Paid</small><h2 id="pol-paid">—</h2></div>
-        <div class="card"><small class="muted">Balance due</small><h2 id="pol-due">—</h2></div>
+      <div class="pagehead"><div><h2>Polisher ledger</h2><p>Sarees out for polish, what came back, and what you owe the polisher</p></div>
+        <div class="actions"><button class="btn ghost" onclick="loadPolisher()"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-refresh"/></svg><span class="hide-sm">Refresh</span></button></div></div>
+      <div class="grid kpis pol-kpis" id="pol-kpis"></div>
+
+      <div class="pol-grid">
+        <div class="card pol-actions">
+          <div class="pol-tabs" role="tablist" aria-label="Polisher actions">
+            <button role="tab" class="on" data-pol-tab="send" onclick="polTab('send')">Send sarees</button>
+            <button role="tab" data-pol-tab="pay" onclick="polTab('pay')">Record payment</button>
+            <button role="tab" data-pol-tab="vendor" onclick="polTab('vendor')">Add polisher</button>
+          </div>
+          <div class="pol-pane" data-pol-pane="send">
+            <div class="pol-form">
+              <div class="pol-wide"><label for="pol-vendor">Polisher</label><select id="pol-vendor"><option value="">Add a polisher first</option></select></div>
+              <div><label for="pol-qty">Sarees sent</label>
+                <div class="pol-step"><button type="button" onclick="polStep('pol-qty',-1)" aria-label="One less">−</button><input id="pol-qty" type="number" min="1" value="10" inputmode="numeric"><button type="button" onclick="polStep('pol-qty',1)" aria-label="One more">+</button></div></div>
+              <div><label for="pol-date">Date sent</label><input id="pol-date" type="date"></div>
+              <div class="pol-wide"><label for="pol-notes">Notes <span class="muted">· optional</span></label><input id="pol-notes" placeholder="e.g. 4 silk, 6 cotton"></div>
+            </div>
+            <div class="pol-foot"><span class="muted" id="pol-send-hint">The polisher gets a WhatsApp with the count.</span>
+              <button class="btn" onclick="createPolisherBatch(this)">Send &amp; notify</button></div>
+          </div>
+          <div class="pol-pane" data-pol-pane="pay" hidden>
+            <div class="pol-form">
+              <div class="pol-wide"><label for="pol-pay-vendor">Polisher</label><select id="pol-pay-vendor"><option value="">Select polisher</option></select></div>
+              <div><label for="pol-pay-amount">Amount (₹)</label><input id="pol-pay-amount" type="number" min="0.01" step="0.01" placeholder="250" inputmode="decimal"></div>
+              <div><label for="pol-pay-date">Payment date</label><input id="pol-pay-date" type="date"></div>
+              <div><label for="pol-pay-method">Method</label><select id="pol-pay-method"><option value="cash">Cash</option><option value="upi">UPI</option><option value="bank">Bank transfer</option><option value="other">Other</option></select></div>
+              <div><label for="pol-pay-ref">Reference <span class="muted">· optional</span></label><input id="pol-pay-ref" placeholder="UPI reference"></div>
+            </div>
+            <div class="pol-foot"><button type="button" class="btn ghost sm" id="pol-pay-full" onclick="polPayFull()">Pay full balance</button>
+              <button class="btn" onclick="recordPolisherPayment(this)">Save &amp; notify</button></div>
+          </div>
+          <div class="pol-pane" data-pol-pane="vendor" hidden>
+            <div class="pol-form">
+              <div class="pol-wide"><label for="pol-name">Polisher name</label><input id="pol-name" placeholder="e.g. Ramesh Polish Works"></div>
+              <div><label for="pol-phone">WhatsApp number</label><input id="pol-phone" type="tel" inputmode="numeric" placeholder="98XXXXXXXX"></div>
+              <div><label for="pol-rate">Rate per saree (₹)</label><input id="pol-rate" type="number" min="1" step="0.5" value="25" inputmode="decimal"></div>
+            </div>
+            <div class="pol-foot"><span></span><button class="btn" onclick="createPolisherVendor(this)">Save polisher</button></div>
+          </div>
+          <p class="pol-msg" id="pol-message" role="status" aria-live="polite"></p>
+        </div>
+
+        <div class="card pol-vendors-card">
+          <div class="panel-head"><h3>Polishers</h3><button class="btn sm ghost" onclick="polTab('vendor')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-plus"/></svg>Add</button></div>
+          <div id="pol-vendors"><span class="muted">Loading…</span></div>
+        </div>
       </div>
-      <div class="card" style="margin-bottom:14px"><h3>Register vendor</h3><div class="setgrid staffadd">
-        <div><label for="pol-name">Vendor name</label><input id="pol-name" placeholder="Polisher name"></div>
-        <div><label for="pol-phone">WhatsApp number</label><input id="pol-phone" type="tel" placeholder="91XXXXXXXXXX"></div>
-        <div><label for="pol-rate">Rate per saree (₹)</label><input id="pol-rate" type="number" min="1" step="0.5" value="25"></div>
-        <button class="btn" onclick="createPolisherVendor(this)">Save vendor</button>
-      </div><div id="pol-vendors" style="margin-top:12px"></div></div>
-      <div class="card" style="margin-bottom:14px"><h3>Send sarees for polish</h3><div class="setgrid staffadd">
-        <div><label for="pol-vendor">Vendor</label><select id="pol-vendor"><option value="">Register vendor first</option></select></div>
-        <div><label for="pol-qty">Quantity sent</label><input id="pol-qty" type="number" min="1" value="10"></div>
-        <div><label for="pol-date">Date sent</label><input id="pol-date" type="date"></div>
-        <div><label for="pol-notes">Notes (optional)</label><input id="pol-notes" placeholder="Batch notes"></div>
-        <button class="btn" onclick="createPolisherBatch(this)">Create batch + WhatsApp</button>
-      </div></div>
-      <div class="card" style="margin-bottom:14px"><h3>Record payment</h3><div class="setgrid staffadd">
-        <div><label for="pol-pay-vendor">Vendor</label><select id="pol-pay-vendor"><option value="">Select vendor</option></select></div>
-        <div><label for="pol-pay-amount">Amount (₹)</label><input id="pol-pay-amount" type="number" min="0.01" step="0.01" placeholder="250"></div>
-        <div><label for="pol-pay-date">Payment date</label><input id="pol-pay-date" type="date"></div>
-        <div><label for="pol-pay-method">Method</label><select id="pol-pay-method"><option value="cash">Cash</option><option value="upi">UPI</option><option value="bank">Bank transfer</option><option value="other">Other</option></select></div>
-        <div><label for="pol-pay-ref">Reference (optional)</label><input id="pol-pay-ref" placeholder="UPI reference"></div>
-        <button class="btn" onclick="recordPolisherPayment(this)">Save payment + WhatsApp</button>
-      </div></div>
-      <div class="card"><h3>Batch ledger</h3><div id="pol-batches" style="overflow:auto"><span class="muted">Loading…</span></div><h3 style="margin-top:20px">Payment history</h3><div id="pol-payments" style="overflow:auto"></div></div>
-      <p class="muted" id="pol-message" role="status" style="margin-top:10px"></p>
+
+      <div class="card pol-ledger">
+        <div class="panel-head"><h3>Batches</h3><span class="muted" id="pol-batch-count"></span></div>
+        <div id="pol-batches"><span class="muted">Loading…</span></div>
+      </div>
+      <div class="card pol-ledger">
+        <div class="panel-head"><h3>Payments</h3><span class="muted" id="pol-pay-count"></span></div>
+        <div id="pol-payments"></div>
+      </div>
     </section>
   </main>
 </div>

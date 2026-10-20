@@ -2551,10 +2551,16 @@ async def put_setting(body: SettingIn, db: AsyncSession = Depends(get_db)) -> di
         return {"ok": True, "unchanged": True}
     if body.key in _READONLY_SETTINGS:
         raise HTTPException(status_code=400, detail=f"{body.key} is managed by the Kwik Klin team (Control panel)")
+    if body.key == "customer_language" and body.value not in ("en", "hi"):
+        raise HTTPException(status_code=400, detail="customer_language must be 'en' or 'hi'")
     try:
         await app_settings.set_value(db, body.key, body.value)
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    if body.key == "customer_language":
+        from app.services.messages import set_customer_lang
+
+        set_customer_lang(body.value)   # live, like message overrides
     return {"ok": True}
 
 

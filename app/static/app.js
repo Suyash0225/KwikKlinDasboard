@@ -5301,7 +5301,28 @@ async function testStandup(btn) {
 
 /* ============================= message formats ============================= */
 let MSG_FORMATS = [];
+function paintCustomerLang(lang) {
+  document.querySelectorAll(".lang-pick [data-lang]").forEach((b) => {
+    const on = b.dataset.lang === lang;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-checked", String(on));
+  });
+}
+async function setCustomerLang(lang, btn) {
+  await busy(btn, async () => {
+    await api("/admin/api/settings", { method: "PUT", body: { key: "customer_language", value: lang } });
+    if (SETTINGS_CACHE) SETTINGS_CACHE.customer_language = lang;
+    paintCustomerLang(lang);
+    toast(lang === "hi" ? "Customers will now get Hinglish messages" : "Customers will now get English messages");
+    mfLoad();   // the editor shows the new language's default text
+  });
+}
+
 async function mfLoad() {
+  try {
+    const s = (SETTINGS_CACHE && "customer_language" in SETTINGS_CACHE) ? SETTINGS_CACHE : await api("/admin/api/settings");
+    paintCustomerLang((s && s.customer_language) || "en");
+  } catch (e) { /* the picker just stays unselected */ }
   try {
     MSG_FORMATS = await api("/admin/api/message-formats");
     $("mf-key").innerHTML = MSG_FORMATS.map((m, i) =>
@@ -5885,7 +5906,9 @@ async function sendChat() {
   const text = input.value.trim();
   if (!text || !OPEN_PHONE) return;
   const replyTo = REPLY_TO;
-  const intent = $("chat-intent")?.value || null;
+  // Inbox replies are service messages (the owner answering a customer);
+  // promotions go through Campaigns with their consent checks.
+  const intent = $("chat-intent")?.value || "transactional";
   const outboundKind = intent === "promotional" ? "manual_marketing" : intent === "transactional" ? "order_status" : null;
   input.value = "";              // clear input
   cancelReply();
@@ -6077,7 +6100,7 @@ async function sendMedia(input) {
   fd.append("phone", OPEN_PHONE);
   fd.append("file", file);
   fd.append("caption", "");
-  const intent = $("chat-intent")?.value || "";
+  const intent = $("chat-intent")?.value || "transactional";
   if (intent) {
     fd.append("intent", intent);
     fd.append("outbound_kind", intent === "promotional" ? "manual_marketing" : "order_status");
@@ -6327,71 +6350,145 @@ function polToday() {
   const d = new Date();
   return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
 }
+/* Polisher page: one action card with three tabs, a polisher list with
+   each one's pending sarees and balance, batches with a returned/sent bar
+   and an inline return stepper, and the payment history. */
+let POL_DATA = null;
+function polTab(tab) {
+  document.querySelectorAll("[data-pol-tab]").forEach((b) => b.classList.toggle("on", b.dataset.polTab === tab));
+  document.querySelectorAll("[data-pol-pane]").forEach((p) => { p.hidden = p.dataset.polPane !== tab; });
+}
+function polStep(id, by) {
+  const el = $(id);
+  if (!el) return;
+  el.value = String(Math.max(Number(el.min || 0), (parseInt(el.value, 10) || 0) + by));
+}
+function polSay(text, isError = false) {
+  if ($("pol-message")) { $("pol-message").textContent = text; $("pol-message").classList.toggle("err", isError); }
+  if (text) toast(text, isError);
+}
+function polVendorStats(data) {
+  const by = {};
+  (data.vendors || []).forEach((v) => { by[v.id] = { pending: 0, accrued: 0, paid: 0 }; });
+  (data.batches || []).forEach((b) => {
+    const s = by[b.vendor_id]; if (!s) return;
+    s.pending += b.quantity_pending;
+    s.accrued += b.rate_per_saree * b.quantity_returned;   // cost accrues on returned sarees
+  });
+  (data.payments || []).forEach((p) => { const s = by[p.vendor_id]; if (s) s.paid += p.amount; });
+  return by;
+}
+function polPayFull() {
+  const id = $("pol-pay-vendor").value;
+  if (!id || !POL_DATA) { polSay("Choose the polisher first.", true); return; }
+  const st = polVendorStats(POL_DATA)[id] || { accrued: 0, paid: 0 };
+  const due = Math.max(0, st.accrued - st.paid);
+  $("pol-pay-amount").value = due ? due.toFixed(2).replace(/\.00$/, "") : "";
+  if (!due) polSay("Nothing due to this polisher right now.");
+}
+const polWa = (st) => {
+  const s = String(st || "").toLowerCase();
+  const cls = /sent|deliver|read|ok/.test(s) ? "PAID" : /fail|error/.test(s) ? "UNPAID" : "PARTIAL";
+  return `<span class="pill ${cls}" title="WhatsApp">${esc(st || "not sent")}</span>`;
+};
 async function loadPolisher() {
   if (!$("pol-batches")) return;
   ["pol-date", "pol-pay-date"].forEach(id => { const el = $(id); if (el && !el.value) el.value = polToday(); });
   try {
     const data = await api("/admin/api/polisher/summary");
+    POL_DATA = data;
     const t = data.totals || {};
-    $("pol-sent").textContent = t.sarees_sent || 0;
-    $("pol-returned").textContent = t.sarees_returned || 0;
-    $("pol-pending").textContent = t.sarees_pending || 0;
-    $("pol-accrued").textContent = polMoney(t.amount_accrued);
-    $("pol-paid").textContent = polMoney(t.amount_paid);
-    $("pol-due").textContent = polMoney(t.outstanding);
+    const names = Object.fromEntries((data.vendors || []).map((v) => [v.id, v.name]));
+    $("pol-kpis").innerHTML =
+      kpi("Balance due", polMoney(t.outstanding), "owed to polishers", "polTab('pay')", "i-expense", Number(t.outstanding) > 0 ? "red" : "green") +
+      kpi("Out for polish", t.sarees_pending || 0, "sarees not back yet", "", "i-receipt", "amber") +
+      kpi("Sent", t.sarees_sent || 0, `${t.sarees_returned || 0} returned`, "", "i-upload", "blue") +
+      kpi("Paid so far", polMoney(t.amount_paid), `of ${polMoney(t.amount_accrued)} cost`, "", "i-ledger", "teal");
     const options = data.vendors.map(v => '<option value="' + esc(v.id) + '">' + esc(v.name) + ' · ₹' + esc(v.rate_per_saree) + '/saree</option>').join("");
     ["pol-vendor","pol-pay-vendor"].forEach(id => {
       const el = $(id); if (!el) return;
       const prior = el.value;
-      el.innerHTML = '<option value="">Select vendor</option>' + options;
+      el.innerHTML = (data.vendors.length ? '<option value="">Select polisher</option>' : '<option value="">Add a polisher first</option>') + options;
       if (prior) el.value = prior;
+      else if (data.vendors.length === 1) el.value = data.vendors[0].id;   // one polisher: no choice to make
     });
-    $("pol-vendors").innerHTML = data.vendors.length ? data.vendors.map(v => '<div style="padding:8px 0;border-bottom:1px solid var(--border,#e5e7eb)"><b>' + esc(v.name) + '</b> <span class="muted">' + esc(v.phone) + '</span> <span style="float:right">' + polMoney(v.rate_per_saree) + '/saree</span></div>').join("") : '<span class="muted">No vendor registered yet.</span>';
-    $("pol-batches").innerHTML = data.batches.length ? '<table class="table"><thead><tr><th>Batch / Date</th><th>Sent</th><th>Returned</th><th>Pending</th><th>Cost if fully polished</th><th>WhatsApp</th><th>Update return</th></tr></thead><tbody>' + data.batches.map(b => '<tr><td><b>' + esc(b.batch_code) + '</b><br><small>' + esc(b.sent_on) + '</small></td><td>' + b.quantity_sent + '</td><td>' + b.quantity_returned + '</td><td>' + b.quantity_pending + '</td><td>' + polMoney(b.amount) + '</td><td>' + esc(b.notification_status) + '</td><td><input aria-label="Returned quantity" id="pol-ret-' + esc(b.id) + '" type="number" min="0" max="' + b.quantity_sent + '" value="' + b.quantity_returned + '" style="width:80px"><button class="btn sm" onclick="updatePolisherReturn(\'' + esc(b.id) + '\',' + b.quantity_sent + ',this)">Save</button></td></tr>').join("") + '</tbody></table>' : '<p class="muted">No polish batches yet.</p>';
-    $("pol-payments").innerHTML = data.payments.length ? '<table class="table"><thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>WhatsApp</th></tr></thead><tbody>' + data.payments.slice().reverse().map(p => '<tr><td>' + esc(p.paid_on) + '</td><td>' + polMoney(p.amount) + '</td><td>' + esc(p.method) + '</td><td>' + esc(p.reference || "—") + '</td><td>' + esc(p.notification_status) + '</td></tr>').join("") + '</tbody></table>' : '<p class="muted">No payments recorded yet.</p>';
-  } catch (e) { $("pol-message").textContent = e.message || "Could not load polisher ledger"; }
+    const stats = polVendorStats(data);
+    $("pol-vendors").innerHTML = data.vendors.length ? data.vendors.map((v) => {
+      const s = stats[v.id] || { pending: 0, accrued: 0, paid: 0 };
+      const due = Math.max(0, s.accrued - s.paid);
+      return `<div class="pol-vendor">
+        <span class="avatar">${esc(initials(v.name, v.phone))}</span>
+        <div class="pv-who"><b>${esc(v.name)}</b><span class="muted">${esc(v.phone)} · ${polMoney(v.rate_per_saree)}/saree</span></div>
+        <div class="pv-num"><b class="${due > 0 ? "late-t" : ""}">${polMoney(due)}</b><span class="muted">${s.pending} out</span></div>
+      </div>`;
+    }).join("") : `<div class="empty"><div class="ico">🧵</div>No polisher yet — add one to start sending sarees.<div style="margin-top:10px"><button class="btn sm" onclick="polTab('vendor')">Add polisher</button></div></div>`;
+    $("pol-batch-count").textContent = data.batches.length ? `${data.batches.length} batches` : "";
+    $("pol-batches").innerHTML = data.batches.length ? `<div class="pol-batches">${data.batches.map((b) => {
+      const pct = b.quantity_sent ? Math.round((b.quantity_returned / b.quantity_sent) * 100) : 0;
+      const done = b.quantity_pending === 0;
+      return `<div class="pol-batch${done ? " done" : ""}">
+        <div class="pb-top">
+          <div><b>${esc(b.batch_code)}</b><span class="muted">${esc(names[b.vendor_id] || "Polisher")} · sent ${esc(fmtDate(b.sent_on))}</span></div>
+          <span class="pill ${done ? "PAID" : "PARTIAL"}">${done ? "All back" : `${b.quantity_pending} pending`}</span>
+        </div>
+        <div class="pb-bar" aria-label="${b.quantity_returned} of ${b.quantity_sent} returned"><i style="width:${pct}%"></i></div>
+        <div class="pb-meta"><span>${b.quantity_returned} / ${b.quantity_sent} returned · ${polMoney(b.rate_per_saree)}/saree</span>${polWa(b.notification_status)}</div>
+        ${b.notes ? `<div class="pb-notes muted">${esc(b.notes)}</div>` : ""}
+        ${done ? "" : `<div class="pb-ret"><span>Returned so far</span>
+          <div class="pol-step"><button type="button" onclick="polStep('pol-ret-${esc(b.id)}',-1)" aria-label="One less">−</button><input aria-label="Returned quantity" id="pol-ret-${esc(b.id)}" type="number" min="0" max="${b.quantity_sent}" value="${b.quantity_returned}" inputmode="numeric"><button type="button" onclick="polStep('pol-ret-${esc(b.id)}',1)" aria-label="One more">+</button></div>
+          <button class="btn sm" onclick="updatePolisherReturn('${esc(b.id)}',${b.quantity_sent},this)">Save</button></div>`}
+      </div>`;
+    }).join("")}</div>` : '<div class="empty"><div class="ico">📦</div>No batches yet — send sarees from the card above.</div>';
+    $("pol-pay-count").textContent = data.payments.length ? `${data.payments.length} payments` : "";
+    $("pol-payments").innerHTML = data.payments.length ? `<div class="pol-pays">${data.payments.slice().reverse().map((p) => `
+      <div class="pol-pay"><div><b>${polMoney(p.amount)}</b><span class="muted">${esc(names[p.vendor_id] || "Polisher")} · ${esc(fmtDate(p.paid_on))} · ${esc(String(p.method || "").toUpperCase())}${p.reference ? " · " + esc(p.reference) : ""}</span></div>${polWa(p.notification_status)}</div>`).join("")}</div>`
+      : '<div class="empty" style="padding:24px">No payments recorded yet.</div>';
+  } catch (e) { polSay(e.message || "Could not load polisher ledger", true); }
 }
 async function createPolisherVendor(btn) {
   const name = $("pol-name").value.trim(), phone = $("pol-phone").value.trim(), rate = Number($("pol-rate").value || 25);
-  if (!name || !phone || !(rate > 0)) { $("pol-message").textContent = "Name, WhatsApp number and valid rate are required."; return; }
+  if (!name || !phone || !(rate > 0)) { polSay("Name, WhatsApp number and valid rate are required.", true); return; }
   btn.disabled = true;
   try {
     await api("/admin/api/polisher/vendors", { method:"POST", body:{name,phone,rate_per_saree:rate} });
-    $("pol-name").value = ""; $("pol-phone").value = ""; $("pol-message").textContent = "Vendor saved.";
+    $("pol-name").value = ""; $("pol-phone").value = ""; polSay("Polisher saved."); polTab("send");
     await loadPolisher();
-  } catch(e) { $("pol-message").textContent = e.message || "Vendor could not be saved"; }
+  } catch(e) { polSay(e.message || "Polisher could not be saved", true); }
   finally { btn.disabled = false; }
 }
 async function createPolisherBatch(btn) {
   const vendor_id = $("pol-vendor").value, quantity_sent = Number($("pol-qty").value), sent_on = $("pol-date").value;
-  if (!vendor_id || !Number.isInteger(quantity_sent) || quantity_sent < 1 || !sent_on) { $("pol-message").textContent = "Select vendor, quantity and date."; return; }
+  if (!vendor_id || !Number.isInteger(quantity_sent) || quantity_sent < 1 || !sent_on) { polSay("Select the polisher, quantity and date.", true); return; }
   if (!confirm("Create polish batch for " + quantity_sent + " sarees? WhatsApp message will be attempted.")) return;
   btn.disabled = true;
   try {
     const result = await api("/admin/api/polisher/batches", {method:"POST", body:{vendor_id,quantity_sent,sent_on,notes:$("pol-notes").value.trim() || null}});
-    $("pol-message").textContent = "Batch " + result.batch_code + " saved. WhatsApp: " + result.notification_status + ". Expected amount " + polMoney(result.amount) + ".";
+    polSay("Batch " + result.batch_code + " saved · WhatsApp: " + result.notification_status + " · " + polMoney(result.amount) + " when all are back.");
     $("pol-notes").value = ""; await loadPolisher();
-  } catch(e) { $("pol-message").textContent = e.message || "Batch could not be saved"; }
+  } catch(e) { polSay(e.message || "Batch could not be saved", true); }
   finally { btn.disabled = false; }
 }
 async function updatePolisherReturn(id, max, btn) {
   const quantity_returned = Number($("pol-ret-" + id).value);
-  if (!Number.isInteger(quantity_returned) || quantity_returned < 0 || quantity_returned > max) { $("pol-message").textContent = "Returned quantity must be between 0 and " + max; return; }
+  if (!Number.isInteger(quantity_returned) || quantity_returned < 0 || quantity_returned > max) { polSay("Returned quantity must be between 0 and " + max, true); return; }
   btn.disabled = true;
-  try { await api("/admin/api/polisher/batches/" + encodeURIComponent(id) + "/return", {method:"PATCH", body:{quantity_returned}}); $("pol-message").textContent = "Return quantity saved."; await loadPolisher(); }
-  catch(e) { $("pol-message").textContent = e.message || "Return quantity could not be saved"; }
+  try { await api("/admin/api/polisher/batches/" + encodeURIComponent(id) + "/return", {method:"PATCH", body:{quantity_returned}}); polSay("Return saved."); await loadPolisher(); }
+  catch(e) { polSay(e.message || "Return quantity could not be saved", true); }
   finally { btn.disabled = false; }
 }
 async function recordPolisherPayment(btn) {
   const vendor_id = $("pol-pay-vendor").value, amount = Number($("pol-pay-amount").value), paid_on = $("pol-pay-date").value, method = $("pol-pay-method").value, reference = $("pol-pay-ref").value.trim() || null;
-  if (!vendor_id || !(amount > 0) || !paid_on) { $("pol-message").textContent = "Select vendor, amount and payment date."; return; }
+  if (!vendor_id || !(amount > 0) || !paid_on) { polSay("Select the polisher, amount and payment date.", true); return; }
   if (!confirm("Record payment of " + polMoney(amount) + "? Vendor WhatsApp confirmation will be attempted.")) return;
   btn.disabled = true;
-  try { const result = await api("/admin/api/polisher/payments", {method:"POST", body:{vendor_id,amount,paid_on,method,reference}}); $("pol-message").textContent = "Payment saved. WhatsApp: " + result.notification_status; $("pol-pay-amount").value = ""; $("pol-pay-ref").value = ""; await loadPolisher(); }
-  catch(e) { $("pol-message").textContent = e.message || "Payment could not be saved"; }
+  try { const result = await api("/admin/api/polisher/payments", {method:"POST", body:{vendor_id,amount,paid_on,method,reference}}); polSay("Payment saved · WhatsApp: " + result.notification_status); $("pol-pay-amount").value = ""; $("pol-pay-ref").value = ""; await loadPolisher(); }
+  catch(e) { polSay(e.message || "Payment could not be saved", true); }
   finally { btn.disabled = false; }
 }
 window.loadPolisher = loadPolisher;
+window.polTab = polTab;
+window.polStep = polStep;
+window.polPayFull = polPayFull;
 window.createPolisherVendor = createPolisherVendor;
 window.createPolisherBatch = createPolisherBatch;
 window.updatePolisherReturn = updatePolisherReturn;

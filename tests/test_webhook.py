@@ -379,7 +379,7 @@ async def test_review_request_is_neutral_for_every_rating_and_locale(monkeypatch
     from app.database import async_session_factory
     from app.models import Customer
     from app.services import audit, customer_messages, tenant_context, messages
-    monkeypatch.setattr(messages, "CUSTOMER_LANG", lang)
+    monkeypatch.setattr(messages, "_customer_lang", lang)
 
     sent_messages = []
 
