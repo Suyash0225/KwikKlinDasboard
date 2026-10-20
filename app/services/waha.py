@@ -7,6 +7,7 @@ apply when WHATSAPP_PROVIDER=waha.
 
 import base64
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -73,6 +74,38 @@ async def _post(path: str, payload: dict) -> dict:
     except ValueError:
         return {"raw": r.text}
 
+
+def _media_request_path(media_url: str) -> str:
+    """Convert WAHA media URL to a path on our configured WAHA host.
+
+    Never fetch the host embedded in an inbound webhook; that would allow
+    a sender to make the app request arbitrary internal URLs.
+    """
+    parts = urlsplit(str(media_url or "").strip())
+    if not parts.path.startswith("/api/"):
+        raise WahaError("WAHA media URL must point to a /api/ path", transient=False)
+    return parts.path + (("?" + parts.query) if parts.query else "")
+
+
+async def download_media_url(media_url: str) -> tuple[bytes, str | None]:
+    """Download an inbound attachment through the configured WAHA host."""
+    path = _media_request_path(media_url)
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.get(_url(path), headers=_headers())
+    except httpx.TransportError as exc:
+        raise WahaError(f"WAHA media network error: {exc}", transient=True) from exc
+    if response.status_code >= 500 or response.status_code == 429:
+        raise WahaError(
+            f"WAHA media temporary error {response.status_code}: {response.text[:300]}",
+            transient=True,
+        )
+    if response.status_code >= 400:
+        raise WahaError(
+            f"WAHA media rejected request {response.status_code}: {response.text[:300]}",
+            transient=False,
+        )
+    return response.content, response.headers.get("content-type")
 
 async def resolve_lid(lid: str) -> str | None:
     """Resolve a WAHA @lid chat id to its phone-number JID.
