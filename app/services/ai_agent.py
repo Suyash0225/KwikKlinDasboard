@@ -184,31 +184,31 @@ def _select_customer_tools_deterministic(text: str) -> dict[str, int]:
     selected: dict[str, int] = {}
 
     if re.search(
-        r"\\b(?:order|orders|kapda|kapde|kapdon|delivery|deliver|kab milega|"
+        r"\b(?:order|orders|kapda|kapde|kapdon|delivery|deliver|kab milega|"
         r"status|ready|pickup|pick ?up|washing|wash|iron|ironing|received|"
-        r"mila|mil gaya|kahan hai|kidhar hai|kab tak)\\b",
+        r"mila|mil gaya|kahan hai|kidhar hai|kab tak)\b",
         lowered,
     ):
         selected["get_customer_orders"] = 5
 
     if re.search(
-        r"\\b(?:bill|invoice|payment|pay|paid|due|baaki|baki|kitna dena|"
-        r"receipt|upi|payment link|kitna baki|kitna baaki)\\b",
+        r"\b(?:bill|invoice|payment|pay|paid|due|baaki|baki|kitna dena|"
+        r"receipt|upi|payment link|kitna baki|kitna baaki)\b",
         lowered,
     ):
         selected["get_customer_bills"] = 5
 
     if re.search(
-        r"\\b(?:price|prices|rate|rates|cost|charge|charges|rate card|"
+        r"\b(?:price|prices|rate|rates|cost|charge|charges|rate card|"
         r"price list|laundry rate|dhulai|dry ?clean|shirt|blanket|per piece|"
-        r"kitne ka|kitna lagega|kya rate)\\b",
+        r"kitne ka|kitna lagega|kya rate)\b",
         lowered,
     ):
         selected["get_shop_rate_card"] = 20
 
     if re.search(
-        r"\\b(?:my profile|mera naam|mera address|my address|phone number|"
-        r"mobile number|naam kya|address kya|mera phone|mera mobile)\\b",
+        r"\b(?:my profile|mera naam|mera address|my address|phone number|"
+        r"mobile number|naam kya|address kya|mera phone|mera mobile)\b",
         lowered,
     ):
         selected["get_customer_profile"] = 1
