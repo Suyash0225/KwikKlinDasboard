@@ -87,6 +87,7 @@ async def enforce_outbound_policy(
     lead: Lead | None = None,
     kind: str | None = None,
     urgent: bool = False,
+    frequency_cap_exempt: bool = False,
 ) -> None:
     """Enforce the policy immediately before a customer-facing outbound send.
 
@@ -115,7 +116,7 @@ async def enforce_outbound_policy(
                 raise SendError("promotional send blocked: customer inactive", transient=False)
             from app.services.marketing import eligible
 
-            ok, reason = await eligible(db, customer.id)
+            ok, reason = await eligible(db, customer.id, ignore_frequency_cap=frequency_cap_exempt)
             if not ok:
                 raise SendError(f"promotional send blocked: {reason}", transient=False)
         else:
@@ -129,7 +130,7 @@ async def enforce_outbound_policy(
         # Re-check eligibility after pacing so an opt-out or stage change wins.
         if customer is not None:
             await db.refresh(customer)
-            ok, reason = await eligible(db, customer.id)
+            ok, reason = await eligible(db, customer.id, ignore_frequency_cap=frequency_cap_exempt)
             if not ok:
                 raise SendError(f"promotional send blocked: {reason}", transient=False)
         else:
