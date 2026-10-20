@@ -1488,11 +1488,23 @@ async def _avoid_repeated_welcome(
     replies with a short neutral prompt instead of repeating the same pitch.
     """
     normalized = " ".join((reply or "").lower().split())
+
+    # Name/address prompts are onboarding steps, not repeated greetings.
+    # In particular, "Welcome to Kwik Klin! May I know your name, please?"
+    # must survive this guard; otherwise a returning thread can replace the
+    # required name question with a generic pickup/rates prompt and stall intake.
+    onboarding_markers = (
+        "may i know your name",
+        "your name, please",
+        "share your full address",
+        "address with a nearby landmark",
+    )
+    if any(marker in normalized for marker in onboarding_markers):
+        return reply
+
     welcome_markers = (
         "welcome to kwik klin",
         "welcome to kwik klin ai",
-        "welcome! may i know your name",
-        "may i know your name, please",
     )
     if not any(marker in normalized for marker in welcome_markers):
         return reply
