@@ -306,6 +306,13 @@ async def test_new_customer_can_get_rate_answer_before_profile_onboarding(monkey
 
 
 async def test_compose_happy_path_no_escalation(monkeypatch) -> None:
+    from app.services import ai_tools
+
+    async def fake_rates(db, customer):
+        return [{"service": "Wash", "garment": "Shirt", "rate": "30", "unit": "piece"}]
+
+    monkeypatch.setattr(ai_tools, "get_shop_rate_card", fake_rates)
+
     async def fake_ask_json(**kw):
         # the FACTS block must carry customer identity, never notes
         assert "AI Grahak" in kw["user_text"]
