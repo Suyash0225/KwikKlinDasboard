@@ -693,6 +693,12 @@ async def build_ai_reply(
         created = await _create_pickup_order(db, customer, intake)
         if created:
             return created  # deterministic confirmation, not model text
+        # Never fall through to the model's free-form reply after an order
+        # creation failure: it could falsely tell the customer the pickup is booked.
+        return (
+            "Maaf kijiye, abhi pickup order confirm nahi ho paya. "
+            "Main team se verify karwaunga; please ise booked na samjhein. — Kwik Klin"
+        )
     # Agent handled it itself — if the owner should know, send a quiet FYI
     # (no open question, nothing waits on the owner).
     admin_note = (out.get("admin_note") or "").strip()
