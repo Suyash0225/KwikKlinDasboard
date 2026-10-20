@@ -1116,10 +1116,11 @@ async def _handle_inbound_message(
 
     text = _extract_text(msg)
 
-    # Anything with a file — photo, voice note, PDF, video, sticker — is
-    # pulled from Meta so the Inbox can show or play it, exactly like
-    # WhatsApp does. Only text and taps have no file.
+    # Download attachments through the configured provider. WAHA message IDs
+    # (for example false_<id>@lid) are not Meta Graph media IDs; WAHA supplies
+    # a media URL that must be fetched from the configured WAHA host.
     mtype = msg.get("type", "")
+    media_download_failed = False
     if mtype in _MEDIA_TYPES:
         from pathlib import Path
 
@@ -1129,30 +1130,32 @@ async def _handle_inbound_message(
         part = msg.get(mtype, {}) or {}
         media_id = part.get("id")
         caption = part.get("caption") or ""
-        # documents carry the sender's own file name — keep it, it's the
-        # only human-readable label a PDF gets
         label = part.get("filename") or ""
         if media_id:
-            fname = await download_media(media_id, media_dir)
+            fname = await download_media(
+                media_id, media_dir, media_url=part.get("url"),
+                mime_type=part.get("mimetype"),
+            )
             if fname:
                 marker = "image" if mtype in ("image", "sticker") else mtype
                 text = f"[{marker}:/admin/media/{fname}]"
                 extra = " ".join(x for x in (label, caption) if x)
-                # A voice note is a message, not an attachment — transcribe it
-                # so the agent can act on what was actually said.
                 if mtype in ("audio", "voice"):
                     said = await _transcribe(Path(media_dir) / fname, part, purpose="customer_voice")
                     if said:
                         extra = said
                 elif mtype in ("image", "sticker"):
-                    # Customer photos are conversational input, not only bill photos.
-                    # Read the image immediately so the customer AI can answer from it.
                     visual = await _describe_customer_image(Path(media_dir) / fname, part)
                     if visual:
                         extra = f"Image content: {visual}"
                 if extra:
                     text += f" {extra}"
-
+            else:
+                media_download_failed = True
+                text = f"[{mtype}:unavailable]" + (f" {caption}" if caption else "")
+        else:
+            media_download_failed = True
+            text = f"[{mtype}:unavailable]"
     # Staff phone? Record against staff. Otherwise upsert customer.
     # Old/test data can contain duplicate staff rows for a phone. An
     # inbound webhook must remain processable; role/power checks are handled
@@ -1221,6 +1224,17 @@ async def _handle_inbound_message(
         phone=phone,
     )
 
+    if media_download_failed:
+        log.warning("inbound_media_unavailable", phone=phone, media_type=mtype,
+                    provider=settings.WHATSAPP_PROVIDER)
+        try:
+            await send_message(
+                db, to_phone=phone,
+                text="Media receive hui, lekin download nahi ho paya. Please dobara bhejein ya caption/text mein bata dein.",
+            )
+        except SendError:
+            log.exception("inbound_media_unavailable_ack_failed", phone=phone)
+        return
     # Staff and the manager (whose number has a customer row from his own
     # tests) get the command agent: bill-by-text, delay + status updates.
     # A silent None means "not a command" — same as pre-Phase-4 behavior.
