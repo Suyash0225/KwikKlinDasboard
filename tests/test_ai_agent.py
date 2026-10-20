@@ -212,6 +212,18 @@ def test_order_confirmation_requires_standalone_explicit_affirmative() -> None:
     assert not _is_explicit_order_confirmation("haan, lekin rate batao")
     assert not _is_explicit_order_confirmation("nahi")
 
+
+def test_order_cancellation_requires_standalone_phrase() -> None:
+    from app.services.ai_agent import _is_explicit_order_cancellation
+
+    assert _is_explicit_order_cancellation("nahi")
+    assert _is_explicit_order_cancellation("Nahin ji")
+    assert _is_explicit_order_cancellation("cancel kar do")
+    assert _is_explicit_order_cancellation("rehne do")
+    assert not _is_explicit_order_cancellation("nahi, rate batao")
+    assert not _is_explicit_order_cancellation("mujhe cancel policy batao")
+
+
 async def test_numeric_price_reply_must_match_requested_active_rate(monkeypatch) -> None:
     from app.services import ai_tools
     from app.services.ai_agent import _price_reply_is_grounded
