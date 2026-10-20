@@ -229,6 +229,30 @@ async def test_numeric_price_reply_must_match_requested_active_rate(monkeypatch)
     assert not await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Shirt ₹30 hai")
     assert await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Main rate verify karke batata hoon")
 
+async def test_pickup_confirmation_requires_latest_exact_summary(monkeypatch) -> None:
+    from app.services.ai_agent import _has_matching_pickup_confirmation_prompt, _pickup_confirmation_summary
+
+    intake = {
+        "name": "Rahul Sharma",
+        "address": "12 Lanka, Varanasi",
+        "items_text": "2 shirts",
+        "pickup_date": "tomorrow",
+    }
+    customer = Customer(phone=PHONE, name="Rahul Sharma", address="12 Lanka, Varanasi")
+
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    db = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock()
+    db.execute.return_value = Result(_pickup_confirmation_summary(intake))
+    assert await _has_matching_pickup_confirmation_prompt(db, customer, intake)
+    db.execute.return_value = Result("Some unrelated outbound message")
+    assert not await _has_matching_pickup_confirmation_prompt(db, customer, intake)
+
 def test_customer_fact_selection_handles_common_hinglish_without_keyword_flood() -> None:
     """Select relevant facts for common Hinglish wording; unrelated questions stay minimal."""
     cases = {
