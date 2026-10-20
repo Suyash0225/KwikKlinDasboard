@@ -352,7 +352,7 @@ _ORDER_BTN_RE = re.compile(r"^\s*\[button:ord:(KK-\S+?):(done|later|problem)\]",
 _LOW_SIGNAL_STAFF_RE = re.compile(
     r"^\s*(?:ok(?:ay)?(?:\s+thanks?)?|thanks?|thank\s+you|thx|welcome|good\s+morning|"
     r"good\s+evening|good\s+night|hi|hello|hey|namaste|theek\s+hai|"
-    r"thik\s+hai|achha|acha)\s*[!.?,🙏🙂👍]*\s*$",
+    r"thik\s+hai|achha|acha)(?:\s+bhaiya)?\s*[!.?,🙏🙂👍]*\s*$",
     re.I,
 )
 
