@@ -1500,7 +1500,7 @@ async def handle_staff_message(
     # before saved order/task context can turn "ok thanks" into an unrelated
     # reply, while preserving any active multi-turn confirmation above.
     if sender_label != "manager" and not pending and _LOW_SIGNAL_STAFF_RE.fullmatch(text or ""):
-        return "Namaste! 🙏 Kwik Klin assistant yahan hai. Order/status ke liye KK order number ya task ke liye T-code bhejein."
+        return None
 
     # A staff request such as "Sunita ka bill bhejo" is a bill lookup,
     # not a new task/relay command. Resolve it before task-context handling.
