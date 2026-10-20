@@ -192,7 +192,7 @@ def _select_customer_tools_deterministic(text: str) -> dict[str, int]:
         selected["get_customer_orders"] = 5
 
     if re.search(
-        r"\b(?:bill|invoice|payment|pay|paid|due|baaki|baki|kitna dena|"
+        r"\b(?:bill|invoice|payment|pay|paid|due|baaki|baki|paisa|jama|kitna dena|"
         r"receipt|upi|payment link|kitna baki|kitna baaki)\b",
         lowered,
     ):
