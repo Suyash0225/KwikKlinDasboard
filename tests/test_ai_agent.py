@@ -202,6 +202,16 @@ async def test_compose_prompt_tells_ai_not_to_repeat_saved_profile(monkeypatch) 
     assert reply
 
 
+def test_order_confirmation_requires_standalone_explicit_affirmative() -> None:
+    from app.services.ai_agent import _is_explicit_order_confirmation
+
+    assert _is_explicit_order_confirmation("haan")
+    assert _is_explicit_order_confirmation("Haan ji")
+    assert _is_explicit_order_confirmation("confirm")
+    assert not _is_explicit_order_confirmation("mujhe kapde dhulwane hain")
+    assert not _is_explicit_order_confirmation("haan, lekin rate batao")
+    assert not _is_explicit_order_confirmation("nahi")
+
 def test_customer_fact_selection_handles_common_hinglish_without_keyword_flood() -> None:
     """Select relevant facts for common Hinglish wording; unrelated questions stay minimal."""
     cases = {
