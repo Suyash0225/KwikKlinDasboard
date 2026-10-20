@@ -1,11 +1,11 @@
 """Merge customer AI memory and rate unit cost migration heads.
 
-Revision ID: 20261020_merge_customer_memory_rate_cost
+Revision ID: 20261020_merge_mem_rate
 Revises: 20261020_customer_ai_memory, 20261020_rate_unit_cost
 """
 from typing import Sequence, Union
 
-revision: str = "20261020_merge_customer_memory_rate_cost"
+revision: str = "20261020_merge_mem_rate"
 down_revision: Union[str, Sequence[str], None] = (
     "20261020_customer_ai_memory",
     "20261020_rate_unit_cost",
