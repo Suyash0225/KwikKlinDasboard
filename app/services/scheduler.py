@@ -84,6 +84,10 @@ def start() -> None:
     _scheduler.add_job(
         _gbp_reviews_tick, CronTrigger(hour="*/6", minute=20, timezone=IST), id="gbp-reviews"
     )
+    # Daily owner prompt for the Google Business Profile poster, at 08:00 IST.
+    _scheduler.add_job(
+        _gbp_poster_reminder_tick, CronTrigger(hour=8, minute=0, timezone=IST), id="gbp-poster-reminder"
+    )
     # Daily Google Business Profile post.
     _scheduler.add_job(
         _gbp_daily_post_tick, CronTrigger(hour=10, minute=0, timezone=IST), id="gbp-daily-post"
@@ -236,6 +240,41 @@ async def _for_each_tenant(job_name: str, fn) -> None:
                 await fn(now_ist)
         except Exception:
             log.exception("tenant_job_failed", job=job_name, tenant=slug)
+
+
+async def _gbp_poster_reminder_tick() -> None:
+    """Ask the owner for a fresh GBP poster every day at 08:00 IST."""
+    from app.services import google_business as gbp
+
+    if not gbp.enabled():
+        return
+
+    async def one(now_ist: datetime) -> None:
+        from app.services.tenant_context import current_tenant_id
+
+        if current_tenant_id.get() is None:
+            return
+        claim_key = f"gbp-poster-reminder:{now_ist.strftime('%Y-%m-%d')}"
+        if not await _claim(claim_key):
+            return
+        phone = manager_phone()
+        if not phone:
+            await _unclaim(claim_key)
+            return
+        async with async_session_factory() as db:
+            try:
+                await send_message(
+                    db,
+                    to_phone=phone,
+                    text=("Good morning! Kwik Klin ka aaj ka Google Business Profile poster bhej dein aur caption likh dein. "
+                          "Poster ke saath caption bhejne par main use aapke configured locations par post karne ki koshish karunga. "
+                          "Dashboard se post karne ke liye Control Panel mein Google Business Poster kholein."),
+                )
+            except Exception as exc:
+                await _unclaim(claim_key)
+                log.warning("gbp_poster_reminder_failed", error=str(exc)[:240])
+
+    await _for_each_tenant("gbp-poster-reminder", one)
 
 
 async def _gbp_daily_post_tick() -> None:
