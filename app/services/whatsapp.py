@@ -247,6 +247,7 @@ async def send_message(
     intent: str | None = None,
     outbound_kind: str | None = None,
     urgent: bool = False,
+    frequency_cap_exempt: bool = False,
 ) -> str:
     """Single outbound gateway. WAHA is first-class; Meta/DotPe keep legacy behavior.
 
@@ -300,6 +301,7 @@ async def send_message(
         await enforce_outbound_policy(
             db, customer=customer, phone=to_phone, intent=effective_intent,
             lead=lead, kind=outbound_kind, urgent=urgent,
+            frequency_cap_exempt=frequency_cap_exempt,
         )
 
     if text:
@@ -499,6 +501,7 @@ async def send_image(
     intent: str | None = None,
     outbound_kind: str | None = None,
     urgent: bool = False,
+    frequency_cap_exempt: bool = False,
 ) -> str:
     """Send media through WAHA when configured; keep Meta/DotPe legacy path."""
     if settings.WHATSAPP_PROVIDER != "waha":
@@ -527,6 +530,7 @@ async def send_image(
         await enforce_outbound_policy(
             db, customer=customer, phone=to_phone, intent=intent,
             lead=lead, kind=outbound_kind, urgent=urgent,
+            frequency_cap_exempt=frequency_cap_exempt,
         )
 
     if settings.WHATSAPP_PROVIDER == "waha":
