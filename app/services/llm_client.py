@@ -251,9 +251,15 @@ async def _generate_with_fallback(
                     raise TimeoutError
                 async with asyncio.timeout(remaining):
                     result = await _with_retry(
-                        lambda: _generate(
-                            system, user_text, candidate, max_tokens, schema, image, PROVIDER,
-                            history,
+                        lambda: (
+                            _generate(
+                                system, user_text, candidate, max_tokens, schema, image, PROVIDER
+                            )
+                            if history is None
+                            else _generate(
+                                system, user_text, candidate, max_tokens, schema, image, PROVIDER,
+                                history,
+                            )
                         ),
                         provider=PROVIDER,
                         model=candidate,
