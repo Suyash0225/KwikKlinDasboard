@@ -391,10 +391,10 @@ async def build_ai_reply(
             "laundry pickup, rates, or an existing order? — Kwik Klin AI"
         )
 
-    # Phase 2 uses a small CHEAP router call to select read-only tools, then
-    # a SMART composer call receives only the facts those tools returned.
-    # The backend executes the selected tools; the model never gets SQL or a
-    # database session. Transactional actions and safety decisions remain in code.
+    # The model gets a bounded, customer-scoped fact set in one composition
+    # call; no keyword router or extra classification call can misroute the
+    # request. The model never gets SQL or a database session. Transactional
+    # actions and safety decisions remain in validated backend code.
     # Link customer-facing AI spend to the customer's active order only when
     # there is exactly one active order. Never guess when multiple orders exist.
     usage_orders = await get_active_orders_for_phone(db, customer.phone)
