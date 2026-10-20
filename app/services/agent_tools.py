@@ -150,6 +150,168 @@ WRITE_TOOLS = {
 CONFIRM_TOOLS = {"billing_adjustment", "set_shop_info"}
 
 
+# Typed parameters for Gemini function calling. The model fills these
+# instead of hand-writing "100 | petrol" strings; enums stop it inventing a
+# period or filter the tool does not know. args_from_call() turns them back
+# into the string each tool already parses, so the tools stay unchanged.
+_S = {"type": "string"}
+_PERIOD_DAYS = {"type": "string", "enum": ["7d", "30d"]}
+_STATUS_NAMES = [s.name for s in OrderStatus]
+
+TOOL_PARAMS: dict[str, dict] = {
+    "ai_health": {"properties": {"period": _PERIOD_DAYS}, "required": []},
+    "growth_review": {"properties": {"period": _PERIOD_DAYS}, "required": []},
+    "order_detail": {
+        "properties": {"order_number": {**_S, "description": "e.g. KK-20261018-03"}},
+        "required": ["order_number"],
+    },
+    "customer_detail": {
+        "properties": {"query": {**_S, "description": "customer name or phone"}},
+        "required": ["query"],
+    },
+    "search_orders": {
+        "properties": {
+            "filter": {"type": "string", "enum": [
+                "late", "today", "week", "unpaid", "active", "delivered", "status",
+            ]},
+            "status": {"type": "string", "enum": _STATUS_NAMES,
+                       "description": "only when filter is 'status'"},
+        },
+        "required": ["filter"],
+    },
+    "garment_demand": {
+        "properties": {"period": {"type": "string", "enum": ["all", "today", "week", "month"]}},
+        "required": [],
+    },
+    "marketing_followup": {
+        "properties": {
+            "mode": {"type": "string", "enum": ["preview", "draft"],
+                     "description": "preview first; draft only when the owner asks to prepare it"},
+            "message": {**_S, "description": "draft text, only with mode=draft"},
+        },
+        "required": ["mode"],
+    },
+    "staff_chat": {"properties": {"name": {**_S, "description": "staff name"}}, "required": ["name"]},
+    "money": {
+        "properties": {"period": {"type": "string", "enum": ["today", "week", "month"]}},
+        "required": ["period"],
+    },
+    "cost_analysis": {
+        "properties": {"period": {"type": "string", "enum": ["today", "week", "month", "all"]}},
+        "required": [],
+    },
+    "billing_adjustment": {
+        "properties": {
+            "action": {"type": "string", "enum": ["add", "remove"]},
+            "order_number": _S,
+            "label": {**_S, "description": "add: what the charge is, e.g. 'Pickup charge'"},
+            "amount": {"type": "number", "description": "add: rupees, positive"},
+            "kind": {"type": "string", "enum": ["extra_charge", "due_charge"]},
+            "note": _S,
+            "adjustment_id": {**_S, "description": "remove: the adjustment id from order_detail"},
+        },
+        "required": ["action", "order_number"],
+    },
+    "ping_staff": {
+        "properties": {
+            "name": {**_S, "description": "staff name"},
+            "message": {**_S, "description": "written as if speaking to them directly"},
+        },
+        "required": ["name", "message"],
+    },
+    "assign_task": {
+        "properties": {
+            "staff_name": _S,
+            "work": {**_S, "description": "what to do, e.g. 'pickup', 'order urgent hai'"},
+            "customer": {**_S, "description": "customer name or phone, if any"},
+            "when": {**_S, "description": "date/time if the owner gave one"},
+        },
+        "required": ["staff_name", "work"],
+    },
+    "task_list": {
+        "properties": {"filter": {**_S, "description": "'open', 'done', or a staff name; empty = all open"}},
+        "required": [],
+    },
+    "add_expense": {
+        "properties": {
+            "amount": {"type": "number", "description": "rupees spent"},
+            "what": {**_S, "description": "kis cheez ka, e.g. 'petrol'"},
+        },
+        "required": ["amount", "what"],
+    },
+    "add_customer": {
+        "properties": {"phone": _S, "name": _S},
+        "required": ["phone", "name"],
+    },
+    "set_shop_info": {
+        "properties": {
+            "field": {"type": "string", "enum": ["timing", "address", "phone", "turnaround"]},
+            "value": _S,
+        },
+        "required": ["field", "value"],
+    },
+}
+
+
+def function_declarations() -> list[dict]:
+    """TOOL_SPECS as Gemini function declarations."""
+    return [
+        {
+            "name": t["name"],
+            "description": t["when"],
+            "parameters": {"type": "object", **TOOL_PARAMS[t["name"]]},
+        }
+        for t in TOOL_SPECS
+    ]
+
+
+def _num(value) -> str:
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return str(value or "").strip()
+
+
+def args_from_call(name: str, args: dict) -> str:
+    """Typed function-call args -> the string the tool parses."""
+    a = {k: v for k, v in (args or {}).items() if v not in (None, "")}
+
+    def join(*keys) -> str:
+        # a "|" inside a value would split it into a field of its own
+        return " | ".join(str(a[k]).replace("|", "/").strip() for k in keys if k in a)
+
+    if name in ("ai_health", "growth_review", "garment_demand", "cost_analysis", "money"):
+        return str(a.get("period", ""))
+    if name == "search_orders":
+        if a.get("filter") == "status" and a.get("status"):
+            return f"status:{a['status']}"
+        return str(a.get("filter", "active"))
+    if name == "marketing_followup":
+        return join("mode", "message") or "preview"
+    if name == "billing_adjustment":
+        if a.get("action") == "remove":
+            return join("action", "order_number", "adjustment_id")
+        if "amount" in a:
+            a["amount"] = _num(a["amount"])
+        a.setdefault("kind", "extra_charge")
+        return join("action", "order_number", "label", "amount", "kind", "note")
+    if name == "ping_staff":
+        return join("name", "message")
+    if name == "assign_task":
+        return join("staff_name", "work", "customer", "when")
+    if name == "add_expense":
+        if "amount" in a:
+            a["amount"] = _num(a["amount"])
+        return join("amount", "what")
+    if name == "add_customer":
+        return join("phone", "name")
+    if name == "set_shop_info":
+        return join("field", "value")
+    single = {"order_detail": "order_number", "customer_detail": "query",
+              "staff_chat": "name", "task_list": "filter"}
+    return str(a.get(single.get(name, ""), "")).strip()
+
+
 def _tool_help() -> str:
     return "\n".join(
         f"- {t['name']}({t['args']}): {t['when']}" for t in TOOL_SPECS

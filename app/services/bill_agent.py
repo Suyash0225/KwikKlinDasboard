@@ -49,7 +49,8 @@ from app.models import (
     StaffRole,
 )
 from app.services import app_settings, audit, llm_client
-from app.services.llm_client import LLMAuthError, LLMError, LLMRateLimited
+from app.services.pending_store import TenantPending
+from app.services.llm_client import LLMAuthError, LLMError, LLMRateLimited, LLMUnavailable
 from app.services.messages import get_message, status_label
 from app.services.order_service import (
     ACTIVE_STATUSES,
@@ -241,16 +242,18 @@ class PendingOrderIssue:
 
 
 # sender phone -> action awaiting 'haan' (a bill draft or a payment)
-_PENDING: dict[str, PendingBill | PendingPayment | PendingAgentAction | PendingRelay | PendingTaskEta | PendingTaskIssue | PendingOrderEta | PendingOrderIssue] = {}
+# phone -> draft awaiting "haan"; keyed by (shop, phone) underneath so a
+# person who works for two shops never confirms one shop's draft in the other.
+_PENDING: dict[str, PendingBill | PendingPayment | PendingAgentAction | PendingRelay | PendingTaskEta | PendingTaskIssue | PendingOrderEta | PendingOrderIssue] = TenantPending()
 
 # owner's WhatsApp sandbox: phone -> {"last_q": last test question}
 # ('test customer' se on, 'test band' se off; sikhao: se Correction banti hai)
-_TEST_MODE: dict[str, dict] = {}
+_TEST_MODE: dict[str, dict] = TenantPending()
 
 # Staff reference memory: when a staff member asks "T-123 kahan hai?" and
 # immediately follows with "kitne pcs?", the second message must still refer
 # to T-123. This is short-lived, per phone, and never replaces DB truth.
-_STAFF_REF_CONTEXT: dict[str, tuple[str, str, datetime]] = {}
+_STAFF_REF_CONTEXT: dict[str, tuple[str, str, datetime]] = TenantPending()
 _STAFF_REF_TTL = timedelta(minutes=20)
 _TASK_REF_RE = re.compile(r"\bT\s*-?\s*(\d+)\b", re.I)
 _ORDER_REF_RE_STAFF = re.compile(r"\bKK-\d{8}-\d{2,}\b", re.I)
@@ -1645,6 +1648,7 @@ async def handle_staff_message(
     reply: str | None = None
     if action == "new_bill" and extracted["items"]:
         draft = await _price_draft(db, extracted)
+        await _learn_aliases(db, pending.draft if isinstance(pending, PendingBill) else None, draft)
         pending_bill = PendingBill(draft=draft)
         _PENDING[sender_phone] = pending_bill
         reply = _draft_summary(draft)
@@ -1946,20 +1950,85 @@ async def _extract_from_photo(
 
 # Spelling variants of the SAME word only — never a mapping from one
 # garment to a different one (that would be guessing on the owner's behalf).
-_SPELLING = {
-    "pent": "pant", "paint": "pant", "pantt": "pant",
-    "sari": "saree", "sadi": "saree",
-    "jean": "jeans", "kurtha": "kurta", "shart": "shirt",
-    "dryclean": "dryclean", "drycleaning": "dryclean",
-}
-
-
 def _key(word: str) -> str:
-    """Match key: case/space/hyphen/plural-insensitive, applied to BOTH sides."""
-    k = re.sub(r"[^a-z0-9]+", "", (word or "").lower())
-    if len(k) > 3 and k.endswith("s"):
-        k = k[:-1]
-    return _SPELLING.get(k, k)
+    """Match key: case/space/hyphen/plural-insensitive, applied to BOTH sides.
+
+    Resolves the built-in Hinglish names too (chadar -> bedsheet); the
+    shop's learned names are applied by _card_matcher when pricing.
+    """
+    from app.services import garment_aliases
+
+    return garment_aliases.key(word)
+
+
+def _card_matcher(words: list[str], aliases: dict[str, str]):
+    """Match-key function for one rate card.
+
+    Aliases map a name to its canonical key, but when two DIFFERENT rows of
+    this card land on the same canonical key (a shop that lists both
+    "Pillow" and "Pillow Cover"), those rows keep their own names: an alias
+    must never merge two things the shop prices separately.
+    """
+    from app.services.garment_aliases import raw_key
+
+    groups: dict[str, set[str]] = {}
+    for w in words:
+        k = raw_key(w)
+        groups.setdefault(aliases.get(k, k), set()).add(k)
+    shared = {canon for canon, raws in groups.items() if len(raws) > 1}
+
+    def match(word: str | None) -> str:
+        k = raw_key(word)
+        canon = aliases.get(k, k)
+        return k if canon in shared else canon
+
+    return match
+
+
+async def _learn_aliases(db: AsyncSession, before: dict | None, after: dict) -> None:
+    """Staff fixed a line the card did not know -> remember the shop's word.
+
+    Learns only an unambiguous fix: exactly one line was unknown before,
+    exactly one new priced garment appeared, with the same quantity. "2
+    chaddar" (unknown) corrected to "2 bedsheet" teaches chaddar = bedsheet.
+    """
+    if not before:
+        return
+    try:
+        from app.services import garment_aliases
+
+        def unknown(d):
+            return [i for i in d["items"] if i.get("amount") is None and not i.get("options")]
+
+        old_unknown = unknown(before)
+        old_garments = {_key(i.get("garment")) for i in before["items"]}
+        new_priced = [
+            i for i in after["items"]
+            if i.get("amount") is not None and _key(i.get("garment")) not in old_garments
+        ]
+        if len(old_unknown) != 1 or len(new_priced) != 1 or unknown(after):
+            return
+        # Same bill, one line fixed — not a new bill for someone else that
+        # happens to have one new garment in it.
+        if len(before["items"]) != len(after["items"]):
+            return
+        if (before.get("customer_phone") or "") != (after.get("customer_phone") or "") or (
+            (before.get("customer_name") or "").casefold() != (after.get("customer_name") or "").casefold()
+        ):
+            return
+        kept = {(_key(i.get("garment")), float(i.get("qty") or 0)) for i in before["items"] if i is not old_unknown[0]}
+        if not kept <= {(_key(i.get("garment")), float(i.get("qty") or 0)) for i in after["items"]}:
+            return
+        was, now = old_unknown[0], new_priced[0]
+        if float(was.get("qty") or 0) != float(now.get("qty") or 0):
+            return
+        rates = (await db.execute(select(Rate.garment).where(Rate.is_active))).scalars().all()
+        await garment_aliases.learn(
+            db, was.get("read_as") or was.get("garment") or "", now["garment"],
+            rate_keys={garment_aliases.raw_key(g) for g in rates},
+        )
+    except Exception:
+        log.exception("garment_alias_learn_failed")
 
 
 async def _price_draft(db: AsyncSession, extracted: dict) -> dict:
@@ -1969,17 +2038,22 @@ async def _price_draft(db: AsyncSession, extracted: dict) -> dict:
     and a garment that exists under several services asks which one. We do
     not silently pick a rate-card row that "looks close".
     """
+    from app.services import garment_aliases
+
     rates = (
         (await db.execute(select(Rate).where(Rate.is_active))).scalars().all()
     )
-    by_key = {(_key(r.service), _key(r.garment)): r for r in rates}
+    aliases = await garment_aliases.load(db)
+    g_match = _card_matcher([r.garment for r in rates], aliases)
+    s_match = _card_matcher([r.service for r in rates], aliases)
+    by_key = {(s_match(r.service), g_match(r.garment)): r for r in rates}
     items = []
     total = Decimal("0")
     for it in extracted["items"]:
         qty = Decimal(str(it.get("qty") or 1))
-        g_key, s_key = _key(it.get("garment")), _key(it.get("service"))
+        g_key, s_key = g_match(it.get("garment")), s_match(it.get("service"))
         rate_row = by_key.get((s_key, g_key)) if g_key else None
-        options = [r for r in rates if g_key and _key(r.garment) == g_key]
+        options = [r for r in rates if g_key and g_match(r.garment) == g_key]
         if rate_row is None and len(options) == 1:
             # only one service exists for this garment — no choice to make
             rate_row = options[0]
@@ -2655,24 +2729,49 @@ def _unbacked_claim(answer: str, used: list[str]) -> bool:
     return bool(_DONE_CLAIM.search(answer))
 
 
-def _manager_system(shop) -> str:
-    """The owner assistant's system prompt — pure, so evals use the real one."""
+_GROUNDING_RULES = (
+    "You are the shop's central business "
+    "reasoning layer: use the domain tools for live orders, staff, money, "
+    "expenses, marketing drafts, tasks, and cost analysis. Python/database "
+    "results are the source of truth; never invent business facts, rates, "
+    "quantities, or profit. For incomplete records, say what is missing "
+    "and label estimates clearly. Never claim a write, message, campaign, "
+    "or task update happened unless its tool result confirms it. Do not "
+    "bypass existing approval, tenant, audit, or outbound-policy gates."
+)
+
+
+def _manager_system(shop, *, function_calling: bool = True) -> str:
+    """The owner assistant's system prompt — pure, so evals use the real one.
+
+    With function calling the tools travel as typed declarations; the older
+    JSON-step loop (kept as a fallback) needs them described in the prompt.
+    """
     from app.services import agent_tools, shop_identity
 
-    return shop_identity.render(_QUERY_SYSTEM, shop) + "\n\nTOOLS you can use:\n" + agent_tools._tool_help() + (
+    base = shop_identity.render(_QUERY_SYSTEM, shop)
+    if function_calling:
+        return base + (
+            "\n\nCall a function whenever the SNAPSHOT does not already contain "
+            "the exact detail asked for — guessing or deflecting is not allowed. "
+            "You may call several read functions at once. After the results "
+            "come back, answer the owner in plain text from them. "
+        ) + _GROUNDING_RULES
+    return base + "\n\nTOOLS you can use:\n" + agent_tools._tool_help() + (
         "\nEach turn: either set tool+args (to look something up / do it) and "
         "leave answer empty, OR leave tool empty and write the final answer. "
         "Use a tool whenever the SNAPSHOT does not already contain the exact "
         "detail asked for — guessing or deflecting is not allowed. After a "
-        "tool result, answer from it. You are the shop's central business "
-        "reasoning layer: use the domain tools for live orders, staff, money, "
-        "expenses, marketing drafts, tasks, and cost analysis. Python/database "
-        "results are the source of truth; never invent business facts, rates, "
-        "quantities, or profit. For incomplete records, say what is missing "
-        "and label estimates clearly. Never claim a write, message, campaign, "
-        "or task update happened unless its tool result confirms it. Do not "
-        "bypass existing approval, tenant, audit, or outbound-policy gates."
-    )
+        "tool result, answer from it. "
+    ) + _GROUNDING_RULES
+
+
+_UNBACKED_NUDGE = (
+    "SYSTEM: tumne kaha kaam ho gaya, lekin koi write tool "
+    "nahi chala — database mein KUCH NAHI badla. Ya to abhi "
+    "sahi tool chalao (add_expense / add_customer / assign_task), "
+    "ya owner ko saaf bolo ki ye tum nahi kar sakte. Jhooth mat bolo."
+)
 
 
 async def _answer_manager_query(
@@ -2680,21 +2779,121 @@ async def _answer_manager_query(
 ) -> str | None:
     """Owner asked something free-form.
 
-    The agent may LOOK THINGS UP before answering: each round it either
-    names a tool (we run it, feed back the result) or gives the final
-    answer. That is the whole difference between "dashboard dekh lo" and a
-    real answer — it can fetch what it wasn't handed up front.
+    The agent may LOOK THINGS UP before answering: it calls typed functions
+    (we run them, feed back the results) until it can give the answer. That
+    is the whole difference between "dashboard dekh lo" and a real answer —
+    it can fetch what it wasn't handed up front.
     """
-    from app.services import agent_tools, shop_identity
+    from app.services import shop_identity
 
     facts = await _manager_facts(db)
-    system = _manager_system(await shop_identity.current(db))
+    shop = await shop_identity.current(db)
     convo = f"SNAPSHOT:\n{facts}\n\n"
     earlier = _OWNER_LAST.get(sender_phone) if sender_phone else None
     if earlier and datetime.now(timezone.utc) - earlier[0] < _OWNER_MEMORY_TTL:
         # "haan ping karo" / "aur kal ka?" only make sense against the last turn.
         convo += f"PICHHLI BAAT:\nOwner: {earlier[1]}\nTum: {earlier[2]}\n\n"
     convo += f"OWNER'S MESSAGE:\n{text[:500]}"
+
+    state = {"ran": False}
+    try:
+        return await _manager_function_loop(db, text, sender_phone, shop, convo, state)
+    except LLMUnavailable:
+        raise   # Gemini is down; the step loop would fail the same way
+    except LLMError as exc:
+        if state["ran"]:
+            raise   # tools already ran; replaying them in another loop could repeat a write
+        # A rejected function-calling request (schema/format) must not leave
+        # the owner without an assistant: fall back to the JSON-step loop.
+        log.warning("manager_function_calling_failed", error=str(exc)[:200])
+        return await _manager_step_loop(db, text, sender_phone, shop, convo)
+
+
+async def _stage_or_run(
+    db: AsyncSession, tool: str, args: str, sender_phone: str | None, text: str
+) -> tuple[str | None, bool, str]:
+    """(preview_to_return, ran_ok, observation) for one tool call."""
+    from app.services import agent_tools
+
+    if tool in agent_tools.CONFIRM_TOOLS:
+        if sender_phone is None:
+            return None, False, "Ye kaam owner ki 'haan' ke bina nahi ho sakta."
+        # Never run it here: show the owner exactly what would change.
+        _PENDING[sender_phone] = PendingAgentAction(tool=tool, args=args)
+        preview = _agent_action_preview(tool, args)
+        log.info("manager_write_awaiting_confirm", tool=tool, args=args[:80])
+        _remember_owner_turn(sender_phone, text, preview)
+        return preview, False, ""
+    ok, observation = await agent_tools.run_tool_checked(db, tool, args)
+    return None, ok, observation
+
+
+async def _manager_function_loop(
+    db: AsyncSession, text: str, sender_phone: str | None, shop, convo: str, state: dict
+) -> str | None:
+    from app.services import agent_tools
+
+    system = _manager_system(shop)
+    declarations = agent_tools.function_declarations()
+    contents: list[dict] = [{"role": "user", "parts": [{"text": convo}]}]
+    used: list[str] = []
+    challenged = False
+    rounds, done = MAX_TOOL_ROUNDS, 0
+
+    while done < rounds:
+        done += 1
+        turn = await llm_client.ask_with_tools(
+            system=system, contents=contents, declarations=declarations,
+            model=llm_client.MODEL_SMART, max_tokens=700,
+        )
+        if not turn.calls:
+            answer = turn.text.strip()
+            if answer and not challenged and _unbacked_claim(answer, used):
+                # It told the owner the books were updated while nothing was
+                # written. Make it either do it or admit it can't.
+                challenged = True
+                rounds += 1   # the challenge gets its own round, not a tool's
+                log.warning("manager_query_unbacked_claim", claim=answer[:160])
+                contents += [turn.content, {"role": "user", "parts": [{"text": _UNBACKED_NUDGE}]}]
+                continue
+            if answer:
+                log.info("manager_query_answered", chars=len(answer), tools=used)
+                _remember_owner_turn(sender_phone, text, answer)
+                return answer
+            break
+        contents.append(turn.content)
+        responses = []
+        for call in turn.calls:
+            tool = call["name"]
+            args = agent_tools.args_from_call(tool, call["args"])
+            preview, ok, observation = await _stage_or_run(db, tool, args, sender_phone, text)
+            if preview is not None:
+                return preview
+            state["ran"] = True
+            if ok:
+                used.append(tool)
+            responses.append({"functionResponse": {"name": tool, "response": {"result": observation}}})
+        # Gemini expects one response per call, in one user turn.
+        contents.append({"role": "user", "parts": responses})
+
+    # Out of rounds — force a final answer from whatever we gathered.
+    turn = await llm_client.ask_with_tools(
+        system=system + "\nAb koi function nahi. Jo mila hai usi se jawab do.",
+        contents=contents, declarations=declarations,
+        model=llm_client.MODEL_SMART, max_tokens=500, mode="NONE",
+    )
+    reply = turn.text.strip()
+    log.info("manager_query_answered", chars=len(reply), tools=used, forced=True)
+    if reply:
+        _remember_owner_turn(sender_phone, text, reply)
+    return reply or None
+
+
+async def _manager_step_loop(
+    db: AsyncSession, text: str, sender_phone: str | None, shop, convo: str
+) -> str | None:
+    """Fallback: the JSON-step loop (one pipe-string tool per round)."""
+    system = _manager_system(shop, function_calling=False)
     used: list[str] = []
     challenged = False
     rounds, done = MAX_TOOL_ROUNDS, 0
@@ -2709,17 +2908,10 @@ async def _answer_manager_query(
         answer = (step.get("answer") or "").strip()
         if not tool:
             if answer and not challenged and _unbacked_claim(answer, used):
-                # It just told the owner the books were updated while nothing
-                # was written. Make it either do it or admit it can't.
                 challenged = True
-                rounds += 1   # the challenge gets its own round, not a tool's
+                rounds += 1
                 log.warning("manager_query_unbacked_claim", claim=answer[:160])
-                convo += (
-                    "\n\nSYSTEM: tumne kaha kaam ho gaya, lekin koi write tool "
-                    "nahi chala — database mein KUCH NAHI badla. Ya to abhi "
-                    "sahi tool chalao (add_expense / add_customer / assign_task), "
-                    "ya owner ko saaf bolo ki ye tum nahi kar sakte. Jhooth mat bolo."
-                )
+                convo += "\n\n" + _UNBACKED_NUDGE
                 continue
             if answer:
                 log.info("manager_query_answered", chars=len(answer), tools=used)
@@ -2727,23 +2919,13 @@ async def _answer_manager_query(
                 return answer
             break
         args = (step.get("args") or "").strip()
-        if tool in agent_tools.CONFIRM_TOOLS:
-            if sender_phone is None:
-                observation = "Ye kaam owner ki 'haan' ke bina nahi ho sakta."
-                convo += f"\n\nTOOL {tool}({args}) ka result:\n{observation}"
-                continue
-            # Never run it here: show the owner exactly what would change.
-            _PENDING[sender_phone] = PendingAgentAction(tool=tool, args=args)
-            preview = _agent_action_preview(tool, args)
-            log.info("manager_write_awaiting_confirm", tool=tool, args=args[:80])
-            _remember_owner_turn(sender_phone, text, preview)
+        preview, ok, observation = await _stage_or_run(db, tool, args, sender_phone, text)
+        if preview is not None:
             return preview
-        ok, observation = await agent_tools.run_tool_checked(db, tool, args)
         if ok:
             used.append(tool)
         convo += f"\n\nTOOL {tool}({args}) ka result:\n{observation}"
 
-    # Out of rounds — force a final answer from whatever we gathered.
     reply = (
         await llm_client.ask(
             system=system + "\nAb koi tool nahi. Jo mila hai usi se jawab do.",
@@ -2759,7 +2941,7 @@ async def _answer_manager_query(
 
 
 # Last owner question + answer per phone, so a follow-up has its referent.
-_OWNER_LAST: dict[str, tuple[datetime, str, str]] = {}
+_OWNER_LAST: dict[str, tuple[datetime, str, str]] = TenantPending()
 _OWNER_MEMORY_TTL = timedelta(minutes=20)
 
 

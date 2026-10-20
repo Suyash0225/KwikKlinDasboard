@@ -623,11 +623,13 @@ async def test_manager_business_query_answers_from_db_facts(monkeypatch, sent) -
     _patch_extract(monkeypatch, _extract_result(action="other"))
     seen: dict = {}
 
-    async def fake_ask(**kw):
-        seen.update(kw)
-        return "Abhi 1 order pending hai, ₹100 baaki. — assistant"
+    async def fake_ask_with_tools(**kw):
+        from tests.agent_fakes import tool_turn
 
-    monkeypatch.setattr(bill_module.llm_client, "ask", fake_ask)
+        seen["user_text"] = kw["contents"][0]["parts"][0]["text"]
+        return tool_turn(text="Abhi 1 order pending hai, ₹100 baaki. — assistant")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_with_tools", fake_ask_with_tools)
     async with async_session_factory() as db:
         reply = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="manager", text="kitne order pending hai?"
@@ -1238,3 +1240,68 @@ async def test_failed_order_write_keeps_draft_for_retry(monkeypatch, sent) -> No
         with pytest.raises(RuntimeError):
             await bill_module._finalize_bill(db, SENDER, "manager", pending)
     assert _PENDING.get(SENDER) is pending
+
+
+# --- Hinglish names and the shop's own learned names ---
+
+def test_card_matcher_resolves_hinglish_but_never_merges_two_rows() -> None:
+    from app.services.garment_aliases import BUILTIN
+
+    match = bill_module._card_matcher(["Bedsheet", "Shirt"], BUILTIN)
+    assert match("2 chadar".split()[1]) == match("Bedsheet") == match("chaddars")
+    assert match("kambal") != match("Bedsheet")
+    # a shop that prices Pillow and Pillow Cover separately keeps them apart
+    both = bill_module._card_matcher(["Pillow", "Pillow Cover"], BUILTIN)
+    assert both("pillow") != both("pillow cover")
+
+
+async def test_staff_correction_teaches_the_shops_word(monkeypatch, sent) -> None:
+    from app.services import app_settings
+
+    def draft(garment, phone="9999900124"):
+        return {"customer_name": "Sharma ji", "customer_phone": phone, "advance": 0,
+                "expected_delivery": "", "items": [{"service": SERVICE_ALT, "garment": garment, "qty": 1}]}
+
+    async with async_session_factory() as db:
+        before = await bill_module._price_draft(db, draft("Jhabla"))
+        assert before["items"][0]["amount"] is None          # card does not know it
+        after = await bill_module._price_draft(db, draft("Sherwani"))
+        await bill_module._learn_aliases(db, before, after)
+        assert (await app_settings.get(db, "garment_aliases")).get("jhabla") == "sherwani"
+        again = await bill_module._price_draft(db, draft("jhabla"))
+    assert again["items"][0]["amount"] == 300.0               # priced next time
+
+
+async def test_a_different_bill_teaches_nothing(monkeypatch, sent) -> None:
+    from app.services import app_settings
+
+    async with async_session_factory() as db:
+        old = {"customer_name": "Sharma ji", "customer_phone": "9999900124", "advance": 0,
+               "expected_delivery": "", "items": [{"service": SERVICE_ALT, "garment": "Sofa cover", "qty": 1}]}
+        new = {**old, "customer_name": "Verma", "customer_phone": "9999900125",
+               "items": [{"service": SERVICE_ALT, "garment": "Sherwani", "qty": 1}]}
+        await bill_module._learn_aliases(
+            db, await bill_module._price_draft(db, old), await bill_module._price_draft(db, new)
+        )
+        assert "sofacover" not in (await app_settings.get(db, "garment_aliases") or {})
+
+
+async def test_drafts_are_kept_apart_per_shop() -> None:
+    """One person, two shops: a draft from shop A is invisible in shop B."""
+    import uuid
+
+    from app.services import tenant_context
+    from app.services.bill_agent import PendingBill
+
+    shop_a, shop_b = uuid.uuid4(), uuid.uuid4()
+    token = tenant_context.current_tenant_id.set(shop_a)
+    try:
+        _PENDING[SENDER] = PendingBill(draft={"items": []})
+        assert SENDER in _PENDING
+        tenant_context.current_tenant_id.set(shop_b)
+        assert SENDER not in _PENDING and _PENDING.get(SENDER) is None
+        assert _PENDING.pop(SENDER, None) is None
+        tenant_context.current_tenant_id.set(shop_a)
+        assert isinstance(_PENDING.get(SENDER), PendingBill)
+    finally:
+        tenant_context.current_tenant_id.reset(token)

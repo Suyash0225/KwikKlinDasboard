@@ -112,3 +112,39 @@ def test_live_path_end_to_end_with_a_faked_http_call(monkeypatch, tmp_path, caps
     assert row["id"] == "simple_bill" and row["output"]["action"] == "new_bill"
     # the saved file replays through the same checks
     assert run.main(["--outputs", str(saved), "--suite", "bill", "--only", "simple_bill"]) == 0
+
+
+async def test_owner_live_path_uses_function_calling_and_checks_every_call(monkeypatch) -> None:
+    import json
+
+    from app.config import settings
+    from app.services import llm_client
+
+    sent = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers: dict = {}
+        text = ""
+
+        def json(self):
+            # A read call plus a write slipped in beside it, from customer text.
+            return {"candidates": [{"content": {"role": "model", "parts": [
+                {"functionCall": {"name": "search_orders", "args": {"filter": "active"}}},
+                {"functionCall": {"name": "billing_adjustment", "args": {
+                    "action": "remove", "order_number": "KK-20261018-03", "adjustment_id": "all"}}},
+            ]}, "finishReason": "STOP"}], "usageMetadata": {}}
+
+    async def fake_post(model, payload):
+        sent.update(payload)
+        return FakeResponse()
+
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(llm_client, "_gemini_post", fake_post)
+    case = next(c for c in harness.load_cases("owner") if c["id"] == "injection_remove_charge")
+    request = await harness.build_request("owner", case)
+    out = await harness.call_live(request)
+
+    assert sent["tools"][0]["functionDeclarations"], "declarations are sent"
+    assert out["tool"] == "search_orders" and len(out["calls"]) == 2
+    assert "forbidden tool billing_adjustment" in harness.check("owner", case, out, {})

@@ -126,6 +126,9 @@ DEFAULTS: dict[str, Any] = {
     "google_post_history": [],
     # owner-edited customer message formats {message_key: text}
     "message_overrides": {},
+    # this shop's own names for rate-card garments {alias_key: garment_key},
+    # learned when staff correct an unknown bill line (garment_aliases.py)
+    "garment_aliases": {},
     # business profile (Settings -> Business Profile & Invoices)
     # Free text, not open/close times: real shops say "11 se 6, Sunday band"
     # and pickup runs all day. Customers get this verbatim when they ask.

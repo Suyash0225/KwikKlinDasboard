@@ -12,6 +12,7 @@ import pytest
 
 import app.services.agent_tools as at
 import app.services.bill_agent as ba
+from tests.agent_fakes import patch_tool_turns, tool_turn
 from app.database import async_session_factory
 from app.models import (
     Conversation,
@@ -193,51 +194,46 @@ async def test_money_tool_reports_period() -> None:
 # --- the loop itself (LLM stubbed, so this tests OUR orchestration) ---
 
 async def test_loop_runs_tool_then_answers(monkeypatch) -> None:
-    steps = [
-        {"tool": "order_detail", "args": "KK-1", "answer": ""},
-        {"tool": "", "args": "", "answer": "Order ready hai, ₹250 baaki."},
-    ]
     seen: list[str] = []
-
-    async def fake_ask_json(*, system, user_text, schema, model=None, max_tokens=0):
-        seen.append(user_text)
-        return steps.pop(0)
+    patch_tool_turns(monkeypatch, ba, [
+        tool_turn(("order_detail", {"order_number": "KK-1"})),
+        tool_turn(text="Order ready hai, ₹250 baaki."),
+    ], seen=seen)
+    ran: list[tuple] = []
 
     async def fake_tool(db, name, args):
+        ran.append((name, args))
         return True, "TOOL-OUTPUT: status READY, baaki 250"
 
-    monkeypatch.setattr(ba.llm_client, "ask_json", fake_ask_json)
     monkeypatch.setattr(at, "run_tool_checked", fake_tool)
 
     async with async_session_factory() as db:
         ans = await ba._answer_manager_query(db, "KK-1 ka kya hua")
 
     assert ans == "Order ready hai, ₹250 baaki."
+    assert ran == [("order_detail", "KK-1")], "typed args reach the tool as its string"
     assert "TOOL-OUTPUT" in seen[-1], "tool result must be fed back to the model"
+    assert "sig-order_detail" in seen[-1], "the model's turn goes back verbatim"
 
 
 async def test_loop_stops_after_max_rounds(monkeypatch) -> None:
     """A model that keeps calling tools must still produce an answer."""
-    calls = {"n": 0}
-
-    async def always_tool(*, system, user_text, schema, model=None, max_tokens=0):
-        calls["n"] += 1
-        return {"tool": "search_orders", "args": "active", "answer": ""}
-
-    async def fake_ask(*, system, user_text, model=None, max_tokens=0):
-        return "Jo mila usse: 2 order active hain."
+    modes: list[str] = []
+    patch_tool_turns(
+        monkeypatch, ba, [tool_turn(("search_orders", {"filter": "active"}))],
+        forced_text="Jo mila usse: 2 order active hain.", modes=modes,
+    )
 
     async def fake_tool(db, name, args):
         return True, "2 active"
 
-    monkeypatch.setattr(ba.llm_client, "ask_json", always_tool)
-    monkeypatch.setattr(ba.llm_client, "ask", fake_ask)
     monkeypatch.setattr(at, "run_tool_checked", fake_tool)
 
     async with async_session_factory() as db:
         ans = await ba._answer_manager_query(db, "kya chal raha hai")
 
-    assert calls["n"] == ba.MAX_TOOL_ROUNDS, "loop must be bounded"
+    assert modes.count("AUTO") == ba.MAX_TOOL_ROUNDS, "loop must be bounded"
+    assert modes[-1] == "NONE", "the last call forces a text answer"
     assert "2 order active" in ans
 
 
