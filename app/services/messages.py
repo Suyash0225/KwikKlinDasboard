@@ -19,11 +19,23 @@ log = structlog.get_logger()
 # Do bhashayein, do sunne wale:
 #   - staff / owner ka WhatsApp bot (bill draft, relay, task, standup) —
 #     Hinglish. Washerman aur delivery wale isi mein kaam karte hain.
-#   - grahak ko jaane wale saare messages — English (owner ka faisla, 16 Sep
-#     2026). "hi" copy catalogue mein bani rehti hai; wapas chahiye to bas
-#     CUSTOMER_LANG badlo.
+#   - grahak ko jaane wale saare messages — default English (owner ka
+#     faisla, 16 Sep 2026). Ab ye Settings → Message formats mein dukaan ki
+#     choice hai (setting "customer_language": "en" ya "hi"), startup par
+#     load hoti hai aur save karte hi turant lagti hai — set_customer_lang().
 DEFAULT_LANG = "hi"
-CUSTOMER_LANG = "en"
+CUSTOMER_LANG = "en"   # the default; read the live value with customer_lang()
+_customer_lang = CUSTOMER_LANG
+
+
+def customer_lang() -> str:
+    """Language for customer-facing messages right now ("en" or "hi")."""
+    return _customer_lang
+
+
+def set_customer_lang(lang: str | None) -> None:
+    global _customer_lang
+    _customer_lang = lang if lang in ("en", "hi") else CUSTOMER_LANG
 
 MESSAGES: dict[str, dict[str, str]] = {
     # --- generic ---
@@ -53,12 +65,12 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     # --- lead conversion follow-up ladder ---
     "lead_followup_2h": {
-        "hi": "{name} ji, aapne Kwik Klin ki laundry service ke baare mein poocha tha 🙏 Agar aap chahein to main pickup arrange karwa sakta hoon. Aaj pickup kis time convenient rahega? — {shop}",
-        "en": "{name} ji, you recently asked about Kwik Klin's laundry service 🙏 If you'd like, we can arrange a pickup. What time would be convenient today? — {shop}",
+        "hi": "{name} ji, aapne {shop} ki laundry service ke baare mein poocha tha 🙏 Agar aap chahein to main pickup arrange karwa sakta hoon. Aaj pickup kis time convenient rahega? — {shop}",
+        "en": "{name} ji, you recently asked about {shop}'s laundry service 🙏 If you'd like, we can arrange a pickup. What time would be convenient today? — {shop}",
     },
     "lead_day1": {
-        "hi": "{name} ji, Kwik Klin se yaad dila rahe hain 🙏 Aaj ya kal kabhi bhi free pickup ho sakta hai — bas time bata dijiye. — {shop}",
-        "en": "{name} ji, a gentle reminder from Kwik Klin 🙏 Free pickup today or tomorrow — just tell us a time. — {shop}",
+        "hi": "{name} ji, {shop} se yaad dila rahe hain 🙏 Aaj ya kal kabhi bhi free pickup ho sakta hai — bas time bata dijiye. — {shop}",
+        "en": "{name} ji, a gentle reminder from {shop} 🙏 Free pickup today or tomorrow — just tell us a time. — {shop}",
     },
     "lead_day3": {
         "hi": "{name} ji, agar laundry ki requirement abhi bhi hai to main aapka pickup confirm karwa sakta hoon 🧺 Aap bas 'haan' ya preferred pickup time bhej dijiye. — {shop}",
@@ -531,7 +543,7 @@ CUSTOMER_KEYS = frozenset({
 
 
 def lang_for(key: str) -> str:
-    return CUSTOMER_LANG if key in CUSTOMER_KEYS else DEFAULT_LANG
+    return _customer_lang if key in CUSTOMER_KEYS else DEFAULT_LANG
 
 
 def get_message(key: str, lang: str | None = None, **fmt: str) -> str:

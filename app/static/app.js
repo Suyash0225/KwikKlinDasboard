@@ -5301,7 +5301,28 @@ async function testStandup(btn) {
 
 /* ============================= message formats ============================= */
 let MSG_FORMATS = [];
+function paintCustomerLang(lang) {
+  document.querySelectorAll(".lang-pick [data-lang]").forEach((b) => {
+    const on = b.dataset.lang === lang;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-checked", String(on));
+  });
+}
+async function setCustomerLang(lang, btn) {
+  await busy(btn, async () => {
+    await api("/admin/api/settings", { method: "PUT", body: { key: "customer_language", value: lang } });
+    if (SETTINGS_CACHE) SETTINGS_CACHE.customer_language = lang;
+    paintCustomerLang(lang);
+    toast(lang === "hi" ? "Customers will now get Hinglish messages" : "Customers will now get English messages");
+    mfLoad();   // the editor shows the new language's default text
+  });
+}
+
 async function mfLoad() {
+  try {
+    const s = (SETTINGS_CACHE && "customer_language" in SETTINGS_CACHE) ? SETTINGS_CACHE : await api("/admin/api/settings");
+    paintCustomerLang((s && s.customer_language) || "en");
+  } catch (e) { /* the picker just stays unselected */ }
   try {
     MSG_FORMATS = await api("/admin/api/message-formats");
     $("mf-key").innerHTML = MSG_FORMATS.map((m, i) =>

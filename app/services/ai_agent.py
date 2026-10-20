@@ -28,7 +28,7 @@ from app.config import settings
 from app.services import llm_client, shop_identity
 from app.services.escalation import raise_escalation
 from app.services.llm_client import LLMError
-from app.services.messages import CUSTOMER_LANG, get_message, status_label
+from app.services.messages import customer_lang, get_message, status_label
 from app.services.order_service import get_active_orders_for_phone
 from app.services.ai_tools import CUSTOMER_READ_TOOLS, run_customer_tool
 from app.services.customer_agent_tools import AGENT_TOOLS, run_agent_tool
@@ -1218,7 +1218,7 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
         if existing is not None:
             return get_message(
                 "status_reply", order_number=existing.order_number,
-                status_label=status_label(existing.status, CUSTOMER_LANG),
+                status_label=status_label(existing.status, customer_lang()),
             )
 
         if not customer.address:

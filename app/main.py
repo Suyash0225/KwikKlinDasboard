@@ -124,10 +124,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from app.database import async_session_factory
         from app.services import app_settings as _as
-        from app.services.messages import load_overrides
+        from app.services.messages import load_overrides, set_customer_lang
 
         async with async_session_factory() as db:
             load_overrides(await _as.get(db, "message_overrides"))
+            set_customer_lang(await _as.get(db, "customer_language"))
     except Exception:
         log.exception("message_overrides_load_failed")
     yield

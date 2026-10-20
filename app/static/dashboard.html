@@ -953,6 +953,15 @@
 
       <div id="st-messages" style="display:none">
       <div class="card" style="margin-bottom:14px">
+        <b>Customer message language</b>
+        <p class="muted" style="margin-top:4px">Bills, status updates, reminders and thank-you messages go to customers in this language. The AI chat replies always follow the customer's own language.</p>
+        <div class="lang-pick" role="radiogroup" aria-label="Customer message language">
+          <button type="button" role="radio" data-lang="hi" onclick="setCustomerLang('hi', this)"><b>Hinglish</b><span>"Namaste! Aapka order mil gaya 🧺"</span></button>
+          <button type="button" role="radio" data-lang="en" onclick="setCustomerLang('en', this)"><b>English</b><span>"Hello! Your order is received 🧺"</span></button>
+        </div>
+        <p class="muted" style="margin-top:8px;font-size:12px">Messages you rewrote yourself below stay exactly as you wrote them.</p>
+      </div>
+      <div class="card" style="margin-bottom:14px">
         <b>✉️ Message formats — write them your way</b>
         <p class="muted" style="margin-top:4px">These go to customers as free-form messages (while the 24h window is open). Edit freely — changes apply instantly, no approval needed. <b>{placeholders}</b> are replaced with real values.</p>
         <div class="filters" style="margin-top:8px">

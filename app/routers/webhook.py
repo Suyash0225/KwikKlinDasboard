@@ -38,7 +38,7 @@ from app.database import get_db
 from app.models import Conversation, Customer, Direction, Staff, WebhookEvent, Order, OrderStatus, PaymentStatus
 from app.services.ai_agent import build_ai_reply
 from app.services.bill_agent import handle_staff_message
-from app.services.messages import CUSTOMER_LANG, get_message, status_label
+from app.services.messages import customer_lang, get_message, status_label
 from app.services.order_service import (
     OrderNotFoundError,
     get_active_orders_for_phone,
@@ -1723,13 +1723,13 @@ async def _build_customer_reply(db: AsyncSession, customer: Customer, text: str)
         return _status_reply(active[0])
     if len(active) > 1:
         lines = [get_message("orders_list_header", count=str(len(active)))]
-        lines += [f"{o.order_number} — {status_label(o.status, CUSTOMER_LANG)}" for o in active]
+        lines += [f"{o.order_number} — {status_label(o.status, customer_lang())}" for o in active]
         return "\n".join(lines)
     return get_message("ack_received")
 
 
 def _status_reply(order) -> str:
-    label = status_label(order.status, CUSTOMER_LANG)
+    label = status_label(order.status, customer_lang())
     if order.expected_delivery:
         return get_message(
             "status_reply_with_date",
