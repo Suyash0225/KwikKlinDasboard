@@ -206,13 +206,42 @@ async def create_branded_campaign_poster(
         background = Path(tmp) / "background.png"
         # Keep model output purely visual. Offer copy, logo, prices and contact
         # details are always rendered locally from the sanitized draft.
+        # Use the actual campaign theme to direct the art, rather than returning
+        # the same generic folded-laundry image for every festival or occasion.
+        # These values are visual guidance only; never let the image model invent copy.
+        theme_text = " ".join(str(theme or "").split())[:100]
+        headline_text = " ".join(str(headline or "").split())[:180]
+        subline_text = " ".join(str(subline or "").split())[:240]
+        theme_lower = theme_text.casefold()
+        visual_direction = (
+            "Dussehra/Vijayadashami-inspired premium festive scene: warm marigold "
+            "orange and gold accents, elegant diya glow, tasteful festive bokeh, "
+            "a subtle celebratory Indian textile setting, no deity or religious figure"
+            if any(term in theme_lower for term in ("dussehra", "dussera", "vijayadashami", "vijay dashami"))
+            else "Diwali-inspired premium festive scene with warm diya-like golden light and elegant festive bokeh"
+            if any(term in theme_lower for term in ("diwali", "deepavali"))
+            else "Holi-inspired premium scene with refined powder-color accents on folded fabric, clean and sophisticated"
+            if "holi" in theme_lower
+            else "Raksha Bandhan-inspired premium festive textile scene with tasteful rakhi colors and warm celebratory details"
+            if any(term in theme_lower for term in ("raksha bandhan", "rakshabandhan", "rakhi"))
+            else "Navratri-inspired premium festive textile scene with rich jewel tones and tasteful festive decor"
+            if "navratri" in theme_lower
+            else "season-appropriate, theme-specific premium commercial art direction inspired by the campaign subject"
+        )
         prompt = (
-            "Create premium square 1:1 lifestyle background artwork for an Indian "
-            "laundry and dry-cleaning campaign. Show fresh folded garments and "
-            "tasteful fabric textures, realistic commercial photography, clean "
-            "natural light, navy and cyan accents, calm negative space. No text, "
-            "letters, numbers, logo, watermark, phone, signage, price, discount or offer. "
-            "Background only; all campaign copy is composited locally."
+            "Create a premium, photorealistic square 1:1 advertising background for "
+            "Kwik Klin, an Indian laundry and dry-cleaning service. Campaign theme: "
+            + theme_text + ". Intended message concept: " + headline_text + ". "
+            "Supporting context: " + subline_text + ". Visual direction: "
+            + visual_direction + ". Integrate fresh, beautifully folded garments "
+            "and luxurious textile detail naturally into the scene. Use polished "
+            "art direction, controlled lighting, strong composition, clear focal "
+            "hierarchy, generous negative space for typography to be overlaid later, "
+            "and restrained navy/cyan brand accents where appropriate. Make the "
+            "visual clearly fit this particular occasion, not a generic laundry stock image. "
+            "Background artwork only: absolutely no text, letters, numbers, logo, "
+            "watermark, phone, signage, price, discount, coupon, offer badge, or UI. "
+            "All text and the real brand logo will be added locally after generation."
         )
         try:
             await generate_background(prompt, background)
