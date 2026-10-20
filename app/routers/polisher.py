@@ -61,7 +61,7 @@ async def _notify(phone: str, message: str) -> str:
 @router.get("/summary")
 async def summary(db: AsyncSession = Depends(get_db)) -> dict:
     vendors = (await db.execute(select(PolisherVendor).where(PolisherVendor.is_active.is_(True)).order_by(PolisherVendor.name))).scalars().all()
-    batches = (await db.execute(select(PolishBatch).order_by(PolishBatch.sent_on.desc()).limit(500))).scalars().all()
+    batches = (await db.execute(select(PolishBatch).order_by(PolishBatch.sent_on.desc()))).scalars().all()
     payments = (await db.execute(select(PolisherPayment))).scalars().all()
     # A payable is accrued only for pieces returned as polished, not merely dispatched.
     accrued = sum((Decimal(b.quantity_returned) * b.rate_per_saree for b in batches), Decimal("0"))
