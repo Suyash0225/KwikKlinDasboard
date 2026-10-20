@@ -287,7 +287,7 @@ _COMPOSE_SYSTEM = (
     "clothes (note heavy items like blanket/curtain/saree), (d) pickup day. "
     "Resolve the pickup day to a real ISO date using the RUNTIME block "
     "(aaj/kal/parso/weekday names). Ask ONLY for what's missing. Fill the "
-    "everything known so far (use the conversation history); set "
+    "intake object from everything known so far (use the conversation history); set "
     "intake.ready=true ONLY when all four are known — the system then "
     "creates the order and arranges pickup itself.\n"
     "   - 'Kab milega' with a delivery date in FACTS -> tell them the date.\n"
