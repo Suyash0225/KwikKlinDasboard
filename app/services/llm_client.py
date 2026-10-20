@@ -481,7 +481,12 @@ async def _gemini_generate(
         for turn in (history or [])
         if turn.get("role") in ("user", "model") and turn.get("text")
     ]
-    contents.append({"role": "user", "parts": parts})
+    if contents and contents[-1]["role"] == "user":
+        # Gemini requires alternating roles. If a customer sent consecutive
+        # messages before the bot replied, keep them in one user turn.
+        contents[-1]["parts"].extend(parts)
+    else:
+        contents.append({"role": "user", "parts": parts})
     payload = {
         "system_instruction": {"parts": [{"text": system}]},
         "contents": contents,
