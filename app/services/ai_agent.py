@@ -496,7 +496,7 @@ _COMPOSE_SYSTEM = (
     f"reply: Done! 5 shirt, 2 pant — kal subah uthwa lenge. Confirm kar dein? — {settings.SHOP_NAME} AI\n"
     "   (intake: ready=true, pickup_date=<kal ki ISO date>)\n"
     "customer: मेरे कपड़े कब आएंगे\n"
-    f"reply: आपका ऑर्डर KK-1042 प्रेस हो रहा है, कल तक मिल जाएगा 👍 — {settings.SHOP_NAME} AI"
+    f"reply: आपका ऑर्डर KK-1042 प्रेस हो रहा है, कल तक मिल जाएगा 👍 — {settings.SHOP_NAME} AI\n"
     "14. REPEAT CUSTOMER: if FACTS show 10+ days since the last delivered order, "
     "no order in progress, and the customer is only greeting/chatting, offer one "
     "friendly pickup suggestion based on known usual items. Never suggest pickup "
@@ -884,12 +884,6 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
         from sqlalchemy import select as _sel
 
         from app.models import Order, OrderStatus, Staff
-        memory = (getattr(customer, "ai_memory", None) or "").strip()
-    if memory:
-        lines.append("What we already know about this customer (private; use naturally, never recite):")
-        lines.append(memory)
-
-    from app.services import app_settings
         from app.services.order_service import create_order, update_status
 
         # duplicate guard: an active pre-wash order already exists -> don't stack
@@ -1102,6 +1096,11 @@ async def _build_facts(
         lines.append(f"Customer phone: {profile['phone']}")
     except Exception:
         log.exception("customer_profile_tool_failed")
+
+    memory = (getattr(customer, "ai_memory", None) or "").strip()
+    if memory:
+        lines.append("What we already know about this customer (private; use naturally, never recite):")
+        lines.append(memory)
 
     from app.services import app_settings
     try:
