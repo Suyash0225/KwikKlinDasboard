@@ -639,3 +639,101 @@ async def test_simple_greeting_does_not_call_llm(monkeypatch) -> None:
             reply = await build_ai_reply(db, cust, "  Hello!! ")
 
     assert reply and "Welcome to Kwik Klin" in reply
+
+
+def test_runtime_block_resolves_kal_to_iso() -> None:
+    from datetime import datetime
+
+    now = datetime(2026, 10, 20, 14, 0, tzinfo=agent_module._IST)
+    block = agent_module._runtime_block(now)
+    assert "Today (aaj) = 2026-10-20" in block
+    assert "kal/tomorrow = 2026-10-21" in block
+    assert "parso = 2026-10-22" in block
+
+
+def test_pickup_date_must_be_iso_and_near() -> None:
+    from datetime import timedelta
+
+    today = agent_module._dt.now(agent_module._IST).date()
+    assert agent_module._parse_pickup_date("kal") is None
+    assert agent_module._parse_pickup_date("") is None
+    assert agent_module._parse_pickup_date((today - timedelta(days=1)).isoformat()) is None
+    assert agent_module._parse_pickup_date((today + timedelta(days=60)).isoformat()) is None
+    assert agent_module._parse_pickup_date((today + timedelta(days=1)).isoformat()) == today + timedelta(days=1)
+
+
+async def test_prompt_carries_runtime_date(monkeypatch) -> None:
+    async def fake_ask_json(**kw):
+        assert kw["user_text"].startswith("RUNTIME:\nNow:")
+        assert "kal/tomorrow = " in kw["user_text"]
+        return {
+            "reply": "Ji — Kwik Klin AI", "intent": "OTHER", "language": "hi",
+            "action": "ANSWER", "action_reason": "", "escalate": False,
+            "escalation_reason": "", "admin_note": "",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        assert await build_ai_reply(db, cust, "kal kapde le lo?")
+
+
+async def test_history_goes_as_turns_not_text(monkeypatch) -> None:
+    from app.models import Conversation, Direction
+
+    async def fake_ask_json(**kw):
+        turns = kw["history"]
+        assert [t["role"] for t in turns] == ["user", "model"]
+        assert "naam bata dijiye" in turns[1]["text"]
+        assert "Rahul" not in kw["user_text"] or "CUSTOMER MESSAGE" in kw["user_text"]
+        return {
+            "reply": "Shukriya Rahul ji! — Kwik Klin AI", "intent": "NEW_ORDER", "language": "hi",
+            "action": "ANSWER", "action_reason": "", "escalate": False,
+            "escalation_reason": "", "admin_note": "",
+            "intake": {"name": "Rahul", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        db.add_all([
+            Conversation(customer_id=cust.id, direction=Direction.INBOUND, message_text="kapde dhulwane hain"),
+            Conversation(customer_id=cust.id, direction=Direction.OUTBOUND, message_text="Ji, apna naam bata dijiye."),
+            Conversation(customer_id=cust.id, direction=Direction.INBOUND, message_text="Rahul"),
+        ])
+        await db.commit()
+        reply = await build_ai_reply(db, cust, "Rahul")
+    assert reply and "Rahul" in reply
+
+
+async def test_facts_always_carry_rate_card_and_orders(monkeypatch) -> None:
+    async def fake_tool(db, customer, name, **kw):
+        return {
+            "get_customer_profile": {"name": "AI Grahak", "address": "X", "phone": PHONE},
+            "get_customer_orders": [],
+            "get_shop_rate_card": [{"service": "Wash", "garment": "Shirt", "rate": 30, "unit": "pc"}],
+        }[name]
+
+    monkeypatch.setattr(agent_module, "run_customer_tool", fake_tool)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        facts = await agent_module._build_facts(db, cust, tool_names={})
+    assert "Rate card" in facts and "Shirt" in facts
+    assert "recent orders: none" in facts
+
+async def test_verbatim_rule_is_in_prompt(monkeypatch) -> None:
+    async def fake_ask_json(**kw):
+        assert "[VERBATIM]" in kw["system"]
+        assert "EXACTLY as written" in kw["system"]
+        return {
+            "reply": "Ji — Kwik Klin AI", "intent": "OTHER", "language": "hi",
+            "action": "ANSWER", "action_reason": "", "escalate": False,
+            "escalation_reason": "", "admin_note": "",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        assert await build_ai_reply(db, cust, "refund policy kya hai")

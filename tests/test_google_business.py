@@ -241,6 +241,9 @@ async def test_gbp_auto_post_records_failure_retries_and_deduplicates(monkeypatc
             async with async_session_factory() as db:
                 await app_settings.set_value(db, "gbp_auto_post_enabled", True)
                 await app_settings.set_value(db, "gbp_auto_posts", [])
+                # Daily posts reuse an owner-supplied poster; artwork generation is disabled.
+                await app_settings.set_value(db, "gbp_owner_poster_url",
+                    "https://kwikklin.online/social/social-google-2026-10-10.png")
                 first = await gbp_auto_post.auto_post_daily(db, now)
                 assert first["published_count"] == 0
                 assert len(first["failed_locations"]) == 1
@@ -390,6 +393,9 @@ async def test_gbp_auto_post_publishes_to_all_selected_locations(monkeypatch) ->
             async with async_session_factory() as db:
                 await app_settings.set_value(db, "gbp_auto_post_enabled", True)
                 await app_settings.set_value(db, "gbp_auto_posts", [])
+                # Daily posts reuse an owner-supplied poster; artwork generation is disabled.
+                await app_settings.set_value(db, "gbp_owner_poster_url",
+                    "https://kwikklin.online/social/social-google-2026-10-10.png")
                 result = await gbp_auto_post.auto_post_daily(db, now)
                 assert result["published_count"] == 3
                 assert result["location_count"] == 3

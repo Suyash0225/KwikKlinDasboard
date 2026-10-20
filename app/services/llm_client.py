@@ -199,10 +199,11 @@ async def _generate(
     schema: dict | None = None,
     image: tuple[str, bytes] | None = None,
     provider: str = PROVIDER,
+    history: list[dict] | None = None,
 ) -> str:
     if provider != "gemini":
         raise LLMUnavailable(f"unsupported LLM provider: {provider}")
-    return await _gemini_generate(system, user_text, model, max_tokens, schema, image)
+    return await _gemini_generate(system, user_text, model, max_tokens, schema, image, history)
 
 
 async def _generate_with_fallback(
@@ -212,6 +213,7 @@ async def _generate_with_fallback(
     max_tokens: int,
     schema: dict | None = None,
     image: tuple[str, bytes] | None = None,
+    history: list[dict] | None = None,
 ) -> str:
     """Try the requested Gemini model, then flash-lite, respecting each model's budget."""
     from app.services.quota import QuotaExceeded, ai_quota_guard
@@ -249,8 +251,15 @@ async def _generate_with_fallback(
                     raise TimeoutError
                 async with asyncio.timeout(remaining):
                     result = await _with_retry(
-                        lambda: _generate(
-                            system, user_text, candidate, max_tokens, schema, image, PROVIDER
+                        lambda: (
+                            _generate(
+                                system, user_text, candidate, max_tokens, schema, image, PROVIDER
+                            )
+                            if history is None
+                            else _generate(
+                                system, user_text, candidate, max_tokens, schema, image, PROVIDER,
+                                history,
+                            )
                         ),
                         provider=PROVIDER,
                         model=candidate,
@@ -337,13 +346,17 @@ async def ask_json(
     schema: dict,
     model: str | None = None,
     max_tokens: int = 500,
+    history: list[dict] | None = None,
 ) -> dict:
     """Completion constrained to a JSON schema (structured outputs).
 
+    history is prior Gemini user/model turns, excluding the current user message.
     Returns the parsed dict. Raises LLMUnavailable / LLMError.
     """
     model = model or MODEL_CHEAP
-    text = await _generate_with_fallback(system, user_text, model, max_tokens, schema=schema)
+    text = await _generate_with_fallback(
+        system, user_text, model, max_tokens, schema=schema, history=history
+    )
     return _parse_json(text, model)
 
 
@@ -447,6 +460,7 @@ async def _gemini_generate(
     max_tokens: int,
     schema: dict | None,
     image: tuple[str, bytes] | None = None,
+    history: list[dict] | None = None,
 ) -> str:
     # Keep output caps close to the caller's real need. Gemini 3.x bills
     # thinking/output tokens together, so a blanket 2048-token floor wastes
@@ -468,9 +482,20 @@ async def _gemini_generate(
             {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(blob).decode()}}
         )
     parts.append({"text": user_text})
+    contents = [
+        {"role": turn["role"], "parts": [{"text": turn["text"]}]}
+        for turn in (history or [])
+        if turn.get("role") in ("user", "model") and turn.get("text")
+    ]
+    if contents and contents[-1]["role"] == "user":
+        # Gemini requires alternating roles. If a customer sent consecutive
+        # messages before the bot replied, keep them in one user turn.
+        contents[-1]["parts"].extend(parts)
+    else:
+        contents.append({"role": "user", "parts": parts})
     payload = {
         "system_instruction": {"parts": [{"text": system}]},
-        "contents": [{"role": "user", "parts": parts}],
+        "contents": contents,
         "generationConfig": gen,
     }
 
