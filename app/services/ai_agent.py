@@ -51,6 +51,17 @@ def _is_explicit_order_confirmation(text: str) -> bool:
     return bool(_ORDER_CONFIRMATION_RE.fullmatch(text or ""))
 
 
+_ORDER_CANCELLATION_RE = re.compile(
+    r"^\\s*(?:nahi(?:\\s+ji)?|nahin(?:\\s+ji)?|no|cancel|cancel karo|cancel kar do|mat karo|rehne do|chhodo|chod do)\\s*[!.🙏👍✅]*\\s*$",
+    re.I,
+)
+
+
+def _is_explicit_order_cancellation(text: str) -> bool:
+    """Recognize only a standalone cancellation of the pending pickup request."""
+    return bool(_ORDER_CANCELLATION_RE.fullmatch(text or ""))
+
+
 def _pickup_confirmation_summary(intake: dict) -> str:
     return (
         f"Order summary: {intake['items_text'][:100]}, pickup {intake['pickup_date']}, "
@@ -669,6 +680,8 @@ async def build_ai_reply(
         (intake.get(k) or "").strip() for k in ("name", "address", "items_text", "pickup_date")
     ):
         has_matching_prompt = await _has_matching_pickup_confirmation_prompt(db, customer, intake)
+        if has_matching_prompt and _is_explicit_order_cancellation(text):
+            return "Theek hai ji, pickup request cancel kar di hai. Koi order create nahi kiya gaya. — Kwik Klin"
         if not _is_explicit_order_confirmation(text) or not has_matching_prompt:
             return _pickup_confirmation_summary(intake)
         if sandbox:
