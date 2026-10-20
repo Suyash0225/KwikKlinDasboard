@@ -100,6 +100,7 @@ async def _price_reply_is_grounded(db: AsyncSession, customer: Customer, questio
 
     rates = await get_shop_rate_card(db, customer)
     normalized_question = re.sub(r"[^a-z0-9]+", " ", (question or "").casefold()).strip()
+    grounded_amounts: set[str] = set()
     for row in rates:
         garment = re.sub(r"[^a-z0-9]+", " ", str(row.get("garment") or "").casefold()).strip()
         service = re.sub(r"[^a-z0-9]+", " ", str(row.get("service") or "").casefold()).strip()
@@ -107,10 +108,9 @@ async def _price_reply_is_grounded(db: AsyncSession, customer: Customer, questio
         # or service. Ambiguous aliases must be clarified rather than guessed.
         named = bool(garment and re.search(r"\b" + re.escape(garment) + r"\b", normalized_question))
         named = named or bool(service and re.search(r"\b" + re.escape(service) + r"\b", normalized_question))
-        amount = canonical_amount(str(row.get("rate") or ""))
-        if named and amount in quoted:
-            return True
-    return False
+        if named:
+            grounded_amounts.add(canonical_amount(str(row.get("rate") or "")))
+    return bool(quoted) and quoted.issubset(grounded_amounts)
 
 
 _REPLY_SCHEMA = {
