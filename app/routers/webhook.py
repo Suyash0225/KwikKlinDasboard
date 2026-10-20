@@ -1231,6 +1231,7 @@ async def _handle_inbound_message(
             await send_message(
                 db, to_phone=phone,
                 text="Media receive hui, lekin download nahi ho paya. Please dobara bhejein ya caption/text mein bata dein.",
+                intent="transactional", outbound_kind="service_reply",
             )
         except SendError:
             log.exception("inbound_media_unavailable_ack_failed", phone=phone)
