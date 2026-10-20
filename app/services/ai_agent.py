@@ -50,7 +50,7 @@ def _is_explicit_order_confirmation(text: str) -> bool:
     """Only a clear, standalone affirmative can confirm a prepared pickup."""
     return bool(_ORDER_CONFIRMATION_RE.fullmatch(text or ""))
 
-_PRICE_AMOUNT_RE = re.compile(r"(?:₹|\bINR\s*|\bRs\.?\s*)(\\d+(?:\.\\d{1,2})?)|\b(\\d+(?:\.\\d{1,2})?)\s*(?:rupees|rs\.?)\b", re.I)
+_PRICE_AMOUNT_RE = re.compile(r"(?:₹|\bINR\s*|\bRs\.?\s*)(\d+(?:\.\d{1,2})?)|\b(\d+(?:\.\d{1,2})?)\s*(?:rupees|rs\.?)\b", re.I)
 
 
 async def _price_reply_is_grounded(db: AsyncSession, customer: Customer, question: str, reply: str) -> bool:
