@@ -704,6 +704,50 @@ async def ai_campaign_draft(
     draft["coupon_code"] = str(draft.get("coupon_code") or f"KK{body.segment[:5].upper()}{now.strftime('%d%m')}").upper()[:30]
     for key in ("message", "gmb_title", "gmb_body", "gmb_cta", "creative_brief", "rationale"):
         draft[key] = str(draft.get(key) or "").strip()
+
+    # A wish/greeting request must not silently become a discount campaign.
+    # Offers are only allowed when the owner explicitly asks for one in the goal.
+    goal_lower = str(body.goal or "").casefold()
+    explicit_offer = any(term in goal_lower for term in (
+        "offer", "discount", "coupon", "promo code", "percent off", "% off",
+        "₹ off", "rupee off", "sale", "deal",
+    ))
+    wish_only = any(term in goal_lower for term in (
+        "wish", "greeting", "festival", "dussehra", "dussera", "vijayadashami",
+        "diwali", "holi", "navratri", "rakshabandhan", "raksha bandhan",
+        "happy birthday", "thank you",
+    )) and not explicit_offer
+    if wish_only:
+        goal_label = " ".join(str(body.goal or "festival").split()).strip()[:80]
+        theme = "Dussehra" if any(x in goal_lower for x in ("dussehra", "dussera", "vijayadashami")) else (
+            "Diwali" if "diwali" in goal_lower else
+            "Holi" if "holi" in goal_lower else
+            "Navratri" if "navratri" in goal_lower else
+            "Raksha Bandhan" if any(x in goal_lower for x in ("rakshabandhan", "raksha bandhan")) else
+            "the festive season"
+        )
+        draft["offer_type"] = "no_discount"
+        draft["discount_value"] = 0
+        draft["coupon_code"] = ""
+        draft["min_order"] = 0
+        draft["campaign_name"] = f"{theme} Greetings — Kwik Klin"
+        draft["message"] = (
+            f"Wishing you and your family a joyful {theme}! ✨ "
+            "May your celebrations be filled with happiness. For your festive outfits, "
+            "Kwik Klin is here for laundry and dry-cleaning care in Varanasi. — Kwik Klin"
+        )
+        draft["gmb_title"] = f"Happy {theme} from Kwik Klin"
+        draft["gmb_body"] = (
+            f"Warm wishes for {theme} from Kwik Klin. Keep your festive outfits looking their best "
+            "with laundry and dry-cleaning care in Varanasi. Explore our services online."
+        )
+        draft["gmb_cta"] = "Learn more"
+        draft["creative_brief"] = f"Premium {theme} visual with refined festive colours, textile details, real Kwik Klin logo; no offer badge or contact details."
+        draft["rationale"] = (
+            f"Created a greeting-only draft for {goal_label}. No discount or coupon was added "
+            "because the goal did not explicitly request an offer."
+        )
+
     draft["gmb_body"] = draft["gmb_body"].replace("\\n", " ")
     # Run the same deterministic phone/link/hashtag sanitizer used by daily GBP
     # posts. AI instructions alone are not a policy gate.
