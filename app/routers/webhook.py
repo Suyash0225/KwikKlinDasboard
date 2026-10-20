@@ -1132,10 +1132,13 @@ async def _handle_inbound_message(
         caption = part.get("caption") or ""
         label = part.get("filename") or ""
         if media_id:
-            if settings.WHATSAPP_PROVIDER == "waha":
+            if settings.WHATSAPP_PROVIDER == "waha" and part.get("url"):
+                # WAHA payloads provide a media URL; Meta payloads do not.
+                # The configured provider may be WAHA in tests/dev while a
+                # signed Meta webhook is still being exercised.
                 fname = await download_media(
                     media_id, media_dir, media_url=part.get("url"),
-                    mime_type=part.get("mimetype"),
+                    mime_type=part.get("mimetype") or part.get("mime_type"),
                 )
             else:
                 # Preserve the existing Meta provider signature and test hooks.
