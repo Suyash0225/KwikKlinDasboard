@@ -356,6 +356,11 @@ _LOW_SIGNAL_STAFF_RE = re.compile(
     re.I,
 )
 
+_STAFF_AI_FALLBACK = (
+    "Message mil gaya. AI abhi jawab nahi de pa raha. Order/status ke liye KK order number "
+    "ya task ke liye T-code/button bhejein; koi update tabhi hoga jab valid command confirm ho."
+)
+
 
 # Task actions are accepted only through explicit interactive IDs. Visible
 # button text and arbitrary natural-language messages are never task commands.
@@ -1495,7 +1500,7 @@ async def handle_staff_message(
     # before saved order/task context can turn "ok thanks" into an unrelated
     # reply, while preserving any active multi-turn confirmation above.
     if sender_label != "manager" and not pending and _LOW_SIGNAL_STAFF_RE.fullmatch(text or ""):
-        return None
+        return "Namaste! 🙏 Kwik Klin assistant yahan hai. Order/status ke liye KK order number ya task ke liye T-code bhejein."
 
     # A staff request such as "Sunita ka bill bhejo" is a bill lookup,
     # not a new task/relay command. Resolve it before task-context handling.
@@ -1612,13 +1617,13 @@ async def handle_staff_message(
             extracted = await _extract(db, text, _as_bill(pending), history)
     except LLMRateLimited as exc:
         log.warning("staff_extract_rate_limited", error=str(exc)[:150])
-        return get_message("ai_down_staff_rate_limit") if sender_label == "manager" else None
+        return get_message("ai_down_staff_rate_limit") if sender_label == "manager" else _STAFF_AI_FALLBACK
     except LLMAuthError as exc:
         log.warning("staff_extract_quota_or_auth_failed", error=str(exc)[:150])
-        return get_message("ai_down_staff_quota") if sender_label == "manager" else None
+        return get_message("ai_down_staff_quota") if sender_label == "manager" else _STAFF_AI_FALLBACK
     except LLMError as exc:
         log.warning("staff_extract_parse_failed", error=str(exc)[:150])
-        return get_message("ai_down_staff_parse") if sender_label == "manager" else None
+        return get_message("ai_down_staff_parse") if sender_label == "manager" else _STAFF_AI_FALLBACK
 
     action = extracted["action"]
     reply: str | None = None
@@ -1679,10 +1684,37 @@ async def handle_staff_message(
         except LLMError as exc:
             log.warning("manager_query_failed", error=str(exc)[:150])
         return get_message("staff_cmd_unknown")
-    # plain staff chatter stays silent unless they're mid-draft
     if pending:
         return get_message("staff_cmd_unknown")
-    return None
+    return await _answer_staff_general_question(text)
+
+
+async def _answer_staff_general_question(text: str) -> str:
+    """Answer ordinary staff chat without exposing manager-only data/tools."""
+    raw = " ".join(str(text or "").split()).strip()
+    if not raw:
+        return _STAFF_AI_FALLBACK
+    try:
+        with llm_client.track("staff_chat"):
+            answer = await llm_client.ask(
+                system=(
+                    "You are Kwik Klin's helpful WhatsApp assistant for staff. Reply in concise "
+                    "Hindi/Hinglish/English matching the message. You have NO database, tools, "
+                    "or live business facts. Never invent order status, customer details, prices, "
+                    "staff assignments, or claim any bill/task/payment/status was changed. "
+                    "For live order information ask for the KK order number; for task updates "
+                    "ask them to use the task's T-code/button or the staff app. If the message "
+                    "is unclear, ask one short clarification. Return plain WhatsApp text only."
+                ),
+                user_text=raw[:800],
+                model=llm_client.MODEL_CHEAP,
+                max_tokens=180,
+            )
+        answer = " ".join(str(answer or "").split()).strip()
+        return answer[:900] if answer else _STAFF_AI_FALLBACK
+    except LLMError as exc:
+        log.warning("staff_general_reply_failed", error=str(exc)[:150])
+        return _STAFF_AI_FALLBACK
 
 
 def _as_bill(pending) -> PendingBill | None:
