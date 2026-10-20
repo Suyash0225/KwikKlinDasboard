@@ -458,3 +458,47 @@ async def test_prompt_carries_runtime_date(monkeypatch) -> None:
     async with async_session_factory() as db:
         cust = await _seed_customer()
         assert await build_ai_reply(db, cust, "kal kapde le lo?")
+
+
+async def test_history_goes_as_turns_not_text(monkeypatch) -> None:
+    from app.models import Conversation, Direction
+
+    async def fake_ask_json(**kw):
+        turns = kw["history"]
+        assert [t["role"] for t in turns] == ["user", "model"]
+        assert "naam bata dijiye" in turns[1]["text"]
+        assert "Rahul" not in kw["user_text"] or "CUSTOMER MESSAGE" in kw["user_text"]
+        return {
+            "reply": "Shukriya Rahul ji! — Kwik Klin AI", "intent": "NEW_ORDER", "language": "hi",
+            "action": "ANSWER", "action_reason": "", "escalate": False,
+            "escalation_reason": "", "admin_note": "",
+            "intake": {"name": "Rahul", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        db.add_all([
+            Conversation(customer_id=cust.id, direction=Direction.INBOUND, message_text="kapde dhulwane hain"),
+            Conversation(customer_id=cust.id, direction=Direction.OUTBOUND, message_text="Ji, apna naam bata dijiye."),
+            Conversation(customer_id=cust.id, direction=Direction.INBOUND, message_text="Rahul"),
+        ])
+        await db.commit()
+        reply = await build_ai_reply(db, cust, "Rahul")
+    assert reply and "Rahul" in reply
+
+
+async def test_facts_always_carry_rate_card_and_orders(monkeypatch) -> None:
+    async def fake_tool(db, customer, name, **kw):
+        return {
+            "get_customer_profile": {"name": "AI Grahak", "address": "X", "phone": PHONE},
+            "get_customer_orders": [],
+            "get_shop_rate_card": [{"service": "Wash", "garment": "Shirt", "rate": 30, "unit": "pc"}],
+        }[name]
+
+    monkeypatch.setattr(agent_module, "run_customer_tool", fake_tool)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        facts = await agent_module._build_facts(db, cust, tool_names={})
+    assert "Rate card" in facts and "Shirt" in facts
+    assert "recent orders: none" in facts
