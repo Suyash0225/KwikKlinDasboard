@@ -49,6 +49,35 @@ def _is_explicit_order_confirmation(text: str) -> bool:
     """Only a clear, standalone affirmative can confirm a prepared pickup."""
     return bool(_ORDER_CONFIRMATION_RE.fullmatch(text or ""))
 
+_PRICE_AMOUNT_RE = re.compile(r"(?:₹|\\bINR\\s*|\\bRs\\.?\\s*)(\\d+(?:\\.\\d{1,2})?)|\\b(\\d+(?:\\.\\d{1,2})?)\\s*(?:rupees|rs\\.?)\\b", re.I)
+
+
+async def _price_reply_is_grounded(db: AsyncSession, customer: Customer, question: str, reply: str) -> bool:
+    """Reject numeric price claims unless they match the requested active DB rate."""
+    quoted = {
+        (match.group(1) or match.group(2)).rstrip("0").rstrip(".")
+        for match in _PRICE_AMOUNT_RE.finditer(reply or "")
+    }
+    if not quoted:
+        return True
+
+    from app.services.ai_tools import get_shop_rate_card
+
+    rates = await get_shop_rate_card(db, customer)
+    normalized_question = re.sub(r"[^a-z0-9]+", " ", (question or "").casefold()).strip()
+    for row in rates:
+        garment = re.sub(r"[^a-z0-9]+", " ", str(row.get("garment") or "").casefold()).strip()
+        service = re.sub(r"[^a-z0-9]+", " ", str(row.get("service") or "").casefold()).strip()
+        # A rate is relevant only when the customer explicitly named this garment
+        # or service. Ambiguous aliases must be clarified rather than guessed.
+        named = bool(garment and re.search(r"\\b" + re.escape(garment) + r"\\b", normalized_question))
+        named = named or bool(service and re.search(r"\\b" + re.escape(service) + r"\\b", normalized_question))
+        amount = str(row.get("rate") or "").rstrip("0").rstrip(".")
+        if named and amount in quoted:
+            return True
+    return False
+
+
 _REPLY_SCHEMA = {
     "type": "object",
     "properties": {
@@ -486,6 +515,22 @@ async def build_ai_reply(
         "CREATE_ORDER", "ESCALATE", "CREATE_CAMPAIGN", "REFERRAL_REQUEST"
     } else "ANSWER"
     action_reason = (out.get("action_reason") or "").strip()
+
+    # Never let the model invent a numeric quote. A price must match the active
+    # database rate for a garment/service explicitly named in this message.
+    if intent == "PRICE_QUERY" and not sandbox:
+        try:
+            grounded = await _price_reply_is_grounded(db, customer, text, out.get("reply") or "")
+        except Exception:
+            log.exception("ai_price_grounding_failed")
+            grounded = False
+        if not grounded:
+            out["reply"] = (
+                "Main is item aur service ka exact active rate card verify nahi kar pa raha. "
+                "Galat rate batane ke bajay team se confirm karwa deta hoon. — Kwik Klin AI"
+            )
+            out["escalate"] = True
+            out["escalation_reason"] = "price quote could not be grounded in active rate card"
 
     # Action/intent pairing is validated in code. A model cannot turn an
     # unrelated message into a bill send just by returning SEND_BILL.
