@@ -224,6 +224,60 @@ def test_order_cancellation_requires_standalone_phrase() -> None:
     assert not _is_explicit_order_cancellation("mujhe cancel policy batao")
 
 
+async def test_pending_pickup_cancellation_does_not_create_order(monkeypatch) -> None:
+    from sqlalchemy import func
+    from app.models import Conversation, Direction, Order
+    from app.services.ai_agent import _pickup_confirmation_summary
+
+    intake = {
+        "name": "AI Grahak",
+        "address": "Test Address, Varanasi",
+        "items_text": "2 shirts",
+        "pickup_date": "tomorrow",
+        "ready": True,
+    }
+    async def fake_ask_json(**kw):
+        return {
+            "reply": "Ji, noted.",
+            "intent": "NEW_ORDER", "language": "hi",
+            "action": "ANSWER", "action_reason": "",
+            "escalate": False, "escalation_reason": "", "admin_note": "",
+            "intake": intake,
+        }
+
+    async def no_selected_tools(*args, **kwargs):
+        return {}
+
+    async def simple_context(*args, **kwargs):
+        return ("facts", "knowledge", "history")
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    monkeypatch.setattr(agent_module, "_select_customer_tools", no_selected_tools)
+    monkeypatch.setattr(agent_module, "_gather_context", simple_context)
+
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        db.add(Conversation(
+            customer_id=cust.id,
+            direction=Direction.OUTBOUND,
+            message_text=_pickup_confirmation_summary(intake),
+            sent_by="bot",
+        ))
+        await db.commit()
+
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        reply = await build_ai_reply(db, cust, "nahi")
+
+    assert reply and "cancel" in reply.lower()
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        count = (await db.execute(
+            select(func.count()).select_from(Order).where(Order.customer_id == cust.id)
+        )).scalar_one()
+    assert count == 0, "a standalone cancellation must never create a pickup order"
+
+
 async def test_numeric_price_reply_must_match_requested_active_rate(monkeypatch) -> None:
     from app.services import ai_tools
     from app.services.ai_agent import _price_reply_is_grounded
