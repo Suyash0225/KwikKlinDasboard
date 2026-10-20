@@ -1589,7 +1589,8 @@ async def handle_staff_message(
             # Backward compatible with an older client or typed "haan".
             if isinstance(pending, PendingPayment):
                 return await _finalize_payment(db, sender_phone, sender_label, pending)
-            return await _finalize_bill(db, sender_phone, sender_label, pending)
+            if isinstance(pending, PendingBill):
+                return await _finalize_bill(db, sender_phone, sender_label, pending)
         if pending and _CANCEL_RE.match(text):
             _PENDING.pop(sender_phone, None)
             return get_message("bill_cancelled")
@@ -1996,6 +1997,27 @@ async def _price_draft(db: AsyncSession, extracted: dict) -> dict:
 _ORDER_ITEM_KEYS = ("type", "service", "garment", "qty", "rate", "amount")
 
 
+def _draft_blockers(draft: dict) -> bool:
+    """True while the draft is not safe to turn into a customer bill.
+
+    The summary asks about these lines; finalize must refuse them too, or a
+    quick "haan" sends the customer a total that skips unpriced items.
+    """
+    try:
+        if float(draft.get("advance") or 0) < 0:
+            return True
+    except (TypeError, ValueError):
+        return True
+    if not draft.get("items"):
+        return True
+    for it in draft["items"]:
+        if it.get("unsure") or it.get("options") or it.get("amount") is None:
+            return True
+        if not float(it.get("qty") or 0) > 0:
+            return True
+    return False
+
+
 def _draft_summary(draft: dict) -> str:
     lines = [get_message("bill_draft_header", customer_name=draft["customer_name"] or "?")]
     if draft.get("from_photo"):
@@ -2022,27 +2044,24 @@ def _draft_summary(draft: dict) -> str:
             needs_answer = True
             lines.append(f"• {qty} × {label} — ⚠️ rate card mein nahi")
     lines.append(get_message("bill_draft_total", total=f"{draft['total']:g}"))
-    if needs_answer:
+    if needs_answer or _draft_blockers(draft):
         lines.append(get_message("bill_draft_needs_answer"))
     if draft["advance"]:
         lines.append(get_message("bill_draft_advance", advance=f"{draft['advance']:g}"))
     if draft["expected_delivery"]:
         lines.append(get_message("bill_draft_delivery", date=draft["expected_delivery"]))
-    if not draft["customer_phone"]:
+    if draft["customer_phone"]:
+        # A misread digit sends the bill to a stranger — show it before "haan".
+        lines.append(get_message("bill_draft_phone", phone=draft["customer_phone"]))
+    else:
         lines.append(get_message("bill_need_phone"))
     lines.append(get_message("bill_draft_confirm"))
     return "\n".join(lines)
 
 
-async def _finalize_bill(
-    db: AsyncSession, sender_phone: str, sender_label: str, pending: PendingBill
-) -> str:
-    d = pending.draft
-    try:
-        phone = normalize_phone(d["customer_phone"])
-    except ValueError:
-        return get_message("bill_need_phone")
-
+async def _create_order_from_draft(
+    db: AsyncSession, d: dict, phone: str, sender_label: str
+):
     exp = None
     if d["expected_delivery"]:
         try:
@@ -2068,7 +2087,7 @@ async def _finalize_bill(
     order_items = [
         {k: v for k, v in it.items() if k in _ORDER_ITEM_KEYS} for it in d["items"]
     ]
-    order = await create_order(
+    return await create_order(
         db,
         customer_phone=phone,
         items=order_items,
@@ -2078,13 +2097,38 @@ async def _finalize_bill(
         created_by=sender_label,
         advance_hint=Decimal(str(d["advance"])) if d["advance"] else None,
     )
+
+
+async def _finalize_bill(
+    db: AsyncSession, sender_phone: str, sender_label: str, pending: PendingBill
+) -> str:
+    d = pending.draft
+    # A double-tapped "haan" must not create a second order: only the draft
+    # still parked for this sender may be finalized.
+    if _PENDING.get(sender_phone) is not pending:
+        return "⚠️ Ye bill draft ab active nahi hai."
+    if _draft_blockers(d):
+        return get_message("bill_draft_needs_answer")
+    try:
+        phone = normalize_phone(d["customer_phone"])
+    except ValueError:
+        return get_message("bill_need_phone")
+
+    # Claim the draft before the first await, so a second "haan" arriving
+    # meanwhile finds nothing to finalize. If the order itself fails, put it
+    # back so "haan" can be retried; once the order exists it stays gone.
+    _PENDING.pop(sender_phone, None)
+    try:
+        order = await _create_order_from_draft(db, d, phone, sender_label)
+    except Exception:
+        _PENDING.setdefault(sender_phone, pending)
+        raise
     if d["advance"]:
         await record_payment(
             db, order, amount=Decimal(str(d["advance"])), method=PaymentMethod.CASH,
             recorded_by=sender_label, note="advance at booking",
             notify_customer=False,   # "order received" message mein advance pehle se hai
         )
-    _PENDING.pop(sender_phone, None)
 
     # instant work order to the responsible staff member (spec 7.5a)
     from app.services.work_orders import send_work_order

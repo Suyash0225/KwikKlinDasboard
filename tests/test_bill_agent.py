@@ -1142,3 +1142,99 @@ async def test_a_named_relay_still_works(monkeypatch, sent, no_task_residue, tes
         )
     assert reply and reply.startswith("✅")
     assert [c for c in sent if c["to"] == TEST_WASHER_PHONE]
+
+
+async def _stage_draft(monkeypatch, sent, items, **extra) -> None:
+    _patch_extract(
+        monkeypatch,
+        _extract_result(
+            action="new_bill", customer_name="Sharma ji",
+            customer_phone="9999900124", items=items, **extra,
+        ),
+    )
+    async with async_session_factory() as db:
+        await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager", text="bill"
+        )
+    assert SENDER in _PENDING
+
+
+async def test_confirm_refused_while_an_item_is_unpriced(monkeypatch, sent) -> None:
+    await _stage_draft(
+        monkeypatch, sent,
+        [
+            {"service": SERVICE, "garment": "Kurta", "qty": 2},
+            {"service": "Alien Service", "garment": "Spacesuit", "qty": 1},
+        ],
+    )
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager", text="haan"
+        )
+    assert "sahi likh dein" in reply
+    assert SENDER in _PENDING  # draft kept so the line can be corrected
+    assert await _order_for_customer() is None  # customer never gets a partial total
+
+
+async def test_confirm_refused_while_service_is_ambiguous(monkeypatch, sent) -> None:
+    # Kurta exists under two services, so no rate is picked.
+    await _stage_draft(monkeypatch, sent, [{"service": "", "garment": "Kurta", "qty": 1}])
+    async with async_session_factory() as db:
+        await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager", text="[button:bill_confirm:yes] Haan"
+        )
+    assert SENDER in _PENDING
+    assert await _order_for_customer() is None
+
+
+async def test_confirm_refused_for_negative_advance(monkeypatch, sent) -> None:
+    await _stage_draft(
+        monkeypatch, sent, [{"service": SERVICE, "garment": "Kurta", "qty": 1}], advance=-50,
+    )
+    async with async_session_factory() as db:
+        await handle_staff_message(
+            db, sender_phone=SENDER, sender_label="manager", text="haan"
+        )
+    assert await _order_for_customer() is None
+
+
+async def test_draft_shows_customer_phone_before_confirm(monkeypatch, sent) -> None:
+    await _stage_draft(monkeypatch, sent, [{"service": SERVICE, "garment": "Kurta", "qty": 1}])
+    menu = next(m for m in sent if m.get("list_rows") and m["to"] == SENDER)
+    assert "9999900124" in menu["text"]
+
+
+async def test_double_tap_confirm_creates_one_order(monkeypatch, sent) -> None:
+    import asyncio
+
+    await _stage_draft(monkeypatch, sent, [{"service": SERVICE, "garment": "Kurta", "qty": 1}])
+    pending = _PENDING[SENDER]
+
+    async def tap():
+        async with async_session_factory() as db:
+            return await bill_module._finalize_bill(db, SENDER, "manager", pending)
+
+    replies = await asyncio.gather(tap(), tap())
+    assert sum("ban gaya" in r for r in replies) == 1
+    async with async_session_factory() as s:
+        orders = (
+            await s.execute(
+                select(Order).join(Customer, Customer.id == Order.customer_id)
+                .where(Customer.phone == CUST_PHONE)
+            )
+        ).scalars().all()
+    assert len(orders) == 1
+
+
+async def test_failed_order_write_keeps_draft_for_retry(monkeypatch, sent) -> None:
+    await _stage_draft(monkeypatch, sent, [{"service": SERVICE, "garment": "Kurta", "qty": 1}])
+    pending = _PENDING[SENDER]
+
+    async def broken_create_order(*a, **kw):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(bill_module, "create_order", broken_create_order)
+    async with async_session_factory() as db:
+        with pytest.raises(RuntimeError):
+            await bill_module._finalize_bill(db, SENDER, "manager", pending)
+    assert _PENDING.get(SENDER) is pending
