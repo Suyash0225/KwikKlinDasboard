@@ -82,8 +82,9 @@ def _media_request_path(media_url: str) -> str:
     a sender to make the app request arbitrary internal URLs.
     """
     parts = urlsplit(str(media_url or "").strip())
-    if not parts.path.startswith("/api/"):
-        raise WahaError("WAHA media URL must point to a /api/ path", transient=False)
+    path_parts = parts.path.split("/")
+    if not parts.path.startswith("/api/files/") or ".." in path_parts:
+        raise WahaError("WAHA media URL must point to a safe /api/files/ path", transient=False)
     return parts.path + (("?" + parts.query) if parts.query else "")
 
 
