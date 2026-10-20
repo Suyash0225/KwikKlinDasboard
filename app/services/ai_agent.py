@@ -42,6 +42,13 @@ def _is_simple_greeting(text: str) -> bool:
     """Cheap deterministic check for greetings; avoid wasting LLM calls."""
     return bool(_SIMPLE_GREETING_RE.fullmatch(text or ""))
 
+_ORDER_CONFIRMATION_RE = re.compile(r"^\s*(?:haan(?:\s+ji)?|han(?:\s+ji)?|ji\s+haan|yes|y|okay|ok|theek(?:\s+hai)?|confirm|confirmed|kar do|bana do|pickup\s+confirm)\s*[!.🙏👍✅]*\s*$", re.I)
+
+
+def _is_explicit_order_confirmation(text: str) -> bool:
+    """Only a clear, standalone affirmative can confirm a prepared pickup."""
+    return bool(_ORDER_CONFIRMATION_RE.fullmatch(text or ""))
+
 _REPLY_SCHEMA = {
     "type": "object",
     "properties": {
@@ -576,10 +583,17 @@ async def build_ai_reply(
         )
         return out.get("reply") or get_message("escalated_ack", lang)
 
-    # Pickup intake complete -> the agent CREATES the order itself
+    # A complete intake is NOT consent to place an order. Show a deterministic
+    # summary first; only a standalone affirmative on a later message may commit.
     if intake.get("ready") and all(
         (intake.get(k) or "").strip() for k in ("name", "address", "items_text", "pickup_date")
     ):
+        if not _is_explicit_order_confirmation(text):
+            return (
+                f"Order summary: {intake['items_text'][:100]}, pickup {intake['pickup_date']}, "
+                f"address {intake['address'][:120]}. Kya main ye pickup order confirm kar doon? "
+                "Reply 'haan' to confirm or 'nahi' to cancel. — Kwik Klin AI"
+            )
         if sandbox:
             return (out.get("reply") or "") + (
                 f"\n🧪 (real mein: order ban jata — {intake['name']}, "
@@ -589,7 +603,6 @@ async def build_ai_reply(
         created = await _create_pickup_order(db, customer, intake)
         if created:
             return created  # deterministic confirmation, not model text
-
     # Agent handled it itself — if the owner should know, send a quiet FYI
     # (no open question, nothing waits on the owner).
     admin_note = (out.get("admin_note") or "").strip()
