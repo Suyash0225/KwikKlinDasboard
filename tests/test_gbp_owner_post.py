@@ -23,3 +23,10 @@ def test_google_policy_removes_phone_number_from_caption():
     caption, action = _caption_and_cta("WEBSITE: Call us at +91 96968 56069 for pickup.")
     assert "+91 96968 56069" not in caption
     assert action == "LEARN_MORE"
+
+
+def test_verified_owner_phone_accepts_waha_jid_format():
+    from app.services.gbp_owner_post import _same_phone
+
+    assert _same_phone("919696856069@c.us", "+91 96968 56069")
+    assert not _same_phone("919696856068@c.us", "+91 96968 56069")
