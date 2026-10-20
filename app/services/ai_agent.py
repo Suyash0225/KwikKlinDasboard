@@ -11,6 +11,7 @@ Safety design — every rule enforced in CODE, not just in the prompt:
   second rule-based reply during the acknowledgement cooldown.
 """
 
+import asyncio
 import re
 from decimal import Decimal, InvalidOperation
 from datetime import date as _date, datetime as _dt, timedelta, timezone as _tz
@@ -205,6 +206,114 @@ async def _thread_turns(
     while turns and turns[0]["role"] == "model":
         turns.pop(0)
     return turns
+
+
+_MEMORY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "usual_items": {"type": "string"},
+        "preferences": {"type": "string"},
+        "open_issue": {"type": "string"},
+        "tone": {"type": "string", "enum": ["warm", "neutral", "formal", "upset"]},
+        "notes": {"type": "string"},
+    },
+    "required": ["usual_items", "preferences", "open_issue", "tone", "notes"],
+    "additionalProperties": False,
+}
+_MEMORY_SYSTEM = (
+    "Maintain a short private memory card for a laundry customer. Extract only explicit facts "
+    "that help serve them better: usual garments, stated preferences, unresolved service issues, "
+    "tone, and one useful note. Never infer facts. Do not include phone numbers, addresses, "
+    "payment credentials, or sensitive personal details. Keep each field short and total output "
+    "under 60 words; use empty strings for unknown facts."
+)
+_MEMORY_MIN_MSGS_FIRST = 4
+_MEMORY_REFRESH_EVERY = 12
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _format_memory(memory: dict) -> str:
+    fields = [
+        ("Usual items", memory.get("usual_items")),
+        ("Preferences", memory.get("preferences")),
+        ("Open issue", memory.get("open_issue")),
+        ("Tone", memory.get("tone")),
+        ("Notes", memory.get("notes")),
+    ]
+    return "\n".join(
+        f"- {label}: {str(value).strip()[:160]}"
+        for label, value in fields
+        if str(value or "").strip()
+    )[:1200]
+
+
+async def _memory_due(db: AsyncSession, customer: Customer) -> bool:
+    from sqlalchemy import func
+    try:
+        query = select(func.count()).select_from(Conversation).where(
+            Conversation.customer_id == customer.id
+        )
+        if customer.ai_memory_at is not None:
+            query = query.where(Conversation.created_at > customer.ai_memory_at)
+        count = int((await db.execute(query)).scalar_one())
+        threshold = _MEMORY_MIN_MSGS_FIRST if not customer.ai_memory else _MEMORY_REFRESH_EVERY
+        return count >= threshold
+    except Exception:
+        log.exception("memory_due_check_failed")
+        return False
+
+
+async def _refresh_customer_memory(customer_id) -> None:
+    """Refresh customer memory in a separate session; failures never affect replies."""
+    from app.database import async_session_factory
+    try:
+        async with async_session_factory() as db:
+            customer = (await db.execute(
+                select(Customer).where(Customer.id == customer_id)
+            )).scalar_one_or_none()
+            if customer is None:
+                return
+            turns = await _thread_turns(db, customer, "", limit=30)
+            if not turns:
+                return
+            try:
+                orders = await run_customer_tool(
+                    db, customer, "get_customer_orders", limit=10
+                )
+            except Exception:
+                orders = []
+            transcript = "\n".join(
+                ("Customer" if turn["role"] == "user" else "Shop") + ": " + turn["text"][:300]
+                for turn in turns
+            )[-9000:]
+            order_lines = "\n".join(
+                "- " + str(order.get("order_number", "Order")) + ": "
+                + str(order.get("status_label", order.get("status", "unknown")))
+                for order in orders
+            ) or "No recent orders"
+            prompt = (
+                "EXISTING MEMORY:\n" + (customer.ai_memory or "(none)")
+                + "\n\nRECENT ORDERS:\n" + order_lines
+                + "\n\nRECENT CHAT:\n" + transcript
+            )
+            with llm_client.attribution(customer_id=customer.id), llm_client.track("memory"):
+                result = await llm_client.ask_json(
+                    system=_MEMORY_SYSTEM, user_text=prompt, schema=_MEMORY_SCHEMA,
+                    model=llm_client.MODEL_CHEAP, max_tokens=600,
+                )
+            customer.ai_memory = _format_memory(result) or None
+            customer.ai_memory_at = _dt.now(_tz.utc)
+            await db.commit()
+            log.info("customer_memory_refreshed", customer_id=str(customer_id))
+    except Exception:
+        log.exception("customer_memory_refresh_failed", customer_id=str(customer_id))
+
+
+def _schedule_memory_refresh(customer_id) -> None:
+    task = asyncio.create_task(_refresh_customer_memory(customer_id))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
 
 _REPLY_SCHEMA = {
     "type": "object",
@@ -482,7 +591,12 @@ _COMPOSE_SYSTEM = (
     f"reply: Done! 5 shirt, 2 pant — kal subah uthwa lenge. Confirm kar dein? — {settings.SHOP_NAME} AI\n"
     "   (intake: ready=true, pickup_date=<kal ki ISO date>)\n"
     "customer: मेरे कपड़े कब आएंगे\n"
-    f"reply: आपका ऑर्डर KK-1042 प्रेस हो रहा है, कल तक मिल जाएगा 👍 — {settings.SHOP_NAME} AI"
+    f"reply: आपका ऑर्डर KK-1042 प्रेस हो रहा है, कल तक मिल जाएगा 👍 — {settings.SHOP_NAME} AI\n"
+    "14. REPEAT CUSTOMER: if FACTS show 10+ days since the last delivered order, "
+    "no order in progress, and the customer is only greeting/chatting, offer one "
+    "friendly pickup suggestion based on known usual items. Never suggest pickup "
+    "when there is an unresolved complaint or opt-out; do not repeat an offer "
+    "already made in this conversation. One line only, not a sales pitch.\n"
 )
 
 
@@ -660,6 +774,10 @@ async def build_ai_reply(
         if sandbox:
             return None
         return await _handle_llm_failure(db, customer, text, str(exc))
+
+    # Background refresh must not delay the customer-facing reply.
+    if not sandbox and not customer.opted_out and await _memory_due(db, customer):
+        _schedule_memory_refresh(customer.id)
 
     lang = out.get("language") if out.get("language") in ("hi", "en") else "hi"
     intent = out.get("intent") if out.get("intent") in {
@@ -893,7 +1011,6 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
         from sqlalchemy import select as _sel
 
         from app.models import Order, OrderStatus, Staff
-        from app.services import app_settings
         from app.services.order_service import create_order, update_status
 
         # duplicate guard: an active pre-wash order already exists -> don't stack
@@ -1107,6 +1224,11 @@ async def _build_facts(
     except Exception:
         log.exception("customer_profile_tool_failed")
 
+    memory = (getattr(customer, "ai_memory", None) or "").strip()
+    if memory:
+        lines.append("What we already know about this customer (private; use naturally, never recite):")
+        lines.append(memory)
+
     from app.services import app_settings
     try:
         cfg = await app_settings.get_many(
@@ -1145,6 +1267,15 @@ async def _build_facts(
                     if o.get("bill_url"):
                         parts.append(f"bill_url {o['bill_url']}")
                     lines.append(" | ".join(parts))
+                if not active:
+                    delivered = [order for order in orders if order.get("status") == "DELIVERED" and order.get("actual_delivery")]
+                    if delivered:
+                        try:
+                            last_delivery = max(_date.fromisoformat(order["actual_delivery"][:10]) for order in delivered)
+                            days_since = (_dt.now(_IST).date() - last_delivery).days
+                            lines.append(f"Days since last delivered order: {days_since}. No order in progress.")
+                        except (TypeError, ValueError):
+                            log.warning("customer_last_delivery_date_invalid")
             else:
                 lines.append("Customer's recent orders: none.")
         except Exception:

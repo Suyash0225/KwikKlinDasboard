@@ -24,6 +24,10 @@ class Customer(Base, TenantScoped):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # Compact private service memory refreshed asynchronously from recent chat/orders.
+    ai_memory: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_memory_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # When THEY last messaged US — this is what the 24h window check reads.
     # Indexed: the customers list sorts on it.
     last_message_at: Mapped[datetime | None] = mapped_column(
