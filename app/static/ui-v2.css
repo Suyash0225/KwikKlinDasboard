@@ -848,3 +848,99 @@ input[type="file"]::file-selector-button {
   #sec-inbox .th-head { display: none; }
 }
 body.inbox-mode #sec-inbox .th-filters button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   POLISHER LEDGER v2
+   ══════════════════════════════════════════════════════════════════════ */
+@media (min-width: 1024px) { .pol-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 767.98px) {
+  .pol-kpis .kpi { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: 10px; align-items: center; padding: 12px; }
+  .pol-kpis .kico { grid-row: 1 / span 2; margin: 0 !important; width: 30px !important; height: 30px !important; }
+  .pol-kpis .kpi .val { font-size: 1.12rem; margin-top: 1px; }
+  .pol-kpis .kpi .lbl { font-size: 11px; }
+  .pol-kpis .kpi .sub { display: none; }
+}
+.pol-grid { display: grid; gap: 14px; margin-bottom: 14px; }
+@media (min-width: 1024px) { .pol-grid { grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr); align-items: start; } }
+.pol-actions { padding: 0; overflow: hidden; }
+.pol-tabs { display: flex; gap: 4px; padding: 6px; margin: 14px 14px 0; background: #eef1f5; border-radius: 12px; }
+.pol-tabs button { flex: 1; border: 0; background: transparent; border-radius: 9px; min-height: 38px; font: inherit; font-weight: 600; font-size: 13.5px; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.pol-tabs button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
+.pol-pane { padding: 16px 18px 18px; }
+.pol-form { display: grid; gap: 12px 14px; grid-template-columns: 1fr 1fr; }
+.pol-form .pol-wide { grid-column: 1 / -1; }
+.pol-form label { margin-bottom: 6px; font-size: 12.5px; }
+.pol-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.pol-foot .muted { font-size: 12.5px; }
+.pol-foot .btn:not(.ghost) { min-height: 44px; padding: 10px 20px; }
+.pol-msg { margin: 0; padding: 0 18px 14px; font-size: 13px; color: var(--success); }
+.pol-msg.err { color: var(--error); }
+.pol-msg:empty { display: none; }
+.pol-step { display: flex; align-items: stretch; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; }
+.pol-step button { border: 0; background: #f8fafc; width: 40px; font-size: 18px; font-weight: 700; color: var(--ink-2); cursor: pointer; }
+.pol-step input { border: 0 !important; border-radius: 0 !important; box-shadow: none !important; text-align: center; width: 100%; min-width: 0; }
+@media (max-width: 560px) { .pol-form { grid-template-columns: 1fr; } .pol-foot .btn:not(.ghost) { flex: 1; } }
+
+.pol-vendors-card { padding: 16px 18px; }
+.pol-vendor { display: flex; align-items: center; gap: 11px; padding: 10px 0; border-bottom: 1px solid var(--border-soft); }
+.pol-vendor:last-child { border-bottom: 0; }
+.pv-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pv-who b { font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pv-who .muted, .pv-num .muted { font-size: 12px; }
+.pv-num { display: flex; flex-direction: column; align-items: flex-end; }
+.pv-num b { font-variant-numeric: tabular-nums; }
+
+.pol-ledger { margin-bottom: 14px; padding: 16px 18px; }
+.pol-batches { display: grid; gap: 10px; }
+@media (min-width: 900px) { .pol-batches { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); } }
+.pol-batch { border: 1px solid var(--border); border-radius: 14px; padding: 13px 14px; display: flex; flex-direction: column; gap: 9px; background: #fff; }
+.pol-batch.done { background: #fbfcfd; }
+.pb-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.pb-top > div { display: flex; flex-direction: column; min-width: 0; }
+.pb-top b { font-size: 14.5px; color: var(--ink); }
+.pb-top .muted { font-size: 12px; }
+.pb-bar { height: 8px; border-radius: 4px; background: #eef1f5; overflow: hidden; }
+.pb-bar i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #22c55e, #15803d); }
+.pb-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); flex-wrap: wrap; }
+.pb-notes { font-size: 12.5px; }
+.pb-ret { display: grid; grid-template-columns: 1fr 130px auto; gap: 8px; align-items: center; padding-top: 9px; border-top: 1px solid var(--border-soft); font-size: 12.5px; color: var(--ink-2); }
+.pb-ret .pol-step input { height: 36px; min-height: 36px; }
+.pb-ret .btn.sm { min-height: 38px; }
+.pol-pays { display: flex; flex-direction: column; }
+.pol-pay { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border-soft); }
+.pol-pay:last-child { border-bottom: 0; }
+.pol-pay > div { display: flex; flex-direction: column; min-width: 0; }
+.pol-pay b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.pol-pay .muted { font-size: 12px; }
+
+/* ── Inbox bubbles: tight like WhatsApp. The time floats on the last line
+   instead of reserving a 52–64px right gutter in every bubble, and the
+   reply/react buttons sit beside the bubble, not inside it. ── */
+body.inbox-mode #sec-inbox .chatlog { padding: 14px 5%; gap: 3px; }
+body.inbox-mode #sec-inbox .bubble {
+  padding: 6px 9px 7px 10px; max-width: min(65%, 560px); border-radius: 9px;
+  font-size: 14.2px; line-height: 1.4; overflow: visible;
+}
+body.inbox-mode #sec-inbox .bubble .bt {
+  float: right; display: inline-block; margin: 6px 0 -4px 12px; font-size: 10.5px; line-height: 1.2;
+  white-space: nowrap; color: #667781;
+}
+body.inbox-mode #sec-inbox .bubble::after { content: ""; display: block; clear: both; }
+body.inbox-mode #sec-inbox .bubble img { display: block; border-radius: 7px; margin: -2px -5px 4px; max-width: calc(100% + 10px); height: auto; }
+body.inbox-mode #sec-inbox .bubble + .bubble.in:not(:has(.quoted)), body.inbox-mode #sec-inbox .bubble + .bubble.out:not(:has(.quoted)) { margin-top: 0; }
+body.inbox-mode #sec-inbox .bubble.in + .bubble.out, body.inbox-mode #sec-inbox .bubble.out + .bubble.in { margin-top: 6px; }
+.bubble-actions { top: 50%; right: auto; transform: translateY(-50%); flex-direction: row; gap: 2px; }
+.bubble.in .bubble-actions { left: calc(100% + 4px); }
+.bubble.out .bubble-actions { right: calc(100% + 4px); }
+.bubble .breply, .bubble .breact { min-width: 28px !important; min-height: 28px !important; border-radius: 50%; background: rgba(255,255,255,.9); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+@media (max-width: 768px) {
+  body.inbox-mode.chat-open #sec-inbox .chatlog { padding: 10px 8px calc(10px + env(safe-area-inset-bottom)); gap: 3px; }
+  body.inbox-mode #sec-inbox .bubble { max-width: 80%; font-size: 14.5px; }
+  /* phones have no hover: keep the buttons, stacked, beside the bubble */
+  .bubble-actions { flex-direction: column; opacity: .9; }
+  .bubble .breply, .bubble .breact { min-width: 30px !important; min-height: 30px !important; }
+}
+/* composer: emoji + attach + text + send — nothing else */
+body.inbox-mode #sec-inbox .composer { gap: 6px; padding: 8px 12px; align-items: flex-end; }
+body.inbox-mode #sec-inbox .composer textarea { border-radius: 22px; padding: 10px 16px; min-height: 44px; background: #fff; }
+body.inbox-mode #sec-inbox .composer > .btn:not(.ghost) { width: 44px; height: 44px; min-width: 44px; border-radius: 50%; padding: 0; background: #00a884; box-shadow: none; }
