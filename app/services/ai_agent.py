@@ -183,7 +183,12 @@ def _select_customer_tools_deterministic(text: str) -> dict[str, int]:
     lowered = (text or "").casefold()
     selected: dict[str, int] = {}
 
-    if re.search(
+    is_new_service_request = bool(re.search(
+        r"\b(?:mujhe|please|i want|i need|need)\b.{0,35}\b"
+        r"(?:dhulwane|dhulana|dhulwana|wash|washing|cleaning)\b",
+        lowered,
+    ))
+    if not is_new_service_request and re.search(
         r"\b(?:order|orders|kapda|kapde|kapdon|delivery|deliver|kab milega|"
         r"status|ready|pickup|pick ?up|washing|wash|iron|ironing|received|"
         r"mila|mil gaya|kahan hai|kidhar hai|kab tak)\b",
