@@ -232,7 +232,7 @@ async def handle_owner_image_message(db: AsyncSession, sender: str, payload: dic
     # "post karo" / "ise post kro". These are instructions, not post copy.
     caption, action = _caption_and_cta(body)
     instruction = re.fullmatch(
-        r"(?:please\\s+)?(?:ise|isey|isko|this)?\\s*(?:post|publish|upload)\\s*"
+        r"(?:please\s+)?(?:ise|isey|isko|this)?\s*(?:post|publish|upload)\s*"
         r"(?:kar(?:o|na|dena|do)?|karo|kr(?:o|na)?|it|please)?[.! ]*",
         caption,
         re.I,
