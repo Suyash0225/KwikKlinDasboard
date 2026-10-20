@@ -49,6 +49,7 @@ from app.models import (
     StaffRole,
 )
 from app.services import app_settings, audit, llm_client
+from app.services.pending_store import TenantPending
 from app.services.llm_client import LLMAuthError, LLMError, LLMRateLimited, LLMUnavailable
 from app.services.messages import get_message, status_label
 from app.services.order_service import (
@@ -241,16 +242,18 @@ class PendingOrderIssue:
 
 
 # sender phone -> action awaiting 'haan' (a bill draft or a payment)
-_PENDING: dict[str, PendingBill | PendingPayment | PendingAgentAction | PendingRelay | PendingTaskEta | PendingTaskIssue | PendingOrderEta | PendingOrderIssue] = {}
+# phone -> draft awaiting "haan"; keyed by (shop, phone) underneath so a
+# person who works for two shops never confirms one shop's draft in the other.
+_PENDING: dict[str, PendingBill | PendingPayment | PendingAgentAction | PendingRelay | PendingTaskEta | PendingTaskIssue | PendingOrderEta | PendingOrderIssue] = TenantPending()
 
 # owner's WhatsApp sandbox: phone -> {"last_q": last test question}
 # ('test customer' se on, 'test band' se off; sikhao: se Correction banti hai)
-_TEST_MODE: dict[str, dict] = {}
+_TEST_MODE: dict[str, dict] = TenantPending()
 
 # Staff reference memory: when a staff member asks "T-123 kahan hai?" and
 # immediately follows with "kitne pcs?", the second message must still refer
 # to T-123. This is short-lived, per phone, and never replaces DB truth.
-_STAFF_REF_CONTEXT: dict[str, tuple[str, str, datetime]] = {}
+_STAFF_REF_CONTEXT: dict[str, tuple[str, str, datetime]] = TenantPending()
 _STAFF_REF_TTL = timedelta(minutes=20)
 _TASK_REF_RE = re.compile(r"\bT\s*-?\s*(\d+)\b", re.I)
 _ORDER_REF_RE_STAFF = re.compile(r"\bKK-\d{8}-\d{2,}\b", re.I)
@@ -2938,7 +2941,7 @@ async def _manager_step_loop(
 
 
 # Last owner question + answer per phone, so a follow-up has its referent.
-_OWNER_LAST: dict[str, tuple[datetime, str, str]] = {}
+_OWNER_LAST: dict[str, tuple[datetime, str, str]] = TenantPending()
 _OWNER_MEMORY_TTL = timedelta(minutes=20)
 
 

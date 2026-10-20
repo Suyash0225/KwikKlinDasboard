@@ -1284,3 +1284,24 @@ async def test_a_different_bill_teaches_nothing(monkeypatch, sent) -> None:
             db, await bill_module._price_draft(db, old), await bill_module._price_draft(db, new)
         )
         assert "sofacover" not in (await app_settings.get(db, "garment_aliases") or {})
+
+
+async def test_drafts_are_kept_apart_per_shop() -> None:
+    """One person, two shops: a draft from shop A is invisible in shop B."""
+    import uuid
+
+    from app.services import tenant_context
+    from app.services.bill_agent import PendingBill
+
+    shop_a, shop_b = uuid.uuid4(), uuid.uuid4()
+    token = tenant_context.current_tenant_id.set(shop_a)
+    try:
+        _PENDING[SENDER] = PendingBill(draft={"items": []})
+        assert SENDER in _PENDING
+        tenant_context.current_tenant_id.set(shop_b)
+        assert SENDER not in _PENDING and _PENDING.get(SENDER) is None
+        assert _PENDING.pop(SENDER, None) is None
+        tenant_context.current_tenant_id.set(shop_a)
+        assert isinstance(_PENDING.get(SENDER), PendingBill)
+    finally:
+        tenant_context.current_tenant_id.reset(token)
