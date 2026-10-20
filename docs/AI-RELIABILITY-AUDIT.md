@@ -13,17 +13,17 @@
 ## Priority 0 — prevent unintended orders and pickups
 
 - [ ] Trace every path from AI `intake.ready` to `_create_pickup_order`.
-- [ ] Require explicit customer confirmation before creating an order or committing to a pickup slot; do not treat a complete set of extracted fields as confirmation.
+- [x] Require a standalone explicit affirmative before creating an order; a complete intake now returns a deterministic summary and asks the customer to confirm.
 - [ ] Confirm confirmation state is bound to the current customer/tenant and the exact order summary, and expires or resets if the requested items/date change.
-- [ ] Add regression tests: complete details without confirmation must not create an order; explicit confirmation creates at most one order; changed details require reconfirmation; repeated webhook delivery must not duplicate the order.
+- [x] Add phrase-level regression tests for standalone confirmation versus a service request, mixed question, and cancellation. [ ] Still needed: full flow tests for changed details and duplicate webhook delivery.
 - [ ] Ensure missing/ambiguous pickup date, address, garment list, or name results in a clarifying question, not an order.
 
 ## Priority 0 — price answers must come from the active rate card
 
 - [ ] Trace rate-card retrieval, garment/service matching, and the final response composer.
-- [ ] Never quote a numeric price unless an active matching database rate was retrieved for the requested garment and service.
+- [x] Numeric price replies are now checked against active DB rates for a garment/service named in the customer's message; unmatched quotes are replaced with a manager-confirmation reply.
 - [ ] If the item/service is missing or ambiguous, ask a short clarification or say the team will confirm; do not guess, extrapolate, or reuse a price for another garment.
-- [ ] Add tests for exact matches, Hindi/Hinglish synonyms, missing rates, conflicting service types (wash vs dry clean), and multi-item questions.
+- [x] Add unit tests for exact amount match, mismatched amount, wrong garment, and no-numeric-price response. [ ] Still needed: Hindi/Hinglish aliases, missing rates, conflicting services, and multi-item cases.
 - [ ] Verify all amounts in customer replies are grounded in retrieved facts and formatted without changing the underlying amount.
 
 ## Priority 1 — Hinglish and follow-up intent regression
