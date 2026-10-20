@@ -20,6 +20,7 @@ from app.routers.agent_admin import router as agent_admin_router
 from app.routers.orders import _key_matches, router as orders_router
 from app.routers.google_analytics import router as google_analytics_router
 from app.routers.webhook import router as webhook_router
+from app.routers.polisher import router as polisher_router
 from app.utils.logger import configure_logging
 
 configure_logging()
@@ -309,6 +310,7 @@ app.add_middleware(TrustedProxyMiddleware)
 app.include_router(webhook_router)
 app.include_router(orders_router)
 app.include_router(admin_router)
+app.include_router(polisher_router)
 app.include_router(agent_admin_router)
 
 # Bechne ka rasta: pricing -> signup -> payment -> login (app/routers/account.py)
