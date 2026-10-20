@@ -445,7 +445,7 @@ def test_pickup_date_must_be_iso_and_near() -> None:
 
 async def test_prompt_carries_runtime_date(monkeypatch) -> None:
     async def fake_ask_json(**kw):
-        assert kw["user_text"].startswith("RUNTIME:\\nNow:")
+        assert kw["user_text"].startswith("RUNTIME:\nNow:")
         assert "kal/tomorrow = " in kw["user_text"]
         return {
             "reply": "Ji — Kwik Klin AI", "intent": "OTHER", "language": "hi",
