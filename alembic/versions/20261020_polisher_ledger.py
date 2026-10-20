@@ -60,8 +60,18 @@ def upgrade() -> None:
     op.create_index("ix_polisher_payments_vendor_id", "polisher_payments", ["vendor_id"])
     op.create_index("ix_polisher_payments_paid_on", "polisher_payments", ["paid_on"])
 
+    predicate = "(NULLIF(current_setting('app.tenant_id', true), '') IS NULL OR tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)"
+    for table in ("polisher_vendors", "polish_batches", "polisher_payments"):
+        op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+        op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+        op.execute(f"CREATE POLICY tenant_isolation ON {table} USING {predicate} WITH CHECK {predicate}")
+
 
 def downgrade() -> None:
+    for table in ("polisher_payments", "polish_batches", "polisher_vendors"):
+        op.execute(f"DROP POLICY tenant_isolation ON {table}")
+        op.execute(f"ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY")
+        op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY")
     op.drop_table("polisher_payments")
     op.drop_table("polish_batches")
     op.drop_table("polisher_vendors")
