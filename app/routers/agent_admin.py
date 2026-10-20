@@ -533,7 +533,9 @@ _CAMPAIGN_AI_SCHEMA = {
 }
 
 
-def _ensure_gmb_local_search_context(body: str, max_chars: int = 700) -> str:
+def _ensure_gmb_local_search_context(
+    body: str, max_chars: int = 700, city: str = "Varanasi"
+) -> str:
     """Add one natural laundry/location phrase if AI copy omitted local context."""
     text = (body or "").strip()
     lowered = text.casefold()
@@ -541,21 +543,38 @@ def _ensure_gmb_local_search_context(body: str, max_chars: int = 700) -> str:
         term in lowered
         for term in ("laundry", "dry clean", "dry-clean", "wash and fold", "garment care")
     )
-    has_location = "varanasi" in lowered
+    # No city on file: there is no location to add, only the service.
+    has_location = not city or city.casefold() in lowered
     if has_service and has_location:
         return text[:max_chars]
     if not has_service and not has_location:
-        suffix = " Laundry and dry cleaning services in Varanasi."
+        suffix = f" Laundry and dry cleaning services in {city}."
     elif not has_service:
         suffix = " Laundry and dry cleaning services."
     else:
-        suffix = " Serving Varanasi."
+        suffix = f" Serving {city}."
     if suffix.strip().casefold() not in lowered:
         # Reserve room for the complete phrase rather than slicing it off at
         # the old 700-character limit.
         prefix = text.rstrip(" .")[:max(0, max_chars - len(suffix))]
         text = prefix + suffix if prefix else suffix.strip()[:max_chars]
     return text[:max_chars]
+
+
+def _offer_line(draft: dict) -> str:
+    """The offer in words, built only from the clamped numbers."""
+    value = float(draft.get("discount_value") or 0)
+    min_order = float(draft.get("min_order") or 0)
+    days = int(draft.get("validity_days") or 7)
+    if draft.get("offer_type") == "percent" and value > 0:
+        line = f"Get {value:g}% off your next laundry order"
+    elif draft.get("offer_type") == "flat" and value > 0:
+        line = f"Get ₹{value:g} off your next laundry order"
+    else:
+        return "Fresh, cared-for clothes with easy pickup — reply to book."
+    if min_order > 0:
+        line += f" of ₹{min_order:g} or more"
+    return line + f", valid for {days} days."
 
 
 @router.post("/campaigns/ai-draft", dependencies=[Depends(require_feature("campaigns"))])
@@ -620,8 +639,12 @@ async def ai_campaign_draft(
         8: "monsoon care",
     }.get(month, "general laundry demand")
 
+    from app.services import shop_identity
+
+    shop = await shop_identity.current(db)
+    city = shop.city or "the shop's city"
     system = (
-        "You are Kwik Klin's marketing strategist. Recommend an offer using the "
+        f"You are {shop.name}'s marketing strategist. Recommend an offer using the "
         "actual segment, customer value, previous campaign outcomes, season and rate card. "
         "Do not invent services, prices, margins or customer facts. Prefer non-discount "
         "value when it can work. Never exceed the supplied max discount. If every rate "
@@ -629,7 +652,7 @@ async def ai_campaign_draft(
         "contribution; shared overhead is excluded, so do not call it net profit. If any "
         "cost is missing, do not claim margin safety is verified. Keep WhatsApp copy <= 3 "
         "short lines. For Google Business local discovery, naturally mention "
-        "a relevant laundry/dry-cleaning service and Varanasi where it fits; avoid keyword "
+        f"a relevant laundry/dry-cleaning service and {city} where it fits; avoid keyword "
         "stuffing. Google Business copy must not include a phone number, fake address, "
         "fake review, or fabricated claim. Return only JSON matching the schema."
     )
@@ -644,7 +667,8 @@ async def ai_campaign_draft(
         "configured_max_discount_percent": configured_max_discount,
         "cost_guard_applied": cost_guard_applied,
         "rate_card": rate_card,
-        "shop_name": "Kwik Klin",
+        "shop_name": shop.name,
+        "city": shop.city,
     }
     try:
         from app.services.llm_client import ask_json, MODEL_SMART, track
@@ -668,11 +692,11 @@ async def ai_campaign_draft(
             "min_order": round(float(aov), 0) if aov else 0,
             "validity_days": 7,
             "coupon_code": f"KK{body.segment[:5].upper()}{now.strftime('%d%m')}",
-            "message": f"Hi {{name}}! Get {value:g}% off your next laundry order this week. — Kwik Klin",
+            "message": f"Hi {{name}}! Get {value:g}% off your next laundry order this week. — {shop.name}",
             "gmb_title": f"{value:g}% off your next laundry order" if value else "Fresh clothes, less hassle",
-            "gmb_body": "Book laundry and dry cleaning with Kwik Klin in Varanasi this week.",
+            "gmb_body": f"Book laundry and dry cleaning with {shop.name}{shop.where} this week.",
             "gmb_cta": "Book now",
-            "creative_brief": "Kwik Klin logo + clean laundry visual + offer badge; no phone number.",
+            "creative_brief": f"{shop.name} logo + clean laundry visual + offer badge; no phone number.",
             "rationale": "Safe deterministic fallback because the marketing model was unavailable.",
         }
 
@@ -706,6 +730,18 @@ async def ai_campaign_draft(
     for key in ("message", "gmb_title", "gmb_body", "gmb_cta", "creative_brief", "rationale"):
         draft[key] = str(draft.get(key) or "").strip()
 
+    # The clamp above changes discount_value, not the words. A message still
+    # promising "25% off" after a 15% cap — or carrying an invented number or
+    # link — is rebuilt from the clamped numbers instead.
+    from app.services.copy_guard import copy_problems
+
+    offer_facts = _offer_line(draft)
+    contact = str(await app_settings.get(db, "shop_contact_phone") or "")
+    problems = copy_problems(draft["message"], allowed_text=f"{offer_facts} {contact}")
+    if problems or not draft["message"]:
+        log.warning("campaign_ai_message_rebuilt", problems=problems)
+        draft["message"] = f"Hi {{name}}! {offer_facts} — {shop.name}"
+
     # A wish/greeting request must not silently become a discount campaign.
     # Offers are only allowed when the owner explicitly asks for one in the goal.
     goal_lower = str(body.goal or "").casefold()
@@ -731,19 +767,19 @@ async def ai_campaign_draft(
         draft["discount_value"] = 0
         draft["coupon_code"] = ""
         draft["min_order"] = 0
-        draft["campaign_name"] = f"{theme} Greetings — Kwik Klin"
+        draft["campaign_name"] = f"{theme} Greetings — {shop.name}"
         draft["message"] = (
             f"Wishing you and your family a joyful {theme}! ✨ "
             "May your celebrations be filled with happiness. For your festive outfits, "
-            "Kwik Klin is here for laundry and dry-cleaning care in Varanasi. — Kwik Klin"
+            f"{shop.name} is here for laundry and dry-cleaning care{shop.where}. — {shop.name}"
         )
-        draft["gmb_title"] = f"Happy {theme} from Kwik Klin"
+        draft["gmb_title"] = f"Happy {theme} from {shop.name}"
         draft["gmb_body"] = (
-            f"Warm wishes for {theme} from Kwik Klin. Keep your festive outfits looking their best "
-            "with laundry and dry-cleaning care in Varanasi. Explore our services online."
+            f"Warm wishes for {theme} from {shop.name}. Keep your festive outfits looking their best "
+            f"with laundry and dry-cleaning care{shop.where}. Explore our services online."
         )
         draft["gmb_cta"] = "Learn more"
-        draft["creative_brief"] = f"Premium {theme} visual with refined festive colours, textile details, real Kwik Klin logo; no offer badge or contact details."
+        draft["creative_brief"] = f"Premium {theme} visual with refined festive colours, textile details, real {shop.name} logo; no offer badge or contact details."
         draft["rationale"] = (
             f"Created a greeting-only draft for {goal_label}. No discount or coupon was added "
             "because the goal did not explicitly request an offer."
@@ -758,7 +794,7 @@ async def ai_campaign_draft(
     # Add one natural local-search phrase if AI omitted service/location context.
     # No keyword stuffing, fabricated addresses, reviews, or ranking claims.
     draft["gmb_body"] = enforce_google_rules(
-        _ensure_gmb_local_search_context(draft["gmb_body"])
+        _ensure_gmb_local_search_context(draft["gmb_body"], city=shop.city)
     )[:700]
     draft["gmb_title"] = enforce_google_rules(draft["gmb_title"])[:120]
     draft["gmb_cta"] = enforce_google_rules(draft["gmb_cta"])[:60]
@@ -776,9 +812,9 @@ async def ai_campaign_draft(
         await ai_poster.create_branded_campaign_poster(
             image_path,
             logo_path,
-            str(draft.get("campaign_name") or "Kwik Klin Campaign"),
+            str(draft.get("campaign_name") or f"{shop.name} Campaign"),
             str(draft.get("gmb_title") or "Fresh clothes, less hassle"),
-            str(draft.get("gmb_body") or "Laundry and dry cleaning services in Varanasi"),
+            str(draft.get("gmb_body") or f"Laundry and dry cleaning services{shop.where}"),
         )
         image_problems = check_google_image(image_path)
         if image_problems:

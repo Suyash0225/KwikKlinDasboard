@@ -532,9 +532,12 @@ async def send_campaign(campaign_id) -> None:
                         last_visit = last_visit.replace(tzinfo=timezone.utc)
                     age_days = max(0.0, (now_utc - last_visit).total_seconds() / 86400) if last_visit else 0.0
                     usual_items = ", ".join(rhythm.get("usual_items") or []) or "kapde"
+                    from app.services import shop_identity
+
+                    shop = await shop_identity.current(db, campaign.tenant_id)
                     text = (
                         f"Namaste {cust.name or 'aap'} ji! Pichhli baar aapne {usual_items} diye the. "
-                        "Jab laundry ki zarurat ho, Kwik Klin yaad rakhein. "
+                        f"Jab laundry ki zarurat ho, {shop.name} yaad rakhein. "
                     )
                     if _is_winback_offer_due(age_days, average_gap):
                         configured_cap = int(await app_settings.get(db, "marketing_max_discount_percent"))
