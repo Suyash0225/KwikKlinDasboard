@@ -651,11 +651,16 @@ def test_runtime_block_resolves_kal_to_iso() -> None:
     assert "parso = 2026-10-22" in block
 
 
-def test_pickup_date_must_be_iso_and_near() -> None:
+def test_pickup_date_accepts_relative_dates_and_stays_near() -> None:
     from datetime import timedelta
 
     today = agent_module._dt.now(agent_module._IST).date()
-    assert agent_module._parse_pickup_date("kal") is None
+    assert agent_module._parse_pickup_date("kal") == today + timedelta(days=1)
+    assert agent_module._parse_pickup_date("tomorrow") == today + timedelta(days=1)
+    assert agent_module._parse_pickup_date("aaj") == today
+    assert agent_module._parse_pickup_date("today") == today
+    assert agent_module._parse_pickup_date("parso") == today + timedelta(days=2)
+    assert agent_module._parse_pickup_date("day after tomorrow") == today + timedelta(days=2)
     assert agent_module._parse_pickup_date("") is None
     assert agent_module._parse_pickup_date((today - timedelta(days=1)).isoformat()) is None
     assert agent_module._parse_pickup_date((today + timedelta(days=60)).isoformat()) is None
