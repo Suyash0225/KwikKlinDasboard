@@ -202,21 +202,16 @@ async def test_compose_prompt_tells_ai_not_to_repeat_saved_profile(monkeypatch) 
     assert reply
 
 
-def test_customer_fact_selection_is_not_keyword_gated() -> None:
-    """Unusual phrasing still gets the same bounded facts for semantic reasoning."""
-    expected = {
-        "get_customer_profile": 1,
-        "get_customer_orders": 20,
-        "get_customer_bills": 20,
-        "get_shop_rate_card": 20,
+def test_customer_fact_selection_handles_common_hinglish_without_keyword_flood() -> None:
+    """Select relevant facts for common Hinglish wording; unrelated questions stay minimal."""
+    cases = {
+        "Blazer rate btao": {"get_shop_rate_card": 20},
+        "kal jo kapde diye the unka kya hua?": {"get_customer_orders": 5},
+        "paisa kaise jama karu": {"get_customer_bills": 5},
+        "Can you help me with something else?": {},
+        "mujhe kapde dhulwane hain plz": {},
     }
-    for message in (
-        "Blazer rate btao",
-        "kal jo kapde diye the unka kya hua?",
-        "paisa kaise jama karu",
-        "Can you help me with something else?",
-        "mujhe kapde dhulwane hain plz",
-    ):
+    for message, expected in cases.items():
         assert agent_module._select_customer_tools_deterministic(message) == expected
 
 
