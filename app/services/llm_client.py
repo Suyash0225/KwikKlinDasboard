@@ -200,9 +200,14 @@ async def _generate(
     image: tuple[str, bytes] | None = None,
     provider: str = PROVIDER,
     history: list[dict] | None = None,
+    tools: dict | None = None,
 ) -> str:
     if provider != "gemini":
         raise LLMUnavailable(f"unsupported LLM provider: {provider}")
+    if tools is not None:
+        return await _gemini_generate(
+            system, user_text, model, max_tokens, schema, image, history, tools=tools
+        )
     return await _gemini_generate(system, user_text, model, max_tokens, schema, image, history)
 
 
@@ -214,6 +219,7 @@ async def _generate_with_fallback(
     schema: dict | None = None,
     image: tuple[str, bytes] | None = None,
     history: list[dict] | None = None,
+    tools: dict | None = None,
 ) -> str:
     """Try the requested Gemini model, then flash-lite, respecting each model's budget."""
     from app.services.quota import QuotaExceeded, ai_quota_guard
@@ -253,6 +259,11 @@ async def _generate_with_fallback(
                     result = await _with_retry(
                         lambda: (
                             _generate(
+                                system, user_text, candidate, max_tokens, schema, image, PROVIDER,
+                                history, tools=tools,
+                            )
+                            if tools is not None
+                            else _generate(
                                 system, user_text, candidate, max_tokens, schema, image, PROVIDER
                             )
                             if history is None
@@ -360,6 +371,50 @@ async def ask_json(
     return _parse_json(text, model)
 
 
+class ToolTurn:
+    """One model turn in a function-calling loop."""
+
+    def __init__(self, content: dict):
+        # The model's content goes back into the next request VERBATIM:
+        # Gemini 3 attaches thought signatures to function-call parts and
+        # rejects a follow-up that drops them.
+        self.content = content
+        parts = content.get("parts") or []
+        self.calls = [
+            {"name": p["functionCall"].get("name", ""), "args": p["functionCall"].get("args") or {}}
+            for p in parts
+            if isinstance(p.get("functionCall"), dict)
+        ]
+        self.text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+
+
+async def ask_with_tools(
+    *,
+    system: str,
+    contents: list[dict],
+    declarations: list[dict],
+    model: str | None = None,
+    max_tokens: int = 700,
+    mode: str = "AUTO",
+) -> ToolTurn:
+    """Gemini native function calling: the model calls typed functions or answers.
+
+    contents is the whole conversation in Gemini form (user text, the model's
+    previous turns, functionResponse parts); the caller owns it. mode "NONE"
+    forces a text answer from what has been gathered.
+    """
+    model = model or MODEL_CHEAP
+    tools = {"declarations": declarations, "contents": contents, "mode": mode}
+    raw = await _generate_with_fallback(
+        system, json.dumps(contents, ensure_ascii=False)[:20000], model, max_tokens, tools=tools,
+    )
+    try:
+        content = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LLMError(f"tool turn was not a content object: {raw[:100]}") from exc
+    return ToolTurn(content)
+
+
 async def ask_json_image(
     *,
     system: str,
@@ -461,6 +516,8 @@ async def _gemini_generate(
     schema: dict | None,
     image: tuple[str, bytes] | None = None,
     history: list[dict] | None = None,
+    *,
+    tools: dict | None = None,
 ) -> str:
     # Keep output caps close to the caller's real need. Gemini 3.x bills
     # thinking/output tokens together, so a blanket 2048-token floor wastes
@@ -493,11 +550,20 @@ async def _gemini_generate(
         contents[-1]["parts"].extend(parts)
     else:
         contents.append({"role": "user", "parts": parts})
+    if tools is not None:
+        # Function calling: the caller supplies the full conversation, and
+        # gets the model's raw content back (see ask_with_tools).
+        contents = tools["contents"]
     payload = {
         "system_instruction": {"parts": [{"text": system}]},
         "contents": contents,
         "generationConfig": gen,
     }
+    if tools is not None:
+        payload["tools"] = [{"functionDeclarations": [
+            {**d, "parameters": _gemini_schema(d["parameters"])} for d in tools["declarations"]
+        ]}]
+        payload["toolConfig"] = {"functionCallingConfig": {"mode": tools["mode"]}}
 
     started = time.monotonic()
     try:
@@ -542,7 +608,8 @@ async def _gemini_generate(
 
     data = resp.json()
     try:
-        parts = data["candidates"][0]["content"]["parts"]
+        candidate_content = data["candidates"][0]["content"]
+        parts = candidate_content["parts"]
         text = "".join(p.get("text", "") for p in parts)
     except (KeyError, IndexError) as exc:
         # No candidates usually means a safety block — unusable, not down.
@@ -588,6 +655,8 @@ async def _gemini_generate(
         )
     except Exception:
         log.exception("llm_usage_record_crashed", model=model)
+    if tools is not None:
+        return json.dumps(candidate_content, ensure_ascii=False)
     return text
 
 

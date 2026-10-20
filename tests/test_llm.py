@@ -152,3 +152,51 @@ async def test_gemini_truncated_json_is_hard_error(monkeypatch) -> None:
     monkeypatch.setattr(llm, "_gemini_post", fake_post)
     with pytest.raises(LLMError):
         await ask_json(system="s", user_text="hi", schema={"type": "object"})
+
+
+async def test_function_calling_payload_and_verbatim_content(monkeypatch) -> None:
+    monkeypatch.setattr(llm, "PROVIDER", "gemini")
+    seen: dict = {}
+    model_content = {"role": "model", "parts": [
+        {"functionCall": {"name": "money", "args": {"period": "month"}}, "thoughtSignature": "SIG123"},
+    ]}
+
+    async def fake_post(model, payload):
+        seen.update(payload)
+        return _gemini_response(200, {
+            "candidates": [{"content": model_content, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
+        })
+
+    monkeypatch.setattr(llm, "_gemini_post", fake_post)
+    contents = [{"role": "user", "parts": [{"text": "is mahine kitna aaya?"}]}]
+    declarations = [{
+        "name": "money", "description": "revenue for a period",
+        "parameters": {"type": "object", "properties": {"period": {"type": "string", "enum": ["month"]}},
+                       "required": ["period"], "additionalProperties": False},
+    }]
+    turn = await llm.ask_with_tools(system="s", contents=contents, declarations=declarations)
+
+    assert seen["contents"] == contents, "the caller's conversation is sent as-is"
+    decl = seen["tools"][0]["functionDeclarations"][0]
+    assert decl["name"] == "money" and "additionalProperties" not in str(decl)
+    assert seen["toolConfig"] == {"functionCallingConfig": {"mode": "AUTO"}}
+    assert "responseSchema" not in seen["generationConfig"]
+    assert turn.calls == [{"name": "money", "args": {"period": "month"}}]
+    # thought signature must survive so the next request can send it back
+    assert turn.content == model_content
+
+
+async def test_function_calling_text_answer_skips_thought_parts(monkeypatch) -> None:
+    monkeypatch.setattr(llm, "PROVIDER", "gemini")
+
+    async def fake_post(model, payload):
+        return _gemini_response(200, {"candidates": [{"content": {"role": "model", "parts": [
+            {"text": "thinking...", "thought": True}, {"text": "₹500 aaye."},
+        ]}}], "usageMetadata": {}})
+
+    monkeypatch.setattr(llm, "_gemini_post", fake_post)
+    turn = await llm.ask_with_tools(
+        system="s", contents=[{"role": "user", "parts": [{"text": "x"}]}], declarations=[], mode="NONE",
+    )
+    assert turn.calls == [] and turn.text == "₹500 aaye."

@@ -623,11 +623,13 @@ async def test_manager_business_query_answers_from_db_facts(monkeypatch, sent) -
     _patch_extract(monkeypatch, _extract_result(action="other"))
     seen: dict = {}
 
-    async def fake_ask(**kw):
-        seen.update(kw)
-        return "Abhi 1 order pending hai, ₹100 baaki. — assistant"
+    async def fake_ask_with_tools(**kw):
+        from tests.agent_fakes import tool_turn
 
-    monkeypatch.setattr(bill_module.llm_client, "ask", fake_ask)
+        seen["user_text"] = kw["contents"][0]["parts"][0]["text"]
+        return tool_turn(text="Abhi 1 order pending hai, ₹100 baaki. — assistant")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_with_tools", fake_ask_with_tools)
     async with async_session_factory() as db:
         reply = await handle_staff_message(
             db, sender_phone=SENDER, sender_label="manager", text="kitne order pending hai?"

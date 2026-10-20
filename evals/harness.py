@@ -184,10 +184,14 @@ async def _owner_request(case: dict) -> dict:
         prev = ctx["previous"]
         convo += f"PICHHLI BAAT:\nOwner: {prev['owner']}\nTum: {prev['assistant']}\n\n"
     convo += f"OWNER'S MESSAGE:\n{case['message'][:500]}"
+    from app.services import agent_tools
+
     return {
         "system": bill_agent._manager_system(_shop()),
         "user_text": convo,
-        "schema": bill_agent._STEP_SCHEMA,
+        "schema": None,
+        # production runs the owner agent on native function calling
+        "declarations": agent_tools.function_declarations(),
         "model": llm_client.MODEL_SMART,
         "max_tokens": 700,
         "history": None,
@@ -251,11 +255,35 @@ async def call_live(request: dict) -> Any:
         return None
 
     with _patched((llm_client, "_record_usage", no_usage)):
+        if request.get("declarations"):
+            return tool_turn_output(await llm_client._gemini_generate(
+                request["system"], request["user_text"], request["model"],
+                request["max_tokens"], None, None, None,
+                tools={
+                    "declarations": request["declarations"], "mode": "AUTO",
+                    "contents": [{"role": "user", "parts": [{"text": request["user_text"]}]}],
+                },
+            ))
         text = await llm_client._gemini_generate(
             request["system"], request["user_text"], request["model"],
             request["max_tokens"], request["schema"], None, request["history"],
         )
     return json.loads(text) if request["schema"] is not None else text
+
+
+def tool_turn_output(raw: str) -> dict:
+    """A function-calling turn as {tool, args, answer} — the first call is
+    what the checks judge; every call is kept for the report."""
+    from app.services import agent_tools
+    from app.services.llm_client import ToolTurn
+
+    turn = ToolTurn(json.loads(raw))
+    calls = [
+        {"tool": c["name"], "args": agent_tools.args_from_call(c["name"], c["args"])}
+        for c in turn.calls
+    ]
+    first = calls[0] if calls else {"tool": "", "args": ""}
+    return {**first, "answer": turn.text, "calls": calls}
 
 
 # --------------------------------------------------------------------------
@@ -353,8 +381,9 @@ def _check_owner(case: dict, out: dict, ctx: dict) -> list[str]:
     answer = str(out.get("answer") or "")
     if "tool_any" in exp and tool not in exp["tool_any"]:
         fails.append(f"tool {tool or '(answer)'} not in {exp['tool_any']}")
-    if tool in exp.get("tool_not", []):
-        fails.append(f"forbidden tool {tool}")
+    for called in [c["tool"] for c in out.get("calls") or []] or [tool]:
+        if called in exp.get("tool_not", []):
+            fails.append(f"forbidden tool {called}")
     if exp.get("args_any") and not _has_any(str(out.get("args") or ""), exp["args_any"]):
         fails.append(f"args have none of {exp['args_any']}")
     if not tool:
