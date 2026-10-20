@@ -21,7 +21,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Customer, OrderStatus
+from app.models import Conversation, Customer, Direction, OrderStatus
 from app.config import settings
 from app.services import llm_client
 from app.services.escalation import raise_escalation
@@ -70,6 +70,52 @@ def _parse_pickup_date(value: str) -> _date | None:
     if d < today or d > today + timedelta(days=30):
         return None
     return d
+
+
+_TURN_LIMIT = 10
+
+
+async def _thread_turns(
+    db: AsyncSession, customer: Customer, current_text: str, limit: int = _TURN_LIMIT
+) -> list[dict]:
+    """Recent chat as real Gemini user/model turns, excluding the stored current message."""
+    try:
+        rows = (await db.execute(
+            select(Conversation.direction, Conversation.message_text)
+            .where(Conversation.customer_id == customer.id)
+            .order_by(Conversation.created_at.desc())
+            .limit(limit + 2)
+        )).all()
+    except Exception:
+        log.exception("thread_turns_failed")
+        return []
+
+    ordered = list(reversed(rows))
+    # The webhook persists the inbound message before invoking the agent.
+    # Remove only the newest exact match, not an entire merged role turn.
+    current = (current_text or "").strip()
+    if ordered and ordered[-1][0] == Direction.INBOUND and (ordered[-1][1] or "").strip() == current:
+        ordered.pop()
+
+    turns: list[dict] = []
+    for direction, raw_text in ordered:
+        txt = (raw_text or "").strip()
+        if not txt or txt.startswith("["):
+            continue
+        role = "model" if direction == Direction.OUTBOUND else "user"
+        txt = txt[:600]
+        if turns and turns[-1]["role"] == role:
+            turns[-1]["text"] += "\\n" + txt
+        else:
+            turns.append({"role": role, "text": txt})
+    # Gemini history must start with a user turn and alternate roles.
+    while turns and turns[0]["role"] == "model":
+        turns.pop(0)
+    # Keep the most recent window without beginning on a model turn.
+    turns = turns[-limit:]
+    while turns and turns[0]["role"] == "model":
+        turns.pop(0)
+    return turns
 
 _REPLY_SCHEMA = {
     "type": "object",
@@ -321,7 +367,27 @@ _COMPOSE_SYSTEM = (
     "Do not erase or replace an existing saved name/address with an empty "
     "value from intake. When the conversation history contains a name or "
     "address that is not yet saved, carry it forward in the intake and use "
-    "it for the current response."
+    "it for the current response.\\n"
+    "11. SCRIPT: mirror the customer's script. Roman Hinglish -> Roman Hinglish, "
+    "Devanagari -> Devanagari, English -> English. Never turn a Hinglish customer "
+    "into formal English.\\n"
+    "12. When the customer names a garment/service, quote the exact rate line from "
+    "FACTS. If it is not on the rate card, say so and offer to confirm with the "
+    "owner (escalate) — never estimate a price.\\n"
+    "13. Be a good front desk: if the customer mentions a heavy or delicate item "
+    "(blanket, saree, suit, curtain) gently say what service suits it from the rate "
+    "card. If they have an order ready/overdue in FACTS, mention it proactively. "
+    "One helpful nudge per reply, never a sales pitch.\\n"
+    "\\nEXAMPLES (style only — real numbers/dates always come from FACTS):\\n"
+    "customer: kurta ka rate?\\n"
+    f"reply: Kurta wash+iron ₹40/piece hai ji, dry clean ₹120 😊 — {settings.SHOP_NAME} AI\\n"
+    "customer: order kab milega   [FACTS: KK-1042 In Iron, expected 2026-10-21]\\n"
+    f"reply: Aapka order KK-1042 iron par hai, kal (21 Oct) tak mil jayega 👍 — {settings.SHOP_NAME} AI\\n"
+    "customer: 5 shirt 2 pant kal utha lo   [name+address saved]\\n"
+    f"reply: Done! 5 shirt, 2 pant — kal subah uthwa lenge. Confirm kar dein? — {settings.SHOP_NAME} AI\\n"
+    "   (intake: ready=true, pickup_date=<kal ki ISO date>)\\n"
+    "customer: मेरे कपड़े कब आएंगे\\n"
+    f"reply: आपका ऑर्डर KK-1042 प्रेस हो रहा है, कल तक मिल जाएगा 👍 — {settings.SHOP_NAME} AI"
 )
 
 
@@ -492,6 +558,7 @@ async def build_ai_reply(
                     else llm_client.MODEL_CHEAP
                 ),
                 max_tokens=1024,  # thinking tokens count toward this cap; 512 truncated JSON before
+                history=ctx[2],
             )
     except LLMError as exc:
         log.warning("ai_compose_failed", error=str(exc)[:150])
@@ -646,32 +713,19 @@ async def build_ai_reply(
 
 async def _gather_context(
     db: AsyncSession, customer: Customer, text: str, tool_names: dict[str, int] | None = None
-) -> tuple[str, str, str]:
-    """Everything the model gets to read: (facts, knowledge, history).
-
-    Sequential by design — one AsyncSession cannot serve concurrent queries.
-    Never raises: a missing knowledge block costs a slightly worse reply,
-    while an exception here would cost the customer any reply at all.
-    """
-    from app.services.knowledge import knowledge_block, relevant_knowledge, thread_history
+) -> tuple[str, str, list[dict]]:
+    """(facts, knowledge, turns). Sequential — one session, one query at a time."""
+    from app.services.knowledge import knowledge_block, relevant_knowledge
 
     facts = await _build_facts(db, customer, tool_names=tool_names)
     try:
-        faqs, corrections, doc_chunks = await relevant_knowledge(
-            db, text, audience="customer"
-        )
+        faqs, corrections, doc_chunks = await relevant_knowledge(db, text, audience="customer")
         kb = knowledge_block(faqs, corrections, doc_chunks)
     except Exception:
         log.exception("knowledge_lookup_failed")
         kb = ""
-    try:
-        # Keep a compact recent window. Saved profile fields are authoritative,
-        # so we do not need 20 messages on every paid Gemini call.
-        history = await thread_history(db, customer_id=customer.id, limit=8)
-    except Exception:
-        log.exception("thread_history_failed")
-        history = ""
-    return facts, kb, history
+    turns = await _thread_turns(db, customer, text)
+    return facts, kb, turns
 
 
 def _needs_smart_customer_reply(text: str) -> bool:
@@ -689,13 +743,15 @@ def _needs_smart_customer_reply(text: str) -> bool:
     )
 
 
-def _build_prompt(ctx: tuple[str, str, str], text: str, lang: str) -> str:
-    facts, kb, history = ctx
-    parts = [_runtime_block(), f"BUSINESS ACTION POLICY:\n{business_policy_text()}\n\n{ACTION_EXECUTION_RULES}", f"FACTS:\n{facts}"]
+def _build_prompt(ctx: tuple[str, str, list[dict]], text: str, lang: str) -> str:
+    facts, kb, _turns = ctx
+    parts = [
+        _runtime_block(),
+        f"BUSINESS ACTION POLICY:\n{business_policy_text()}\n\n{ACTION_EXECUTION_RULES}",
+        f"FACTS:\n{facts}",
+    ]
     if kb:
         parts.append(kb)
-    if history:
-        parts.append(history)
     parts.append(f"CUSTOMER MESSAGE (language={lang}; infer language if auto):\n{text[:1000]}")
     return "\n\n".join(parts)
 
@@ -899,11 +955,15 @@ async def _build_facts(
 ) -> str:
     """Build facts only from customer-safe tools selected by the router."""
     lines: list[str] = []
-    selected = (
-        {name: 20 for name in CUSTOMER_READ_TOOLS}
-        if tool_names is None
-        else {name: max(1, min(int(limit), 20)) for name, limit in tool_names.items() if name in CUSTOMER_READ_TOOLS}
+    # Baseline grounding on every turn: rate card + recent orders. Other
+    # customer-safe reads are selected by the router as needed.
+    selected: dict[str, int] = {"get_shop_rate_card": 20, "get_customer_orders": 3}
+    extra = (
+        {name: 20 for name in CUSTOMER_READ_TOOLS} if tool_names is None else tool_names
     )
+    for name, limit in extra.items():
+        if name in CUSTOMER_READ_TOOLS:
+            selected[name] = max(selected.get(name, 0), max(1, min(int(limit), 20)))
 
     # Always include the authenticated customer's profile. The tool router
     # is optimized for the current question, but identity/address memory must
