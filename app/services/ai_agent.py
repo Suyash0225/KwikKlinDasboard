@@ -175,20 +175,45 @@ _TOOL_ROUTER_SYSTEM = (
 
 
 def _select_customer_tools_deterministic(text: str) -> dict[str, int]:
-    """Provide a complete, customer-scoped fact set to the language model.
+    """Select a small set of read-only facts using inexpensive multilingual cues.
 
-    Do not infer intent from a fixed keyword list. Customers can ask in Hindi,
-    Hinglish, English, with typos, indirectly, or across multiple messages.
-    The composer decides which facts matter; these bounded read tools expose
-    only this customer's profile/orders/bills and the shop's public rate card.
+    Keep routing deterministic and minimal (no extra Gemini call), while
+    recognizing common Hindi/Hinglish variants for routine customer questions.
     """
-    del text  # routing must not depend on literal words in the message
-    return {
-        "get_customer_profile": 1,
-        "get_customer_orders": 20,
-        "get_customer_bills": 20,
-        "get_shop_rate_card": 20,
-    }
+    lowered = (text or "").casefold()
+    selected: dict[str, int] = {}
+
+    if re.search(
+        r"\\b(?:order|orders|kapda|kapde|kapdon|delivery|deliver|kab milega|"
+        r"status|ready|pickup|pick ?up|washing|wash|iron|ironing|received|"
+        r"mila|mil gaya|kahan hai|kidhar hai|kab tak)\\b",
+        lowered,
+    ):
+        selected["get_customer_orders"] = 5
+
+    if re.search(
+        r"\\b(?:bill|invoice|payment|pay|paid|due|baaki|baki|kitna dena|"
+        r"receipt|upi|payment link|kitna baki|kitna baaki)\\b",
+        lowered,
+    ):
+        selected["get_customer_bills"] = 5
+
+    if re.search(
+        r"\\b(?:price|prices|rate|rates|cost|charge|charges|rate card|"
+        r"price list|laundry rate|dhulai|dry ?clean|shirt|blanket|per piece|"
+        r"kitne ka|kitna lagega|kya rate)\\b",
+        lowered,
+    ):
+        selected["get_shop_rate_card"] = 20
+
+    if re.search(
+        r"\\b(?:my profile|mera naam|mera address|my address|phone number|"
+        r"mobile number|naam kya|address kya|mera phone|mera mobile)\\b",
+        lowered,
+    ):
+        selected["get_customer_profile"] = 1
+
+    return selected
 
 
 async def _select_customer_tools(
