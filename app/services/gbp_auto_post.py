@@ -419,8 +419,8 @@ async def auto_post_daily(db, now_ist: datetime) -> dict:
     poster_url = _public_poster_url(await app_settings.get(db, "gbp_owner_poster_url"))
     poster_issue = None
     if not poster_url:
-        poster_url, poster_issue = await _build_poster_url(db, now_ist, topic_key)
-        poster_url = _public_poster_url(poster_url)
+        # Owner supplies every poster. Never generate artwork or silently publish text-only.
+        poster_issue = "owner_poster_required: upload your own poster in the Control panel before daily publishing"
     if not poster_url:
         # The owner explicitly expects a branded poster on GBP. Do not silently
         # publish a text-only post when image generation or the stable public
