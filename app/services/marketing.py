@@ -156,7 +156,7 @@ async def recompute_segments(db: AsyncSession) -> dict[str, int]:
     return counts
 
 
-async def eligible(db: AsyncSession, customer_id) -> tuple[bool, str]:
+async def eligible(db: AsyncSession, customer_id, *, ignore_frequency_cap: bool = False) -> tuple[bool, str]:
     """Compliance gate for ONE customer. Returns (ok, reason_if_not)."""
     cust = await db.get(Customer, customer_id)
     if cust is None or not cust.is_active:
@@ -166,7 +166,7 @@ async def eligible(db: AsyncSession, customer_id) -> tuple[bool, str]:
     if _blocked_test_recipient(cust.phone):
         return False, "blocked_test_recipient"
     cap = int(await app_settings.get(db, "marketing_freq_cap_per_month"))
-    if cust.last_marketing_at:
+    if not ignore_frequency_cap and cust.last_marketing_at:
         min_gap_days = max(1, 30 // max(cap, 1))
         if datetime.now(timezone.utc) - cust.last_marketing_at < timedelta(days=min_gap_days):
             return False, "freq_cap"
