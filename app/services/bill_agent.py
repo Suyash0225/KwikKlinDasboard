@@ -1645,6 +1645,7 @@ async def handle_staff_message(
     reply: str | None = None
     if action == "new_bill" and extracted["items"]:
         draft = await _price_draft(db, extracted)
+        await _learn_aliases(db, pending.draft if isinstance(pending, PendingBill) else None, draft)
         pending_bill = PendingBill(draft=draft)
         _PENDING[sender_phone] = pending_bill
         reply = _draft_summary(draft)
@@ -1946,20 +1947,85 @@ async def _extract_from_photo(
 
 # Spelling variants of the SAME word only — never a mapping from one
 # garment to a different one (that would be guessing on the owner's behalf).
-_SPELLING = {
-    "pent": "pant", "paint": "pant", "pantt": "pant",
-    "sari": "saree", "sadi": "saree",
-    "jean": "jeans", "kurtha": "kurta", "shart": "shirt",
-    "dryclean": "dryclean", "drycleaning": "dryclean",
-}
-
-
 def _key(word: str) -> str:
-    """Match key: case/space/hyphen/plural-insensitive, applied to BOTH sides."""
-    k = re.sub(r"[^a-z0-9]+", "", (word or "").lower())
-    if len(k) > 3 and k.endswith("s"):
-        k = k[:-1]
-    return _SPELLING.get(k, k)
+    """Match key: case/space/hyphen/plural-insensitive, applied to BOTH sides.
+
+    Resolves the built-in Hinglish names too (chadar -> bedsheet); the
+    shop's learned names are applied by _card_matcher when pricing.
+    """
+    from app.services import garment_aliases
+
+    return garment_aliases.key(word)
+
+
+def _card_matcher(words: list[str], aliases: dict[str, str]):
+    """Match-key function for one rate card.
+
+    Aliases map a name to its canonical key, but when two DIFFERENT rows of
+    this card land on the same canonical key (a shop that lists both
+    "Pillow" and "Pillow Cover"), those rows keep their own names: an alias
+    must never merge two things the shop prices separately.
+    """
+    from app.services.garment_aliases import raw_key
+
+    groups: dict[str, set[str]] = {}
+    for w in words:
+        k = raw_key(w)
+        groups.setdefault(aliases.get(k, k), set()).add(k)
+    shared = {canon for canon, raws in groups.items() if len(raws) > 1}
+
+    def match(word: str | None) -> str:
+        k = raw_key(word)
+        canon = aliases.get(k, k)
+        return k if canon in shared else canon
+
+    return match
+
+
+async def _learn_aliases(db: AsyncSession, before: dict | None, after: dict) -> None:
+    """Staff fixed a line the card did not know -> remember the shop's word.
+
+    Learns only an unambiguous fix: exactly one line was unknown before,
+    exactly one new priced garment appeared, with the same quantity. "2
+    chaddar" (unknown) corrected to "2 bedsheet" teaches chaddar = bedsheet.
+    """
+    if not before:
+        return
+    try:
+        from app.services import garment_aliases
+
+        def unknown(d):
+            return [i for i in d["items"] if i.get("amount") is None and not i.get("options")]
+
+        old_unknown = unknown(before)
+        old_garments = {_key(i.get("garment")) for i in before["items"]}
+        new_priced = [
+            i for i in after["items"]
+            if i.get("amount") is not None and _key(i.get("garment")) not in old_garments
+        ]
+        if len(old_unknown) != 1 or len(new_priced) != 1 or unknown(after):
+            return
+        # Same bill, one line fixed — not a new bill for someone else that
+        # happens to have one new garment in it.
+        if len(before["items"]) != len(after["items"]):
+            return
+        if (before.get("customer_phone") or "") != (after.get("customer_phone") or "") or (
+            (before.get("customer_name") or "").casefold() != (after.get("customer_name") or "").casefold()
+        ):
+            return
+        kept = {(_key(i.get("garment")), float(i.get("qty") or 0)) for i in before["items"] if i is not old_unknown[0]}
+        if not kept <= {(_key(i.get("garment")), float(i.get("qty") or 0)) for i in after["items"]}:
+            return
+        was, now = old_unknown[0], new_priced[0]
+        if float(was.get("qty") or 0) != float(now.get("qty") or 0):
+            return
+        rates = (await db.execute(select(Rate.garment).where(Rate.is_active))).scalars().all()
+        await garment_aliases.learn(
+            db, was.get("read_as") or was.get("garment") or "", now["garment"],
+            rate_keys={garment_aliases.raw_key(g) for g in rates},
+        )
+    except Exception:
+        log.exception("garment_alias_learn_failed")
 
 
 async def _price_draft(db: AsyncSession, extracted: dict) -> dict:
@@ -1969,17 +2035,22 @@ async def _price_draft(db: AsyncSession, extracted: dict) -> dict:
     and a garment that exists under several services asks which one. We do
     not silently pick a rate-card row that "looks close".
     """
+    from app.services import garment_aliases
+
     rates = (
         (await db.execute(select(Rate).where(Rate.is_active))).scalars().all()
     )
-    by_key = {(_key(r.service), _key(r.garment)): r for r in rates}
+    aliases = await garment_aliases.load(db)
+    g_match = _card_matcher([r.garment for r in rates], aliases)
+    s_match = _card_matcher([r.service for r in rates], aliases)
+    by_key = {(s_match(r.service), g_match(r.garment)): r for r in rates}
     items = []
     total = Decimal("0")
     for it in extracted["items"]:
         qty = Decimal(str(it.get("qty") or 1))
-        g_key, s_key = _key(it.get("garment")), _key(it.get("service"))
+        g_key, s_key = g_match(it.get("garment")), s_match(it.get("service"))
         rate_row = by_key.get((s_key, g_key)) if g_key else None
-        options = [r for r in rates if g_key and _key(r.garment) == g_key]
+        options = [r for r in rates if g_key and g_match(r.garment) == g_key]
         if rate_row is None and len(options) == 1:
             # only one service exists for this garment — no choice to make
             rate_row = options[0]

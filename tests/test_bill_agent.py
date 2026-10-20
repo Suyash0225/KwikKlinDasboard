@@ -1240,3 +1240,47 @@ async def test_failed_order_write_keeps_draft_for_retry(monkeypatch, sent) -> No
         with pytest.raises(RuntimeError):
             await bill_module._finalize_bill(db, SENDER, "manager", pending)
     assert _PENDING.get(SENDER) is pending
+
+
+# --- Hinglish names and the shop's own learned names ---
+
+def test_card_matcher_resolves_hinglish_but_never_merges_two_rows() -> None:
+    from app.services.garment_aliases import BUILTIN
+
+    match = bill_module._card_matcher(["Bedsheet", "Shirt"], BUILTIN)
+    assert match("2 chadar".split()[1]) == match("Bedsheet") == match("chaddars")
+    assert match("kambal") != match("Bedsheet")
+    # a shop that prices Pillow and Pillow Cover separately keeps them apart
+    both = bill_module._card_matcher(["Pillow", "Pillow Cover"], BUILTIN)
+    assert both("pillow") != both("pillow cover")
+
+
+async def test_staff_correction_teaches_the_shops_word(monkeypatch, sent) -> None:
+    from app.services import app_settings
+
+    def draft(garment, phone="9999900124"):
+        return {"customer_name": "Sharma ji", "customer_phone": phone, "advance": 0,
+                "expected_delivery": "", "items": [{"service": SERVICE_ALT, "garment": garment, "qty": 1}]}
+
+    async with async_session_factory() as db:
+        before = await bill_module._price_draft(db, draft("Jhabla"))
+        assert before["items"][0]["amount"] is None          # card does not know it
+        after = await bill_module._price_draft(db, draft("Sherwani"))
+        await bill_module._learn_aliases(db, before, after)
+        assert (await app_settings.get(db, "garment_aliases")).get("jhabla") == "sherwani"
+        again = await bill_module._price_draft(db, draft("jhabla"))
+    assert again["items"][0]["amount"] == 300.0               # priced next time
+
+
+async def test_a_different_bill_teaches_nothing(monkeypatch, sent) -> None:
+    from app.services import app_settings
+
+    async with async_session_factory() as db:
+        old = {"customer_name": "Sharma ji", "customer_phone": "9999900124", "advance": 0,
+               "expected_delivery": "", "items": [{"service": SERVICE_ALT, "garment": "Sofa cover", "qty": 1}]}
+        new = {**old, "customer_name": "Verma", "customer_phone": "9999900125",
+               "items": [{"service": SERVICE_ALT, "garment": "Sherwani", "qty": 1}]}
+        await bill_module._learn_aliases(
+            db, await bill_module._price_draft(db, old), await bill_module._price_draft(db, new)
+        )
+        assert "sofacover" not in (await app_settings.get(db, "garment_aliases") or {})

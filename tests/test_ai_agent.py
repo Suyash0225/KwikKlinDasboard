@@ -1024,3 +1024,24 @@ async def test_history_keeps_voice_transcripts_and_real_newlines() -> None:
         turns = await agent_module._thread_turns(db, cust, "theek")
     assert turns[0] == {"role": "user", "text": "5 shirt dhulwani hai\nkal le jao"}
     assert turns[1]["role"] == "model"
+
+
+def test_hinglish_name_grounds_the_rate_card_row() -> None:
+    rates = [{"service": "Wash & Iron", "garment": "Bedsheet", "rate": "60", "unit": "pc"}]
+    assert agent_module.amounts_are_grounded(rates, "chadar ka rate?", "Chadar ₹60/piece hai ji")
+    assert not agent_module.amounts_are_grounded(rates, "kambal ka rate?", "Kambal ₹60 hai")
+
+
+async def test_rate_card_facts_list_other_names(monkeypatch) -> None:
+    async def fake_tool(db, customer, name, **kw):
+        return {
+            "get_customer_profile": {"name": "AI Grahak", "address": "X", "phone": PHONE},
+            "get_customer_orders": [],
+            "get_shop_rate_card": [{"service": "Wash & Iron", "garment": "Bedsheet", "rate": 60, "unit": "pc"}],
+        }[name]
+
+    monkeypatch.setattr(agent_module, "run_customer_tool", fake_tool)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        facts = await agent_module._build_facts(db, cust, tool_names={})
+    assert "Bedsheet: ₹60/pc (also: chadar" in facts

@@ -128,12 +128,24 @@ async def _price_reply_is_grounded(
         return True
     from app.services.ai_tools import get_shop_rate_card
 
+    from app.services import garment_aliases
+
     rates = await get_shop_rate_card(db, customer)
-    return amounts_are_grounded(rates, question, reply, facts=facts)
+    aliases = await garment_aliases.load(db)
+    return amounts_are_grounded(rates, question, reply, facts=facts, aliases=aliases)
+
+
+def _names_alias_of(garment: str, question_keys: set[str], aliases: dict[str, str]) -> bool:
+    from app.services.garment_aliases import raw_key
+
+    target = raw_key(garment)
+    target = aliases.get(target, target)
+    return any(aliases.get(k, k) == target for k in question_keys)
 
 
 def amounts_are_grounded(
-    rates: list[dict], question: str, reply: str, *, facts: str = ""
+    rates: list[dict], question: str, reply: str, *, facts: str = "",
+    aliases: dict[str, str] | None = None,
 ) -> bool:
     """Reject numeric price claims unless they match the requested active DB rate.
 
@@ -156,6 +168,10 @@ def amounts_are_grounded(
         return True
 
     normalized_question = re.sub(r"[^a-z0-9]+", " ", (question or "").casefold()).strip()
+    from app.services import garment_aliases
+
+    alias_table = garment_aliases.BUILTIN if aliases is None else aliases
+    question_keys = {garment_aliases.raw_key(w) for w in normalized_question.split()}
     grounded_amounts: set[str] = set()
     for row in rates:
         garment = re.sub(r"[^a-z0-9]+", " ", str(row.get("garment") or "").casefold()).strip()
@@ -164,6 +180,8 @@ def amounts_are_grounded(
         # or service. Ambiguous aliases must be clarified rather than guessed.
         named = bool(garment and re.search(r"\b" + re.escape(garment) + r"\b", normalized_question))
         named = named or bool(service and re.search(r"\b" + re.escape(service) + r"\b", normalized_question))
+        # "chadar ka rate?" names the Bedsheet row through its Hinglish name.
+        named = named or bool(garment and _names_alias_of(garment, question_keys, alias_table))
         if named:
             grounded_amounts.add(canonical_amount(str(row.get("rate") or "")))
     named_rates = []
@@ -1485,12 +1503,17 @@ async def _build_facts(
         try:
             rates = await run_customer_tool(db, customer, "get_shop_rate_card")
             if rates:
-                lines.append("Rate card (per piece unless /kg):")
-                lines.extend(
-                    f"- {r['service']}{' / ' + r['garment'] if r['garment'] else ''}: "
-                    f"₹{r['rate']}/{r['unit']}"
-                    for r in rates
-                )
+                from app.services import garment_aliases
+
+                other_names = garment_aliases.names_by_garment(await garment_aliases.load(db))
+                lines.append("Rate card (per piece unless /kg; 'also' = other names customers use):")
+                for r in rates:
+                    also = other_names.get(garment_aliases.key(r["garment"]), [])[:4] if r["garment"] else []
+                    lines.append(
+                        f"- {r['service']}{' / ' + r['garment'] if r['garment'] else ''}: "
+                        f"₹{r['rate']}/{r['unit']}"
+                        + (f" (also: {', '.join(also)})" if also else "")
+                    )
         except Exception:
             log.exception("shop_rate_card_tool_failed")
 
