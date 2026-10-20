@@ -202,6 +202,62 @@ async def test_compose_prompt_tells_ai_not_to_repeat_saved_profile(monkeypatch) 
     assert reply
 
 
+def test_customer_fact_selection_is_not_keyword_gated() -> None:
+    """Unusual phrasing still gets the same bounded facts for semantic reasoning."""
+    expected = {
+        "get_customer_profile": 1,
+        "get_customer_orders": 20,
+        "get_customer_bills": 20,
+        "get_shop_rate_card": 20,
+    }
+    for message in (
+        "Blazer rate btao",
+        "kal jo kapde diye the unka kya hua?",
+        "paisa kaise jama karu",
+        "Can you help me with something else?",
+        "mujhe kapde dhulwane hain plz",
+    ):
+        assert agent_module._select_customer_tools_deterministic(message) == expected
+
+
+def test_new_customer_onboarding_does_not_block_general_questions() -> None:
+    """A missing profile must not prevent an answer to a non-order question."""
+    customer = Customer(phone=PHONE, name=None, address=None)
+    assert not agent_module._needs_new_customer_onboarding(
+        "PRICE_QUERY", [], None, customer, "ANSWER"
+    )
+    assert not agent_module._needs_new_customer_onboarding(
+        "OTHER", [], None, customer, "ANSWER"
+    )
+    assert agent_module._needs_new_customer_onboarding(
+        "NEW_ORDER", [], None, customer, "CREATE_LEAD"
+    )
+
+
+async def test_new_customer_can_get_rate_answer_before_profile_onboarding(monkeypatch) -> None:
+    async def fake_ask_json(**kw):
+        return {
+            "reply": "Blazer dry-clean ka exact rate rate card mein verify kar raha hoon.",
+            "intent": "PRICE_QUERY", "language": "hi",
+            "action": "ANSWER", "action_reason": "",
+            "escalate": False, "escalation_reason": "", "admin_note": "",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        cust = Customer(phone=PHONE, name=None, address=None)
+        db.add(cust)
+        await db.commit()
+        reply = await build_ai_reply(db, cust, "Blazer ka rate kitna padega?")
+
+    assert reply and "rate" in reply.lower()
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        assert cust.name is None
+        assert cust.address is None
+
+
 async def test_compose_happy_path_no_escalation(monkeypatch) -> None:
     async def fake_ask_json(**kw):
         # the FACTS block must carry customer identity, never notes
