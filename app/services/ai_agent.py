@@ -12,6 +12,7 @@ Safety design — every rule enforced in CODE, not just in the prompt:
 """
 
 import re
+from decimal import Decimal, InvalidOperation
 from datetime import datetime as _dt, timezone as _tz
 
 import structlog
@@ -54,8 +55,14 @@ _PRICE_AMOUNT_RE = re.compile(r"(?:₹|\\bINR\\s*|\\bRs\\.?\\s*)(\\d+(?:\\.\\d{1
 
 async def _price_reply_is_grounded(db: AsyncSession, customer: Customer, question: str, reply: str) -> bool:
     """Reject numeric price claims unless they match the requested active DB rate."""
+    def canonical_amount(value: str) -> str:
+        try:
+            return format(Decimal(value).normalize(), "f")
+        except (InvalidOperation, ValueError):
+            return value
+
     quoted = {
-        (match.group(1) or match.group(2)).rstrip("0").rstrip(".")
+        canonical_amount(match.group(1) or match.group(2))
         for match in _PRICE_AMOUNT_RE.finditer(reply or "")
     }
     if not quoted:
@@ -72,7 +79,7 @@ async def _price_reply_is_grounded(db: AsyncSession, customer: Customer, questio
         # or service. Ambiguous aliases must be clarified rather than guessed.
         named = bool(garment and re.search(r"\\b" + re.escape(garment) + r"\\b", normalized_question))
         named = named or bool(service and re.search(r"\\b" + re.escape(service) + r"\\b", normalized_question))
-        amount = str(row.get("rate") or "").rstrip("0").rstrip(".")
+        amount = canonical_amount(str(row.get("rate") or ""))
         if named and amount in quoted:
             return True
     return False
