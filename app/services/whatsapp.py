@@ -584,52 +584,65 @@ async def send_image(
     )
     return mid
 
-async def download_media(media_id: str, dest_dir: str) -> str | None:
-    """Fetch an inbound media file from Meta; returns saved filename or None.
+async def download_media(
+    media_id: str, dest_dir: str, *, media_url: str | None = None,
+    mime_type: str | None = None,
+) -> str | None:
+    """Fetch inbound media using WAHA media URL or Meta media API.
 
     Never raises — inbound processing must survive a failed download.
     """
     import os
     import uuid as _uuid
 
-    # Inbound processing ke context ka tenant — usi ke token se media milta
-    # hai (Meta media sirf apne number ke token se download hota hai).
-    from app.database import async_session_factory as _asf
-
-    async with _asf() as _db:
-        creds = await resolve_creds(_db)
-    headers = {"Authorization": f"Bearer {creds.token}"}
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            meta = await client.get(
-                f"{_GRAPH}/{media_id}", headers=headers
-            )
-            if meta.status_code >= 400:
-                log.warning("media_meta_failed", media_id=media_id, status=meta.status_code)
+        if settings.WHATSAPP_PROVIDER == "waha":
+            # WAHA message IDs are not Meta Graph media IDs.
+            if not media_url:
+                log.warning("media_waha_url_missing", media_id=media_id)
                 return None
-            info = meta.json()
-            url = info.get("url")
-            mime = info.get("mime_type", "image/jpeg")
-            if not url:
-                return None
-            blob = await client.get(url, headers=headers)
-            if blob.status_code >= 400:
-                log.warning("media_download_failed", media_id=media_id, status=blob.status_code)
-                return None
-        ext = MEDIA_EXT.get(mime.split(";")[0].strip())
+            from app.services import waha
+
+            content, response_mime = await waha.download_media_url(media_url)
+            mime = mime_type or response_mime or "application/octet-stream"
+        else:
+            # Meta media must be resolved with the connected business token.
+            from app.database import async_session_factory as _asf
+
+            async with _asf() as _db:
+                creds = await resolve_creds(_db)
+            headers = {"Authorization": f"Bearer {creds.token}"}
+            async with httpx.AsyncClient(timeout=60) as client:
+                meta = await client.get(f"{_GRAPH}/{media_id}", headers=headers)
+                if meta.status_code >= 400:
+                    log.warning("media_meta_failed", media_id=media_id, status=meta.status_code)
+                    return None
+                info = meta.json()
+                url = info.get("url")
+                mime = info.get("mime_type", "image/jpeg")
+                if not url:
+                    return None
+                blob = await client.get(url, headers=headers)
+                if blob.status_code >= 400:
+                    log.warning("media_download_failed", media_id=media_id, status=blob.status_code)
+                    return None
+                content = blob.content
+
+        ext = MEDIA_EXT.get((mime or "").split(";")[0].strip())
         if not ext:
-            # unknown type: keep the subtype so the file is still openable
-            ext = "." + (mime.split("/")[-1].split(";")[0].strip() or "bin")[:8]
+            subtype = (mime or "").split("/")[-1].split(";")[0].strip() or "bin"
+            ext = "." + subtype[:8]
         name = f"in-{_uuid.uuid4().hex}{ext}"
         os.makedirs(dest_dir, exist_ok=True)
         with open(os.path.join(dest_dir, name), "wb") as fh:
-            fh.write(blob.content)
-        log.info("media_downloaded", media_id=media_id, file=name, bytes=len(blob.content))
+            fh.write(content)
+        log.info("media_downloaded", media_id=media_id, file=name, bytes=len(content),
+                 provider=settings.WHATSAPP_PROVIDER)
         return name
     except Exception:
-        log.exception("media_download_error", media_id=media_id)
+        log.exception("media_download_error", media_id=media_id,
+                      provider=settings.WHATSAPP_PROVIDER)
         return None
-
 
 async def _find_recipient(
     db: AsyncSession, phone: str
