@@ -19,3 +19,14 @@ def test_automated_agent_detector_is_conservative():
     assert looks_like_automated_agent("I am a bot and can help you with your order.")
     assert not looks_like_automated_agent("Hi, I want to know your laundry price.")
     assert not looks_like_automated_agent("Do you have pickup service?")
+
+
+def test_customer_asking_about_a_bot_does_not_pause_the_agent():
+    # A customer naming the word must still get an answer.
+    assert not looks_like_automated_agent("kya ye chatbot hai?")
+    assert not looks_like_automated_agent("Is this an auto reply? I need a human")
+    assert not looks_like_automated_agent("aapka virtual assistant kaam nahi kar raha")
+    # Senders describing themselves are still caught.
+    assert looks_like_automated_agent("Hi! I am a virtual assistant of ABC Store.")
+    assert looks_like_automated_agent("This is an auto-reply. We will get back soon.")
+    assert looks_like_automated_agent("This is an automated reply.")

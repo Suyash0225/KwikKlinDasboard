@@ -989,3 +989,22 @@ async def test_personalized_winback_creates_customer_locked_coupon_and_caps_30_d
                 {"phone": PHONE},
             )
             await cleanup_db.commit()
+
+
+def test_winback_target_list_formats_members() -> None:
+    # Regression: this used datetime without importing it and crashed the
+    # weekly suggestion whenever the normal_late segment won.
+    from datetime import datetime, timedelta, timezone
+
+    from app.services.marketing_agent import _winback_target_list
+
+    out = _winback_target_list({
+        "members": [{
+            "name": "Sharma ji",
+            "usual_items": ["Kurta"],
+            "average_visit_gap_days": 10,
+            "last_visit_at": datetime.now(timezone.utc) - timedelta(days=30),
+        }],
+    })
+    assert "Sharma ji" in out
+    assert "offer eligible" in out

@@ -45,6 +45,7 @@ from app.services.marketing import (
     queue_campaign,
     send_campaign,
 )
+from app.services.marketing_agent import _spawn
 from app.utils.phone import normalize_phone
 from app.utils.dates import IST
 
@@ -866,7 +867,7 @@ async def approve_campaign(campaign_id: str, db: AsyncSession = Depends(get_db))
             "status": "failed",
             "message": "No eligible recipients. Check segment, opt-outs, frequency caps, and active orders.",
         }
-    asyncio.create_task(send_campaign(c.id))
+    _spawn(send_campaign(c.id))
     await audit.record(
         actor_role="admin", actor="dashboard", action="campaign_approved",
         args={"campaign": c.name}, result=f"queued {queued}",

@@ -174,6 +174,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Sab theek? Upar menu se choice select karein: Haan = bill banega | Bill Badalna Hai = edit | Cancel = draft hatao.",
         "en": "Please choose from the menu above: Yes = create bill | Edit = change draft | Cancel = discard draft.",
     },
+    "bill_draft_phone": {
+        "hi": "Customer number: {phone} — sahi hai na?",
+        "en": "Customer number: {phone} — is this right?",
+    },
     "bill_need_phone": {
         "hi": "⚠️ Customer ka number nahi mila — number bhej dein, draft saved hai.",
         "en": "⚠️ No customer number — send it, the draft is saved.",
