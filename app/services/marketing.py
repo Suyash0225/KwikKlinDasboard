@@ -578,10 +578,15 @@ async def send_campaign(campaign_id) -> None:
                             local_url=f"/admin/media/{creative_file}",
                             sent_by="bot",
                             intent="promotional",
+                            frequency_cap_exempt=campaign.campaign_type == "wish",
                         )
                     else:
                         wamid = await send_message(
-                            db, to_phone=cust.phone, text=text, category="marketing"
+                            db,
+                            to_phone=cust.phone,
+                            text=text,
+                            category="marketing",
+                            frequency_cap_exempt=campaign.campaign_type == "wish",
                         )
                     rec.status = "sent"
                     rec.wa_message_id = wamid
