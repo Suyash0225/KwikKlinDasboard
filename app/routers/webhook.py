@@ -1132,10 +1132,14 @@ async def _handle_inbound_message(
         caption = part.get("caption") or ""
         label = part.get("filename") or ""
         if media_id:
-            fname = await download_media(
-                media_id, media_dir, media_url=part.get("url"),
-                mime_type=part.get("mimetype"),
-            )
+            if settings.WHATSAPP_PROVIDER == "waha":
+                fname = await download_media(
+                    media_id, media_dir, media_url=part.get("url"),
+                    mime_type=part.get("mimetype"),
+                )
+            else:
+                # Preserve the existing Meta provider signature and test hooks.
+                fname = await download_media(media_id, media_dir)
             if fname:
                 marker = "image" if mtype in ("image", "sticker") else mtype
                 text = f"[{marker}:/admin/media/{fname}]"
