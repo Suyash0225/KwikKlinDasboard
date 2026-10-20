@@ -1495,6 +1495,7 @@ function renderLines() {
    tap = 2. Neeche chhota cart. Data wahi LINES hai jo desktop editor
    likhta hai, isliye hisaab aur save ek hi rasta. */
 let NB_SVC = "";
+let NBQ_LIST = [];   // tiles as rendered (search can mix services)
 
 /* Kapde kahan hain — dukaan par, ya grahak se lene jaana hai? Lene jaana
    ho to pickup_date jaata hai aur order delivery wale ki list mein pickup
@@ -1568,16 +1569,23 @@ function renderQuick() {
   $("nbq-svcs").innerHTML = svcs.map((s) =>
     `<button type="button" role="tab" class="nbq-svc${s === NB_SVC ? " on" : ""}" aria-selected="${s === NB_SVC}"
       onclick="nbPickSvc(this.dataset.s)" data-s="${esc(s)}">${esc(s)}</button>`).join("");
-  const items = garmentsFor(NB_SVC);
+  // Search narrows this service; anything matching in other services shows
+  // after it, labelled, so "shirt" finds Shirt in every service in one go.
+  const q = (($("nbq-q") || {}).value || "").trim().toLowerCase();
+  const hit = (r) => !q || (r.garment || "by weight").toLowerCase().includes(q);
+  const here = garmentsFor(NB_SVC).filter(hit);
+  const other = q ? RATES.filter((r) => r.is_active && r.service !== NB_SVC && hit(r)).slice(0, 12) : [];
+  const items = here.concat(other);
+  NBQ_LIST = items;
   $("nbq-items").innerHTML = items.length
     ? items.map((r, n) => {
         const inCart = LINES.find((l) => l.service === r.service && l.garment === r.garment);
         const count = inCart ? (r.unit === "kg" ? `${inCart.qty}kg` : inCart.qty) : "";
         return `<button type="button" class="nbq-item${inCart ? " in" : ""}" onclick="nbTap(${n})">
-          <b>${esc(r.garment || "By weight")}</b><small>₹${Number(r.rate)}${r.unit === "kg" ? "/kg" : ""}</small>
+          <b>${esc(r.garment || "By weight")}</b><small>₹${Number(r.rate)}${r.unit === "kg" ? "/kg" : ""}${r.service !== NB_SVC ? ` · ${esc(r.service)}` : ""}</small>
           ${inCart ? `<span class="nbq-n">${esc(String(count))}</span>` : ""}</button>`;
       }).join("")
-    : `<div class="nbq-empty">${svcs.length ? "No items in this service." : "Your rate card is empty — add a service below."}</div>`;
+    : `<div class="nbq-empty">${q ? `No “${esc(q)}” on the rate card — add it with “New service / item”.` : svcs.length ? "No items in this service." : "Your rate card is empty — add a service below."}</div>`;
   const rows = realLines();
   $("nb-cart").innerHTML = rows.map(([l, i]) => {
     const kg = lineUnit(l) === "kg";
@@ -1605,10 +1613,11 @@ function renderQuick() {
     </div>`;
   }).join("");
 }
-function nbPickSvc(s) { NB_SVC = s; renderQuick(); }
+function nbPickSvc(s) { NB_SVC = s; if ($("nbq-q")) $("nbq-q").value = ""; renderQuick(); }
 function nbTap(n) {
-  const r = garmentsFor(NB_SVC)[n];
+  const r = NBQ_LIST[n];
   if (!r) return;
+  if ($("nbq-q") && $("nbq-q").value) { $("nbq-q").value = ""; }
   // khaali placeholder line (desktop editor ka "Service…") phone par bekaar
   LINES = LINES.filter((l) => l.service);
   const same = LINES.find((l) => l.service === r.service && l.garment === r.garment);
@@ -2587,11 +2596,55 @@ async function bulkDeleteCustomers() {
     toast(e.message || "Bulk delete failed", true);
   }
 }
+/* Customers: summary tiles, filter chips, and one clean row per person.
+   Bulk-delete checkboxes appear only in Select mode — they used to sit on
+   every card, one stray tap from a destructive bulk action. */
+let CUST_FILTER = "all", CUST_SELECT_MODE = false;
+const CUST_FILTERS = {
+  all: ["All", () => true],
+  owes: ["Owes money", (c) => Number(c.outstanding) > 0],
+  active: ["Active orders", (c) => Number(c.active_orders) > 0],
+  opted: ["Opted out", (c) => !!c.opted_out],
+};
+function setCustFilter(f) { CUST_FILTER = f; CUST_SHOWN = 30; renderCustomers(); }
+function toggleCustSelectMode() {
+  CUST_SELECT_MODE = !CUST_SELECT_MODE;
+  if (!CUST_SELECT_MODE) CUST_SELECTED.clear();
+  if ($("cust-select-btn")) $("cust-select-btn").textContent = CUST_SELECT_MODE ? "Done" : "Select";
+  renderCustomers();
+}
+const initials = (name, phone) => {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  return (parts.length ? parts.slice(0, 2).map((p) => p[0]).join("") : String(phone || "").slice(-2)).toUpperCase();
+};
+function renderCustKpis() {
+  const box = $("cust-kpis");
+  if (!box) return;
+  const all = CUSTOMERS_CACHE || [];
+  const owes = all.filter((c) => Number(c.outstanding) > 0);
+  const out = owes.reduce((a, c) => a + Number(c.outstanding || 0), 0);
+  const active = all.filter((c) => Number(c.active_orders) > 0).length;
+  const plus = CUST_MAYBE_MORE ? "+" : "";
+  box.innerHTML =
+    kpi("Customers", `${all.length}${plus}`, "", "setCustFilter('all')", "i-users", "blue") +
+    kpi("Owe money", `${owes.length}${plus}`, "", "setCustFilter('owes')", "i-ledger", "red") +
+    kpi("Outstanding", money(out), "", "setCustFilter('owes')", "i-expense", "amber") +
+    kpi("Active orders", `${active}${plus}`, "", "setCustFilter('active')", "i-receipt", "green");
+}
 function renderCustomers() {
   if (!$("cust-list")) return;
-  const all = visibleCustomers();
+  renderCustKpis();
+  const test = (CUST_FILTERS[CUST_FILTER] || CUST_FILTERS.all)[1];
+  const searched = visibleCustomers();
+  if ($("cust-chips")) {
+    $("cust-chips").innerHTML = Object.entries(CUST_FILTERS).map(([k, [label, fn]]) =>
+      `<span class="chip ${CUST_FILTER === k ? "on" : ""}" onclick="setCustFilter('${k}')">${label}<span class="cnt">${searched.filter(fn).length}</span></span>`).join("");
+  }
+  const all = searched.filter(test);
   if (!all.length) {
-    $("cust-list").innerHTML = emptyBox("No customers yet — they appear after their first bill or message.", "👥");
+    $("cust-list").innerHTML = emptyBox((CUSTOMERS_CACHE || []).length
+      ? "Nobody matches — try another filter or search."
+      : "No customers yet — they appear after their first bill or message.", "👥");
     return;
   }
   const rows = all.slice(0, CUST_SHOWN);
@@ -2601,33 +2654,39 @@ function renderCustomers() {
   const moreBtn = more
     ? `<div style="padding:12px;text-align:center"><button class="btn ghost sm" onclick="custMore(this)">⬇ Show more (${rows.length}${CUST_MAYBE_MORE ? "+" : " / " + all.length})</button></div>`
     : "";
-  const selectBar = `<div class="row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 0">
-    <label><input type="checkbox" ${allVisibleSelected ? "checked" : ""} onchange="toggleVisibleCustomers(this.checked)"> Select visible (${rows.length})</label>
-    <div><span class="muted">${selectedCount} selected</span>
-    <button class="btn sm danger" ${selectedCount ? "" : "disabled"} onclick="bulkDeleteCustomers()">🗑 Delete selected</button></div>
-  </div>`;
+  const selectBar = CUST_SELECT_MODE ? `<div class="cust-selectbar">
+    <label><input type="checkbox" ${allVisibleSelected ? "checked" : ""} onchange="toggleVisibleCustomers(this.checked)"> Select all ${rows.length}</label>
+    <span class="muted">${selectedCount} selected</span>
+    <button class="btn sm danger" ${selectedCount ? "" : "disabled"} onclick="bulkDeleteCustomers()">🗑 Delete selected</button>
+  </div>` : "";
+  const due = (c) => Number(c.outstanding) > 0
+    ? `<span class="pill UNPAID">${money(c.outstanding)} due</span>`
+    : `<span class="pill PAID">Clear</span>`;
+  const sw = (c) => `<label class="switch" title="Automatic payment reminders"><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder('${c.phone}', this.checked)"><i></i><span>Auto reminder</span></label>`;
+  const pick = (c) => CUST_SELECT_MODE
+    ? `<input class="cust-pick" aria-label="Select ${esc(c.phone)}" type="checkbox" ${CUST_SELECTED.has(c.phone) ? "checked" : ""} onchange="toggleCustomerSelected('${esc(c.phone)}', this.checked)">` : "";
+  const who = (c) => `<div class="cust-who">${pick(c)}<span class="avatar">${esc(initials(c.name, c.phone))}</span>
+    <div><b>${esc(displayName(c.name, c.phone))}</b>${c.opted_out ? ' <span class="tag">opted out</span>' : ""}<span class="muted">${esc(c.phone)}</span></div></div>`;
+  const acts = (c) => `<div class="act">
+    ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
+    <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">Chat</button>
+    <button class="btn sm ghost" title="Actions" aria-label="Actions" onclick="customerMenu('${c.phone}')">⋯</button></div>`;
   $("cust-list").innerHTML = selectBar + `
-    <table class="tbl"><thead><tr><th>Select</th><th>Customer</th><th>Auto reminder</th><th>Orders</th><th>Business</th><th>Paid</th><th>Outstanding</th><th>Last seen</th><th>Actions</th></tr></thead>
+    <table class="tbl cust-tbl"><thead><tr><th>Customer</th><th>Orders</th><th>Business</th><th>Paid</th><th>Balance</th><th>Reminders</th><th>Last seen</th><th>Actions</th></tr></thead>
     <tbody>${rows.map((c) => `
-      <tr><td><input aria-label="Select ${esc(c.phone)}" type="checkbox" ${CUST_SELECTED.has(c.phone) ? "checked" : ""} onchange="toggleCustomerSelected('${esc(c.phone)}', this.checked)"></td>
-      <td>${esc(displayName(c.name, c.phone))}${c.opted_out ? ' <span class="tag">opted out</span>' : ""}<div class="muted">${esc(c.phone)}</div></td>
-      <td><label title="Automatic payment reminders"><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\'${c.phone}\', this.checked)"> Enable</label></td>
-      <td>${c.total_orders} <span class="muted">(${c.active_orders} active)</span></td>
+      <tr><td>${who(c)}</td>
+      <td>${c.total_orders}${Number(c.active_orders) ? ` <span class="muted">· ${c.active_orders} active</span>` : ""}</td>
       <td class="money">${money(c.business)}</td><td class="money">${money(c.paid)}</td>
-      <td class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</td>
+      <td>${due(c)}</td><td>${sw(c)}</td>
       <td class="muted">${c.last_message_at ? fmtWhen(c.last_message_at) : "—"}</td>
-      <td><div class="act">
-        ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
-        <button class="btn sm ghost" title="Actions" aria-label="Actions" onclick="customerMenu('${c.phone}')">⋯</button>
-      </div></td></tr>`).join("")}
+      <td>${acts(c)}</td></tr>`).join("")}
     </tbody></table>
     <div class="rowcards">${rows.map((c) => `
-      <div class="rowcard"><div class="r1"><label><input type="checkbox" ${CUST_SELECTED.has(c.phone) ? "checked" : ""} onchange="toggleCustomerSelected('${esc(c.phone)}', this.checked)"> <b>${esc(displayName(c.name, c.phone))}</b></label><span class="money" style="color:${Number(c.outstanding) > 0 ? "var(--danger)" : "var(--ok)"}">${money(c.outstanding)}</span></div>
-      <div class="kv"><span>${esc(c.phone)}</span><span>${c.total_orders} orders</span></div>
-      <div class="kv"><label><input type="checkbox" ${c.payment_reminders_enabled ? "checked" : ""} ${c.opted_out ? "disabled" : ""} onchange="setPaymentReminder(\'${c.phone}\', this.checked)"> Auto payment reminder</label></div>
-      <div class="kv"><span>Business ${money(c.business)}</span><span>Paid ${money(c.paid)}</span></div>
-      <div class="act">${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
-      <button class="btn sm ghost" onclick="customerMenu('${c.phone}')">⋯ Actions</button></div></div>`).join("")}</div>${moreBtn}`;
+      <div class="rowcard custcard">
+        <div class="cc-top">${who(c)}${due(c)}</div>
+        <div class="cc-meta"><span>${c.total_orders} orders${Number(c.active_orders) ? ` · ${c.active_orders} active` : ""}</span><span>${money(c.business)} business</span></div>
+        <div class="cc-foot">${sw(c)}${acts(c)}</div>
+      </div>`).join("")}</div>${moreBtn}`;
 }
 
 /* Ek ⋯ se saare kaam — har jagah wahi pattern (dashboard, bill history, staff panel) */
@@ -4349,9 +4408,9 @@ async function uploadDoc(input) {
   try {
     const r = await api("/admin/api/training/upload", { method: "POST", body: fd });
     toast(`${r.document} learned — ${r.chunks} parts, live now`);
-    $("doc-status").textContent = "";
+    $("doc-status").textContent = "Tap to choose a file";
     loadTraining();
-  } catch (e) { toast(e.message, true); $("doc-status").textContent = ""; }
+  } catch (e) { toast(e.message, true); $("doc-status").textContent = "Tap to choose a file"; }
   input.value = "";
 }
 function delDocAt(i) {
@@ -4590,7 +4649,11 @@ async function loadWahaConnection() {
           <span class="chip on">🟢 Connected</span>
           <b>${esc(s.push_name || s.number_masked || "WhatsApp")}</b>
         </div>
-        <small class="muted" style="display:block;margin-top:6px">Session: ${esc(s.session || "default")} · WAHA/NOWEB</small>`;
+        <small class="muted" style="display:block;margin-top:6px">Session: ${esc(s.session || "default")} · WAHA/NOWEB</small>
+        <div class="filters" style="margin-top:10px">
+          <button class="btn ghost sm" onclick="syncWahaWebhook(this)">↻ Sync inbox settings</button>
+          <small class="muted">Do this once after an update so replies you type on the shop phone appear in the Inbox.</small>
+        </div>`;
       return;
     }
     const started = state === "SCAN_QR_CODE" || state === "STARTING" || state === "INITIALIZING" || state === "AUTHENTICATING";
@@ -4607,6 +4670,16 @@ async function loadWahaConnection() {
   } catch (e) {
     box.innerHTML = `<div class="errbox">⚠️ ${esc(e.message)}<br><br><button class="btn ghost" onclick="loadWahaConnection()">Try again</button></div>`;
   }
+}
+
+/* Re-sends the webhook subscription to WAHA. Needed once after the update
+   that added "message.any" — without it the shop phone's own replies never
+   reach the Inbox. WAHA restarts the session briefly to apply it. */
+async function syncWahaWebhook(btn) {
+  await busy(btn, async () => {
+    await api("/admin/api/whatsapp/waha/configure-webhook", { method: "POST" });
+    toast("Inbox settings synced — replies from your phone will now show up");
+  });
 }
 
 async function startWahaConnection() {
@@ -5453,6 +5526,8 @@ function threadMenu(phone) {
     </div>`);
 }
 
+const svgIcon = (id) => `<svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#${id}"/></svg>`;
+
 function closeThreadMobile(push = true) {
   // Responsive inbox reset: both panes return on desktop/tablet after resize.
   document.body.classList.remove("chat-open");
@@ -5649,10 +5724,12 @@ async function openThread(phone, silent = false, push = true) {
     <div style="flex:1;min-width:0"><b>${esc(displayName(d.name, d.phone))}</b>
       <div class="muted">${d.phone} · ${d.kind === "staff" ? "Staff 🧑‍🔧" : d.kind === "admin" ? "You 👑" : "Customer"}</div></div>
     <span class="winchip ${d.window.open ? "open" : "closed"}">${d.window.open ? "window open" : "window closed"}</span>
-    <button class="btn sm ghost" title="Find in conversation" aria-label="Find in conversation" onclick="toggleChatSearch()">🔎</button>
-    <button class="btn sm ghost" title="Yaad dilao" onclick="pingThread(this)">🔔 Ping</button>
-    <button class="btn sm ghost danger" title="Delete chat" onclick="deleteThread('${phone}')">🗑️</button>
-    ${d.kind === "customer" ? `<button class="btn sm ghost" id="agent-pause-btn" onclick="toggleAgentPause()">🤖 Agent: …</button>` : ""}`;
+    <div class="ch-acts">
+      <button class="ch-btn" title="Find in conversation" aria-label="Find in conversation" onclick="toggleChatSearch()">${svgIcon("i-search")}</button>
+      <button class="ch-btn" title="Remind them" aria-label="Send a reminder" onclick="pingThread(this)">${svgIcon("i-bell")}<span class="lbl">Ping</span></button>
+      ${d.kind === "customer" ? `<button class="ch-btn" id="agent-pause-btn" title="Bot on/off for this chat" aria-label="Bot on or off for this chat" onclick="toggleAgentPause()">${svgIcon("i-agent")}<span class="lbl">Bot</span></button>` : ""}
+      <button class="ch-btn danger" title="Delete chat" aria-label="Delete chat" onclick="deleteThread('${phone}')">${svgIcon("i-trash")}</button>
+    </div>`;
     refreshPauseBtn();
     LAST_HEAD_SIG = headSig;
   }
@@ -5688,7 +5765,7 @@ async function refreshPauseBtn() {
   const btn = $("agent-pause-btn");
   if (!btn || !OPEN_PHONE) return;
   // customers list carries agent_paused? Not included — read from threads name only; do a light check via customers cache
-  btn.textContent = "🤖 Agent: on/off";
+  // icon + short label are in the markup; only the action is wired here
   btn.onclick = toggleAgentPause;
 }
 let PAUSED_SET = new Set();

@@ -124,6 +124,8 @@ DEFAULTS: dict[str, Any] = {
     # Pichhli Google Business posts [{date, text}] — AI inhe dohraata nahi
     # (Google repeat text ko spam maanta hai). Aakhri 30 rakhe jaate hain.
     "google_post_history": [],
+    # owner poster publishes (Google poster dialog): newest last, last 30 kept
+    "gbp_owner_post_log": [],
     # owner-edited customer message formats {message_key: text}
     "message_overrides": {},
     # this shop's own names for rate-card garments {alias_key: garment_key},

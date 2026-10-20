@@ -216,7 +216,10 @@ async def waha_configure_webhook(request: Request) -> dict:
             },
             "webhooks": [{
                 "url": f"{settings.SITE_URL.rstrip('/') if settings.SITE_URL else 'https://kwikklin.online'}/webhook/waha",
-                "events": ["message", "message.ack", "session.status"],
+                # "message" carries only incoming messages; replies typed on the
+                # shop's own phone arrive ONLY as "message.any" (fromMe). Without
+                # it they never reached the inbox.
+                "events": ["message", "message.any", "message.ack", "session.status"],
                 "hmac": {"key": webhook_secret},
                 "retries": {"policy": "exponential", "delaySeconds": 2, "attempts": 5},
             }]

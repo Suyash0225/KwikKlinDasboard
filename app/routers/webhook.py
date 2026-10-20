@@ -403,7 +403,17 @@ async def receive_waha_webhook(
         try:
             event_name = str(event.get("event") or "")
             payload = event.get("payload") or {}
-            if event_name == "message":
+            if event_name == "message.any":
+                # Every message, both directions. Incoming ones are handled by
+                # the "message" event, so only our own (typed on the shop's
+                # phone) are taken from here.
+                if _waha_message_is_from_me(payload):
+                    data = payload.get("_data") or {}
+                    nested_source = data.get("source") if isinstance(data, dict) else ""
+                    source = str(payload.get("source") or nested_source or "").strip().lower()
+                    if source != "api":
+                        await _record_waha_manual_outbound(db, payload)
+            elif event_name == "message":
                 # WAHA/engine versions expose fromMe at either the payload
                 # root or _data.key. Accept the documented boolean and string
                 # forms; otherwise an outgoing phone reply can be misrouted as
@@ -526,9 +536,17 @@ async def _record_waha_manual_outbound(db: AsyncSession, payload: dict) -> None:
     customer = (
         await db.execute(select(Customer).where(Customer.phone == phone))
     ).scalar_one_or_none()
+    staff = None
     if customer is None:
+        from app.models import Staff
+
+        staff = (
+            await db.execute(select(Staff).where(Staff.phone == phone))
+        ).scalar_one_or_none()
+    if customer is None and staff is None:
         # Do not create customers merely because someone sent a message from
-        # the phone. Log the mismatch so a failed human takeover is diagnosable.
+        # the phone (the shop number also carries personal chats). Log the
+        # mismatch so a missing inbox message is diagnosable.
         log.warning("waha_manual_outbound_customer_not_found", phone=phone, raw_to=raw_to)
         return
 
@@ -545,7 +563,8 @@ async def _record_waha_manual_outbound(db: AsyncSession, payload: dict) -> None:
 
     db.add(
         Conversation(
-            customer_id=customer.id,
+            customer_id=customer.id if customer is not None else None,
+            staff_id=staff.id if staff is not None else None,
             direction=Direction.OUTBOUND,
             message_text=body or "[human reply]",
             wa_message_id=wa_message_id,
@@ -555,7 +574,10 @@ async def _record_waha_manual_outbound(db: AsyncSession, payload: dict) -> None:
         )
     )
     await db.commit()
-    log.info("human_whatsapp_takeover", phone=phone, wa_message_id=wa_message_id)
+    log.info(
+        "human_whatsapp_takeover" if customer is not None else "owner_phone_message_to_staff",
+        phone=phone, wa_message_id=wa_message_id,
+    )
 
 
 async def _human_handoff_waiting(

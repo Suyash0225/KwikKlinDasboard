@@ -964,3 +964,71 @@ async def test_waha_webhook_fails_closed_when_home_tenant_is_unavailable(
 
     assert response.status_code == 503
     assert response.json()["error"] == "shop tenant is not configured"
+
+
+# --- messages typed on the shop's own phone (WAHA "message.any") ---
+
+async def _post_waha(client, monkeypatch, event: str, payload: dict):
+    import hashlib
+    import hmac
+    import json
+
+    secret = "test-waha-webhook-secret"
+    monkeypatch.setattr(settings, "WAHA_WEBHOOK_SECRET", secret)
+    monkeypatch.setattr(settings, "WAHA_WEBHOOK_HMAC_KEY", "")
+    body = json.dumps({"event": event, "session": "default", "payload": payload}, separators=(",", ":")).encode()
+    sig = hmac.new(secret.encode(), body, hashlib.sha512).hexdigest()
+    return await client.post("/webhook/waha", content=body, headers={"X-Webhook-Hmac": sig})
+
+
+async def test_phone_typed_reply_reaches_the_inbox_via_message_any(client, sent, monkeypatch) -> None:
+    """WAHA's "message" event never carries fromMe; the shop phone's own
+    replies only arrive as "message.any" — they must land in the thread."""
+    import uuid
+
+    phone = f"+91997{uuid.uuid4().int % 10**7:07d}"
+    async with async_session_factory() as db:
+        db.add(Customer(phone=phone, name="Phone Reply Test"))
+        await db.commit()
+    wid = f"waha-any-{uuid.uuid4().hex}"
+    r = await _post_waha(client, monkeypatch, "message.any", {
+        "id": wid, "fromMe": True, "source": "app", "to": f"{phone[1:]}@c.us", "body": "Kal tak ready ho jayega ji",
+    })
+    assert r.status_code == 200
+    async with async_session_factory() as db:
+        row = (await db.execute(select(Conversation).where(Conversation.wa_message_id == wid))).scalar_one()
+    assert row.message_text == "Kal tak ready ho jayega ji" and row.sent_by == "human"
+
+
+async def test_message_any_inbound_is_left_to_the_message_event(client, sent, monkeypatch) -> None:
+    import uuid
+
+    wid = f"waha-any-in-{uuid.uuid4().hex}"
+    r = await _post_waha(client, monkeypatch, "message.any", {
+        "id": wid, "fromMe": False, "from": "919999900287@c.us", "body": "hello",
+    })
+    assert r.status_code == 200
+    async with async_session_factory() as db:
+        assert (await db.execute(select(Conversation).where(Conversation.wa_message_id == wid))).scalar_one_or_none() is None
+    assert not sent, "no reply may be triggered twice for one inbound message"
+
+
+async def test_phone_message_to_staff_lands_in_the_staff_thread(client, sent, monkeypatch, test_washer) -> None:
+    import uuid
+
+    wid = f"waha-any-staff-{uuid.uuid4().hex}"
+    r = await _post_waha(client, monkeypatch, "message.any", {
+        "id": wid, "fromMe": True, "source": "app", "to": f"{TEST_WASHER_PHONE_RAW}@c.us", "body": "Sham tak 5 order ready karo",
+    })
+    assert r.status_code == 200
+    async with async_session_factory() as db:
+        row = (await db.execute(select(Conversation).where(Conversation.wa_message_id == wid))).scalar_one()
+        washer = (await db.execute(select(Staff).where(Staff.phone == TEST_WASHER_PHONE))).scalar_one()
+    assert row.staff_id == washer.id and row.customer_id is None
+
+
+def test_waha_webhook_subscribes_to_own_messages() -> None:
+    from pathlib import Path
+
+    src = Path("app/routers/admin.py").read_text(encoding="utf-8")
+    assert '"message.any"' in src, "without message.any, phone-typed replies never reach the inbox"

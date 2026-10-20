@@ -20,4 +20,4 @@ def test_modal_history_fix_refreshes_both_script_cache_versions() -> None:
     dashboard = Path("app/static/dashboard.html").read_text(encoding="utf-8")
     staff = Path("app/static/staff.html").read_text(encoding="utf-8")
     assert "app.js?v=ui2-" in dashboard  # bumped after the modal-history fix
-    assert "staff.js?v=s15" in staff  # bumped after the modal-history fix
+    assert "staff.js?v=s16" in staff  # bumped after the modal-history fix
