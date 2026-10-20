@@ -86,7 +86,7 @@ def start() -> None:
     )
     # Daily Google Business Profile post.
     _scheduler.add_job(
-        _gbp_daily_post_tick, CronTrigger(hour=10, minute=15, timezone=IST), id="gbp-daily-post"
+        _gbp_daily_post_tick, CronTrigger(hour=10, minute=0, timezone=IST), id="gbp-daily-post"
     )
     _scheduler.start()
     log.info("scheduler_started", jobs=["hourly", "staff-expense-closing", "human-handoff", "nightly", "tunnel-guard", "durability", "gbp-reviews"])
