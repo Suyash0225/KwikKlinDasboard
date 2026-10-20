@@ -1767,6 +1767,22 @@ _BILL_CONTEXT_RE = re.compile(
 )
 
 
+def _extract_prompt(
+    text: str, card: str, draft: dict | None, history: str, today: str
+) -> str:
+    """The extraction prompt — pure, so evals send exactly what production does."""
+    sections = [f"TODAY_IST:{today}"]
+    if card:
+        sections.append(f"RATE_CARD:\n{card}")
+    # Thread history is only useful when editing/continuing a bill draft.
+    if draft is not None and history:
+        sections.append(f"RECENT_CONTEXT:\n{history}")
+    if draft is not None:
+        sections.append(f"CURRENT_DRAFT:{json.dumps(draft, default=str, separators=(',', ':'))}")
+    sections.append(f"STAFF_MESSAGE:{(text or '')[:800]}")
+    return "\n\n".join(sections)
+
+
 async def _extract(
     db: AsyncSession, text: str, pending: PendingBill | None, history: str = ""
 ) -> dict:
@@ -1784,17 +1800,9 @@ async def _extract(
             f"{r.service}|{r.garment}|{r.rate}/{r.unit}" for r in rates
         )
 
-    today = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
-    sections = [f"TODAY_IST:{today}"]
-    if card:
-        sections.append(f"RATE_CARD:\n{card}")
-    # Thread history is only useful when editing/continuing a bill draft.
-    if pending and history:
-        sections.append(f"RECENT_CONTEXT:\n{history}")
-    if pending:
-        sections.append(f"CURRENT_DRAFT:{json.dumps(pending.draft, default=str, separators=(',', ':'))}")
-    sections.append(f"STAFF_MESSAGE:{(text or '')[:800]}")
-    prompt = "\n\n".join(sections)
+    prompt = _extract_prompt(
+        text, card, pending.draft if pending else None, history, today_ist().isoformat()
+    )
 
     # Every bill/staff extraction must be attributable; otherwise usage falls
     # into the dashboard's generic "Other" bucket.
@@ -2647,23 +2655,11 @@ def _unbacked_claim(answer: str, used: list[str]) -> bool:
     return bool(_DONE_CLAIM.search(answer))
 
 
-async def _answer_manager_query(
-    db: AsyncSession, text: str, *, sender_phone: str | None = None
-) -> str | None:
-    """Owner asked something free-form.
+def _manager_system(shop) -> str:
+    """The owner assistant's system prompt — pure, so evals use the real one."""
+    from app.services import agent_tools, shop_identity
 
-    The agent may LOOK THINGS UP before answering: each round it either
-    names a tool (we run it, feed back the result) or gives the final
-    answer. That is the whole difference between "dashboard dekh lo" and a
-    real answer — it can fetch what it wasn't handed up front.
-    """
-    from app.services import agent_tools
-
-    from app.services import shop_identity
-
-    facts = await _manager_facts(db)
-    shop = await shop_identity.current(db)
-    system = shop_identity.render(_QUERY_SYSTEM, shop) + "\n\nTOOLS you can use:\n" + agent_tools._tool_help() + (
+    return shop_identity.render(_QUERY_SYSTEM, shop) + "\n\nTOOLS you can use:\n" + agent_tools._tool_help() + (
         "\nEach turn: either set tool+args (to look something up / do it) and "
         "leave answer empty, OR leave tool empty and write the final answer. "
         "Use a tool whenever the SNAPSHOT does not already contain the exact "
@@ -2677,6 +2673,22 @@ async def _answer_manager_query(
         "or task update happened unless its tool result confirms it. Do not "
         "bypass existing approval, tenant, audit, or outbound-policy gates."
     )
+
+
+async def _answer_manager_query(
+    db: AsyncSession, text: str, *, sender_phone: str | None = None
+) -> str | None:
+    """Owner asked something free-form.
+
+    The agent may LOOK THINGS UP before answering: each round it either
+    names a tool (we run it, feed back the result) or gives the final
+    answer. That is the whole difference between "dashboard dekh lo" and a
+    real answer — it can fetch what it wasn't handed up front.
+    """
+    from app.services import agent_tools, shop_identity
+
+    facts = await _manager_facts(db)
+    system = _manager_system(await shop_identity.current(db))
     convo = f"SNAPSHOT:\n{facts}\n\n"
     earlier = _OWNER_LAST.get(sender_phone) if sender_phone else None
     if earlier and datetime.now(timezone.utc) - earlier[0] < _OWNER_MEMORY_TTL:

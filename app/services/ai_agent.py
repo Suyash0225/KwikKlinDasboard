@@ -123,6 +123,18 @@ _PRICE_AMOUNT_RE = re.compile(r"(?:₹|\bINR\s*|\bRs\.?\s*)(\d+(?:\.\d{1,2})?)|\
 async def _price_reply_is_grounded(
     db: AsyncSession, customer: Customer, question: str, reply: str, *, facts: str = ""
 ) -> bool:
+    """Async wrapper: the active rate card for this customer's shop."""
+    if not _PRICE_AMOUNT_RE.search(reply or ""):
+        return True
+    from app.services.ai_tools import get_shop_rate_card
+
+    rates = await get_shop_rate_card(db, customer)
+    return amounts_are_grounded(rates, question, reply, facts=facts)
+
+
+def amounts_are_grounded(
+    rates: list[dict], question: str, reply: str, *, facts: str = ""
+) -> bool:
     """Reject numeric price claims unless they match the requested active DB rate.
 
     `question` may carry the last few customer turns, so "aur pant ka?" is
@@ -143,9 +155,6 @@ async def _price_reply_is_grounded(
     if not quoted:
         return True
 
-    from app.services.ai_tools import get_shop_rate_card
-
-    rates = await get_shop_rate_card(db, customer)
     normalized_question = re.sub(r"[^a-z0-9]+", " ", (question or "").casefold()).strip()
     grounded_amounts: set[str] = set()
     for row in rates:

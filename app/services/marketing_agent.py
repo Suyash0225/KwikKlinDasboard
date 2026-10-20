@@ -334,6 +334,13 @@ def _rationale(pick: dict) -> str:
     )
 
 
+def _copy_system(shop: shop_identity.ShopIdentity, extra: str = "") -> str:
+    """Campaign-copy system prompt — pure, so evals use the real one."""
+    return (shop_identity.render(_COPY_SYSTEM, shop)
+            + f"\n\nBusiness policy:\n{business_policy_text()}"
+            + (f"\nOwner's style rules (follow them): {extra}" if extra else ""))
+
+
 async def _draft_copy(segment: str, offer: str, shop: shop_identity.ShopIdentity | None = None) -> str:
     """Campaign copy from the model, or a safe template if it fails the checks.
 
@@ -362,9 +369,7 @@ async def _draft_copy(segment: str, offer: str, shop: shop_identity.ShopIdentity
             contact = str(await app_settings.get(db, "shop_contact_phone") or "").strip()
     except Exception:
         pass
-    system = (shop_identity.render(_COPY_SYSTEM, shop)
-               + f"\n\nBusiness policy:\n{business_policy_text()}"
-               + (f"\nOwner's style rules (follow them): {extra}" if extra else ""))
+    system = _copy_system(shop, extra)
     try:
         with llm_client.track("marketing"):
             copy = await llm_client.ask(
