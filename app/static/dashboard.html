@@ -355,7 +355,7 @@
       <div class="camp-live-grid">
         <div class="camp-main-card">
           <div class="camp-step"><span>1</span><div><b>Campaign Content</b><small>Message, image and campaign name.</small></div></div>
-          <fieldset class="camp-type-field"><legend>Campaign type *</legend><div class="camp-type-grid"><label class="camp-type-card"><input type="radio" name="camp-type" value="wish" onchange="campaignTypeChanged()"><span>🎉 <b>Wish / Greeting</b><small>Festival, birthday, thank-you</small></span></label><label class="camp-type-card selected"><input type="radio" name="camp-type" value="promotion" checked onchange="campaignTypeChanged()"><span>📢 <b>Promotion / Offer</b><small>Normal promotion rules</small></span></label><label class="camp-type-card"><input type="radio" name="camp-type" value="payment_reminder" onchange="campaignTypeChanged()"><span>💰 <b>Payment reminder</b><small>Customers with dues</small></span></label></div><small id="camp-type-help" class="muted">Promotion follows existing eligibility rules.</small></fieldset>
+          <fieldset class="camp-type-field"><legend>Campaign type *</legend><div class="camp-type-grid"><label class="camp-type-card"><input type="radio" name="camp-type" value="wish" onchange="campaignTypeChanged()"><span class="camp-type-text"><b>🎉 Wish / Greeting</b><small>Festival, birthday, thank-you. No offer, no frequency limit.</small></span></label><label class="camp-type-card selected"><input type="radio" name="camp-type" value="promotion" checked onchange="campaignTypeChanged()"><span class="camp-type-text"><b>📢 Promotion / Offer</b><small>Normal promotion rules and frequency limits apply.</small></span></label><label class="camp-type-card"><input type="radio" name="camp-type" value="payment_reminder" onchange="campaignTypeChanged()"><span class="camp-type-text"><b>💰 Payment reminder</b><small>Only customers with an outstanding balance.</small></span></label></div><small id="camp-type-help" class="muted">Promotion follows existing eligibility rules.</small></fieldset>
           <div class="camp-field"><label for="camp-name">Campaign name <em>*</em></label><input id="camp-name" placeholder="October Freshness Offer" maxlength="120" oninput="updateCampaignPreview()"><small>Only used internally. Customers will not see this name.</small></div>
           <div class="camp-field camp-ai-draft">
             <label for="camp-ai-goal">AI campaign goal</label>
@@ -428,12 +428,23 @@
         </div>
       </div>
 
-      <div class="camp-review-card"><div class="camp-step"><span class="blue">3</span><div><b>Review &amp; Send</b><small>Check audience and rules before sending.</small></div></div><div class="camp-review-grid"><div><h4>Recipient breakdown</h4><div id="camp-recipient-breakdown" class="camp-breakdown"></div><button type="button" class="btn ghost sm" onclick="previewCampaignRecipients()">Preview recipients</button><div id="camp-recipient-preview" class="camp-recipient-preview" hidden></div></div><div><h4>Schedule</h4><label class="camp-schedule-option"><input type="radio" name="camp-send-mode" value="now" checked onchange="toggleCampaignSchedule()"> Send now</label><label class="camp-schedule-option"><input type="radio" name="camp-send-mode" value="later" onchange="toggleCampaignSchedule()"> Schedule for later</label><input type="datetime-local" id="camp-scheduled-at" hidden><small id="camp-send-estimate" class="muted"></small></div></div></div><button class="camp-start" id="camp-start-btn" onclick="createCampaign(this)">➤ <span>Review &amp; Send</span><small>Automatic sending · 15–20 sec gap</small></button>
-      <button type="button" class="btn ghost" id="camp-test-send-btn" onclick="testCampaignSend(this)" style="width:100%;margin-top:8px">📱 Test send to my number</button><p id="camp-send-validation" class="camp-inline-note" role="status">Add a campaign name, message or image, and an audience.</p>
+      <div class="camp-review-card">
+        <div class="camp-step"><span class="blue">3</span><div><b>Review &amp; Send</b><small>Check audience and rules before sending.</small></div></div>
+        <div class="camp-review-grid">
+          <div><h4>Recipient breakdown</h4><div id="camp-recipient-breakdown" class="camp-breakdown"></div><button type="button" class="btn ghost sm" onclick="previewCampaignRecipients()">👀 Preview recipients</button><div id="camp-recipient-preview" class="camp-recipient-preview" hidden></div></div>
+          <div><h4>Schedule</h4><div class="camp-schedule">
+            <label class="camp-schedule-option"><input type="radio" name="camp-send-mode" value="now" checked onchange="toggleCampaignSchedule()"> Send now</label>
+            <label class="camp-schedule-option"><input type="radio" name="camp-send-mode" value="later" onchange="toggleCampaignSchedule()"> Schedule for later</label>
+            <input type="datetime-local" id="camp-scheduled-at" aria-label="Scheduled date and time" hidden>
+          </div><small id="camp-send-estimate" class="muted"></small></div>
+        </div>
+        <div class="camp-send-row"><button class="camp-start" id="camp-start-btn" onclick="createCampaign(this)"><span>➤ Review &amp; Send</span><small>Automatic sending · 15–20 sec gap · opt-outs always skipped</small></button><button type="button" class="btn ghost" id="camp-test-send-btn" onclick="testCampaignSend(this)">📱 Test send to my number</button></div>
+        <p id="camp-send-validation" class="camp-inline-note" role="status" aria-live="polite" data-state="warn">Add a campaign name, message or image, and an audience.</p>
+      </div>
 
       <div id="camp-history" class="camp-history">
         <div class="camp-section-head"><div><h3>Campaign History</h3><p>Open a campaign for detailed recipient tracking.</p></div></div><div class="camp-history-filters"><select id="camp-history-filter" onchange="filterCampaignHistory()"><option value="all">All</option><option value="sending">Running</option><option value="sent">Completed</option><option value="draft">Draft</option><option value="scheduled">Scheduled</option><option value="cancelled">Cancelled</option></select><input id="camp-history-search" type="search" placeholder="Search campaign name…" oninput="filterCampaignHistory()"></div>
-        <div id="camp-list"></div>
+        <div id="camp-list"><div class="camp-skeleton" aria-hidden="true"></div><div class="camp-skeleton" aria-hidden="true"></div></div>
       </div>
       <div id="seg-cards" style="display:none"></div>
       <div class="camp-lead-panel">      <div id="manual-lead-handoff" class="camp-dashboard-card" style="margin-bottom:14px">
@@ -442,9 +453,9 @@
           <button class="btn ghost sm" onclick="loadManualLeads()">↻ Refresh leads</button>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:12px">
-          <div class="camp-field"><label for="manual-lead-name">Customer name *</label><input id="manual-lead-name" maxlength="120" placeholder="Customer name" oninput="updateLeadContext()" oninput="updateLeadContext()"></div>
-          <div class="camp-field"><label for="manual-lead-phone">WhatsApp number *</label><input id="manual-lead-phone" inputmode="tel" maxlength="24" placeholder="+91 98765 43210" oninput="updateLeadContext()" oninput="updateLeadContext()"></div>
-          <div class="camp-field"><label for="manual-lead-need">Interested service *</label><input id="manual-lead-need" maxlength="300" placeholder="Dry cleaning, bulk laundry…" oninput="updateLeadContext()" oninput="updateLeadContext()"></div>
+          <div class="camp-field"><label for="manual-lead-name">Customer name *</label><input id="manual-lead-name" maxlength="120" placeholder="Customer name" oninput="updateLeadContext()"></div>
+          <div class="camp-field"><label for="manual-lead-phone">WhatsApp number *</label><input id="manual-lead-phone" inputmode="tel" maxlength="24" placeholder="+91 98765 43210" oninput="updateLeadContext()"></div>
+          <div class="camp-field"><label for="manual-lead-need">Interested service *</label><input id="manual-lead-need" maxlength="300" placeholder="Dry cleaning, bulk laundry…" oninput="updateLeadContext()"></div>
         </div>
         <div class="camp-lead-context" aria-live="polite"><h4>Lead context</h4><div id="manual-lead-context-summary">Enter lead details to preview the recipient.</div><div class="camp-lead-status-row"><span>Source: Phone call</span><span>Status: New lead</span><span>Last contact: Not available</span></div><div class="camp-lead-timeline"><b>Conversation history</b><p>No previous WhatsApp messages are available for this new lead.</p></div></div>
         <div class="camp-lead-context" aria-live="polite"><h4>Lead context</h4><div id="manual-lead-context-summary">Enter lead details to preview the recipient.</div><div class="camp-lead-status-row"><span>Source: Phone call</span><span>Status: New lead</span><span>Last contact: Not available</span></div><div class="camp-lead-timeline"><b>Conversation history</b><p>No previous WhatsApp messages are available for this new lead.</p></div></div>
