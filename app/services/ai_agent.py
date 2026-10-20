@@ -141,12 +141,21 @@ def _runtime_block(now: _dt | None = None) -> str:
 
 
 def _parse_pickup_date(value: str) -> _date | None:
-    """ISO date from intake, or None. Code decides readiness, not the model."""
-    try:
-        d = _date.fromisoformat((value or "").strip()[:10])
-    except ValueError:
-        return None
+    """Parse ISO dates and common relative Hindi/English pickup-day labels."""
+    raw = (value or "").strip().casefold()
     today = _dt.now(_IST).date()
+    relative_days = {
+        "aaj": 0, "today": 0,
+        "kal": 1, "tomorrow": 1,
+        "parso": 2, "day after tomorrow": 2,
+    }
+    if raw in relative_days:
+        d = today + timedelta(days=relative_days[raw])
+    else:
+        try:
+            d = _date.fromisoformat(raw[:10])
+        except ValueError:
+            return None
     if d < today or d > today + timedelta(days=30):
         return None
     return d
@@ -775,7 +784,8 @@ async def build_ai_reply(
         )
         return out.get("reply") or get_message("escalated_ack", lang)
 
-    # Validate the pickup date in code before considering order creation.
+    # Validate dates, but keep the customer's original date wording in the
+    # confirmation summary so an existing prompt can be matched exactly.
     pickup_day = _parse_pickup_date(intake.get("pickup_date") or "")
     if intake.get("ready") and pickup_day is None:
         log.warning("intake_pickup_date_invalid", value=str(intake.get("pickup_date") or "")[:20])
@@ -784,19 +794,18 @@ async def build_ai_reply(
     if intake.get("ready") and pickup_day is not None and all(
         (intake.get(k) or "").strip() for k in ("name", "address", "items_text")
     ):
-        intake = {
-            **intake,
-            "pickup_date": pickup_day.isoformat(),
-            "pickup_label": pickup_day.strftime("%a %d %b"),
-        }
-        # A complete intake is NOT consent to place an order. Show a deterministic
-        # summary first; only a standalone affirmative after that exact prompt may commit.
         has_matching_prompt = await _has_matching_pickup_confirmation_prompt(db, customer, intake)
         if has_matching_prompt and _is_explicit_order_cancellation(text):
             return "Theek hai ji, pickup request cancel kar di hai. Koi order create nahi kiya gaya. — Kwik Klin AI"
         if not _is_explicit_order_confirmation(text) or not has_matching_prompt:
             return _pickup_confirmation_summary(intake)
 
+        # Normalize only after the exact summary has been confirmed.
+        intake = {
+            **intake,
+            "pickup_date": pickup_day.isoformat(),
+            "pickup_label": pickup_day.strftime("%a %d %b"),
+        }
         if sandbox:
             return (out.get("reply") or "") + (
                 f"\n🧪 (real mein: order ban jata — {intake['name']}, "
