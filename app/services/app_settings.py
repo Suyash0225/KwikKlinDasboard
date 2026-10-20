@@ -201,6 +201,9 @@ DEFAULTS: dict[str, Any] = {
     # Google Business daily-post history and toggle.
     "gbp_auto_posts": [],
     "gbp_auto_post_enabled": True,
+    # Last verified owner-supplied GBP poster; daily auto-post reuses this file URL.
+    "gbp_owner_poster_url": "",
+    "gbp_owner_poster_uploaded_at": "",
     # Owner-editable seasonal topics used by the existing GBP daily-post job.
     "gbp_seasonal_calendar": [
         {"name": "winter-care", "start": "11-15", "end": "02-15",
