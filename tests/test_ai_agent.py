@@ -312,6 +312,66 @@ async def test_pickup_creation_returns_existing_active_order_without_duplicate(m
     db.execute.assert_awaited_once()
 
 
+async def test_changed_pickup_details_invalidate_old_confirmation(monkeypatch) -> None:
+    from sqlalchemy import func
+    from app.models import Conversation, Direction, Order
+    from app.services.ai_agent import _pickup_confirmation_summary
+
+    old_intake = {
+        "name": "AI Grahak",
+        "address": "Test Address, Varanasi",
+        "items_text": "2 shirts",
+        "pickup_date": "tomorrow",
+        "ready": True,
+    }
+    changed_intake = {
+        **old_intake,
+        "address": "New Address, Lanka, Varanasi",
+    }
+
+    async def fake_ask_json(**kw):
+        return {
+            "reply": "Ji, noted.",
+            "intent": "NEW_ORDER", "language": "hi",
+            "action": "ANSWER", "action_reason": "",
+            "escalate": False, "escalation_reason": "", "admin_note": "",
+            "intake": changed_intake,
+        }
+
+    async def no_selected_tools(*args, **kwargs):
+        return {}
+
+    async def simple_context(*args, **kwargs):
+        return ("facts", "knowledge", "history")
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    monkeypatch.setattr(agent_module, "_select_customer_tools", no_selected_tools)
+    monkeypatch.setattr(agent_module, "_gather_context", simple_context)
+
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        db.add(Conversation(
+            customer_id=cust.id,
+            direction=Direction.OUTBOUND,
+            message_text=_pickup_confirmation_summary(old_intake),
+            sent_by="bot",
+        ))
+        await db.commit()
+
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        reply = await build_ai_reply(db, cust, "haan")
+
+    assert reply == _pickup_confirmation_summary(changed_intake)
+    assert "New Address, Lanka, Varanasi" in reply
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        count = (await db.execute(
+            select(func.count()).select_from(Order).where(Order.customer_id == cust.id)
+        )).scalar_one()
+    assert count == 0, "an affirmative for stale details must not create an order"
+
+
 async def test_numeric_price_reply_must_match_requested_active_rate(monkeypatch) -> None:
     from app.services import ai_tools
     from app.services.ai_agent import _price_reply_is_grounded
