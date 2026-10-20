@@ -278,6 +278,40 @@ async def test_pending_pickup_cancellation_does_not_create_order(monkeypatch) ->
     assert count == 0, "a standalone cancellation must never create a pickup order"
 
 
+async def test_pickup_creation_returns_existing_active_order_without_duplicate(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app.models import OrderStatus
+    from app.services.ai_agent import _create_pickup_order
+
+    existing = SimpleNamespace(order_number="KK-EXISTING-01", status=OrderStatus.RECEIVED)
+
+    class ExistingOrders:
+        def first(self):
+            return existing
+
+    class QueryResult:
+        def scalars(self):
+            return ExistingOrders()
+
+    db = AsyncMock()
+    db.execute.return_value = QueryResult()
+    customer = Customer(phone=PHONE, name="AI Grahak", address="Test Address, Varanasi")
+    intake = {
+        "name": "AI Grahak",
+        "address": "Test Address, Varanasi",
+        "items_text": "2 shirts",
+        "pickup_date": "tomorrow",
+        "ready": True,
+    }
+
+    reply = await _create_pickup_order(db, customer, intake)
+
+    assert reply
+    assert "KK-EXISTING-01" in reply
+    db.execute.assert_awaited_once()
+
+
 async def test_numeric_price_reply_must_match_requested_active_rate(monkeypatch) -> None:
     from app.services import ai_tools
     from app.services.ai_agent import _price_reply_is_grounded
