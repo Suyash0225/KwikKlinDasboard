@@ -402,9 +402,9 @@ async def auto_post_daily(db, now_ist: datetime) -> dict:
         "topicType": "STANDARD",
         "callToAction": {"actionType": "LEARN_MORE", "url": cta_url},
     }
-    # Generate today's branded, phone-free poster locally. Google can only
-    # attach it when the stable public /social URL is configured and valid.
-    poster_url, poster_issue = await _build_poster_url(db, now_ist, topic_key)
+    # Owner-supplied poster only. Automatic Gemini artwork generation is intentionally disabled.
+    poster_url = _public_poster_url(await app_settings.get(db, "gbp_owner_poster_url"))
+    poster_issue = None if poster_url else "owner_poster_missing: send a poster image from the verified admin WhatsApp number first"
     if not poster_url:
         # The owner explicitly expects a branded poster on GBP. Do not silently
         # publish a text-only post when image generation or the stable public
