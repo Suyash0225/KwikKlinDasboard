@@ -597,6 +597,49 @@ function openSheet() { $("sheet-ov").classList.add("open"); $("more-sheet").clas
 function closeSheet() { $("sheet-ov")?.classList.remove("open"); $("more-sheet")?.classList.remove("open"); }
 function sheetGo(sec) { closeSheet(); go(sec); }
 
+/* Google Business poster: gbp-poster.js owns the dialog; its floating
+   launcher covered the tab bar and the chat composer, so it is hidden in
+   CSS and opened from the nav / More sheet instead. */
+function openGbpPoster() {
+  const launch = document.getElementById("kk-gbp-poster-launch");
+  if (launch) launch.click();
+  else toast("Poster tool is still loading — try again in a moment", true);
+}
+
+/* Phone cards: a bill can carry eight buttons, which buries the one the
+   counter needs. Keep the first three visible and fold the rest behind a
+   "More" toggle. Applied to every rendered card list, whoever renders it. */
+const CARD_ACTIONS_VISIBLE = 3;
+function foldCardActions(root = document) {
+  root.querySelectorAll(".rowcard .act:not([data-folded])").forEach((act) => {
+    const btns = [...act.children].filter((el) => el.matches("button, .btn, a.btn"));
+    act.dataset.folded = "1";
+    if (btns.length <= CARD_ACTIONS_VISIBLE + 1) return;
+    btns.slice(CARD_ACTIONS_VISIBLE).forEach((b) => b.classList.add("act-extra"));
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "btn ghost sm act-more";
+    more.setAttribute("aria-expanded", "false");
+    more.textContent = `More (${btns.length - CARD_ACTIONS_VISIBLE})`;
+    more.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = act.classList.toggle("act-open");
+      more.setAttribute("aria-expanded", String(open));
+      more.textContent = open ? "Less" : `More (${btns.length - CARD_ACTIONS_VISIBLE})`;
+    });
+    act.appendChild(more);
+  });
+}
+function watchCardActions() {
+  foldCardActions();
+  let queued = false;
+  new MutationObserver(() => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; foldCardActions(); });
+  }).observe(document.querySelector(".main") || document.body, { childList: true, subtree: true });
+}
+
 /* ============================= dashboard ============================= */
 let DASH = null, SUMMARY = null, dashFilter = { status: "", pay: "", q: "", page: 1 };
 const PAGE = 25;
@@ -669,10 +712,13 @@ async function loadGrowthAnalytics() {
     </div>` : "";
     let wStatus;
     if (w.configured) {
-      wStatus = `🟢 <b>${w.active_users || 0}</b> active now · ${w.views || 0} views · ${w.events || 0} events
-        <div style="margin-top:6px"><small class="muted">GA4: ${esc(ga4.property_name || ga4.property_id)}</small>
-        <button class="btn sm ghost" style="margin-left:6px" onclick="connectGA4()">Reconnect</button>
-        <button class="btn sm ghost" style="margin-left:4px" onclick="disconnectGA4()">Disconnect</button></div>`;
+      wStatus = `<div class="minis">
+          <div class="mini"><b>${w.active_users || 0}</b><span>Active now</span></div>
+          <div class="mini"><b>${w.views || 0}</b><span>Views</span></div>
+          <div class="mini"><b>${w.events || 0}</b><span>Events</span></div></div>
+        <div class="g-foot"><small class="muted">GA4 · ${esc(ga4.property_name || ga4.property_id)}</small>
+        <button class="btn sm ghost" onclick="connectGA4()">Reconnect</button>
+        <button class="btn sm ghost" onclick="disconnectGA4()">Disconnect</button></div>`;
     } else {
       const choices = ga4.choices || [];
       const picker = choices.length > 1
@@ -680,26 +726,25 @@ async function loadGrowthAnalytics() {
             ${choices.map(p => `<option value="${esc(p.property_id)}">${esc(p.property_name)}</option>`).join("")}
           </select><button class="btn sm" style="margin-left:6px" onclick="selectGA4Property()">Use property</button>`
         : "";
-      wStatus = `⚪ GA4 not connected${w.error ? ` — ${esc(w.error)}` : ""}
-        <div style="margin-top:8px"><button class="btn sm" onclick="connectGA4()">Connect GA4</button>${picker}</div>`;
+      wStatus = `<p class="muted">Not connected${w.error ? ` — ${esc(w.error)}` : ""}. See live visitors on your website.</p>
+        <div class="g-foot"><button class="btn sm" onclick="connectGA4()">Connect GA4</button>${picker}</div>`;
     }
     const gm = g.metrics || {};
     const gStatus = g.configured
-      ? `🟢 Website clicks <b>${gm.WEBSITE_CLICKS || 0}</b> · Calls <b>${gm.CALL_CLICKS || 0}</b> · Directions <b>${gm.BUSINESS_DIRECTION_REQUESTS || 0}</b>`
-      : `⚪ Google Business Performance not connected${g.error ? ` — ${esc(g.error)}` : ""}`;
+      ? `<div class="minis">
+          <div class="mini"><b>${gm.WEBSITE_CLICKS || 0}</b><span>Website clicks</span></div>
+          <div class="mini"><b>${gm.CALL_CLICKS || 0}</b><span>Calls</span></div>
+          <div class="mini"><b>${gm.BUSINESS_DIRECTION_REQUESTS || 0}</b><span>Directions</span></div></div>
+        <small class="muted">Google reports daily, so this is the latest available period.</small>`
+      : `<p class="muted">Not connected${g.error ? ` — ${esc(g.error)}` : ""}. Calls, clicks and directions from your Google listing.</p>`;
     box.innerHTML = `
-      <div class="split2">
-        <div style="padding:10px;border:1px solid var(--border);border-radius:10px">
-          <b>🌐 Website</b><div style="margin-top:6px">${wStatus}</div>
-          <small class="muted">GA4 realtime is the live counter; it is not a made-up server hit.</small>
-        </div>
-        <div style="padding:10px;border:1px solid var(--border);border-radius:10px">
-          <b>📍 Google Business Profile</b><div style="margin-top:6px">${gStatus}</div>
-          <small class="muted">GBP reporting is daily/aggregated, so this card shows the latest available period.</small>
-        </div>
+      <div class="g-grid">
+        <div class="g-tile"><div class="g-name"><span class="g-dot ${w.configured ? "on" : ""}"></span>Website</div>${wStatus}</div>
+        <div class="g-tile"><div class="g-name"><span class="g-dot ${g.configured ? "on" : ""}"></span>Google Business Profile</div>${gStatus}</div>
       </div>
-      <div style="margin-top:10px;padding:10px;background:var(--n50);border-radius:10px">
-        <b>📣 Campaigns</b> · ${m.messages_sent_this_month || 0} messages sent this month
+      <div class="g-camp" onclick="go('campaigns')" role="button" tabindex="0">
+        <span><b>${m.messages_sent_this_month || 0}</b> campaign messages sent this month</span>
+        <svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-chevron"/></svg>
       </div>
       ${attributionCard}`;
   } catch (e) {
@@ -789,11 +834,22 @@ async function loadDashboard() {
     $("dash-orders").innerHTML = errBox(e.message, "loadDashboard");
     return;
   }
-  renderKpis(); renderChips(); renderOrders();
+  renderKpis(); renderChips(); renderOrders(); renderDashHello();
   loadWaStats();
   loadGrowthAnalytics();
   if (!window._growthTimer) window._growthTimer = setInterval(loadGrowthAnalytics, 30000);
 }
+function renderDashHello() {
+  const hour = new Date().getHours();
+  const part = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const name = ((SIGNED_IN_AS && SIGNED_IN_AS.user && SIGNED_IN_AS.user.name) || "").split(" ")[0];
+  if ($("dash-hello")) $("dash-hello").textContent = name ? `${part}, ${name}` : part;
+  if ($("dash-date")) {
+    $("dash-date").textContent = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })
+      + " · here is your shop today";
+  }
+}
+
 /* "unreachable" used to cover every case, including shops that simply never
    connected WhatsApp. Each state needs a different next step from the owner. */
 function metaPill(s) {
@@ -812,18 +868,17 @@ async function loadWaStats() {
     const s = await api("/admin/api/whatsapp/stats");
     const t = s.templates, q = s.quality;
     const qpill = q ? `<span class="pill ${q === "GREEN" ? "PAID" : "PARTIAL"}">quality ${q.toLowerCase()}</span>` : "";
+    const stat = (label, value) => `<div class="mini"><b>${value}</b><span>${label}</span></div>`;
     $("wa-stats").innerHTML = `
-      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
-        <b style="margin:0">📱 WhatsApp aaj</b>
-        <span>➡️ Bheje: <b>${s.today.sent}</b></span>
-        <span>⬅️ Aaye: <b>${s.today.received}</b></span>
-        <span>👥 Baat hui: <b>${s.today.customers_talked}</b> customers se</span>
-        <span>📑 Templates: <b style="color:var(--ok)">${t.approved} ✓</b> · <b style="color:var(--warn)">${t.pending} pending</b>${t.rejected ? ` · <b style="color:var(--danger)">${t.rejected} ✗</b>` : ""}</span>
-        ${qpill}
-        ${metaPill(s)}
+      <div class="panel-head"><h3>WhatsApp today</h3><div class="pillrow">${qpill}${metaPill(s)}</div></div>
+      <div class="minis">
+        ${stat("Sent", s.today.sent)}
+        ${stat("Received", s.today.received)}
+        ${stat("Customers", s.today.customers_talked)}
+        ${stat("Templates", `${t.approved}<small> / ${t.pending} pending${t.rejected ? ` · ${t.rejected} rejected` : ""}</small>`)}
       </div>`;
   } catch (e) {
-    $("wa-stats").innerHTML = `<span class="muted">📱 Could not load WhatsApp stats: ${esc(e.message)}</span>`;
+    $("wa-stats").innerHTML = `<div class="panel-head"><h3>WhatsApp today</h3></div><span class="muted">Could not load: ${esc(e.message)}</span>`;
   }
 }
 
@@ -832,17 +887,20 @@ function renderKpis() {
   const outstanding = CUSTOMERS_CACHE
     ? CUSTOMERS_CACHE.reduce((a, x) => a + Number(x.outstanding || 0), 0) : null;
   $("kpis").innerHTML = `
-    ${kpi("New orders today", c.today_new, "", "go('bills')", "🧺", "orange")}
-    ${kpi("Today's collection", money(t.revenue || 0), "", "go('reports')", "₹", "green")}
-    ${kpi("Revenue this month", money(m.revenue || 0), "", "go('reports')", "📈", "blue")}
-    ${kpi("Expenses this month", money(m.expenses || 0), "", "go('expenses')", "💸", "amber")}
-    ${kpi("Profit this month", money(m.profit || 0), "revenue − expenses", "go('reports')", "💰", "teal")}
-    ${kpi("Total outstanding", outstanding === null ? "…" : money(outstanding), "tap for the list", "dashFilter.status='UNPAID';dashFilter.page=1;renderChips();renderOrders();document.getElementById('dash-orders').scrollIntoView({behavior:'smooth'})", "🏦", "red")}
+    ${kpi("New orders today", c.today_new, `${c.active_total || 0} active`, "go('bills')", "i-receipt", "orange")}
+    ${kpi("Today's collection", money(t.revenue || 0), "cash + UPI received", "go('reports')", "i-expense", "green")}
+    ${kpi("Revenue this month", money(m.revenue || 0), "payments received", "go('reports')", "i-reports", "blue")}
+    ${kpi("Profit this month", money(m.profit || 0), "revenue − expenses", "go('reports')", "i-usage", "teal")}
+    ${kpi("Expenses this month", money(m.expenses || 0), "logged spend", "go('expenses')", "i-ledger", "amber")}
+    ${kpi("Outstanding", outstanding === null ? "…" : money(outstanding), "tap to see who owes", "dashFilter.status='UNPAID';dashFilter.page=1;renderChips();renderOrders();document.getElementById('dash-orders').scrollIntoView({behavior:'smooth'})", "i-users", "red")}
   `;
   if (outstanding === null) loadCustomers(true).then(renderKpis);
 }
+/* icon: an id from icons.svg ("i-…") draws the sprite icon; anything else
+   (older callers pass an emoji) is shown as text. */
 const kpi = (lbl, val, sub, click, icon = "📊", tint = "blue") =>
-  `<div class="card kpi" onclick="${click}"><span class="kico ${tint}">${icon}</span><div class="lbl">${lbl}</div><div class="val">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  `<div class="card kpi" onclick="${click}"><span class="kico ${tint}">${String(icon).startsWith("i-")
+    ? `<svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#${icon}"/></svg>` : icon}</span><div class="lbl">${lbl}</div><div class="val">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
 
 function renderChips() {
   const by = DASH.counts.by_status || {};
@@ -904,6 +962,7 @@ function renderOrders() {
   const pages = Math.max(1, Math.ceil(all.length / PAGE));
   dashFilter.page = Math.min(dashFilter.page, pages);
   const rows = all.slice((dashFilter.page - 1) * PAGE, dashFilter.page * PAGE);
+  if ($("dash-count")) $("dash-count").textContent = `${all.length} ${all.length === 1 ? "order" : "orders"}`;
   if (!rows.length) { $("dash-orders").innerHTML = emptyBox("No orders match — new bills appear here."); $("dash-pager").innerHTML = ""; return; }
 
   $("dash-orders").innerHTML = `
@@ -918,27 +977,28 @@ function renderOrders() {
         <td>${fmtDate(o.expected_delivery)}</td>
         <td><div class="act">
           ${nextStepBtn(o)}
-          ${!["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn sm ghost status-change-btn" title="Change status" aria-label="Change status" onclick="statusModal('${o.order_number}','${o.status}')">↕ Change status</button>` : ""}
           <button class="btn sm ghost" title="Collect payment" aria-label="Collect payment" onclick="paymentModal('${o.order_number}')">₹</button>
           <button class="btn sm ghost" title="More actions" aria-label="More actions" onclick="orderMenu('${o.order_number}')">⋯</button>
         </div></td>
       </tr>`).join("")}
     </tbody></table>
     <div class="rowcards">${rows.map((o) => `
-      <div class="rowcard ${isOverdue(o) ? "overdue" : ""}">
-        <div class="r1"><b>${o.order_number}${o.priority === "urgent" ? " ⚡" : ""}</b><span class="pill ${o.status}">${statusName(o.status)}</span></div>
+      <div class="rowcard ordercard ${isOverdue(o) ? "overdue" : ""}">
+        <div class="oc-top">
+          <div class="oc-who"><b>${esc(displayName(o.customer, o.phone))}</b><span>${o.order_number}${o.priority === "urgent" ? " · ⚡ urgent" : ""}</span></div>
+          <span class="pill ${o.status}">${statusName(o.status)}</span>
+        </div>
         ${o.tracking && o.tracking.delayed ? `<div class="delaynote">⏱ ${esc(o.tracking.delay_reason)}</div>` : ""}
-        <div class="kv"><span>${esc(displayName(o.customer, o.phone))}</span><span>${esc(o.phone)}</span></div>
-        <div class="kv"><span>${whoLine(o) || '<span class="muted">Not assigned yet</span>'}</span><span>${stageTimer(o)}</span></div>
-        <div class="kv"><span class="muted">${esc(itemsText(o.items))}</span></div>
-        <div class="kv"><span>Paid ${money(o.amount_paid)} of ${o.total_amount ? money(o.total_amount) : "—"}</span><span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></div>
-        <div class="kv"><span>Delivery</span><span>${fmtDate(o.expected_delivery)}${isOverdue(o) ? " ⚠️" : ""}</span></div>
+        <div class="oc-items">${esc(itemsText(o.items)) || '<span class="muted">No items</span>'}</div>
+        <div class="oc-meta">
+          <span>${money(o.amount_paid)} / ${o.total_amount ? money(o.total_amount) : "—"} <span class="pill ${o.payment_status}">${o.payment_status.toLowerCase()}</span></span>
+          <span class="${isOverdue(o) ? "late-t" : ""}">Due ${fmtDate(o.expected_delivery)}</span>
+        </div>
+        ${whoLine(o) || stageTimer(o) ? `<div class="oc-meta muted"><span>${whoLine(o) || "Not assigned yet"}</span><span>${stageTimer(o)}</span></div>` : ""}
         <div class="act">
           ${nextStepBtn(o)}
-          ${!["DELIVERED", "CANCELLED"].includes(o.status) ? `<button class="btn sm ghost status-change-btn" onclick="statusModal('${o.order_number}','${o.status}')">↕ Change status</button>` : ""}
-          <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')">₹</button>
-          <button class="btn sm ghost" onclick="orderDetail('${o.order_number}')">Details</button>
-          <button class="btn sm ghost" onclick="jumpChat('${o.phone}')">Chat</button>
+          <button class="btn sm ghost" onclick="paymentModal('${o.order_number}')" aria-label="Collect payment">₹ Pay</button>
+          <button class="btn sm ghost" onclick="orderMenu('${o.order_number}')" aria-label="More actions">⋯</button>
         </div>
       </div>`).join("")}
     </div>`;
@@ -3646,6 +3706,7 @@ function renderCampaignOverview(d) {
   ).join("") : '<div class="camp-running-empty">No campaign is currently sending.</div>';
 }
 async function loadCampaigns() {
+  if (!$("sec-campaigns")?.dataset.tab) campTabRestore();
   clearTimeout(CAMPAIGN_POLL_TIMER);
   if ($("camp-list") && !$("camp-list").querySelector(".camp-history-item")) $("camp-list").innerHTML = '<div class="camp-skeleton" aria-hidden="true"></div><div class="camp-skeleton" aria-hidden="true"></div>';
   $("seg-cards").innerHTML = "";
@@ -3770,7 +3831,8 @@ function renderSegments(segs) {
 }
 function renderCampaigns(camps) {
   if (!camps.length) {
-    $("camp-list").innerHTML = emptyBox("No campaigns yet. Create your first campaign above.", "📣");
+    $("camp-list").innerHTML = emptyBox("No campaigns yet — your first one takes about two minutes.", "📣")
+      + `<div style="text-align:center;margin:14px 0 4px"><button class="btn" onclick="resetCampaignForm()">＋ New campaign</button></div>`;
     return;
   }
   $("camp-list").innerHTML = camps.map((c) => {
@@ -3863,7 +3925,7 @@ function renderCampaignPreviewRows(rows,title){const root=$("camp-recipient-prev
 function showSkippedRecipients(reason){const d=window.CAMPAIGN_PREVIEW_DATA||{};renderCampaignPreviewRows((d.skipped_recipients||[]).filter(x=>x.reason===reason),"Skipped — "+reason.replaceAll("_"," "));}
 function scheduleCampaignPreview(){clearTimeout(window.CAMPAIGN_PREVIEW_TIMER);const name=($("camp-name")?.value||"").trim(),content=Boolean(($("camp-msg")?.value||"").trim()||window.CAMPAIGN_CUSTOM_IMAGE),segment=$("camp-seg")?.value||"";if(!name||!content||!segment)return;window.CAMPAIGN_PREVIEW_TIMER=setTimeout(()=>previewCampaignRecipients(false),450);}
 function filterCampaignPreview(q){const v=(q||"").toLowerCase();document.querySelectorAll("#camp-preview-rows [data-search]").forEach(e=>e.hidden=!e.dataset.search.includes(v));}
-async function duplicateCampaign(id){try{const c=await api("/admin/api/campaigns/"+id);if($("camp-name"))$("camp-name").value=(c.name||"Campaign")+" copy";if($("camp-msg"))$("camp-msg").value=c.message_text||"";const t=document.querySelector('input[name="camp-type"][value="'+(c.campaign_type||"promotion")+'"]');if(t)t.checked=true;if($("camp-rule-frequency"))$("camp-rule-frequency").checked=(c.rule_flags||{}).respect_frequency!==false;if($("camp-rule-complaints"))$("camp-rule-complaints").checked=(c.rule_flags||{}).skip_complaints!==false;if(c.creative_file){window.CAMPAIGN_CUSTOM_IMAGE=c.creative_file;const url="/admin/media/"+encodeURIComponent(c.creative_file);if($("camp-image-preview"))$("camp-image-preview").innerHTML='<div class="camp-image-card"><img src="'+url+'" alt="Campaign image preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';if($("camp-preview-image"))$("camp-preview-image").innerHTML='<img src="'+url+'" alt="Campaign image">';}if(c.segment==="selected"){const d=await api("/admin/api/campaigns/"+id+"/recipients");CAMPAIGN_SELECTED_CUSTOMERS=d.recipients.filter(x=>x.status!=="skipped").map(x=>({ref:x.customer_id,name:x.name,phone:x.phone}));renderCampaignSelectedCustomers();selectCampaignAudience("selected",false);}else{selectCampaignAudience(c.segment,false);}campaignTypeChanged();updateCampaignMsgCount();updateCampaignPreview();window.scrollTo({top:0,behavior:"smooth"});toast("Campaign copied into the editor. Review recipients before sending.");}catch(e){toast("Could not duplicate campaign: "+(e.message||"retry"),true);}}
+async function duplicateCampaign(id){campTab("create");try{const c=await api("/admin/api/campaigns/"+id);if($("camp-name"))$("camp-name").value=(c.name||"Campaign")+" copy";if($("camp-msg"))$("camp-msg").value=c.message_text||"";const t=document.querySelector('input[name="camp-type"][value="'+(c.campaign_type||"promotion")+'"]');if(t)t.checked=true;if($("camp-rule-frequency"))$("camp-rule-frequency").checked=(c.rule_flags||{}).respect_frequency!==false;if($("camp-rule-complaints"))$("camp-rule-complaints").checked=(c.rule_flags||{}).skip_complaints!==false;if(c.creative_file){window.CAMPAIGN_CUSTOM_IMAGE=c.creative_file;const url="/admin/media/"+encodeURIComponent(c.creative_file);if($("camp-image-preview"))$("camp-image-preview").innerHTML='<div class="camp-image-card"><img src="'+url+'" alt="Campaign image preview"><button type="button" class="btn ghost sm" onclick="removeCampaignImage()">Remove image</button></div>';if($("camp-preview-image"))$("camp-preview-image").innerHTML='<img src="'+url+'" alt="Campaign image">';}if(c.segment==="selected"){const d=await api("/admin/api/campaigns/"+id+"/recipients");CAMPAIGN_SELECTED_CUSTOMERS=d.recipients.filter(x=>x.status!=="skipped").map(x=>({ref:x.customer_id,name:x.name,phone:x.phone}));renderCampaignSelectedCustomers();selectCampaignAudience("selected",false);}else{selectCampaignAudience(c.segment,false);}campaignTypeChanged();updateCampaignMsgCount();updateCampaignPreview();window.scrollTo({top:0,behavior:"smooth"});toast("Campaign copied into the editor. Review recipients before sending.");}catch(e){toast("Could not duplicate campaign: "+(e.message||"retry"),true);}}
 function updateCampaignMsgCount() {
   const el = $("camp-msg"), count = $("camp-msg-count");
   if (el && count) count.textContent = el.value.length + "/4000";
@@ -3880,6 +3942,7 @@ function updateCampaignPreview() {
   const name=Boolean(($("camp-name")?.value||"").trim()),content=Boolean(($("camp-msg")?.value||"").trim()||window.CAMPAIGN_CUSTOM_IMAGE),aud=n>0,send=$("camp-start-btn");if(send)send.disabled=!(name&&content&&aud);if(!name)setCampaignNote("Enter a campaign name.","warn");else if(!content)setCampaignNote("Add message text or a supported image.","warn");else if(!aud)setCampaignNote("Choose an audience with at least one customer.","warn");else setCampaignNote("Ready to review. The server re-checks eligibility, opt-outs and frequency limits before anything is sent.","ok");scheduleCampaignPreview();
 }
 function resetCampaignForm() {
+  campTab("create");
   CAMPAIGN_SELECTED_CUSTOMERS = [];
   CAMPAIGN_CUSTOMER_CACHE = {};
   CAMPAIGN_PICKER_ROWS = [];
@@ -3898,7 +3961,28 @@ function resetCampaignForm() {
   $("camp-name")?.focus();
   window.scrollTo({top:0,behavior:"smooth"});
 }
-function scrollCampaignHistory() { $("camp-history")?.scrollIntoView({behavior:"smooth",block:"start"}); }
+function scrollCampaignHistory() { campTab("overview"); $("camp-history")?.scrollIntoView({behavior:"smooth",block:"start"}); }
+
+/* Campaigns page tabs: Overview (numbers + history), New campaign (the
+   3-step composer), Leads (phone-call handoff). The choice is remembered
+   per browser; anything that opens the composer switches to its tab. */
+function campTab(tab) {
+  const sec = $("sec-campaigns");
+  if (!sec) return;
+  if (!["overview", "create", "leads"].includes(tab)) tab = "overview";
+  sec.dataset.tab = tab;
+  sec.querySelectorAll("[data-camp-tab-btn]").forEach((b) => {
+    const on = b.dataset.campTabBtn === tab;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-selected", String(on));
+  });
+  try { localStorage.setItem("kk_camp_tab", tab); } catch (e) { /* private mode */ }
+}
+function campTabRestore() {
+  let tab = "overview";
+  try { tab = localStorage.getItem("kk_camp_tab") || tab; } catch (e) { /* private mode */ }
+  campTab(tab);
+}
 async function uploadCampaignImage(input) {
   const file = input.files && input.files[0];
   if (!file) return;
@@ -3953,10 +4037,10 @@ async function createCampaign(btn) {
       const later=document.querySelector('input[name="camp-send-mode"]:checked')?.value==="later",sv=$("camp-scheduled-at")?.value||"";if(later&&(!sv||new Date(sv)<=new Date())){setCampaignNote("Choose a future date and time.","error");return;}
       const draft=await api("/admin/api/campaigns",{method:"POST",body:{name,segment,message_text:message,selected_customer_ids:segment==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.map(x=>x.ref):[],coupon_code:null,creative_file:window.CAMPAIGN_CUSTOM_IMAGE||null,campaign_type:campaignType,respect_frequency:Boolean($("camp-rule-frequency")?.checked),skip_complaints:Boolean($("camp-rule-complaints")?.checked),skip_blocked:true,include_opted_out:false,scheduled_at:later?new Date(sv).toISOString():null}});
       try{
-        if(later){toast("Campaign scheduled; no messages sent yet.");resetCampaignForm();loadCampaigns();return;}
+        if(later){toast("Campaign scheduled; no messages sent yet.");resetCampaignForm();campTab("overview");loadCampaigns();return;}
         const result=await api("/admin/api/campaigns/"+draft.id+"/approve",{method:"POST"});
         toast("Campaign started successfully — "+result.queued+" customers queued");
-        resetCampaignForm(); loadCampaigns();
+        resetCampaignForm(); campTab("overview"); loadCampaigns();  // sent: watch it go out
       }catch(e){
         toast("Draft saved, but sending could not be started: "+e.message,true);
         loadCampaigns();
@@ -4060,6 +4144,7 @@ function updateCampaignAudienceCount() {
   document.querySelectorAll(".camp-audience[data-segment]").forEach(card=>{const k=card.dataset.segment,n=k==="selected"?CAMPAIGN_SELECTED_CUSTOMERS.length:Number(window.CAMPAIGN_SEG_COUNTS?.[k]||0);let badge=card.querySelector(".camp-live-count");if(!badge){badge=document.createElement("span");badge.className="camp-live-count";card.appendChild(badge)}badge.textContent=String(n);});
 }
 function prefillCampaign(seg) {
+  campTab("create");
   selectCampaignAudience(seg,false);
   if($("camp-name"))$("camp-name").value=(SEGMENT_LABEL[seg]||seg)+" - "+new Date().toISOString().slice(0,10);
   updateCampaignPreview();
@@ -6098,13 +6183,15 @@ window.addEventListener("DOMContentLoaded", () => {
     go(h, false);
   }
 
+  watchCardActions();
+
   // keyboard access: the nav / tab bar / sheet items are divs — give them
   // focus + Enter/Space so the app is usable without a touchscreen or mouse
-  document.querySelectorAll(".nav div[data-s], .tabbar div, .sheet-grid div, .logout")
+  document.querySelectorAll(".nav div[data-s], .nav .nav-action, .tabbar div, .sheet-grid div, .logout")
     .forEach((el) => { el.setAttribute("tabindex", "0"); el.setAttribute("role", "button"); });
   document.addEventListener("keydown", (e) => {
     if ((e.key === "Enter" || e.key === " ") &&
-        e.target.matches?.(".nav div[data-s], .tabbar div, .sheet-grid div, .logout")) {
+        e.target.matches?.(".nav div[data-s], .nav .nav-action, .tabbar div, .sheet-grid div, .logout")) {
       e.preventDefault(); e.target.click();
     }
   });

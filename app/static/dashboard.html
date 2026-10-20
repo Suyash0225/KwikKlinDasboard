@@ -11,16 +11,19 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- fonts load WITHOUT blocking first paint: text shows in the system font,
-     Poppins swaps in when it lands (display=swap). media-flip trick, no JS lib. -->
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap"
+     Inter swaps in when it lands (display=swap). media-flip trick, no JS lib. -->
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet" media="print" onload="this.media='all';this.onload=null">
-<noscript><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet"></noscript>
+<noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 <!-- app.css is mobile-first and carries every breakpoint — one sheet, one cascade.
      It stays render-blocking on purpose: it IS the critical CSS (too big to inline). -->
 <link rel="stylesheet" href="/admin/static/tokens.css?v=rs1">
 <link rel="stylesheet" href="/admin/static/app.css?v=inboxweb20261018">
+<!-- ui-v2: the visual layer (type, surfaces, mobile chrome). Loaded last so
+     it wins ties; app.css keeps layout and behaviour. -->
+<link rel="stylesheet" href="/admin/static/ui-v2.css?v=1">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
-<script src="/admin/static/app.js?v=inboxux20261019ga4fixmodalhistory" defer></script>
+<script src="/admin/static/app.js?v=ui2-2" defer></script>
 <script src="/admin/static/gbp-poster.js?v=2" defer></script>
 </head>
 <body>
@@ -35,72 +38,83 @@
     </div>
     <nav class="nav">
       <div class="navsec">Operations</div>
-      <div data-s="dashboard" onclick="go('dashboard')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-dashboard"/></svg>Dashboard</div>
-      <div data-s="inbox" onclick="go('inbox')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-inbox"/></svg>Inbox</div>
-      <div data-s="newbill" onclick="go('newbill')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-plus"/></svg>New bill</div>
-      <div data-s="bills" onclick="go('bills')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-receipt"/></svg>Bill history</div>
-      <div data-s="customers" onclick="go('customers')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-users"/></svg>Customers</div>
+      <div data-s="dashboard" onclick="go('dashboard')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-dashboard"/></svg>Dashboard</div>
+      <div data-s="inbox" onclick="go('inbox')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-inbox"/></svg>Inbox</div>
+      <div data-s="newbill" onclick="go('newbill')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-plus"/></svg>New bill</div>
+      <div data-s="bills" onclick="go('bills')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-receipt"/></svg>Bill history</div>
+      <div data-s="customers" onclick="go('customers')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-users"/></svg>Customers</div>
       <div class="navsec">Money</div>
-      <div data-s="expenses" onclick="go('expenses')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-expense"/></svg>Expenses</div>
-      <div data-s="reports" onclick="go('reports')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-reports"/></svg>Reports</div>
+      <div data-s="expenses" onclick="go('expenses')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-expense"/></svg>Expenses</div>
+      <div data-s="reports" onclick="go('reports')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-reports"/></svg>Reports</div>
       <div class="navsec">Growth</div>
-      <div data-s="polisher" onclick="go('polisher')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-expense"/></svg>Polisher ledger</div>
-      <div data-s="campaigns" onclick="go('campaigns')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-campaign"/></svg>Campaigns</div>
+      <div data-s="polisher" onclick="go('polisher')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-ledger"/></svg>Polisher ledger</div>
+      <div data-s="campaigns" onclick="go('campaigns')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-campaign"/></svg>Campaigns</div>
+      <div class="nav-action" onclick="openGbpPoster()"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-image"/></svg>Google poster</div>
       <div class="navsec">Agent</div>
-      <div data-s="business" onclick="go('business')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-dashboard"/></svg>Business Manager</div>
-      <div data-s="tasks" onclick="go('tasks')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-task"/></svg>Tasks</div>
-      <div data-s="agents" onclick="go('agents')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-agent"/></svg>Agents</div>
-      <div data-s="usage" onclick="go('usage')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-usage"/></svg>AI usage</div>
-      <div data-s="training" onclick="go('training')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-training"/></svg>AI training</div>
-      <div data-s="activity" onclick="go('activity')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-activity"/></svg>Activity</div>
+      <div data-s="business" onclick="go('business')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-briefcase"/></svg>Business Manager</div>
+      <div data-s="tasks" onclick="go('tasks')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-task"/></svg>Tasks</div>
+      <div data-s="agents" onclick="go('agents')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-agent"/></svg>Agents</div>
+      <div data-s="usage" onclick="go('usage')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-usage"/></svg>AI usage</div>
+      <div data-s="training" onclick="go('training')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-training"/></svg>AI training</div>
+      <div data-s="activity" onclick="go('activity')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-activity"/></svg>Activity</div>
       <div class="navsec">System</div>
-      <div data-s="settings" onclick="go('settings')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-settings"/></svg>Settings</div>
+      <div data-s="settings" onclick="go('settings')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-settings"/></svg>Settings</div>
     </nav>
     <div class="side-foot">
       <div class="sysline"><span class="dot"></span>Postgres · WhatsApp bot active</div>
-      <div class="logout" onclick="kkLogout()"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=rs1#i-logout"/></svg>Log out admin</div>
+      <div class="logout" onclick="kkLogout()"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-logout"/></svg>Log out admin</div>
     </div>
   </aside>
 
   <!-- ======== main ======== -->
   <main class="main">
     <div class="topbar">
-      <button class="burger" aria-label="Open menu" onclick="toggleSidebar()">☰</button>
+      <button class="burger" aria-label="Open menu" onclick="toggleSidebar()"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-menu"/></svg></button>
       <h2 id="mob-title">Dashboard</h2>
     </div>
 
     <!-- Dashboard -->
     <section id="sec-dashboard">
-      <div class="pagehead"><div><h2>Dashboard</h2><p>Today at a glance</p></div>
-        <div class="actions"><button class="btn" onclick="go('newbill')">➕ New bill</button></div></div>
+      <div class="pagehead dash-head">
+        <div><h2 id="dash-hello">Dashboard</h2><p id="dash-date">Today at a glance</p></div>
+        <div class="actions">
+          <button class="btn ghost" onclick="loadDashboard()" aria-label="Refresh dashboard"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-refresh"/></svg><span class="hide-sm">Refresh</span></button>
+          <button class="btn" onclick="go('newbill')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-plus"/></svg>New bill</button>
+        </div>
+      </div>
       <!-- static skeletons paint on slow 4G before app.js + the API answer;
            loadDashboard() replaces them with real numbers -->
       <div class="grid kpis" id="kpis"><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div><div class="card skel" style="height:96px"></div></div>
-      <div class="card" id="wa-stats" style="margin-bottom:14px"><span class="muted">📱 Loading WhatsApp stats…</span></div>
-      <div class="card" id="growth-analytics" style="margin-bottom:14px">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-          <b>📈 Live growth</b><button class="btn sm ghost" onclick="loadGrowthAnalytics()">↻ Refresh</button>
+
+      <div class="card dash-orders-card">
+        <div class="doc-head">
+          <div class="doc-title"><h3>Active orders</h3><span class="muted" id="dash-count"></span></div>
+          <div class="filters doc-tools">
+            <label class="searchbox"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-search"/></svg><input type="search" aria-label="Search orders" placeholder="Search name, phone or order…" oninput="dashFilter.q=this.value;dashFilter.page=1;renderOrdersDeb()"></label>
+            <select aria-label="Payment filter" onchange="dashFilter.pay=this.value;dashFilter.page=1;renderOrders()">
+              <option value="">All payments</option><option value="PAID">Paid</option>
+              <option value="PARTIAL">Partial</option><option value="UNPAID">Unpaid</option>
+            </select>
+          </div>
         </div>
-        <div class="muted" style="margin-top:6px">Website realtime, Google Business Profile performance, and campaign results.</div>
-        <div id="growth-analytics-body" style="margin-top:10px"><span class="muted">Loading…</span></div>
+        <div class="chips" id="dash-chips"></div>
+        <div class="listcard" id="dash-orders"><div class="skel skelrow"></div><div class="skel skelrow"></div><div class="skel skelrow"></div><div class="skel skelrow"></div></div>
+        <div class="pager" id="dash-pager"></div>
       </div>
-      <div class="chips" id="dash-chips"></div>
-      <div class="filters">
-        <input type="search" aria-label="Search orders" placeholder="Search name, phone or order…" oninput="dashFilter.q=this.value;dashFilter.page=1;renderOrdersDeb()">
-        <select aria-label="Payment filter" onchange="dashFilter.pay=this.value;dashFilter.page=1;renderOrders()">
-          <option value="">All payments</option><option value="PAID">Paid</option>
-          <option value="PARTIAL">Partial</option><option value="UNPAID">Unpaid</option>
-        </select>
-        <button class="btn ghost sm" onclick="loadDashboard()">↻ Refresh</button>
+
+      <div class="dash-side">
+        <div class="card" id="wa-stats"><span class="muted">Loading WhatsApp stats…</span></div>
+        <div class="card" id="growth-analytics">
+          <div class="panel-head"><h3>Growth</h3><button class="btn sm ghost" onclick="loadGrowthAnalytics()" aria-label="Refresh growth"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-refresh"/></svg></button></div>
+          <div id="growth-analytics-body"><span class="muted">Loading…</span></div>
+        </div>
       </div>
-      <div class="card listcard"><div id="dash-orders" style="padding:12px"><div class="skel skelrow"></div><div class="skel skelrow"></div><div class="skel skelrow"></div><div class="skel skelrow"></div></div></div>
-      <div class="pager" id="dash-pager"></div>
     </section>
 
     <!-- Inbox -->
     <section id="sec-inbox" style="display:none">
       <!-- Inbox UI change: keep the existing sidebar drawer reachable on phones. -->
-      <div class="pagehead"><button class="inbox-mobile-burger" onclick="toggleSidebar()" aria-label="Open menu" title="Open menu">☰</button><div class="inbox-title"><h2>Inbox</h2><p>WhatsApp — see and reply yourself</p></div>
+      <div class="pagehead"><button class="inbox-mobile-burger" onclick="toggleSidebar()" aria-label="Open menu" title="Open menu"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-menu"/></svg></button><div class="inbox-title"><h2>Inbox</h2><p>WhatsApp — see and reply yourself</p></div>
         <div class="actions">
           <button class="btn" onclick="newChatModal()">➕ New chat</button>
           <button class="btn ghost" onclick="loadThreads()">↻ Refresh</button>
@@ -341,8 +355,15 @@
           <button class="btn" onclick="resetCampaignForm()">＋ New campaign</button>
         </div>
       </div>
+      <!-- One job per tab: the page used to be a single 4,700px wall of
+           numbers, composer, history and lead tools. campTab() in app.js. -->
+      <div class="camp-tabs" role="tablist" aria-label="Campaign sections">
+        <button role="tab" data-camp-tab-btn="overview" onclick="campTab('overview')">Overview</button>
+        <button role="tab" data-camp-tab-btn="create" onclick="campTab('create')">New campaign</button>
+        <button role="tab" data-camp-tab-btn="leads" onclick="campTab('leads')">Leads</button>
+      </div>
 
-      <div class="camp-dashboard-card">
+      <div class="camp-dashboard-card" data-camp-tab="overview">
         <div class="camp-section-head">
           <div><h3>Campaign dashboard</h3><p>Live numbers from campaign and recipient records.</p></div>
           <button class="btn ghost sm" onclick="openFailedCampaignMessages()">⚠ Failed messages</button>
@@ -352,7 +373,7 @@
         <div id="camp-running" class="camp-running"></div>
       </div>
 
-      <div class="camp-live-grid">
+      <div class="camp-live-grid" data-camp-tab="create">
         <div class="camp-main-card">
           <div class="camp-step"><span>1</span><div><b>Campaign Content</b><small>Message, image and campaign name.</small></div></div>
           <fieldset class="camp-type-field"><legend>Campaign type *</legend><div class="camp-type-grid"><label class="camp-type-card"><input type="radio" name="camp-type" value="wish" onchange="campaignTypeChanged()"><span class="camp-type-text"><b>🎉 Wish / Greeting</b><small>Festival, birthday, thank-you. No offer, no frequency limit.</small></span></label><label class="camp-type-card selected"><input type="radio" name="camp-type" value="promotion" checked onchange="campaignTypeChanged()"><span class="camp-type-text"><b>📢 Promotion / Offer</b><small>Normal promotion rules and frequency limits apply.</small></span></label><label class="camp-type-card"><input type="radio" name="camp-type" value="payment_reminder" onchange="campaignTypeChanged()"><span class="camp-type-text"><b>💰 Payment reminder</b><small>Only customers with an outstanding balance.</small></span></label></div><small id="camp-type-help" class="muted">Promotion follows existing eligibility rules.</small></fieldset>
@@ -401,7 +422,7 @@
         </div>
       </div>
 
-      <div class="camp-bottom-grid">
+      <div class="camp-bottom-grid" data-camp-tab="create">
         <div class="camp-card">
           <div class="camp-step"><span class="blue">2</span><div><b>Select Audience</b><small>Use an existing segment or choose exact customers.</small></div></div><div id="camp-audience-lock-note" class="camp-inline-note" hidden></div>
           <div class="camp-audience-grid">
@@ -428,6 +449,7 @@
         </div>
       </div>
 
+      <div class="camp-send-block" data-camp-tab="create">
       <div class="camp-review-card">
         <div class="camp-step"><span class="blue">3</span><div><b>Review &amp; Send</b><small>Check audience and rules before sending.</small></div></div>
         <div class="camp-review-grid">
@@ -441,13 +463,14 @@
         <div class="camp-send-row"><button class="camp-start" id="camp-start-btn" onclick="createCampaign(this)"><span>➤ Review &amp; Send</span><small>Automatic sending · 15–20 sec gap · opt-outs always skipped</small></button><button type="button" class="btn ghost" id="camp-test-send-btn" onclick="testCampaignSend(this)">📱 Test send to my number</button></div>
         <p id="camp-send-validation" class="camp-inline-note" role="status" aria-live="polite" data-state="warn">Add a campaign name, message or image, and an audience.</p>
       </div>
+      </div>
 
-      <div id="camp-history" class="camp-history">
+      <div id="camp-history" class="camp-history" data-camp-tab="overview">
         <div class="camp-section-head"><div><h3>Campaign History</h3><p>Open a campaign for detailed recipient tracking.</p></div></div><div class="camp-history-filters"><select id="camp-history-filter" onchange="filterCampaignHistory()"><option value="all">All</option><option value="sending">Running</option><option value="sent">Completed</option><option value="draft">Draft</option><option value="scheduled">Scheduled</option><option value="cancelled">Cancelled</option></select><input id="camp-history-search" type="search" placeholder="Search campaign name…" oninput="filterCampaignHistory()"></div>
         <div id="camp-list"><div class="camp-skeleton" aria-hidden="true"></div><div class="camp-skeleton" aria-hidden="true"></div></div>
       </div>
       <div id="seg-cards" style="display:none"></div>
-      <div class="camp-lead-panel">      <div id="manual-lead-handoff" class="camp-dashboard-card" style="margin-bottom:14px">
+      <div class="camp-lead-panel" data-camp-tab="leads">      <div id="manual-lead-handoff" class="camp-dashboard-card" style="margin-bottom:14px">
         <div class="camp-section-head">
           <div><h3>📞 Phone-call lead → WhatsApp handoff</h3><p>Save the call details, review a message, and send only after the customer has agreed. The existing AI agent handles replies.</p></div>
           <button class="btn ghost sm" onclick="loadManualLeads()">↻ Refresh leads</button>
@@ -501,8 +524,6 @@
           <textarea id="tr-mkt-inst" rows="2" placeholder="e.g. Always address customers respectfully, mention festivals, keep messages short."></textarea></div>
         <p class="muted" style="margin-top:6px">Locked rules always win: no invented prices, no other customer's data, no unapproved discounts, no promises the database doesn't support.</p>
         <button class="btn" style="margin-top:8px" onclick="saveAgentSettings(this)">Save</button>
-
-/div>
       </div>
       <div class="card" style="margin-bottom:14px">
         <b>🙋 Teach me — questions the agent could not answer (<span id="teach-count">0</span>)</b>
@@ -973,27 +994,32 @@
 </div>
 
 <!-- bottom tab bar (mobile): thumb-zone essentials + More sheet -->
-<div class="tabbar">
-  <div data-s="inbox" onclick="go('inbox')" style="position:relative"><span class="ti">💬</span>Inbox<span class="tab-badge" id="unread-badge">0</span></div>
-  <div data-s="newbill" onclick="go('newbill')"><span class="ti">➕</span>New bill</div>
-  <div data-s="dashboard" onclick="go('dashboard')"><span class="ti">📊</span>Home</div>
-  <div data-s="customers" onclick="go('customers')"><span class="ti">👥</span>Customers</div>
-  <div onclick="openSheet()"><span class="ti">☰</span>More</div>
-</div>
+<nav class="tabbar" aria-label="Main">
+  <div data-s="dashboard" onclick="go('dashboard')"><span class="ti"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-dashboard"/></svg></span>Home</div>
+  <div data-s="inbox" onclick="go('inbox')" style="position:relative"><span class="ti"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-inbox"/></svg></span>Inbox<span class="tab-badge" id="unread-badge">0</span></div>
+  <div data-s="newbill" class="tab-fab" onclick="go('newbill')"><span class="ti"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-plus"/></svg></span>New bill</div>
+  <div data-s="customers" onclick="go('customers')"><span class="ti"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-users"/></svg></span>Customers</div>
+  <div onclick="openSheet()"><span class="ti"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-more"/></svg></span>More</div>
+</nav>
 
 <!-- More sheet (mobile) -->
 <div class="sheet-ov" id="sheet-ov" onclick="closeSheet()"></div>
 <div class="sheet" id="more-sheet">
   <div class="grabber"></div>
   <div class="sheet-grid">
-    <div onclick="sheetGo('bills')"><span class="si">🧾</span>Bill history</div>
-    <div onclick="sheetGo('expenses')"><span class="si">💸</span>Expenses</div>
-    <div onclick="sheetGo('reports')"><span class="si">📈</span>Reports</div>
-    <div onclick="sheetGo('campaigns')"><span class="si">📣</span>Campaigns</div>
-    <div onclick="sheetGo('agents')"><span class="si">🤖</span>Agents</div>
-    <div onclick="sheetGo('training')"><span class="si">🎓</span>AI training</div>
-    <div onclick="sheetGo('activity')"><span class="si">🛰</span>Activity</div>
-    <div onclick="sheetGo('settings')"><span class="si">⚙️</span>Settings</div>
+    <div onclick="sheetGo('bills')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-receipt"/></svg></span>Bill history</div>
+    <div onclick="sheetGo('expenses')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-expense"/></svg></span>Expenses</div>
+    <div onclick="sheetGo('reports')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-reports"/></svg></span>Reports</div>
+    <div onclick="sheetGo('polisher')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-ledger"/></svg></span>Polisher</div>
+    <div onclick="sheetGo('campaigns')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-campaign"/></svg></span>Campaigns</div>
+    <div onclick="sheetGo('business')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-briefcase"/></svg></span>Business</div>
+    <div onclick="sheetGo('tasks')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-task"/></svg></span>Tasks</div>
+    <div onclick="sheetGo('agents')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-agent"/></svg></span>Agents</div>
+    <div onclick="sheetGo('usage')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-usage"/></svg></span>AI usage</div>
+    <div onclick="sheetGo('training')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-training"/></svg></span>AI training</div>
+    <div onclick="sheetGo('activity')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-activity"/></svg></span>Activity</div>
+    <div onclick="sheetGo('settings')"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-settings"/></svg></span>Settings</div>
+    <div onclick="closeSheet();openGbpPoster()"><span class="si"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-image"/></svg></span>Google poster</div>
   </div>
 </div>
 

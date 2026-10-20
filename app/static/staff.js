@@ -222,19 +222,23 @@ async function start() {
 const canBill = () => ME.can_bill && ME.features.includes("billing");
 
 function navItems() {
-  const out = [["work", "🧺", "Work"]];
+  const out = [["work", "i-basket", "Work"]];
   if (canBill()) {
-    out.push(["bills", "🧾", "Bills"], ["new", "＋", "New"]);
+    out.push(["bills", "i-receipt", "Bills"], ["new", "i-plus", "New"]);
   }
-  if (ME.can_expense) out.push(["exp", "💸", "Expense"]);
-  if (ME.is_manager && ME.features.includes("staff_reports")) out.push(["team", "👥", "Team"]);
-  out.push(["me", "👤", "You"]);
+  if (ME.can_expense) out.push(["exp", "i-expense", "Expense"]);
+  if (ME.is_manager && ME.features.includes("staff_reports")) out.push(["team", "i-users", "Team"]);
+  out.push(["me", "i-user", "You"]);
   return out;
 }
 
+/* Icons come from the dashboard's SVG sprite (one cached file): emoji
+   render differently on every phone and never line up with the label. */
+const icon = (id) => `<svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#${id}"/></svg>`;
+
 function renderNav() {
-  $("nav").innerHTML = navItems().map(([k, icon, label]) =>
-    `<button data-nav="${k}" class="${NAV === k ? "on" : ""}"><i>${icon}</i>${label}</button>`).join("");
+  $("nav").innerHTML = navItems().map(([k, ic, label]) =>
+    `<button data-nav="${k}" class="${NAV === k ? "on" : ""}${k === "new" ? " fab" : ""}"><i>${icon(ic)}</i>${label}</button>`).join("");
   $("nav").querySelectorAll("[data-nav]").forEach((b) => { b.onclick = () => go(b.dataset.nav); });
 }
 
