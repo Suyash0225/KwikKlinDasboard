@@ -63,7 +63,8 @@ async def summary(db: AsyncSession = Depends(get_db)) -> dict:
     vendors = (await db.execute(select(PolisherVendor).where(PolisherVendor.is_active.is_(True)).order_by(PolisherVendor.name))).scalars().all()
     batches = (await db.execute(select(PolishBatch).order_by(PolishBatch.sent_on.desc()).limit(500))).scalars().all()
     payments = (await db.execute(select(PolisherPayment))).scalars().all()
-    accrued = sum((Decimal(b.quantity_sent) * b.rate_per_saree for b in batches), Decimal("0"))
+    # A payable is accrued only for pieces returned as polished, not merely dispatched.
+    accrued = sum((Decimal(b.quantity_returned) * b.rate_per_saree for b in batches), Decimal("0"))
     paid = sum((p.amount for p in payments), Decimal("0"))
     returned = sum(b.quantity_returned for b in batches)
     sent = sum(b.quantity_sent for b in batches)
@@ -78,8 +79,10 @@ async def summary(db: AsyncSession = Depends(get_db)) -> dict:
 @router.post("/vendors")
 async def create_vendor(payload: VendorIn, db: AsyncSession = Depends(get_db)) -> dict:
     phone = "".join(c for c in payload.phone if c.isdigit())
-    if len(phone) < 10:
-        raise HTTPException(422, "Valid WhatsApp phone number with country code is required")
+    if len(phone) == 10:
+        phone = "91" + phone
+    if len(phone) < 11 or len(phone) > 15:
+        raise HTTPException(422, "Enter a valid WhatsApp number, with country code if not an Indian 10-digit number")
     vendor = PolisherVendor(name=payload.name.strip(), phone=phone, rate_per_saree=payload.rate_per_saree)
     db.add(vendor)
     await db.commit()
