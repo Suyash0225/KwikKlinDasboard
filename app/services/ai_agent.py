@@ -50,6 +50,34 @@ def _is_explicit_order_confirmation(text: str) -> bool:
     """Only a clear, standalone affirmative can confirm a prepared pickup."""
     return bool(_ORDER_CONFIRMATION_RE.fullmatch(text or ""))
 
+
+def _pickup_confirmation_summary(intake: dict) -> str:
+    return (
+        f"Order summary: {intake['items_text'][:100]}, pickup {intake['pickup_date']}, "
+        f"address {intake['address'][:120]}. Kya main ye pickup order confirm kar doon? "
+        "Reply 'haan' to confirm or 'nahi' to cancel. — Kwik Klin AI"
+    )
+
+
+async def _has_matching_pickup_confirmation_prompt(
+    db: AsyncSession, customer: Customer, intake: dict
+) -> bool:
+    """Confirmation is valid only after this exact summary was sent to this customer."""
+    from app.models import Conversation, Direction
+
+    last_outbound = (
+        await db.execute(
+            select(Conversation.message_text)
+            .where(
+                Conversation.customer_id == customer.id,
+                Conversation.direction == Direction.OUTBOUND,
+            )
+            .order_by(Conversation.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return last_outbound == _pickup_confirmation_summary(intake)
+
 _PRICE_AMOUNT_RE = re.compile(r"(?:₹|\bINR\s*|\bRs\.?\s*)(\d+(?:\.\d{1,2})?)|\b(\d+(?:\.\d{1,2})?)\s*(?:rupees|rs\.?)\b", re.I)
 
 
@@ -640,12 +668,9 @@ async def build_ai_reply(
     if intake.get("ready") and all(
         (intake.get(k) or "").strip() for k in ("name", "address", "items_text", "pickup_date")
     ):
-        if not _is_explicit_order_confirmation(text):
-            return (
-                f"Order summary: {intake['items_text'][:100]}, pickup {intake['pickup_date']}, "
-                f"address {intake['address'][:120]}. Kya main ye pickup order confirm kar doon? "
-                "Reply 'haan' to confirm or 'nahi' to cancel. — Kwik Klin AI"
-            )
+        has_matching_prompt = await _has_matching_pickup_confirmation_prompt(db, customer, intake)
+        if not _is_explicit_order_confirmation(text) or not has_matching_prompt:
+            return _pickup_confirmation_summary(intake)
         if sandbox:
             return (out.get("reply") or "") + (
                 f"\n🧪 (real mein: order ban jata — {intake['name']}, "
