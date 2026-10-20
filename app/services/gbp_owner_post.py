@@ -28,8 +28,12 @@ _MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 
 def _same_phone(left: str, right: str) -> bool:
+    # WAHA identifies senders as JIDs (for example 919876543210@c.us).
+    # Strip the JID suffix before applying the application's E.164 normalizer.
     try:
-        return normalize_phone(left) == normalize_phone(right)
+        left_number = str(left or "").split("@", 1)[0]
+        right_number = str(right or "").split("@", 1)[0]
+        return normalize_phone(left_number) == normalize_phone(right_number)
     except (ValueError, TypeError):
         return False
 
