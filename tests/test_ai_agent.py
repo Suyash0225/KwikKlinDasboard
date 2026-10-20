@@ -202,6 +202,218 @@ async def test_compose_prompt_tells_ai_not_to_repeat_saved_profile(monkeypatch) 
     assert reply
 
 
+def test_order_confirmation_requires_standalone_explicit_affirmative() -> None:
+    from app.services.ai_agent import _is_explicit_order_confirmation
+
+    assert _is_explicit_order_confirmation("haan")
+    assert _is_explicit_order_confirmation("Haan ji")
+    assert _is_explicit_order_confirmation("confirm")
+    assert not _is_explicit_order_confirmation("mujhe kapde dhulwane hain")
+    assert not _is_explicit_order_confirmation("haan, lekin rate batao")
+    assert not _is_explicit_order_confirmation("nahi")
+
+
+def test_order_cancellation_requires_standalone_phrase() -> None:
+    from app.services.ai_agent import _is_explicit_order_cancellation
+
+    assert _is_explicit_order_cancellation("nahi")
+    assert _is_explicit_order_cancellation("Nahin ji")
+    assert _is_explicit_order_cancellation("cancel kar do")
+    assert _is_explicit_order_cancellation("rehne do")
+    assert not _is_explicit_order_cancellation("nahi, rate batao")
+    assert not _is_explicit_order_cancellation("mujhe cancel policy batao")
+
+
+async def test_pending_pickup_cancellation_does_not_create_order(monkeypatch) -> None:
+    from sqlalchemy import func
+    from app.models import Conversation, Direction, Order
+    from app.services.ai_agent import _pickup_confirmation_summary
+
+    intake = {
+        "name": "AI Grahak",
+        "address": "Test Address, Varanasi",
+        "items_text": "2 shirts",
+        "pickup_date": "tomorrow",
+        "ready": True,
+    }
+    async def fake_ask_json(**kw):
+        return {
+            "reply": "Ji, noted.",
+            "intent": "NEW_ORDER", "language": "hi",
+            "action": "ANSWER", "action_reason": "",
+            "escalate": False, "escalation_reason": "", "admin_note": "",
+            "intake": intake,
+        }
+
+    async def no_selected_tools(*args, **kwargs):
+        return {}
+
+    async def simple_context(*args, **kwargs):
+        return ("facts", "knowledge", "history")
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    monkeypatch.setattr(agent_module, "_select_customer_tools", no_selected_tools)
+    monkeypatch.setattr(agent_module, "_gather_context", simple_context)
+
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        db.add(Conversation(
+            customer_id=cust.id,
+            direction=Direction.OUTBOUND,
+            message_text=_pickup_confirmation_summary(intake),
+            sent_by="bot",
+        ))
+        await db.commit()
+
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        reply = await build_ai_reply(db, cust, "nahi")
+
+    assert reply and "cancel" in reply.lower()
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        count = (await db.execute(
+            select(func.count()).select_from(Order).where(Order.customer_id == cust.id)
+        )).scalar_one()
+    assert count == 0, "a standalone cancellation must never create a pickup order"
+
+
+async def test_pickup_creation_returns_existing_active_order_without_duplicate(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app.models import OrderStatus
+    from app.services.ai_agent import _create_pickup_order
+
+    existing = SimpleNamespace(order_number="KK-EXISTING-01", status=OrderStatus.RECEIVED)
+
+    class ExistingOrders:
+        def first(self):
+            return existing
+
+    class QueryResult:
+        def scalars(self):
+            return ExistingOrders()
+
+    db = AsyncMock()
+    db.execute.return_value = QueryResult()
+    customer = Customer(phone=PHONE, name="AI Grahak", address="Test Address, Varanasi")
+    intake = {
+        "name": "AI Grahak",
+        "address": "Test Address, Varanasi",
+        "items_text": "2 shirts",
+        "pickup_date": "tomorrow",
+        "ready": True,
+    }
+
+    reply = await _create_pickup_order(db, customer, intake)
+
+    assert reply
+    assert "KK-EXISTING-01" in reply
+    db.execute.assert_awaited_once()
+
+
+async def test_changed_pickup_details_invalidate_old_confirmation(monkeypatch) -> None:
+    from sqlalchemy import func
+    from app.models import Conversation, Direction, Order
+    from app.services.ai_agent import _pickup_confirmation_summary
+
+    old_intake = {
+        "name": "AI Grahak",
+        "address": "Test Address, Varanasi",
+        "items_text": "2 shirts",
+        "pickup_date": "tomorrow",
+        "ready": True,
+    }
+    changed_intake = {
+        **old_intake,
+        "address": "New Address, Lanka, Varanasi",
+    }
+
+    async def fake_ask_json(**kw):
+        return {
+            "reply": "Ji, noted.",
+            "intent": "NEW_ORDER", "language": "hi",
+            "action": "ANSWER", "action_reason": "",
+            "escalate": False, "escalation_reason": "", "admin_note": "",
+            "intake": changed_intake,
+        }
+
+    async def no_selected_tools(*args, **kwargs):
+        return {}
+
+    async def simple_context(*args, **kwargs):
+        return ("facts", "knowledge", "history")
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    monkeypatch.setattr(agent_module, "_select_customer_tools", no_selected_tools)
+    monkeypatch.setattr(agent_module, "_gather_context", simple_context)
+
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        db.add(Conversation(
+            customer_id=cust.id,
+            direction=Direction.OUTBOUND,
+            message_text=_pickup_confirmation_summary(old_intake),
+            sent_by="bot",
+        ))
+        await db.commit()
+
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        reply = await build_ai_reply(db, cust, "haan")
+
+    assert reply == _pickup_confirmation_summary(changed_intake)
+    assert "New Address, Lanka, Varanasi" in reply
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        count = (await db.execute(
+            select(func.count()).select_from(Order).where(Order.customer_id == cust.id)
+        )).scalar_one()
+    assert count == 0, "an affirmative for stale details must not create an order"
+
+
+async def test_numeric_price_reply_must_match_requested_active_rate(monkeypatch) -> None:
+    from app.services import ai_tools
+    from app.services.ai_agent import _price_reply_is_grounded
+
+    async def fake_rates(db, customer):
+        return [
+            {"service": "Dry Clean", "garment": "Blazer", "rate": "150.00", "unit": "piece"},
+            {"service": "Wash", "garment": "Shirt", "rate": "30", "unit": "piece"},
+        ]
+
+    monkeypatch.setattr(ai_tools, "get_shop_rate_card", fake_rates)
+    customer = Customer(phone=PHONE, name="Test", address="Varanasi")
+    assert await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Blazer ₹150 hai")
+    assert not await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Blazer ₹120 hai")
+    assert not await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Shirt ₹30 hai")
+    assert not await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Blazer ₹150 hai, special ₹200")
+    assert await _price_reply_is_grounded(None, customer, "Blazer dry clean rate", "Main rate verify karke batata hoon")
+
+async def test_pickup_confirmation_requires_latest_exact_summary(monkeypatch) -> None:
+    from app.services.ai_agent import _has_matching_pickup_confirmation_prompt, _pickup_confirmation_summary
+
+    intake = {
+        "name": "Rahul Sharma",
+        "address": "12 Lanka, Varanasi",
+        "items_text": "2 shirts",
+        "pickup_date": "tomorrow",
+    }
+    customer = Customer(phone=PHONE, name="Rahul Sharma", address="12 Lanka, Varanasi")
+
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    db = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock()
+    db.execute.return_value = Result(_pickup_confirmation_summary(intake))
+    assert await _has_matching_pickup_confirmation_prompt(db, customer, intake)
+    db.execute.return_value = Result("Some unrelated outbound message")
+    assert not await _has_matching_pickup_confirmation_prompt(db, customer, intake)
+
 def test_customer_fact_selection_handles_common_hinglish_without_keyword_flood() -> None:
     """Select relevant facts for common Hinglish wording; unrelated questions stay minimal."""
     cases = {
@@ -254,6 +466,13 @@ async def test_new_customer_can_get_rate_answer_before_profile_onboarding(monkey
 
 
 async def test_compose_happy_path_no_escalation(monkeypatch) -> None:
+    from app.services import ai_tools
+
+    async def fake_rates(db, customer):
+        return [{"service": "Wash", "garment": "Shirt", "rate": "30", "unit": "piece"}]
+
+    monkeypatch.setattr(ai_tools, "get_shop_rate_card", fake_rates)
+
     async def fake_ask_json(**kw):
         # the FACTS block must carry customer identity, never notes
         assert "AI Grahak" in kw["user_text"]
@@ -432,11 +651,16 @@ def test_runtime_block_resolves_kal_to_iso() -> None:
     assert "parso = 2026-10-22" in block
 
 
-def test_pickup_date_must_be_iso_and_near() -> None:
+def test_pickup_date_accepts_relative_dates_and_stays_near() -> None:
     from datetime import timedelta
 
     today = agent_module._dt.now(agent_module._IST).date()
-    assert agent_module._parse_pickup_date("kal") is None
+    assert agent_module._parse_pickup_date("kal") == today + timedelta(days=1)
+    assert agent_module._parse_pickup_date("tomorrow") == today + timedelta(days=1)
+    assert agent_module._parse_pickup_date("aaj") == today
+    assert agent_module._parse_pickup_date("today") == today
+    assert agent_module._parse_pickup_date("parso") == today + timedelta(days=2)
+    assert agent_module._parse_pickup_date("day after tomorrow") == today + timedelta(days=2)
     assert agent_module._parse_pickup_date("") is None
     assert agent_module._parse_pickup_date((today - timedelta(days=1)).isoformat()) is None
     assert agent_module._parse_pickup_date((today + timedelta(days=60)).isoformat()) is None
@@ -528,3 +752,18 @@ async def test_customer_memory_is_in_customer_facts(monkeypatch) -> None:
         facts = await agent_module._build_facts(db, customer, tool_names={})
     assert "already know about this customer" in facts
     assert "Usual items: shirts" in facts
+async def test_verbatim_rule_is_in_prompt(monkeypatch) -> None:
+    async def fake_ask_json(**kw):
+        assert "[VERBATIM]" in kw["system"]
+        assert "EXACTLY as written" in kw["system"]
+        return {
+            "reply": "Ji — Kwik Klin AI", "intent": "OTHER", "language": "hi",
+            "action": "ANSWER", "action_reason": "", "escalate": False,
+            "escalation_reason": "", "admin_note": "",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    async with async_session_factory() as db:
+        cust = await _seed_customer()
+        assert await build_ai_reply(db, cust, "refund policy kya hai")

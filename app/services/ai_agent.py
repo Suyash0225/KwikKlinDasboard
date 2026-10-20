@@ -13,6 +13,7 @@ Safety design — every rule enforced in CODE, not just in the prompt:
 
 import asyncio
 import re
+from decimal import Decimal, InvalidOperation
 from datetime import date as _date, datetime as _dt, timedelta, timezone as _tz
 from zoneinfo import ZoneInfo
 
@@ -46,6 +47,85 @@ def _is_simple_greeting(text: str) -> bool:
     """Cheap deterministic check for greetings; avoid wasting LLM calls."""
     return bool(_SIMPLE_GREETING_RE.fullmatch(text or ""))
 
+_ORDER_CONFIRMATION_RE = re.compile(r"^\s*(?:haan(?:\s+ji)?|han(?:\s+ji)?|ji\s+haan|yes|y|okay|ok|theek(?:\s+hai)?|confirm|confirmed|kar do|bana do|pickup\s+confirm)\s*[!.🙏👍✅]*\s*$", re.I)
+
+
+def _is_explicit_order_confirmation(text: str) -> bool:
+    """Only a clear, standalone affirmative can confirm a prepared pickup."""
+    return bool(_ORDER_CONFIRMATION_RE.fullmatch(text or ""))
+
+
+_ORDER_CANCELLATION_RE = re.compile(
+    r"^\s*(?:nahi(?:\s+ji)?|nahin(?:\s+ji)?|no|cancel|cancel karo|cancel kar do|mat karo|rehne do|chhodo|chod do)\s*[!.🙏👍✅]*\s*$",
+    re.I,
+)
+
+
+def _is_explicit_order_cancellation(text: str) -> bool:
+    """Recognize only a standalone cancellation of the pending pickup request."""
+    return bool(_ORDER_CANCELLATION_RE.fullmatch(text or ""))
+
+
+def _pickup_confirmation_summary(intake: dict) -> str:
+    return (
+        f"Order summary: {intake['items_text'][:100]}, pickup {intake['pickup_date']}, "
+        f"address {intake['address'][:120]}. Kya main ye pickup order confirm kar doon? "
+        "Reply 'haan' to confirm or 'nahi' to cancel. — Kwik Klin AI"
+    )
+
+
+async def _has_matching_pickup_confirmation_prompt(
+    db: AsyncSession, customer: Customer, intake: dict
+) -> bool:
+    """Confirmation is valid only after this exact summary was sent to this customer."""
+    from app.models import Conversation, Direction
+
+    last_outbound = (
+        await db.execute(
+            select(Conversation.message_text)
+            .where(
+                Conversation.customer_id == customer.id,
+                Conversation.direction == Direction.OUTBOUND,
+            )
+            .order_by(Conversation.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return last_outbound == _pickup_confirmation_summary(intake)
+
+_PRICE_AMOUNT_RE = re.compile(r"(?:₹|\bINR\s*|\bRs\.?\s*)(\d+(?:\.\d{1,2})?)|\b(\d+(?:\.\d{1,2})?)\s*(?:rupees|rs\.?)\b", re.I)
+
+
+async def _price_reply_is_grounded(db: AsyncSession, customer: Customer, question: str, reply: str) -> bool:
+    """Reject numeric price claims unless they match the requested active DB rate."""
+    def canonical_amount(value: str) -> str:
+        try:
+            return format(Decimal(value).normalize(), "f")
+        except (InvalidOperation, ValueError):
+            return value
+
+    quoted = {
+        canonical_amount(match.group(1) or match.group(2))
+        for match in _PRICE_AMOUNT_RE.finditer(reply or "")
+    }
+    if not quoted:
+        return True
+
+    from app.services.ai_tools import get_shop_rate_card
+
+    rates = await get_shop_rate_card(db, customer)
+    normalized_question = re.sub(r"[^a-z0-9]+", " ", (question or "").casefold()).strip()
+    grounded_amounts: set[str] = set()
+    for row in rates:
+        garment = re.sub(r"[^a-z0-9]+", " ", str(row.get("garment") or "").casefold()).strip()
+        service = re.sub(r"[^a-z0-9]+", " ", str(row.get("service") or "").casefold()).strip()
+        # A rate is relevant only when the customer explicitly named this garment
+        # or service. Ambiguous aliases must be clarified rather than guessed.
+        named = bool(garment and re.search(r"\b" + re.escape(garment) + r"\b", normalized_question))
+        named = named or bool(service and re.search(r"\b" + re.escape(service) + r"\b", normalized_question))
+        if named:
+            grounded_amounts.add(canonical_amount(str(row.get("rate") or "")))
+    return bool(quoted) and quoted.issubset(grounded_amounts)
 
 def _runtime_block(now: _dt | None = None) -> str:
     """Current date in IST so relative pickup dates resolve to real dates."""
@@ -62,12 +142,21 @@ def _runtime_block(now: _dt | None = None) -> str:
 
 
 def _parse_pickup_date(value: str) -> _date | None:
-    """ISO date from intake, or None. Code decides readiness, not the model."""
-    try:
-        d = _date.fromisoformat((value or "").strip()[:10])
-    except ValueError:
-        return None
+    """Parse ISO dates and common relative Hindi/English pickup-day labels."""
+    raw = (value or "").strip().casefold()
     today = _dt.now(_IST).date()
+    relative_days = {
+        "aaj": 0, "today": 0,
+        "kal": 1, "tomorrow": 1,
+        "parso": 2, "day after tomorrow": 2,
+    }
+    if raw in relative_days:
+        d = today + timedelta(days=relative_days[raw])
+    else:
+        try:
+            d = _date.fromisoformat(raw[:10])
+        except ValueError:
+            return None
     if d < today or d > today + timedelta(days=30):
         return None
     return d
@@ -487,6 +576,12 @@ _COMPOSE_SYSTEM = (
     "(blanket, saree, suit, curtain) gently say what service suits it from the rate "
     "card. If they have an order ready/overdue in FACTS, mention it proactively. "
     "One helpful nudge per reply, never a sales pitch.\n"
+    "15. VERBATIM: if a knowledge entry's answer starts with [VERBATIM], send the "
+    "text after that tag EXACTLY as written — same language, same words, same "
+    "numbers. You may put one short greeting line before it and the signature "
+    "after it. Never translate, shorten, reword or merge it with other text. "
+    "If two [VERBATIM] entries match, use the one that answers the customer's "
+    "actual question.\n"
     "\nEXAMPLES (style only — real numbers/dates always come from FACTS):\n"
     "customer: kurta ka rate?\n"
     f"reply: Kurta wash+iron ₹40/piece hai ji, dry clean ₹120 😊 — {settings.SHOP_NAME} AI\n"
@@ -695,6 +790,22 @@ async def build_ai_reply(
     } else "ANSWER"
     action_reason = (out.get("action_reason") or "").strip()
 
+    # Never let the model invent a numeric quote. A price must match the active
+    # database rate for a garment/service explicitly named in this message.
+    if intent == "PRICE_QUERY" and not sandbox:
+        try:
+            grounded = await _price_reply_is_grounded(db, customer, text, out.get("reply") or "")
+        except Exception:
+            log.exception("ai_price_grounding_failed")
+            grounded = False
+        if not grounded:
+            out["reply"] = (
+                "Main is item aur service ka exact active rate card verify nahi kar pa raha. "
+                "Galat rate batane ke bajay team se confirm karwa deta hoon. — Kwik Klin AI"
+            )
+            out["escalate"] = True
+            out["escalation_reason"] = "price quote could not be grounded in active rate card"
+
     # Action/intent pairing is validated in code. A model cannot turn an
     # unrelated message into a bill send just by returning SEND_BILL.
     allowed_action = (
@@ -791,17 +902,28 @@ async def build_ai_reply(
         )
         return out.get("reply") or get_message("escalated_ack", lang)
 
-    # Pickup intake complete -> the agent CREATES the order itself
+    # Validate dates, but keep the customer's original date wording in the
+    # confirmation summary so an existing prompt can be matched exactly.
     pickup_day = _parse_pickup_date(intake.get("pickup_date") or "")
-    if intake.get("ready") and pickup_day is None and (intake.get("pickup_date") or "").strip():
-        # Model said ready but gave 'kal' or a bad date — don't create an order
-        # on a guess; its own reply (which asks/confirms) goes out instead.
-        log.warning("intake_pickup_date_invalid", value=str(intake.get("pickup_date"))[:20])
+    if intake.get("ready") and pickup_day is None:
+        log.warning("intake_pickup_date_invalid", value=str(intake.get("pickup_date") or "")[:20])
+        return "Pickup kis din chahiye ji? Kripya aaj, kal, parso ya date bata dein. — Kwik Klin AI"
+
     if intake.get("ready") and pickup_day is not None and all(
         (intake.get(k) or "").strip() for k in ("name", "address", "items_text")
     ):
-        intake = {**intake, "pickup_date": pickup_day.isoformat(),
-                  "pickup_label": pickup_day.strftime("%a %d %b")}
+        has_matching_prompt = await _has_matching_pickup_confirmation_prompt(db, customer, intake)
+        if has_matching_prompt and _is_explicit_order_cancellation(text):
+            return "Theek hai ji, pickup request cancel kar di hai. Koi order create nahi kiya gaya. — Kwik Klin AI"
+        if not _is_explicit_order_confirmation(text) or not has_matching_prompt:
+            return _pickup_confirmation_summary(intake)
+
+        # Normalize only after the exact summary has been confirmed.
+        intake = {
+            **intake,
+            "pickup_date": pickup_day.isoformat(),
+            "pickup_label": pickup_day.strftime("%a %d %b"),
+        }
         if sandbox:
             return (out.get("reply") or "") + (
                 f"\n🧪 (real mein: order ban jata — {intake['name']}, "
@@ -811,7 +933,12 @@ async def build_ai_reply(
         created = await _create_pickup_order(db, customer, intake)
         if created:
             return created  # deterministic confirmation, not model text
-
+        # Never fall through to the model's free-form reply after an order
+        # creation failure: it could falsely tell the customer the pickup is booked.
+        return (
+            "Maaf kijiye, abhi pickup order confirm nahi ho paya. "
+            "Main team se verify karwaunga; please ise booked na samjhein. — Kwik Klin"
+        )
     # Agent handled it itself — if the owner should know, send a quiet FYI
     # (no open question, nothing waits on the owner).
     admin_note = (out.get("admin_note") or "").strip()
@@ -1186,4 +1313,3 @@ async def _build_facts(
             log.exception("shop_rate_card_tool_failed")
 
     return "\n".join(lines)
-

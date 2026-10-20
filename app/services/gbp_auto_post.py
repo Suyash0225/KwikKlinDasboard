@@ -59,6 +59,17 @@ async def _api_post(refresh_token: str, account: str, location: str, payload: di
     ) as c:
         r = await c.post(url, json=payload)
     if r.status_code not in (200, 201):
+        # Keep the response body (bounded) in server logs so Google 5xx
+        # failures can be diagnosed. Do NOT retry POST blindly: a 500 may
+        # occur after Google has created the post, and a retry can duplicate it.
+        log.warning(
+            "gbp_local_post_api_failed",
+            status=r.status_code,
+            account=account,
+            location=location,
+            body=(r.text or "")[:800],
+            request_id=r.headers.get("x-guploader-uploadid") or r.headers.get("x-request-id"),
+        )
         raise gbp.GBPError(gbp._explain(r))
     return r.json() or {}
 
@@ -402,9 +413,14 @@ async def auto_post_daily(db, now_ist: datetime) -> dict:
         "topicType": "STANDARD",
         "callToAction": {"actionType": "LEARN_MORE", "url": cta_url},
     }
-    # Owner-supplied poster only. Automatic Gemini artwork generation is intentionally disabled.
+    # Prefer a verified owner-supplied poster. If none is configured, create
+    # one branded campaign poster (Gemini artwork with deterministic fallback)
+    # and share the same public HTTPS URL across the selected locations.
     poster_url = _public_poster_url(await app_settings.get(db, "gbp_owner_poster_url"))
-    poster_issue = None if poster_url else "owner_poster_missing: send a poster image from the verified admin WhatsApp number first"
+    poster_issue = None
+    if not poster_url:
+        # Owner supplies every poster. Never generate artwork or silently publish text-only.
+        poster_issue = "owner_poster_required: upload your own poster in the Control panel before daily publishing"
     if not poster_url:
         # The owner explicitly expects a branded poster on GBP. Do not silently
         # publish a text-only post when image generation or the stable public
