@@ -304,12 +304,12 @@ async def test_human_reply_during_ai_generation_cancels_pending_send(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_repeated_welcome_is_replaced_after_first_welcome():
+async def test_generic_repeated_welcome_is_replaced_after_first_welcome():
     from app.routers.webhook import _avoid_repeated_welcome
 
     previous = [
         type("Message", (), {
-            "message_text": "Welcome to Kwik Klin 😊 May I know your name, please?"
+            "message_text": "Welcome to Kwik Klin 😊 Would you like help?"
         })()
     ]
 
@@ -327,12 +327,25 @@ async def test_repeated_welcome_is_replaced_after_first_welcome():
 
     customer = type("Customer", (), {"id": 1, "phone": "+919999999999"})()
     result = await _avoid_repeated_welcome(
-        FakeDB(), customer,
-        "Welcome to Kwik Klin 😊 May I know your name, please?",
+        FakeDB(), customer, "Welcome to Kwik Klin 😊 Would you like help?"
     )
 
     assert "Welcome" not in result
     assert "laundry pickup" in result
+
+
+@pytest.mark.asyncio
+async def test_name_onboarding_prompt_is_not_replaced_as_repeated_welcome():
+    from app.routers.webhook import _avoid_repeated_welcome
+
+    class FakeDB:
+        async def execute(self, *_args, **_kwargs):
+            raise AssertionError("onboarding prompts must return before querying history")
+
+    customer = type("Customer", (), {"id": 1, "phone": "+919999999999"})()
+    reply = "Welcome to Kwik Klin! 😊 May I know your name, please?"
+
+    assert await _avoid_repeated_welcome(FakeDB(), customer, reply) == reply
 
 
 @pytest.mark.asyncio

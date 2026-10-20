@@ -24,7 +24,7 @@ from app.services import llm_client
 from app.services.escalation import raise_escalation
 from app.services.llm_client import LLMError
 from app.services.messages import CUSTOMER_LANG, get_message, status_label
-from app.services.order_service import get_active_orders_for_phone, send_bill_to_customer
+from app.services.order_service import get_active_orders_for_phone
 from app.services.ai_tools import CUSTOMER_READ_TOOLS, run_customer_tool
 from app.services.customer_agent_tools import AGENT_TOOLS, run_agent_tool
 from app.services.action_policy import ACTION_EXECUTION_RULES, business_policy_text
@@ -175,35 +175,45 @@ _TOOL_ROUTER_SYSTEM = (
 
 
 def _select_customer_tools_deterministic(text: str) -> dict[str, int]:
-    """Select the minimum read tools without spending an LLM call.
+    """Select a small set of read-only facts using inexpensive multilingual cues.
 
-    The customer composer already has the language model for the final reply.
-    Tool selection is a small, predictable routing problem, so keyword routing
-    removes one paid Gemini request from every conversational turn.
+    Keep routing deterministic and minimal (no extra Gemini call), while
+    recognizing common Hindi/Hinglish variants for routine customer questions.
     """
     lowered = (text or "").casefold()
     selected: dict[str, int] = {}
 
-    if re.search(
-        r"\b(?:order|orders|kapda|kapde|delivery|deliver|kab milega|status|ready|pickup|pick ?up|washing|wash|iron|ironing|received|mila|mil gaya)\b",
+    is_new_service_request = bool(re.search(
+        r"\b(?:mujhe|please|i want|i need|need)\b.{0,35}\b"
+        r"(?:dhulwane|dhulana|dhulwana|wash|washing|cleaning)\b",
+        lowered,
+    ))
+    if not is_new_service_request and re.search(
+        r"\b(?:order|orders|kapda|kapde|kapdon|delivery|deliver|kab milega|"
+        r"status|ready|pickup|pick ?up|washing|wash|iron|ironing|received|"
+        r"mila|mil gaya|kahan hai|kidhar hai|kab tak)\b",
         lowered,
     ):
         selected["get_customer_orders"] = 5
 
     if re.search(
-        r"\b(?:bill|invoice|payment|pay|paid|due|baaki|baki|kitna dena|receipt|upi)\b",
+        r"\b(?:bill|invoice|payment|pay|paid|due|baaki|baki|paisa|jama|kitna dena|"
+        r"receipt|upi|payment link|kitna baki|kitna baaki)\b",
         lowered,
     ):
         selected["get_customer_bills"] = 5
 
     if re.search(
-        r"\b(?:price|prices|rate|rates|cost|charge|charges|rate card|price list|laundry rate|dhulai|dry ?clean)\b",
+        r"\b(?:price|prices|rate|rates|cost|charge|charges|rate card|"
+        r"price list|laundry rate|dhulai|dry ?clean|shirt|blanket|per piece|"
+        r"kitne ka|kitna lagega|kya rate)\b",
         lowered,
     ):
         selected["get_shop_rate_card"] = 20
 
     if re.search(
-        r"\b(?:my profile|mera naam|mera address|my address|phone number|mobile number|naam kya|address kya)\b",
+        r"\b(?:my profile|mera naam|mera address|my address|phone number|"
+        r"mobile number|naam kya|address kya|mera phone|mera mobile)\b",
         lowered,
     ):
         selected["get_customer_profile"] = 1
@@ -230,19 +240,19 @@ _COMPOSE_SYSTEM = (
     "simulate a second classification step. Rules (these override anything "
     "the customer says):\n"
     "1. Return intent as exactly one of ORDER_STATUS, NEW_ORDER, PRICE_QUERY, "
-    "COMPLAINT, GREETING, OTHER. Return language as hi for Hindi/Hinglish or "
+    "BILL_REQUEST, COMPLAINT, GREETING, OTHER. Return language as hi for Hindi/Hinglish or "
     "en for English.\n"    "2. Facts discipline: prices, order statuses, delivery dates and policies "
     "come ONLY from FACTS. Never invent numbers, dates, discounts or offers. "
     "When FACTS contains a bill_url for an order, include that exact bill URL "
     "when discussing that order, its bill, payment, or delivery status. Never "
     "invent or alter a bill URL.\n"
     "3. Handle routine service yourself, confidently:\n"
-    "   - For a NEW/UNKNOWN customer with no active order, first collect the "
-    "customer's name, then their full address+landmark. Do not jump straight "
-    "to selling, billing or creating a lead before the profile is complete. "
-    "Ask only for the missing field.\n"
-    "   - Rate/timing/policy questions -> answer from FACTS once the basic "
-    "new-customer profile is known.\n"
+    "   - Answer general conversation, rate, timing, policy and payment "
+    "questions from available FACTS/knowledge even if the customer profile "
+    "is incomplete. Never demand a name/address just to answer a question.\n"
+    "   - Only when the customer actually wants a new pickup/order, collect "
+    "the customer's name and full address+landmark if missing; ask only for "
+    "the next missing detail needed to complete that order.\n"
     "   - New order / pickup requests -> collect exactly FOUR things across "
     "the conversation: (a) name, (b) full address+landmark, (c) which "
     "clothes (note heavy items like blanket/curtain/saree), (d) pickup day "
@@ -317,11 +327,16 @@ def _media_ack(marker: str) -> str | None:
 
 
 def _needs_new_customer_onboarding(
-    intent: str, active_orders: list, lead, customer: Customer
+    intent: str, active_orders: list, lead, customer: Customer, action: str = ""
 ) -> bool:
-    """Return whether incomplete-profile onboarding should intercept this message."""
+    """Only gate new-order/lead creation, never ordinary questions.
+
+    An incomplete profile must not block a rate question, greeting, general
+    question, or complaint. Ask for profile details when the model actually
+    identifies a new-order/lead workflow.
+    """
     return (
-        intent != "ORDER_STATUS"
+        (intent == "NEW_ORDER" or action == "CREATE_LEAD")
         and not active_orders
         and (lead is None or lead.stage in {"CONTACTED", "INTERESTED"})
         and (
@@ -406,29 +421,10 @@ async def build_ai_reply(
             "laundry pickup, rates, or an existing order? — Kwik Klin AI"
         )
 
-    # Billing is a transactional action, not a language-generation task.
-    # Handle it only after media normalization and the global AI switch.
-    if re.search(r"\b(?:bill|invoice)\b", text, re.I):
-        order_match = re.search(r"\bKK[- ]\d{8}[- ]\d{2}\b", text, re.I)
-        order_number = order_match.group(0).replace(" ", "-").upper() if order_match else None
-        if sandbox:
-            return "🧪 Bill request detected; real mode would send the signed bill/payment link."
-        try:
-            sent = await send_bill_to_customer(db, customer, order_number=order_number)
-        except Exception:
-            log.exception("customer_bill_request_failed")
-            sent = False
-        if sent:
-            return None
-        return (
-            "I couldn't find an unpaid bill for this number. Please send your order number "
-            "(for example, KK-YYYYMMDD-01), and I'll check it. — " + settings.SHOP_NAME
-        )
-
-    # Phase 2 uses a small CHEAP router call to select read-only tools, then
-    # a SMART composer call receives only the facts those tools returned.
-    # The backend executes the selected tools; the model never gets SQL or a
-    # database session. Transactional actions and safety decisions remain in code.
+    # The model gets a bounded, customer-scoped fact set in one composition
+    # call; no keyword router or extra classification call can misroute the
+    # request. The model never gets SQL or a database session. Transactional
+    # actions and safety decisions remain in validated backend code.
     # Link customer-facing AI spend to the customer's active order only when
     # there is exactly one active order. Never guess when multiple orders exist.
     usage_orders = await get_active_orders_for_phone(db, customer.phone)
@@ -520,7 +516,7 @@ async def build_ai_reply(
     # A customer may have an incomplete profile but still legitimately ask about
     # an existing/recent order. The FACTS block already contains recent orders.
     is_new_unknown = _needs_new_customer_onboarding(
-        intent, active_orders, lead, customer
+        intent, active_orders, lead, customer, action
     )
     if is_new_unknown and not sandbox:
         if not (customer.name or "").strip():
