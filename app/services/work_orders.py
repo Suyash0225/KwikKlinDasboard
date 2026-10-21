@@ -268,7 +268,7 @@ async def announce_new_order(db: AsyncSession, order: Order) -> str:
     bhej deta hai; uske upar ye "Naya order aaya" doosra message tha. Aur
     pickup wale order par kapde abhi grahak ke ghar hain — washerman ko
     tab khabar jab pickup ho. Lautata hai send_work_order jaisa outcome, ya
-    'agent' (agent ne de diya) / 'later' (pickup ya planning ke baad).
+    'agent' (agent ne de diya) / 'later' (pickup ke baad).
     """
     from app.models import OrderStatus, Task
     from app.models.task import TASK_OPEN
@@ -285,7 +285,10 @@ async def announce_new_order(db: AsyncSession, order: Order) -> str:
                 ).limit(1)
             )
         ).scalar_one_or_none()
-        return "agent" if has_task else "later"
+        if has_task:
+            return "agent"
+    # Agent band hai, ya usne kaam baad (delivery ke paas) ke liye rakha —
+    # washerman ko naya order abhi bata do (pehle jaisa)
     return await send_work_order(db, order, headline="Naya order aaya")
 
 

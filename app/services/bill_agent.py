@@ -3609,11 +3609,20 @@ async def _apply_done(
             return get_message("status_done", order_number=number, status_name=out["status"])
         target = OrderStatus.PICKED_UP
     elif role in ("WASHER", "IRONER"):
-        # "Done" = is order ka agla kadam (Wash -> Iron -> Ready), seedha
-        # READY nahi — warna iron chhoot jaata aur grahak ko "ready" chala jaata
+        # "Done" = jis stage par kaam chal raha tha wo poora (Wash -> Iron ->
+        # Ready), seedha READY nahi — warna iron chhoot jaata aur grahak ko
+        # "ready" chala jaata. Order abhi Received hai to dhulai (pehla stage)
+        # hi poori hui hai.
         from app.services import service_stages
 
-        target = await service_stages.next_stage(db, order)
+        stages = await service_stages.stages_for(db, order)
+        current = order.status
+        if current in service_stages.BEFORE:
+            current = stages[0] if stages else None
+        target = (
+            service_stages.next_after(current, stages) if current is not None
+            else service_stages.next_after(order.status, stages)
+        )
         if target is None:
             return (
                 f"⚠️ {number} abhi {status_label(order.status)} hai — "

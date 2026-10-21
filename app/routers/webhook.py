@@ -77,14 +77,11 @@ async def _is_status_query(db: AsyncSession, customer: Customer, text: str) -> b
     Pehle "kapde ... delivery/ready" wala koi bhi vaakya status maana jaata
     tha — naye pickup ki maang ("kapde dhulwane hai, ready kitne din me")
     AI tak pahunchti hi nahi thi aur grahak ko "hum jald jawab denge" milta.
+    Ab naya kaam maangne wale shabd hon to AI.
     """
     if ORDER_NUMBER_RE.search(text or ""):
         return True
-    if not ORDER_STATUS_QUERY_RE.search(text or "") or _NEW_WORK_RE.search(text or ""):
-        return False
-    from app.services.order_service import get_active_orders_for_phone
-
-    return bool(await get_active_orders_for_phone(db, customer.phone))
+    return bool(ORDER_STATUS_QUERY_RE.search(text or "")) and not _NEW_WORK_RE.search(text or "")
 
 
 # AI signature ab whatsapp.send_message ke andar centrally lagta hai
