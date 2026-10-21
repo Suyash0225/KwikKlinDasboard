@@ -2567,10 +2567,14 @@ async def _finalize_payment(
     db: AsyncSession, sender_phone: str, sender_label: str, pending: PendingPayment
 ) -> str:
     method_map = {"cash": PaymentMethod.CASH, "upi": PaymentMethod.UPI, "other": PaymentMethod.OTHER}
+    # Pehle hi (kisi await se pehle) utha lo: button tap + typed "haan" dono
+    # aaye to doosra yahan khaali haath lautta hai — pehle paisa do baar judta
+    if _PENDING.get(sender_phone) is not pending:
+        return "ℹ️ Ye payment pehle hi record ho chuka hai."
+    _PENDING.pop(sender_phone, None)
     try:
         order = await get_order(db, pending.order_number)
     except OrderNotFoundError:
-        _PENDING.pop(sender_phone, None)
         return get_message("order_not_found_staff", order_number=pending.order_number)
     await record_payment(
         db, order,
@@ -2578,7 +2582,6 @@ async def _finalize_payment(
         method=method_map[pending.method],
         recorded_by=sender_label,
     )
-    _PENDING.pop(sender_phone, None)
     await audit.record(
         actor_role="admin" if sender_label == "manager" else "staff",
         actor=sender_label,

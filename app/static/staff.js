@@ -1635,6 +1635,10 @@ async function askCollect(order, due) {
     };
   });
 
+  // Is sheet ki ek pehchan — dohra tap / signal lautne par dobara bheja
+  // gaya request doosra paisa nahi jodta
+  const clientRef = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const send = (e, method) => {
     const amount = parseFloat($("m-amt").value);
     const ceiling = settlePrev ? grand : due;
@@ -1642,7 +1646,7 @@ async function askCollect(order, due) {
     if (amount > ceiling + 0.01) { toast(`Only ${money(ceiling)} is due`, true); return; }
     return busy(e.currentTarget, async () => {
       const r = await api(`/orders/${encodeURIComponent(order)}/collect`, {
-        method: "POST", body: { amount, method, settle_previous: settlePrev },
+        method: "POST", body: { amount, method, settle_previous: settlePrev, client_ref: clientRef },
       });
       closeModal();
       const older = (r.settled_older || []).length;

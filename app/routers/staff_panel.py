@@ -11,6 +11,7 @@ call button alag endpoint se chalta hai, aur wo bhi audit hota hai.
 
 import asyncio
 import re
+import sys
 import uuid as uuid_module
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -23,6 +24,7 @@ from fastapi import (
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy import text as sqltext
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -1191,6 +1193,9 @@ class CollectIn(BaseModel):
     # maange kisi doosre order ko chhoona nahi — delivery wale ne jo bola
     # wahi hona chahiye, aur us bill ka due jitna hi ceiling rehta hai.
     settle_previous: bool = False
+    # Sheet khulte hi bana ek id — wahi request dobara aaye (dohra tap,
+    # signal lautne par outbox) to doosra paisa nahi judta
+    client_ref: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9-]+$")
 
 
 @router.post("/orders/{number}/collect")
@@ -1214,6 +1219,23 @@ async def collect_payment(
     if order.status in DEAD_FOR_MONEY:
         raise HTTPException(status_code=409, detail=f"{order.order_number} is cancelled — no payment")
     from decimal import Decimal
+
+    ref = f"collect:{body.client_ref}" if body.client_ref else None
+
+    async def _already_done() -> dict:
+        await db.refresh(order)
+        d = float((order.total_amount or 0) - (order.amount_paid or 0))
+        prev, _ = await customer_outstanding(db, order.customer_id, exclude_order_id=order.id)
+        return {"ok": True, "duplicate": True, "due": max(0.0, d), "previous_due": prev, "settled_older": []}
+
+    if ref:
+        from app.models import Payment
+
+        seen = (
+            await db.execute(select(Payment.id).where(Payment.provider_reference == ref).limit(1))
+        ).scalar_one_or_none()
+        if seen is not None:
+            return await _already_done()
 
     due = float((order.total_amount or 0) - (order.amount_paid or 0))
     prev_due, _ = await customer_outstanding(db, order.customer_id, exclude_order_id=order.id)
@@ -1257,14 +1279,28 @@ async def collect_payment(
             # purane bill par alag-alag message nahi — ek hi paisa hai, ek hi raseed
             # (neeche is order par, ya aakhri purane bill par)
             left -= take
-            await record_payment(
-                db, o, amount=take, method=method, recorded_by=who,
-                notify_customer=left <= 0,
-            )
+            try:
+                await record_payment(
+                    db, o, amount=take, method=method, recorded_by=who,
+                    notify_customer=left <= 0,
+                    provider_reference=ref if not settled else None,
+                )
+            except IntegrityError:
+                if settled:
+                    raise
+                return await _already_done()   # saath aaya dohra request
             settled.append({"order": o_number, "amount": float(take)})
 
     if left > 0:
-        await record_payment(db, order, amount=left, method=method, recorded_by=who)
+        try:
+            await record_payment(
+                db, order, amount=left, method=method, recorded_by=who,
+                provider_reference=ref if not settled else None,
+            )
+        except IntegrityError:
+            if settled:
+                raise
+            return await _already_done()
 
     await audit.record(
         actor_role="staff", actor=who, action="cod_collected",
@@ -1619,6 +1655,21 @@ async def pickup_bill_context(
     }
 
 
+# Bina order wale pickup par bill ban raha hai — dohra Save rokne ka nishaan
+_BILLING_MARK = "billing-in-progress"
+
+
+def _raise_order_http(exc: BaseException | None) -> None:
+    """create_order ki galti staff ko saaf dikhe (galat coupon, plan limit) —
+    pehle ye 500 ban jaati thi."""
+    from app.services.order_service import OrderError, PlanLimitError
+
+    if isinstance(exc, PlanLimitError):
+        raise HTTPException(status_code=402, detail=str(exc))
+    if isinstance(exc, (OrderError, ValueError)):
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/bills", dependencies=[Depends(require_biller())], status_code=201)
 async def create_bill(
     body: BillIn,
@@ -1754,7 +1805,7 @@ async def create_bill(
         # total_amount set and cannot create a second advance/payment.
         pickup_task = (
             await db.execute(
-                select(Task).where(Task.id == pickup_task.id).with_for_update()
+                select(Task).where(Task.id == pickup_task.id).with_for_update().execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if pickup_task is None or pickup_task.kind != "pickup":
@@ -1772,28 +1823,47 @@ async def create_bill(
             raise HTTPException(status_code=409, detail="Pickup task has no customer")
         if normalize_phone(phone) != normalize_phone(task_customer.phone):
             raise HTTPException(status_code=409, detail="Customer does not match this pickup")
-        order = await create_order(
-            db,
-            customer_phone=normalize_phone(task_customer.phone),
-            customer_name=name or None,
-            items=items,
-            total_amount=total,
-            discount_amount=discount or None,
-            expected_delivery=delivery,
-            advance_hint=Decimal(str(body.advance)) if body.advance else None,
-            created_by=p.staff.name,
-            needs_pickup=False,
-            priority="urgent" if body.urgent else "normal",
-            bill_seconds=body.bill_seconds,
-            coupon_code=body.coupon_code.strip() or None,
-        )
+        # create_order beech mein commit karta hai (lock chhoot jaata hai) aur
+        # tab tak task par order juda nahi hota — dohra Save doosra order bana
+        # deta. Pehle task par nishaan, lock ke andar hi.
+        if (pickup_task.reply or "").startswith(_BILLING_MARK):
+            raise HTTPException(status_code=409, detail="This pickup is already being billed")
+        pickup_task.reply = _BILLING_MARK
+        db.add(pickup_task)
+        await db.commit()
+        try:
+            order = await create_order(
+                db,
+                customer_phone=normalize_phone(task_customer.phone),
+                customer_name=name or None,
+                items=items,
+                total_amount=total,
+                discount_amount=discount or None,
+                expected_delivery=delivery,
+                advance_hint=Decimal(str(body.advance)) if body.advance else None,
+                created_by=p.staff.name,
+                needs_pickup=False,
+                priority="urgent" if body.urgent else "normal",
+                bill_seconds=body.bill_seconds,
+                coupon_code=body.coupon_code.strip() or None,
+            )
+        except Exception:
+            await db.rollback()
+            pickup_task = await db.get(Task, pickup_task.id)
+            if pickup_task is not None and pickup_task.reply == _BILLING_MARK:
+                pickup_task.reply = None
+                db.add(pickup_task)
+                await db.commit()
+            _raise_order_http(sys.exc_info()[1])
+            raise
+        pickup_task.reply = None
         pickup_task.order_id = order.id
         db.add(pickup_task)
         await db.commit()
     elif pickup_task is not None:
         existing = (
             await db.execute(
-                select(Order).where(Order.id == pickup_task.order_id).with_for_update()
+                select(Order).where(Order.id == pickup_task.order_id).with_for_update().execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if existing is None or existing.status is not OrderStatus.PICKUP_ASSIGNED:
@@ -1817,24 +1887,28 @@ async def create_bill(
         await db.commit()
         await db.refresh(order)
     else:
-        order = await create_order(
-        db,
-        customer_phone=normalize_phone(phone),
-        customer_name=name or None,
-        items=items,
-        # total_amount hamesha CHHOOT KE BAAD ka hai — wahi convention jo
-        # dashboard ke coupon raste par hai. Do jagah do matlab rakhne par
-        # har report do jawab dene lagti hai.
-        total_amount=total,
-        discount_amount=discount or None,
-        expected_delivery=delivery,
-        advance_hint=Decimal(str(body.advance)) if body.advance else None,
-        created_by=p.staff.name,
-        needs_pickup=body.needs_pickup,
-        priority="urgent" if body.urgent else "normal",
-        bill_seconds=body.bill_seconds,
-        coupon_code=body.coupon_code.strip() or None,
-        )
+        try:
+            order = await create_order(
+                db,
+                customer_phone=normalize_phone(phone),
+                customer_name=name or None,
+                items=items,
+                # total_amount hamesha CHHOOT KE BAAD ka hai — wahi convention jo
+                # dashboard ke coupon raste par hai. Do jagah do matlab rakhne par
+                # har report do jawab dene lagti hai.
+                total_amount=total,
+                discount_amount=discount or None,
+                expected_delivery=delivery,
+                advance_hint=Decimal(str(body.advance)) if body.advance else None,
+                created_by=p.staff.name,
+                needs_pickup=body.needs_pickup,
+                priority="urgent" if body.urgent else "normal",
+                bill_seconds=body.bill_seconds,
+                coupon_code=body.coupon_code.strip() or None,
+            )
+        except Exception as exc:
+            _raise_order_http(exc)
+            raise
     # Advance ko paisa maankar ledger mein likhte hain — create ke baad,
     # wahi rasta jo dashboard ke New Bill par hai.
     if body.advance:
@@ -2841,6 +2915,12 @@ async def hand_over_cash(
     """
     from app.models import CashHandover, HANDOVER_PENDING
 
+    # Dohra tap: staff ki row par lock — doosra request pehle ke commit ke
+    # baad chalta hai, naya `since` dekhta hai aur "kuch collect nahi" paata
+    await db.execute(
+        select(Staff).where(Staff.id == p.staff.id).with_for_update()
+        .execution_options(populate_existing=True)
+    )
     since = await _cash_since(db, p.staff)
     # database ki ghadi — payments.received_at bhi wahi likhti hai
     now = (await db.execute(select(func.now()))).scalar_one()

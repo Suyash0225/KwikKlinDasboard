@@ -264,6 +264,32 @@ async def create_task(
     return task
 
 
+async def apply_reassignment(db: AsyncSession, task: Task, staff: Staff) -> None:
+    """Kaam naye aadmi ko — purane reminder hisaab ke saath nahi.
+
+    Pehle ping_count/escalated_at wahi rehte the (naye aadmi ko us din
+    reminder hi nahi jaata), aur order ka assigned_* purane aadmi par rehta
+    — agla stage (jaise READY par delivery) phir usi ke paas chala jaata.
+    Commit caller karta hai.
+    """
+    task.assigned_staff_id = staff.id
+    task.ping_count = 0
+    task.escalated_at = None
+    db.add(task)
+    if task.order_id is None:
+        return
+    order = await db.get(Order, task.order_id)
+    if order is None:
+        return
+    from app.models import StaffRole
+
+    if task.kind in ("pickup", "delivery") and staff.role is StaffRole.DELIVERY:
+        order.assigned_delivery_id = staff.id
+    elif task.kind in ("wash", "dry") and staff.role is not StaffRole.IRONER:
+        order.assigned_washer_id = staff.id
+    db.add(order)
+
+
 async def send_task_to(db: AsyncSession, task: Task, staff: Staff) -> bool:
     """Naye aadmi ko kaam bhejo (reassign ke baad)."""
     sent = await _send_to_assignee(db, task, staff, first=True)
@@ -857,7 +883,7 @@ async def complete_task(
     """Complete once, with a row lock so simultaneous taps have one winner."""
     locked = (
         await db.execute(
-            select(Task).where(Task.id == task.id).with_for_update()
+            select(Task).where(Task.id == task.id).with_for_update().execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if locked is None:

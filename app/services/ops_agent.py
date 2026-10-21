@@ -351,7 +351,10 @@ async def _ensure_stage_task(db: AsyncSession, order: Order, status: OrderStatus
     )
 
 
-async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStatus, by: str) -> None:
+async def on_status_change(
+    db: AsyncSession, order: Order, new_status: OrderStatus, by: str,
+    *, old_status: OrderStatus | None = None,
+) -> None:
     """Order aage badha — jo kaam ho chuka use band karo, ruka to sab band."""
     num = order.order_number
     try:
@@ -360,6 +363,10 @@ async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStat
         if new_status in (OrderStatus.CANCELLED, OrderStatus.ON_HOLD):
             await task_service.cancel_open_tasks_for_order(db, order.id, by="ops-agent")
             return
+        if old_status is OrderStatus.ON_HOLD:
+            # Hold par saare kaam band hue the — wapas chalu hote hi jis stage
+            # par order hai uska kaam phir se (warna order kisi ki list mein nahi)
+            await _resume_tasks(db, order, new_status)
         kinds = _DONE_ON.get(new_status)
         if not kinds:
             return
@@ -412,6 +419,39 @@ async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStat
     except Exception:
         await db.rollback()
         log.exception("ops_agent_status_hook_failed", order=num)
+
+
+async def _resume_tasks(db: AsyncSession, order: Order, status: OrderStatus) -> None:
+    """Hold se wapas: is status ka khula kaam na ho to bana do."""
+    if not await enabled(db):
+        return
+    from app.models import Customer
+    from app.services import service_stages, tasks as task_service
+    from app.services.work_orders import items_summary
+
+    if status is OrderStatus.PICKUP_ASSIGNED:
+        await task_service.create_pickup_task(db, order)
+        return
+    if status in (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY):
+        await task_service.create_delivery_task(db, order)
+        return
+    if status in _STAGE_TASKS:
+        await _ensure_stage_task(db, order, status)
+        return
+    stages = await service_stages.stages_for(db, order)
+    kind = service_stages.task_kind(status, stages)
+    if kind is None or await _open_tasks(db, order.id, _PROCESS_KINDS):
+        return
+    worker = await pick_worker(db, kind, order)
+    if worker is None:
+        return
+    customer = await db.get(Customer, order.customer_id)
+    who = (customer.name or customer.phone) if customer else "Customer"
+    await task_service.create_task(
+        db, title=f"{who} — {_KIND_LABEL[kind]} (resumed): {items_summary(order)[:160]}",
+        staff=worker, order=order, urgent=order.priority == "urgent",
+        created_by="ops-agent", kind=kind, notify=True,
+    )
 
 
 async def on_task_done(db: AsyncSession, task: Task, by: str) -> None:
