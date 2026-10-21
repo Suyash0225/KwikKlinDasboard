@@ -2465,20 +2465,52 @@ async function saveBill(btn) {
 async function showTeam(opts = {}) {
   $("chips").innerHTML = "";
   if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
-  let rows;
-  try { rows = await api("/team"); }
-  catch (e) { $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  let rows, stuck = { orders: [] }, cash = { pending: [] };
+  try {
+    [rows, stuck, cash] = await Promise.all([
+      api("/team"),
+      api("/stuck").catch(() => ({ orders: [] })),
+      api("/cash/handovers").catch(() => ({ pending: [] })),
+    ]);
+  } catch (e) { $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   if (NAV !== "team") return;
-  if (!rows.length) { $("list").innerHTML = `<div class="empty"><b>No staff yet</b>The owner adds them from the dashboard.</div>`; return; }
-  $("list").innerHTML = `<div class="reg">${rows.map((s) => `
+  // Aaj kisne kya kiya — sirf jo hua wahi likho, khaali "0 picked" shor hai
+  const dayLine = (d) => {
+    if (!d) return "";
+    const bits = [
+      d.picked && `${d.picked} picked`, d.washed && `${d.washed} washing`, d.ready && `${d.ready} ready`,
+      d.delivered && `${d.delivered} delivered`, d.cash && `${money(d.cash)} cash`, d.upi && `${money(d.upi)} UPI`,
+    ].filter(Boolean);
+    return `<div class="sub mt-xs">Today: ${bits.length ? esc(bits.join(" · ")) : "nothing yet"}</div>`;
+  };
+  const cashBar = cash.pending.length
+    ? `<div class="routebar"><span>💵 <b>${cash.pending.length}</b> cash handover${cash.pending.length > 1 ? "s" : ""} to count</span>
+         <button class="btn go sm" id="t-count">Count</button></div>` : "";
+  // Atka hua kaam: do din se ek hi status par — tap = poori detail
+  const stuckHtml = stuck.orders.length ? `<div class="sechead">⏳ Stuck for ${stuck.hours}h+ (${stuck.orders.length})</div>
+    <div class="reg">${stuck.orders.map((o) => `
+      <article class="row tappable" data-stuck="${esc(o.number)}">
+        <div class="spine late"></div>
+        <div class="when late"><b>${o.hours >= 48 ? Math.round(o.hours / 24) + "d" : o.hours + "h"}</b><span>same</span></div>
+        <div class="body">
+          <div class="line1"><b>${o.urgent ? "🔴 " : ""}${esc(o.customer)}</b></div>
+          <div class="sub"><span class="tag late">${esc(STATUS_WORD[o.status] || o.status)}</span>${esc(o.number)}${o.staff ? " · " + esc(o.staff) : ""}</div>
+        </div>
+      </article>`).join("")}</div>` : "";
+  const team = rows.length ? `<div class="sechead">Team</div><div class="reg">${rows.map((s) => `
     <article class="row">
       <div class="spine ${s.open ? "deliver" : "ready"}"></div>
       <div class="when"><b>${s.open}</b><span>open</span></div>
       <div class="body">
         <div class="line1"><b>${esc(s.name)}</b><span class="amt">${s.done_24h} done</span></div>
         <div class="sub">${esc(roleLabel(s.role))} · ${esc(s.phone_masked)}${s.has_login ? "" : " · no panel login"}</div>
+        ${dayLine(s.today)}
       </div>
-    </article>`).join("")}</div>`;
+    </article>`).join("")}</div>`
+    : `<div class="empty"><b>No staff yet</b>The owner adds them from the dashboard.</div>`;
+  $("list").innerHTML = cashBar + stuckHtml + team;
+  if ($("t-count")) $("t-count").onclick = countCash;
+  $("list").querySelectorAll("[data-stuck]").forEach((r) => { r.onclick = () => orderDetailModal(r.dataset.stuck); });
 }
 
 /* ─── main (profile) ────────────────────────────────────────────────── */

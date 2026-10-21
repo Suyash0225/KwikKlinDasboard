@@ -215,3 +215,35 @@ async def test_today_counts_work_due_today(client, two_shops) -> None:
         await db.commit()
     await _login(client, A_PHONE)
     assert (await client.get("/staff/api/today")).json()["due_today"] >= 1
+
+
+async def test_manager_sees_stuck_orders_and_each_persons_day(client, two_shops, sent) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    stuck = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A)
+    fresh = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A)
+    old = datetime.now(timezone.utc) - timedelta(hours=60)
+    async with async_session_factory() as db:
+        await db.execute(
+            sqltext(
+                "UPDATE order_status_history SET changed_at = :at WHERE order_id ="
+                " (SELECT id FROM orders WHERE order_number = :n AND tenant_id = :t)"
+            ),
+            {"at": old, "n": stuck, "t": str(two_shops["a"])},
+        )
+        await db.commit()
+
+    # washerman ne aaj ek order dhulai mein daala
+    await _login(client, A_PHONE)
+    assert (await client.post(f"/staff/api/orders/{fresh}/washing")).status_code == 200
+    assert (await client.get("/staff/api/stuck")).status_code == 403
+
+    await _login(client, A_MGR_PHONE)
+    st = (await client.get("/staff/api/stuck")).json()
+    numbers = [o["number"] for o in st["orders"]]
+    assert stuck in numbers and fresh not in numbers
+    assert next(o for o in st["orders"] if o["number"] == stuck)["hours"] >= 59
+
+    team = (await client.get("/staff/api/team")).json()
+    awash = next(r for r in team if r["name"] == "Awash")
+    assert awash["today"]["washed"] == 1

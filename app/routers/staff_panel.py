@@ -1829,6 +1829,111 @@ async def my_bills(
 # --------------------------------------------------- manager ka hissa ----
 
 
+def _empty_day() -> dict:
+    return {"picked": 0, "washed": 0, "ready": 0, "delivered": 0, "cash": 0.0, "upi": 0.0}
+
+
+async def _staff_day(db: AsyncSession, names: list[str]) -> dict[str, dict]:
+    """Aaj (IST) har aadmi ne kya kiya — status history aur payment ledger se.
+
+    Dono jagah aadmi ka NAAM likha hota hai (changed_by / recorded_by), isliye
+    yahi joda jaata hai. Do query, poori team ke liye — har aadmi par alag nahi.
+    """
+    from app.models import OrderStatusHistory, Payment, PaymentMethod
+
+    if not names:
+        return {}
+    start = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    out = {n: _empty_day() for n in names}
+    key = {
+        OrderStatus.PICKED_UP: "picked", OrderStatus.IN_WASH: "washed",
+        OrderStatus.READY: "ready", OrderStatus.DELIVERED: "delivered",
+    }
+    hist = (
+        await db.execute(
+            select(OrderStatusHistory.changed_by, OrderStatusHistory.new_status, func.count())
+            .join(Order, Order.id == OrderStatusHistory.order_id)   # tenant filter Order se
+            .where(
+                OrderStatusHistory.changed_by.in_(names),
+                OrderStatusHistory.changed_at >= start,
+                OrderStatusHistory.new_status.in_(list(key)),
+            )
+            .group_by(OrderStatusHistory.changed_by, OrderStatusHistory.new_status)
+        )
+    ).all()
+    for who, status, n in hist:
+        out[who][key[status]] += n
+    pay = (
+        await db.execute(
+            select(Payment.recorded_by, Payment.method, func.sum(Payment.amount))
+            .where(Payment.recorded_by.in_(names), Payment.received_at >= start)
+            .group_by(Payment.recorded_by, Payment.method)
+        )
+    ).all()
+    for who, method, amt in pay:
+        out[who]["cash" if method is PaymentMethod.CASH else "upi"] += float(amt or 0)
+    return out
+
+
+# Itne ghante ek hi status par = atka hua. Dhulai/sukhai ke liye bhi do din bahut hai.
+STUCK_HOURS = 48
+
+
+@router.get("/stuck")
+async def stuck_orders(
+    p: StaffPrincipal = Depends(require_manager), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Jo order 2 din se ek hi jagah pada hai — chupchaap late hone se pehle."""
+    from app.models import OrderStatusHistory
+
+    last_move = (
+        select(OrderStatusHistory.order_id, func.max(OrderStatusHistory.changed_at).label("at"))
+        .group_by(OrderStatusHistory.order_id).subquery()
+    )
+    moved = func.coalesce(last_move.c.at, Order.created_at)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=STUCK_HOURS)
+    rows = (
+        await db.execute(
+            select(Order, moved.label("moved"))
+            .outerjoin(last_move, last_move.c.order_id == Order.id)
+            .where(
+                Order.status.notin_((OrderStatus.DELIVERED, OrderStatus.CANCELLED)),
+                moved < cutoff,
+            )
+            .order_by(moved).limit(50)
+        )
+    ).all()
+    cust_ids = {o.customer_id for o, _ in rows if o.customer_id}
+    customers = {
+        c.id: c for c in (
+            await db.execute(select(Customer).where(Customer.id.in_(cust_ids)))
+        ).scalars().all()
+    } if cust_ids else {}
+    staff_ids = {sid for o, _ in rows for sid in (o.assigned_washer_id, o.assigned_delivery_id) if sid}
+    staff = {
+        st.id: st.name for st in (
+            await db.execute(select(Staff).where(Staff.id.in_(staff_ids)))
+        ).scalars().all()
+    } if staff_ids else {}
+    now = datetime.now(timezone.utc)
+    out = []
+    for o, at in rows:
+        cust = customers.get(o.customer_id)
+        who = o.assigned_delivery_id if o.status in (
+            OrderStatus.PICKUP_ASSIGNED, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY
+        ) else o.assigned_washer_id
+        out.append({
+            "number": o.order_number,
+            "customer": (cust.name or "Customer") if cust else "?",
+            "status": o.status.name,
+            "hours": int((now - at).total_seconds() // 3600),
+            "staff": staff.get(who, ""),
+            "urgent": o.priority == "urgent",
+            "delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
+        })
+    return {"orders": out, "hours": STUCK_HOURS}
+
+
 @router.get("/team", dependencies=[Depends(require_staff_feature("staff_reports"))])
 async def team_view(
     p: StaffPrincipal = Depends(require_manager), db: AsyncSession = Depends(get_db)
@@ -1838,6 +1943,7 @@ async def team_view(
     rows = (
         await db.execute(select(Staff).where(Staff.is_active).order_by(Staff.name))
     ).scalars().all()
+    day = await _staff_day(db, [s.name for s in rows])
     out = []
     for s in rows:
         open_n = (
@@ -1862,6 +1968,7 @@ async def team_view(
                 "phone_masked": mask_phone(s.phone),
                 "open": open_n, "done_24h": done_n,
                 "has_login": bool(s.password_hash),
+                "today": day.get(s.name, _empty_day()),
             }
         )
     return out

@@ -696,3 +696,6 @@ h3.mt-lg { margin-top: 20px; }
 .check-row input { width: 20px; height: 20px; min-height: 0; flex: none; }
 /* ginti bill se na mile to wo line laal */
 .dl-row.off .dl-name, .dl-row.off .dl-of { color: var(--late); font-weight: 700; }
+/* Team tab ke hisse: atke order, team */
+.sechead { margin: 14px 2px 8px; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); }
+.sechead:first-child { margin-top: 0; }
