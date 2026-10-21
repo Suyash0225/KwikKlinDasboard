@@ -627,7 +627,7 @@ async function loadWork(opts = {}) {
       type: "stop", chip: k.chip, spine: w.late ? "late" : k.spine, kindLabel: k.label,
       number: s.number, who: s.customer, items: s.items, due: s.due,
       address: s.address, urgent: s.urgent, when: w, late: w.late, tasks: [],
-      hasOrder: true, status: s.status, clothes: s.clothes,
+      hasOrder: true, status: s.status, next: s.next, clothes: s.clothes,
     };
     byOrder.set(s.number, item);
     page.push(item);
@@ -646,7 +646,8 @@ async function loadWork(opts = {}) {
       // Bina order wale kaam par paisa hota hi nahi — na rakam dikhani hai
       // na "chukta" ka ✓, warna aadmi samajhta hai ki paisa aa gaya.
       noMoney: !t.order,
-      hasOrder: !!t.order, status: t.order ? t.order.status : null, clothes: t.order ? t.order.clothes : null,
+      hasOrder: !!t.order, status: t.order ? t.order.status : null, next: t.order ? t.order.next : null,
+      clothes: t.order ? t.order.clothes : null,
       // Title upar bold mein aa chuka hai; dobara neeche likhna sirf
       // shor hai. Neeche wahi jab order ka naam upar ho.
       urgent: t.urgent, when: w, late: !!w.late, tasks: [t],
@@ -755,6 +756,14 @@ function moreBar(shown, total, fn) {
    ki kis row par kya dabana hai. Ab kram hamesha: Call · kaam · ₹ · ⋯ */
 const DELIVERY_ROLES = ["DELIVERY", "MANAGER", "SUPERVISOR", "ADMIN"];
 const WASH_ROLES = ["WASHER", "IRONER", "MANAGER", "SUPERVISOR", "ADMIN"];
+const WASH_STAGES = ["RECEIVED", "PICKED_UP", "IN_WASH", "IN_DRY", "IN_IRON"];
+const STEP_START = { IN_DRY: "Start drying", IN_IRON: "Start iron", READY: "Ready" };
+const STEP_SEND = { IN_DRY: "Send to dry", IN_IRON: "Send to iron", READY: "Ready" };
+const STEP_ASK = {
+  IN_DRY: ["Move clothes to drying?", "Yes, drying"],
+  IN_IRON: ["Send clothes for ironing?", "Yes, send to iron"],
+  READY: ["Clothes done and ready?", "Yes, ready"],
+};
 function primaryAction(w) {
   const t = w.tasks && w.tasks[0];
   const s = w.status;
@@ -766,15 +775,12 @@ function primaryAction(w) {
     const t = w.tasks && w.tasks.find((x) => x.kind === "pickup" && x.status === "OPEN");
     return t ? { act: "pickup_bill", label: "Create bill & pick up", code: t.code } : { act: "pickup", label: "Picked up" };
   }
-  if (s && ["RECEIVED", "PICKED_UP"].includes(s) && WASH_ROLES.includes(ME.role)) {
-    return { act: "washing", label: "Start wash" };
-  }
-  // Dhulai ke baad kapde press wale ke paas jaate hain; Ready press ke baad
-  if (s && ["IN_WASH", "IN_DRY"].includes(s) && WASH_ROLES.includes(ME.role)) {
-    return { act: "ironing", label: "Send to iron" };
-  }
-  if (s === "IN_IRON" && WASH_ROLES.includes(ME.role)) {
-    return { act: "ready", label: "Ready" };
+  // Agla stage server batata hai — service ke stages se. Sirf-press wala
+  // kapda "Start wash" nahi dikhata, seedha "Start iron".
+  if (s && WASH_STAGES.includes(s) && WASH_ROLES.includes(ME.role) && w.next) {
+    if (w.next === "IN_WASH") return { act: "washing", label: "Start wash" };
+    const before = ["RECEIVED", "PICKED_UP"].includes(s);
+    return { act: "advance", to: w.next, label: (before ? STEP_START : STEP_SEND)[w.next] };
   }
   if (t) return { act: "done", label: "Done", code: t.code };
   return null;
@@ -807,7 +813,7 @@ function workRow(w) {
       ${ME.show_route && w.address ? `<div class="sub mt-xs">📍 ${esc(w.address)}</div>` : ""}
       <div class="acts">
         ${w.hasOrder && ME.can_contact ? `<button class="btn ghost sm" data-do="call">Call</button>` : ""}
-        ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}>${esc(main.label)}</button>` : ""}
+        ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}${main.to ? ` data-to="${esc(main.to)}"` : ""}>${esc(main.label)}</button>` : ""}
         ${ME.show_route && w.address ? `<button class="btn ghost sm" data-do="map" data-addr="${esc(w.address)}">Route</button>` : ""}
         ${ME.can_money && ME.features.includes("cod_collection") && w.due > 0
           ? `<button class="btn money sm" data-do="pay" data-due="${w.due}">${money(w.due)} collect</button>` : ""}
@@ -830,8 +836,8 @@ function runAction(act, num, d = {}) {
   if (act === "pickup_bill") return openPickupBill(d.code);
   if (act === "pickup") return confirmStep(num, "picked-up", "Picked up the clothes?", "Yes, picked up");
   if (act === "washing") return washStartModal(num);
-  if (act === "ironing") return confirmStep(num, "ironing", "Washing done — send for ironing?", "Yes, send to iron");
-  if (act === "ready") return confirmStep(num, "ready", "Clothes ironed and ready?", "Yes, ready");
+  if (act === "advance" && STEP_ASK[d.to]) return confirmStep(num, "advance", STEP_ASK[d.to][0], STEP_ASK[d.to][1], { to: d.to });
+  if (act === "ready") return confirmStep(num, "ready", "Clothes done and ready?", "Yes, ready");
 }
 
 function wireRows() {
@@ -876,7 +882,7 @@ async function orderDetailModal(number) {
   try { o = await api(`/orders/${encodeURIComponent(number)}`); }
   catch (e) { toast(e.message, true); return; }
   const w = WORK.find((x) => x.number === number) || { tasks: [], hasOrder: true };
-  const main = primaryAction({ ...w, status: o.status, clothes: o.clothes });
+  const main = primaryAction({ ...w, status: o.status, next: o.next, clothes: o.clothes });
   const c = o.clothes || { total: 0, delivered: 0, pending: 0 };
   const lineHtml = (o.lines || []).map((l) => {
     const tag = (d, q) => d >= q ? `<span class="dl-tag ok">✓ delivered</span>`
@@ -905,7 +911,7 @@ async function orderDetailModal(number) {
     ${o.notes ? `<div class="od-block"><b>Notes</b><p class="note">${esc(o.notes)}</p></div>` : ""}
     <div class="btnrow">
       ${ME.can_contact ? `<button class="btn ghost" data-od="call">📞 Call</button>` : ""}
-      ${main ? `<button class="btn go" data-od="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}>${esc(main.label)}</button>` : ""}
+      ${main ? `<button class="btn go" data-od="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}${main.to ? ` data-to="${esc(main.to)}"` : ""}>${esc(main.label)}</button>` : ""}
       ${o.can_collect && o.due > 0 ? `<button class="btn money" data-od="pay" data-due="${o.due}">${money(o.due)} collect</button>` : ""}
     </div>
     <div class="btnrow">

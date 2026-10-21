@@ -2560,6 +2560,13 @@ async def put_setting(body: SettingIn, db: AsyncSession = Depends(get_db)) -> di
         raise HTTPException(status_code=400, detail=f"{body.key} is managed by the Kwik Klin team (Control panel)")
     if body.key == "customer_language" and body.value not in ("en", "hi"):
         raise HTTPException(status_code=400, detail="customer_language must be 'en' or 'hi'")
+    if body.key == "service_stages":
+        from app.services.service_stages import clean_config
+
+        try:
+            body.value = clean_config(body.value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
     try:
         await app_settings.set_value(db, body.key, body.value)
     except KeyError as exc:

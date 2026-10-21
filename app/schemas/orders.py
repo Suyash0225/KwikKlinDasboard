@@ -102,6 +102,8 @@ class DeliveryDateIn(BaseModel):
 class OrderOut(BaseModel):
     order_number: str
     status: str
+    # Service ke stages se agla kadam (sirf-press order: RECEIVED -> IN_IRON)
+    next_status: str | None = None
     customer_phone: str
     customer_name: str | None
     items: list

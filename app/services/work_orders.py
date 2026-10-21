@@ -134,22 +134,12 @@ async def task_status_menu(db: AsyncSession, code: str) -> list[ListRow]:
         from app.models import OrderStatus
         next_step = None
         if order is not None:
-            stage = {
-                OrderStatus.RECEIVED: ("wash", "🧼 Start washing", "Order received; washing starts now"),
-                OrderStatus.PICKED_UP: ("wash", "🧼 Start washing", "Pickup complete; washing starts now"),
-                OrderStatus.IN_WASH: ("dry", "💨 Washing done", "Move washed clothes to drying"),
-                OrderStatus.IN_DRY: ("iron", "👔 Drying done", "Move dry clothes to ironing"),
-                OrderStatus.IN_IRON: ("ready", "✅ Ironing done", "Mark order ready for delivery"),
-            }.get(order.status)
-            expected_kind = {
-                OrderStatus.RECEIVED: "wash",
-                OrderStatus.PICKED_UP: "wash",
-                OrderStatus.IN_WASH: "wash",
-                OrderStatus.IN_DRY: "dry",
-                OrderStatus.IN_IRON: "iron",
-            }.get(order.status)
-            if stage and task.kind == expected_kind:
-                next_step = stage
+            # Agla kadam service ke stages se — sirf-press order dhulai nahi dikhata
+            from app.services import service_stages
+
+            stages = await service_stages.stages_for(db, order)
+            if service_stages.task_matches(task.kind, order.status, stages):
+                next_step = service_stages.menu_step(order.status, stages)
         rows = []
         if next_step:
             action, title, description = next_step

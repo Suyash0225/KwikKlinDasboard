@@ -480,20 +480,14 @@ async def _handle_task_button(
         # Do not trust an old WhatsApp list card: only the next legal
         # processing step can be selected, even though the general order
         # state machine permits skipping stages for manager corrections.
-        next_action = {
-            OrderStatus.RECEIVED: "wash",
-            OrderStatus.PICKED_UP: "wash",
-            OrderStatus.IN_WASH: "dry",
-            OrderStatus.IN_DRY: "iron",
-            OrderStatus.IN_IRON: "ready",
-        }.get(order.status)
-        expected_task_kind = {
-            "wash": "wash",
-            "dry": "wash",
-            "iron": "dry",
-            "ready": "iron",
-        }[action]
-        if action != next_action or task.kind != expected_task_kind:
+        # Agla kadam service ke stages se (service_stages): sirf-press order
+        # RECEIVED se seedha ironing, Wash & Fold dry ke baad Ready.
+        from app.services import service_stages
+
+        stages = await service_stages.stages_for(db, order)
+        step = service_stages.menu_step(order.status, stages)
+        next_action = step[0] if step else None
+        if action != next_action or not service_stages.task_matches(task.kind, order.status, stages):
             return (
                 f"⚠️ *{order.order_number}* abhi {status_label(order.status)} stage par hai. "
                 "Purana menu use na karein; current stage ka task dobara khol kar next step chunein."

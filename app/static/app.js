@@ -1180,8 +1180,18 @@ const STEP_LABEL = {
   READY: "✨ Ready", OUT_FOR_DELIVERY: "🚚 Out for delivery", DELIVERED: "✅ Delivered",
   ON_HOLD: "⏸ On hold", CANCELLED: "🚫 Cancel order",
 };
+/* Dhulai shuru karte waqt service ke stages maayne rakhte hain: sirf-press
+   wala order "Start wash" nahi, "Start iron" dikhaye. Baad ke stage par
+   owner ka seedha "Ready" wala shortcut waisa hi. */
+const START_STEP = { IN_DRY: "💨 Start drying", IN_IRON: "🔥 Start iron", READY: "✨ Ready" };
+function nextStep(o) {
+  if (["RECEIVED", "PICKED_UP"].includes(o.status) && START_STEP[o.next_status]) {
+    return [o.next_status, START_STEP[o.next_status]];
+  }
+  return NEXT_STEP[o.status];
+}
 function nextStepBtn(o, cls = "btn sm") {
-  const n = NEXT_STEP[o.status];
+  const n = nextStep(o);
   return n ? `<button class="${cls}" onclick="setStatus('${o.order_number}','${o.status}','${n[0]}')">${n[1]}</button>` : "";
 }
 async function setStatus(number, current, next) {
@@ -4915,29 +4925,57 @@ function renderRateMatrix() {
   const garments = [...new Set([...pc.map((r) => r.garment), ...RM_EXTRA_G])].filter(Boolean).sort();
   const cell = (g, s) => {
     const r = pc.find((x) => x.garment === g && x.service === s);
-    const margin = r && r.cost_rate != null && Number(r.rate) > 0
-      ? `${Math.max(0, (Number(r.rate) - Number(r.cost_rate)) / Number(r.rate) * 100).toFixed(1)}% gross contribution`
-      : "Cost not set";
-    return `<td><div style="display:grid;gap:4px;min-width:100px">
-      <input aria-label="${esc(g)} ${esc(s)} selling rate" title="Customer selling rate (₹/unit)" type="number" step="0.5" style="max-width:100px" value="${r ? r.rate : ""}"
-        placeholder="Sell ₹" onchange="rmCell('${esc(g)}','${esc(s)}',this.value,'${r ? r.id : ""}')">
-      <input aria-label="${esc(g)} ${esc(s)} internal cost" title="Internal cost per unit (optional)" type="number" min="0" step="0.5" style="max-width:100px" value="${r && r.cost_rate != null ? r.cost_rate : ""}"
-        placeholder="Cost ₹" ${r ? "" : "disabled"} onchange="rmCellCost(this.value,'${r ? r.id : ""}')">
-      <small class="muted">${margin}</small></div></td>`;
+    return `<td><input aria-label="${esc(g)} ${esc(s)} selling rate" title="Customer selling rate (₹/unit)" type="number" step="0.5" style="max-width:100px" value="${r ? r.rate : ""}"
+        placeholder="₹" onchange="rmCell('${esc(g)}','${esc(s)}',this.value,'${r ? r.id : ""}')"></td>`;
   };
   const x = (fn, arg, title) => `<button type="button" class="rm-x" title="${esc(title)}" aria-label="${esc(title)}" onclick="${fn}('${esc(arg)}')">✕</button>`;
   $("rate-matrix").innerHTML = `
-    <p class="muted" style="margin:0 0 8px">Sell ₹ is the customer price; Cost ₹ is your optional internal variable cost per unit. When every active rate has a cost, AI campaign discounts are capped at the smallest gross contribution. Shared overhead is excluded.</p>
+    <p class="muted" style="margin:0 0 8px">Under each service, tap Wash / Dry / Iron to choose the stages its clothes go through. An iron-only service skips washing and drying.</p>
     <table class="tbl keep" style="min-width:${180 + services.length * 125}px"><thead><tr>
-      <th>Laundry garment name</th>${services.map((s) => `<th><span class="rm-h">${esc(s)}<small style="display:block">Sell ₹ / Cost ₹</small>${x("rmDeleteService", s, `Remove service ${s}`)}</span></th>`).join("")}
+      <th>Laundry garment name</th>${services.map((s) => `<th><span class="rm-h">${esc(s)}${x("rmDeleteService", s, `Remove service ${s}`)}</span>${stageChips(s)}</th>`).join("")}
     </tr></thead><tbody>
       ${garments.map((g) => `<tr><td><span class="rm-h"><b style="font-size:13px;text-transform:none;letter-spacing:0">${esc(g)}</b>${x("rmDeleteGarment", g, `Remove ${g}`)}</span></td>${services.map((s) => cell(g, s)).join("")}</tr>`).join("")}
     </tbody></table>`;
   $("rate-kg").innerHTML = kg.map((r) => `
-    <div class="sumrow"><span>${esc(r.service)}<small class="muted" style="display:block">${r.cost_rate != null ? `₹${(Number(r.rate)-Number(r.cost_rate)).toFixed(2)} gross contribution/kg` : "Cost not set"}</small></span>
-      <span style="display:grid;gap:4px;max-width:120px"><input aria-label="${esc(r.service)} selling rate per kg" title="Selling rate per kg" type="number" step="0.5" value="${r.rate}" onchange="updRate('${r.id}', this.value, null)">
-      <input aria-label="${esc(r.service)} internal cost per kg" title="Internal cost per kg (optional)" type="number" min="0" step="0.5" placeholder="Cost ₹" value="${r.cost_rate ?? ""}" onchange="updCostRate('${r.id}', this.value)"></span></div>`).join("")
+    <div class="sumrow"><span>${esc(r.service)}${stageChips(r.service)}</span>
+      <span style="max-width:120px"><input aria-label="${esc(r.service)} selling rate per kg" title="Selling rate per kg" type="number" step="0.5" value="${r.rate}" onchange="updRate('${r.id}', this.value, null)"></span></div>`).join("")
     || `<p class="muted">No per-kg services yet.</p>`;
+}
+
+/* Service ke stages (Wash / Dry / Iron). Owner ne tay na kiya ho to naam
+   se andaaza — server ka services/service_stages.py bhi yahi karta hai. */
+const STAGE_KEYS = [["IN_WASH", "Wash"], ["IN_DRY", "Dry"], ["IN_IRON", "Iron"]];
+function defaultStages(service) {
+  const n = String(service || "").toLowerCase();
+  const washy = ["wash", "dhulai", "laundry", "dry clean", "dryclean", "clean"].some((w) => n.includes(w));
+  const pressy = ["iron", "press", "istri", "isteri", "steam", "polish", "roll"].some((w) => n.includes(w));
+  if (!washy && pressy) return ["IN_IRON"];
+  if (n.includes("wash") && n.includes("fold") && !pressy) return ["IN_WASH", "IN_DRY"];
+  return ["IN_WASH", "IN_DRY", "IN_IRON"];
+}
+function stagesOf(service) {
+  const cfg = SETTINGS_CACHE.service_stages || {};
+  return Array.isArray(cfg[service]) ? cfg[service] : defaultStages(service);
+}
+function stageChips(service) {
+  const on = stagesOf(service);
+  return `<span class="rm-stages" role="group" aria-label="${esc(service)} stages">${STAGE_KEYS.map(([k, label]) =>
+    `<button type="button" class="rm-stage${on.includes(k) ? " on" : ""}" aria-pressed="${on.includes(k)}"
+      onclick="toggleStage('${esc(service)}','${k}')">${label}</button>`).join("")}</span>`;
+}
+async function saveStages(service, stages) {
+  const value = { ...(SETTINGS_CACHE.service_stages || {}), [service]: stages };
+  await api("/admin/api/settings", { method: "PUT", body: { key: "service_stages", value } });
+  SETTINGS_CACHE.service_stages = value;
+}
+async function toggleStage(service, key) {
+  const cur = stagesOf(service);
+  const next = cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key];
+  try {
+    await saveStages(service, STAGE_KEYS.map(([k]) => k).filter((k) => next.includes(k)));
+    renderRateMatrix();
+    toast(next.length ? `${service}: stages saved — new and running orders follow them` : `${service}: no stages — goes straight to Ready`);
+  } catch (e) { toast(e.message, true); }
 }
 async function rmCell(garment, service, value, id) {
   const v = parseFloat(value);
@@ -4951,29 +4989,6 @@ async function rmCell(garment, service, value, id) {
     }
     RM_RATES = await api("/admin/api/rates");
     renderRateMatrix();
-  } catch (e) { toast(e.message, true); }
-}
-async function rmCellCost(value, id) {
-  if (!id) return;
-  const raw = String(value).trim();
-  const cost = raw === "" ? null : Number(raw);
-  if (cost !== null && (!Number.isFinite(cost) || cost < 0)) { toast("Enter a non-negative internal cost or clear the field.", true); return; }
-  try {
-    await api(`/admin/api/rates/${id}`, { method: "PUT", body: { cost_rate: cost } });
-    RM_RATES = await api("/admin/api/rates");
-    renderRateMatrix();
-    toast(cost === null ? "Internal cost cleared." : "Internal unit cost saved.");
-  } catch (e) { toast(e.message, true); }
-}
-async function updCostRate(id, value) {
-  const raw = String(value).trim();
-  const cost = raw === "" ? null : Number(raw);
-  if (cost !== null && (!Number.isFinite(cost) || cost < 0)) { toast("Enter a non-negative internal cost or clear the field.", true); return; }
-  try {
-    await api(`/admin/api/rates/${id}`, { method: "PUT", body: { cost_rate: cost } });
-    RM_RATES = await api("/admin/api/rates");
-    renderRateMatrix();
-    toast(cost === null ? "Internal cost cleared." : "Internal unit cost saved.");
   } catch (e) { toast(e.message, true); }
 }
 async function rmDeleteGroup(kind, name) {
@@ -5000,11 +5015,15 @@ function rmAddGarment() {
   renderRateMatrix();
   toast("Now type a rate in any service cell — it saves automatically");
 }
-function rmAddService() {
+async function rmAddService() {
   const s = $("rm-service").value.trim();
   if (!s) return;
+  // Service banate hi uske stages — jo box tick hain
+  const stages = STAGE_KEYS.map(([k]) => k).filter((k) => $(`rm-st-${k}`) && $(`rm-st-${k}`).checked);
+  try { await saveStages(s, stages); } catch (e) { toast(e.message, true); return; }
   RM_EXTRA_S.push(s); $("rm-service").value = "";
   renderRateMatrix();
+  toast(`${s} added — now type its rates`);
 }
 let rateTimer = {};
 function updRate(id, rate, active) {

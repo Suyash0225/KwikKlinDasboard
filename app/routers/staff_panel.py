@@ -38,7 +38,7 @@ from app.models import (
     StaffRole,
     Task,
 )
-from app.services import audit, delivery, plans, receipt
+from app.services import audit, delivery, plans, receipt, service_stages
 from app.services.auth import verify_password
 from app.services.staff_auth import (
     STAFF_COOKIE,
@@ -378,7 +378,8 @@ async def _prefetch(db: AsyncSession, tasks: list[Task], p: StaffPrincipal) -> d
         if sids:
             srows = (await db.execute(select(Staff).where(Staff.id.in_(sids)))).scalars().all()
             staff = {st.id: st for st in srows}
-    return {"orders": orders, "customers": customers, "staff": staff}
+    stage_cfg = await service_stages.config(db) if orders else {}
+    return {"orders": orders, "customers": customers, "staff": staff, "stage_cfg": stage_cfg}
 
 
 def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
@@ -408,6 +409,7 @@ def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
             "items": items_summary(order),
             "delivery": order.expected_delivery.isoformat() if order.expected_delivery else None,
             "status": order.status.name,
+            "next": service_stages.next_name(order, pre["stage_cfg"]),
             "notes": order.notes,
             "clothes": delivery.counts(order),
         }
@@ -747,6 +749,7 @@ async def order_detail(
         "clothes": delivery.counts(order),
         "urgent": order.priority == "urgent",
         "status": order.status.name,
+        "next": service_stages.next_name(order, await service_stages.config(db)),
         "delivery": order.expected_delivery.isoformat() if order.expected_delivery else None,
         "notes": order.notes,
     }
@@ -1022,6 +1025,41 @@ async def order_ironing(
         return await delivery.ironing(db, order, by=p.staff.name)
     except delivery.DeliveryError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+class AdvanceIn(BaseModel):
+    # Jo button aadmi ne dekha tha — purani screen se galat stage na lage
+    to: OrderStatus
+
+
+@router.post("/orders/{number}/advance")
+async def order_advance(
+    number: str,
+    body: AdvanceIn,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Dhulai ki kataar ka agla stage — service ke stages ke hisaab se.
+
+    Sirf-press order RECEIVED se seedha ironing, Wash & Fold dry ke baad
+    Ready. Kaun sa stage agla hai ye server tay karta hai; `to` sirf ye
+    pakka karta hai ki screen purani nahi thi.
+    """
+    _role_or_403(p, _WASH_ROLES, "Washing")
+    order = await _my_order(db, p, number)
+    nxt = await service_stages.next_stage(db, order)
+    if nxt is None or nxt is not body.to:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{order.order_number} is {order.status.name} — refresh and try again",
+        )
+    from app.services.order_service import InvalidTransitionError, update_status
+
+    try:
+        await update_status(db, order, nxt, changed_by=p.staff.name)
+    except InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"order_number": order.order_number, "status": order.status.name}
 
 
 @router.post("/orders/{number}/ready")
@@ -2895,6 +2933,7 @@ async def my_route(
 
     # Route band ho to pata bhejte hi nahi — UI mein chhupana kaafi nahi
     show_route = bool(await app_settings.get(db, "staff_show_route"))
+    stage_cfg = await service_stages.config(db)
     stops = []
     for o in rows:
         cust = customers.get(o.customer_id)
@@ -2915,6 +2954,7 @@ async def my_route(
                    if can_contact(p) else {"address": ""}),
                 "items": items_summary(o),
                 "status": o.status.name,
+                "next": service_stages.next_name(o, stage_cfg),
                 "urgent": o.priority == "urgent",
                 **({"due": float((o.total_amount or 0) - (o.amount_paid or 0))} if can_money(p) else {}),
                 "delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
