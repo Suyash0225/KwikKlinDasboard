@@ -755,3 +755,7 @@ h3.mt-lg { margin-top: 20px; }
   border: 1px solid var(--rule); background: var(--sheet); color: var(--ink-2);
   border-radius: 999px; padding: 7px 12px; font-size: 13px; font-weight: 600; cursor: pointer; min-height: 36px;
 }
+
+/* "You" ke upar kaam ke bade buttons (Expense / Team) — nav se hatke yahan */
+.card.quick { display: grid; gap: 10px; }
+.card.quick .btn.wide { margin-top: 0; min-height: 48px; font-size: 15px; }

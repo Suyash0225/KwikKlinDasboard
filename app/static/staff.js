@@ -312,12 +312,11 @@ const canBill = () => ME.can_bill && ME.features.includes("billing");
 
 function navItems() {
   // Tasks har kisi ke liye — owner ka diya kaam ek jagah, kaam ki list mein nahi dabta
+  // 5 se zyada tab phone par patle ho jaate the (delivery ke 6, manager ke 7).
+  // Ab: Work · Tasks · ➕New (beech mein, angoothe ke neeche) · Bills · You.
+  // Expense aur Team kam baar khulte hain — "You" ke andar bade buttons.
   const out = [["work", "i-basket", "Work"], ["tasks", "i-task", "Tasks"]];
-  if (canBill()) {
-    out.push(["bills", "i-receipt", "Bills"], ["new", "i-plus", "New"]);
-  }
-  if (ME.can_expense) out.push(["exp", "i-expense", "Expense"]);
-  if (ME.is_manager && ME.features.includes("staff_reports")) out.push(["team", "i-users", "Team"]);
+  if (canBill()) out.push(["new", "i-plus", "New"], ["bills", "i-receipt", "Bills"]);
   out.push(["me", "i-user", "You"]);
   return out;
 }
@@ -342,6 +341,15 @@ async function openPickupBill(code) {
   }
 }
 
+const SUB_OF_ME = ["exp", "team"];
+const canTeam = () => ME.is_manager && ME.features.includes("staff_reports");
+// Expense/Team ke upar "‹ You" — wapas aane ka saaf rasta
+function backToMe() {
+  if (!SUB_OF_ME.includes(NAV)) return;
+  $("chips").innerHTML = `<button type="button" data-back="me">‹ You</button>`;
+  $("chips").querySelector("[data-back]").onclick = () => go("me");
+}
+
 function go(nav, push = true) {
   if (push && NAV !== nav) history.pushState({ kk: "nav", nav }, "");
   NAV = nav;
@@ -352,7 +360,9 @@ function go(nav, push = true) {
   $("today").hidden = !(nav === "work" || nav === "bills");
   $("latebar").hidden = true;        // paintLate() isse wapas laayega
   if ($("pushbar")) paintPushNudge();
-  $("nav").querySelectorAll("[data-nav]").forEach((b) => b.classList.toggle("on", b.dataset.nav === nav));
+  // Expense/Team "You" ke andar hain — nav mein "You" hi chamke
+  const navOn = SUB_OF_ME.includes(nav) ? "me" : nav;
+  $("nav").querySelectorAll("[data-nav]").forEach((b) => b.classList.toggle("on", b.dataset.nav === navOn));
   if (nav === "work") loadWork();
   else if (nav === "tasks") showTasks();
   else if (nav === "bills") loadBills();
@@ -2506,6 +2516,7 @@ function newRateModal(service, itemName = "") {
    apna daala hua dikhta hai; galti ho to owner hatata hai. */
 async function showExpenses(opts = {}) {
   $("chips").innerHTML = "";
+  backToMe();
   if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
   let d;
   try { d = await api("/expenses"); }
@@ -2862,6 +2873,7 @@ async function saveBill(btn) {
 
 async function showTeam(opts = {}) {
   $("chips").innerHTML = "";
+  backToMe();
   if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
   let rows, stuck = { orders: [] }, cash = { pending: [] };
   try {
@@ -3016,7 +3028,12 @@ async function paintPoints() {
 
 function showMe() {
   $("chips").innerHTML = "";
+  const quick = [
+    ME.can_expense ? `<button class="btn go wide mt0" data-go="exp">💸 Add expense</button>` : "",
+    canTeam() ? `<button class="btn ghost wide" data-go="team">👥 Team — kisne kya kiya</button>` : "",
+  ].filter(Boolean).join("");
   $("list").innerHTML = `
+    ${quick ? `<div class="card quick">${quick}</div>` : ""}
     <div class="card">
       <h3>${esc(ME.name)}</h3>
       <div class="kv"><span>Role</span><b>${esc(roleLabel(ME.role))}</b></div>
@@ -3033,6 +3050,7 @@ function showMe() {
     </div>`;
   paintPushCard();
   paintPoints();
+  $("list").querySelectorAll("[data-go]").forEach((b) => { b.onclick = () => go(b.dataset.go); });
   $("p-pw").onclick = changePw;
   $("p-out").onclick = async () => {
     try { await api("/logout", { method: "POST" }); } catch (e) { /* cookie waise bhi jayegi */ }
