@@ -3014,8 +3014,10 @@ async def _route_query(db: AsyncSession, p: StaffPrincipal, tab: str = "todo"):
             q = q.where(Order.status.in_(road_stages))
         else:
             # Ready ho chuke order jinke kuch kapde washerman ne roke hain —
-            # unka bacha kaam abhi dhulai wale ka hai, list se gayab na ho
-            q = q.where(or_(
+            # unka bacha kaam abhi dhulai wale ka hai, list se gayab na ho.
+            # Naye sire se: upar ka `status in wash_stages` isse AND ho jaata
+            # aur Ready order kabhi aata hi nahi.
+            q = select(Order).where(or_(
                 Order.status.in_(wash_stages),
                 and_(Order.status.in_((OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)), _HELD_SQL),
             ))
