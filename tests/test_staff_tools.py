@@ -247,3 +247,22 @@ async def test_manager_sees_stuck_orders_and_each_persons_day(client, two_shops,
     team = (await client.get("/staff/api/team")).json()
     awash = next(r for r in team if r["name"] == "Awash")
     assert awash["today"]["washed"] == 1
+
+
+async def test_collect_survives_whatsapp_being_down(client, two_shops, sent, monkeypatch) -> None:
+    """Paisa commit ho chuka ho aur grahak ki raseed na ja paaye — tab bhi
+    200. Pehle send fail par session rollback se order expire hota, log
+    line usse padhti aur 500 aata; delivery wala dobara dabata."""
+    from app.services import order_service
+    from app.services.whatsapp import SendError
+
+    async def down(db, **kwargs):
+        db.expire_all()        # asli send_message fail par yahi haalat chhodta hai
+        raise SendError("WAHA network error", transient=True)
+
+    number = await _order_for(two_shops["a"], two_shops["a_del"], CUST_A, delivery=True, total=120)
+    monkeypatch.setattr(order_service, "send_message", down)
+    await _login(client, A_DEL_PHONE)
+    r = await client.post(f"/staff/api/orders/{number}/collect", json={"amount": 120, "method": "cash"})
+    assert r.status_code == 200, r.text
+    assert r.json()["due"] == 0

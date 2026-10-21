@@ -42,6 +42,76 @@ async function api(path, opts = {}) {
   return data;
 }
 
+/* ─── bina signal ke kaam (outbox) ──────────────────────────────────── */
+/* Gali mein signal nahi to "Delivered" dabana bekaar jaata tha — aadmi
+   bhool jaata ki kaunsa dabaya tha. Ab sirf STATUS wale kaam (picked up,
+   wash, ready, deliver, ghar par nahi) phone mein ruk jaate hain aur
+   signal aate hi apne aap chale jaate hain. Do baar pahunche to server
+   409 deta hai (order aage badh chuka) — wo bhi "ho gaya" hai.
+   Paisa (collect) yahan JAAN-BOOJH KAR nahi: jawab kho jaye aur dobara
+   bheja jaye to ek hi paisa do baar likh jaata. */
+const OUTBOX_KEY = "kk_staff_outbox";
+// Ek phone par do log login kar sakte hain — har aadmi ke kaam sirf usi ke
+// naam se jaayein, isliye har item par uska number.
+function allOutbox() {
+  try { return JSON.parse(localStorage.getItem(OUTBOX_KEY) || "[]"); } catch (e) { return []; }
+}
+const outbox = () => (ME ? allOutbox().filter((x) => x.owner === ME.phone) : []);
+function saveOutbox(mine) {
+  const others = allOutbox().filter((x) => !ME || x.owner !== ME.phone);
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(others.concat(mine))); } catch (e) { /* private mode */ }
+  paintOutbox();
+}
+const isOffline = (e) => !navigator.onLine || (e instanceof TypeError);   // fetch network par TypeError deta hai
+/* Status ka kaam: signal ho to seedha, na ho to outbox. {queued:true} lautata hai. */
+async function sendOrQueue(path, body, label, number) {
+  if (navigator.onLine) {
+    try { return await api(path, { method: "POST", body }); }
+    catch (e) { if (!isOffline(e)) throw e; }
+  }
+  const list = outbox();
+  list.push({ id: Date.now() + "-" + Math.random().toString(36).slice(2, 7), owner: ME.phone, path, body: body || null, label, number, at: Date.now() });
+  saveOutbox(list);
+  toast(`No signal — "${label}" saved on the phone, it will go when the signal is back`, false, 4500);
+  return { queued: true };
+}
+let FLUSHING = false;
+async function flushOutbox() {
+  if (FLUSHING || !navigator.onLine || !outbox().length) return;
+  FLUSHING = true;
+  let sent = 0;
+  try {
+    for (const item of outbox()) {
+      try {
+        await api(item.path, { method: "POST", body: item.body || undefined });
+        sent++;
+      } catch (e) {
+        if (isOffline(e)) break;                   // signal phir gaya — baaki baad mein
+        // 409 = pehle hi ho chuka; baaki 4xx = server ne mana kiya — dono mein dobara bhejna bekaar
+        if (e.status !== 409) toast(`${item.number}: "${item.label}" could not be saved — ${e.message}`, true, 6000);
+        else sent++;
+      }
+      saveOutbox(outbox().filter((x) => x.id !== item.id));
+    }
+  } finally { FLUSHING = false; }
+  if (sent) { toast(`${sent} saved action${sent > 1 ? "s" : ""} sent ✅`); loadToday(); refreshCurrent({ quiet: true }); }
+}
+function paintOutbox() {
+  let bar = $("outbar");
+  const n = outbox().length;
+  if (!bar) {
+    if (!n) return;
+    bar = document.createElement("button");
+    bar.id = "outbar"; bar.type = "button"; bar.className = "latebar outbar";
+    $("latebar").insertAdjacentElement("afterend", bar);
+    bar.onclick = () => (navigator.onLine ? flushOutbox() : toast("Still no signal — it will send by itself", true));
+  }
+  bar.hidden = !n;
+  bar.innerHTML = `<span>⏳ ${n} action${n > 1 ? "s" : ""} waiting for signal</span><b>Send now</b>`;
+}
+window.addEventListener("online", flushOutbox);
+setInterval(flushOutbox, 30000);
+
 function toast(msg, err = false, ms = 3200) {
   const t = document.createElement("div");
   t.className = "toast" + (err ? " err" : "");
@@ -219,6 +289,8 @@ async function start() {
   loadToday();
   loadBell();
   startLive();
+  paintOutbox();
+  flushOutbox();
 }
 
 /* ─── role ke hisaab se nav ─────────────────────────────────────────── */
@@ -710,6 +782,7 @@ function workRow(w) {
     : `<span class="amt paid-tick">✓</span>`;
   const main = primaryAction(w);
   const partial = w.clothes && w.clothes.delivered > 0 && w.clothes.pending > 0;
+  const queued = outbox().filter((x) => x.number === w.number).map((x) => x.label);
   return `<article class="row tappable" data-num="${esc(w.number)}" data-open="1">
     <div class="spine ${w.spine}"></div>
     <div class="when ${w.late ? "late" : ""}">
@@ -720,6 +793,7 @@ function workRow(w) {
       <div class="sub">
         <span class="tag ${w.chip === "task" ? "task" : w.spine || "wash"}">${esc(w.kindLabel)}</span>${esc(w.number)}${w.items ? " · " + esc(w.items) : ""}
       </div>
+      ${queued.length ? `<div class="sub mt-xs"><span class="tag deliver">⏳ ${esc(queued.join(", "))} — waiting for signal</span></div>` : ""}
       ${partial ? `<div class="sub mt-xs"><span class="tag late">${w.clothes.pending} pending</span>${w.clothes.delivered} of ${w.clothes.total} delivered</div>` : ""}
       ${w.title && w.type === "task" ? `<div class="sub note">${esc(w.title)}</div>` : ""}
       ${asked ? `<div class="sub mt-xs"><span class="tag late">Cancel maanga</span>${esc(t.cancel_reason || "")}</div>` : ""}
@@ -973,8 +1047,10 @@ async function deliverModal(number) {
     const all = n === totalPending;
     const items = all ? null : slots.map((s, i) => ({ line: s.line, ...(s.piece != null ? { piece: s.piece } : {}), qty: pick[i] }))
       .filter((x) => x.qty > 0);
-    const r = await api(`/orders/${encodeURIComponent(number)}/deliver`, { method: "POST", body: { items } });
+    const r = await sendOrQueue(`/orders/${encodeURIComponent(number)}/deliver`, { items }, all ? "Deliver" : `Deliver ${n}`, number);
     closeModal();
+    // signal nahi — paisa bhi baad mein (collect bina signal ke nahi hota)
+    if (r.queued) { if (o.can_collect && o.due > 0) toast(`Collect ${money(o.due)} and record it when the signal is back`, true, 6000); return; }
     toast(r.pending ? `${r.delivered_now} delivered — ${r.pending} still pending` : `${number} delivered ✅`, false, 3500);
     loadToday(); refreshCurrent({ quiet: true });
     // paisa baaki ho to seedha collect — darwaze par wahi agla kaam hai
@@ -1041,8 +1117,9 @@ async function washStartModal(number) {
   });
   $("wc-go").onclick = (e) => busy(e.currentTarget, async () => {
     const counts = slots.map((x, i) => ({ line: x.line, ...(x.piece != null ? { piece: x.piece } : {}), got: got[i] }));
-    const r = await api(`/orders/${encodeURIComponent(number)}/washing`, { method: "POST", body: { counts } });
+    const r = await sendOrQueue(`/orders/${encodeURIComponent(number)}/washing`, { counts }, "Start wash", number);
     closeModal();
+    if (r.queued) return;
     toast(r.check && !r.check.ok ? `${number} — washing. Count mismatch sent to the owner` : `${number} — washing ✅`, !!(r.check && !r.check.ok));
     loadToday(); refreshCurrent({ quiet: true });
   });
@@ -1058,9 +1135,11 @@ function confirmStep(number, path, question, yes) {
       <button class="btn go" id="m-step">${esc(yes)}</button>
     </div>`);
   $("m-step").onclick = (e) => busy(e.currentTarget, async () => {
-    await api(`/orders/${encodeURIComponent(number)}/${path}`, { method: "POST" });
+    const what = yes.replace(/^Yes, /, "");
+    const r = await sendOrQueue(`/orders/${encodeURIComponent(number)}/${path}`, null, what, number);
     closeModal();
-    toast(`${number} — ${yes.replace(/^Yes, /, "")} ✅`);
+    if (r.queued) return;
+    toast(`${number} — ${what} ✅`);
     loadToday(); refreshCurrent({ quiet: true });
   });
 }
@@ -1078,10 +1157,9 @@ function askNotHome(number) {
       <button class="btn go" id="nh-ok">Yes, not home</button>
     </div>`);
   $("nh-ok").onclick = (e) => busy(e.currentTarget, async () => {
-    const r = await api(`/orders/${encodeURIComponent(number)}/not-home`, {
-      method: "POST", body: { note: $("nh-note").value.trim() },
-    });
+    const r = await sendOrQueue(`/orders/${encodeURIComponent(number)}/not-home`, { note: $("nh-note").value.trim() }, "Customer not home", number);
     closeModal();
+    if (r.queued) return;
     toast("Noted — the owner has been told");
     refreshCurrent({ quiet: true });
     if (r.can_message) composeMessage(number, "not_home");
