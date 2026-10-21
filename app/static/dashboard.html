@@ -23,7 +23,7 @@
      it wins ties; app.css keeps layout and behaviour. -->
 <link rel="stylesheet" href="/admin/static/ui-v2.css?v=2">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
-<script src="/admin/static/app.js?v=ui2-4" defer></script>
+<script src="/admin/static/app.js?v=ui2-6" defer></script>
 <script src="/admin/static/gbp-poster.js?v=3" defer></script>
 </head>
 <body>
@@ -846,6 +846,51 @@
               <option value="false">Off — only the default washer gets a WhatsApp</option>
             </select>
             <small>The agent picks the staff member with the fewest open tasks, closes tasks as the order moves, and hands work from inactive staff to someone else.</small>
+          </div>
+        </div>
+        <hr class="hr">
+        <b class="subhead">⭐ Staff points &amp; work reminders</b>
+        <p class="muted" style="margin-top:4px">After delivery the customer is asked about one part of the service, in turn: the washing, the pickup &amp; delivery, or the whole service — and told who did it. Their rating gives points to those staff (both, for the whole service), who get a thank-you or a polite note on a bad rating. So every staff member gets rated over time. Late work reminders go to the person responsible; orders 2+ days late also reach you.</p>
+        <div class="setgrid">
+          <div class="setfield">
+            <label for="set-pts-good">Points for "Excellent"</label>
+            <input id="set-pts-good" type="number" min="0" max="100" inputmode="numeric">
+          </div>
+          <div class="setfield">
+            <label for="set-pts-mid">Points for "It was okay"</label>
+            <input id="set-pts-mid" type="number" min="0" max="100" inputmode="numeric">
+            <small>"Needs work" gives 0 points and alerts you.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-reward">Do you reward staff for points?</label>
+            <select id="set-reward">
+              <option value="false">No — points are only a score</option>
+              <option value="true">Yes — I give a reward for points</option>
+            </select>
+            <small>Only when Yes, customers are told that their rating earns the staff a reward. Keep it true.</small>
+          </div>
+          <div class="setfield">
+            <label for="set-reward-note">Reward rule shown to staff</label>
+            <input id="set-reward-note" type="text" maxlength="150" placeholder="e.g. ₹200 bonus for every 50 points">
+          </div>
+          <div class="setfield">
+            <label for="set-staffnames">Tell customers who did the work</label>
+            <select id="set-staffnames">
+              <option value="true">On — e.g. "your clothes were prepared by Ravi"</option>
+              <option value="false">Off</option>
+            </select>
+          </div>
+          <div class="setfield">
+            <label for="set-nudges">Late work reminders &amp; thank-yous to staff</label>
+            <select id="set-nudges">
+              <option value="true">On</option>
+              <option value="false">Off</option>
+            </select>
+          </div>
+          <div class="setfield">
+            <label for="set-nudge-hours">Reminder times (hours, 24h)</label>
+            <input id="set-nudge-hours" type="text" inputmode="numeric" placeholder="11, 15, 18">
+            <small>Hours in night quiet time are skipped. The first time also lists today's due work.</small>
           </div>
         </div>
         <hr class="hr">

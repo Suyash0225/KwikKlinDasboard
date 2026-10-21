@@ -36,6 +36,7 @@ from app.models.polisher import PolisherVendor, PolishBatch, PolisherPayment
 from app.models.push_subscription import PushSubscription
 from app.models.rate import Rate
 from app.models.staff import Staff
+from app.models.staff_point import StaffPoint
 from app.models.staff_session import StaffSession
 from app.models.task import TASK_CANCELLED, TASK_DONE, TASK_OPEN, Task
 from app.models.task import TaskMessage
@@ -106,6 +107,7 @@ __all__ = [
     "SentEvent",
     "SettingKV",
     "Staff",
+    "StaffPoint",
     "StaffSession",
     "StaffRole",
     "TASK_CANCELLED",

@@ -1860,7 +1860,8 @@ async def _staff_day(db: AsyncSession, names: list[str]) -> dict[str, dict]:
             select(OrderStatusHistory.changed_by, OrderStatusHistory.new_status, func.count())
             .join(Order, Order.id == OrderStatusHistory.order_id)   # tenant filter Order se
             .where(
-                OrderStatusHistory.changed_by.in_(names),
+                # history mein naam kabhi "Ravi", kabhi "staff:Ravi" — dono
+                OrderStatusHistory.changed_by.in_(names + [f"staff:{n}" for n in names]),
                 OrderStatusHistory.changed_at >= start,
                 OrderStatusHistory.new_status.in_(list(key)),
             )
@@ -1868,7 +1869,7 @@ async def _staff_day(db: AsyncSession, names: list[str]) -> dict[str, dict]:
         )
     ).all()
     for who, status, n in hist:
-        out[who][key[status]] += n
+        out[who[6:] if who.startswith("staff:") else who][key[status]] += n
     pay = (
         await db.execute(
             select(Payment.recorded_by, Payment.method, func.sum(Payment.amount))
@@ -1950,6 +1951,17 @@ async def team_view(
         await db.execute(select(Staff).where(Staff.is_active).order_by(Staff.name))
     ).scalars().all()
     day = await _staff_day(db, [s.name for s in rows])
+    from app.models import StaffPoint
+
+    month_start = datetime.now(IST).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    pts = dict(
+        (
+            await db.execute(
+                select(StaffPoint.staff_id, func.sum(StaffPoint.points))
+                .where(StaffPoint.created_at >= month_start).group_by(StaffPoint.staff_id)
+            )
+        ).all()
+    )
     out = []
     for s in rows:
         open_n = (
@@ -1975,6 +1987,7 @@ async def team_view(
                 "open": open_n, "done_24h": done_n,
                 "has_login": bool(s.password_hash),
                 "today": day.get(s.name, _empty_day()),
+                "month_points": pts.get(s.id, 0),
             }
         )
     return out
@@ -2405,6 +2418,48 @@ async def today_summary(
             Task.status == TASK_DONE, Task.completed_at >= start
         )
     return out
+
+
+# ------------------------------------------------------- mere points ----
+
+
+@router.get("/points")
+async def my_points(
+    p: StaffPrincipal = Depends(current_staff), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Is mahine grahakon ki rating se mere points, aur haal ki ratings."""
+    from app.models import StaffPoint
+    from app.services import app_settings, staff_scores
+
+    start = datetime.now(IST).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    counts = dict(
+        (
+            await db.execute(
+                select(StaffPoint.rating, func.count())
+                .where(StaffPoint.staff_id == p.staff.id, StaffPoint.created_at >= start)
+                .group_by(StaffPoint.rating)
+            )
+        ).all()
+    )
+    recent = (
+        await db.execute(
+            select(StaffPoint, Order.order_number)
+            .join(Order, Order.id == StaffPoint.order_id)
+            .where(StaffPoint.staff_id == p.staff.id)
+            .order_by(StaffPoint.created_at.desc()).limit(10)
+        )
+    ).all()
+    reward_on = bool(await app_settings.get(db, "staff_reward_enabled"))
+    return {
+        "month_points": await staff_scores.month_points(db, p.staff.id),
+        "good": counts.get("good", 0), "mid": counts.get("mid", 0), "bad": counts.get("bad", 0),
+        "reward_note": ((await app_settings.get(db, "staff_reward_note")) or "").strip() if reward_on else "",
+        "recent": [
+            {"order": num, "rating": sp.rating, "points": sp.points, "role": sp.role,
+             "at": sp.created_at.astimezone(IST).strftime("%d %b")}
+            for sp, num in recent
+        ],
+    }
 
 
 # ------------------------------------------------- phone par notification ----

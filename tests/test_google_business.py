@@ -469,3 +469,44 @@ def test_post_location_statuses_reports_each_location_and_latest_attempt() -> No
     )
     assert legacy[0]["status"] == "not_posted"
     assert legacy[2]["status"] == "published"
+
+
+def test_star_filter_hides_low_review_cards_but_keeps_the_true_rating() -> None:
+    reviews = [
+        {"id": str(i), "name": f"R{i}", "photo": "", "rating": stars, "text": f"Zz review {stars} star",
+         "time": f"2026-09-0{i}T00:00:00Z", "reply": ""}
+        for i, stars in enumerate((5, 4, 3, 1), start=1)
+    ]
+    data = {"rating": 3.3, "count": 4, "reviews": reviews}
+    for min_stars, kept in ((0, {5, 4, 3, 1}), (4, {5, 4}), (5, {5})):
+        summary, cards = gbp.render_block({**data, "min_stars": min_stars})
+        assert {s for s in (5, 4, 3, 1) if f"Zz review {s} star" in cards} == kept, min_stars
+        # upar ka rating aur ginti Google ka poora sach — chhaant sirf cards ki
+        assert "3.3" in summary and "Based on 4 Google reviews" in summary
+
+
+async def test_owner_picks_which_reviews_the_website_shows(client) -> None:
+    async with async_session_factory() as db:
+        before = await app_settings.get(db, "gbp_reviews")
+    try:
+        async with async_session_factory() as db:
+            await app_settings.set_value(db, "gbp_reviews", {"rating": 4.0, "count": 2, "reviews": [
+                {"id": "a", "name": "A", "photo": "", "rating": 5, "text": "Zzfilter five", "time": "2026-09-02T00:00:00Z", "reply": ""},
+                {"id": "b", "name": "B", "photo": "", "rating": 2, "text": "Zzfilter two", "time": "2026-09-01T00:00:00Z", "reply": ""},
+            ]})
+        gbp._home_cache.update(at=0.0, data=None)
+        assert "Zzfilter two" in (await client.get("/")).text
+        bad = await client.put("/admin/api/google-business/review-filter", headers=AUTH, json={"min_stars": 3})
+        assert bad.status_code == 400
+        r = await client.put("/admin/api/google-business/review-filter", headers=AUTH, json={"min_stars": 4})
+        assert r.status_code == 200, r.text
+        assert r.json()["review_min_stars"] == 4
+        page = (await client.get("/")).text
+        assert "Zzfilter five" in page and "Zzfilter two" not in page
+    finally:
+        async with async_session_factory() as db:
+            await app_settings.set_value(db, "gbp_reviews", before)
+            conn = await gbp.get_connection(db)
+            conn.pop("review_min_stars", None)
+            await gbp.save_connection(db, conn)
+        gbp._home_cache.update(at=0.0, data=None)

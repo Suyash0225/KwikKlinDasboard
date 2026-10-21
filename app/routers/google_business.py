@@ -98,6 +98,7 @@ async def status_for(db: AsyncSession) -> dict:
         ),
         "auto_post_location_count": len(post_locations),
         "review_source": conn.get("review_source") or "",
+        "review_min_stars": gbp.review_min_stars(conn),
         "review_locations": [
             {"location": l["location"], "title": l.get("title", ""), "address": l.get("address", "")}
             for l in gbp.review_locations(conn)
@@ -112,6 +113,27 @@ async def status(db: AsyncSession = Depends(get_db)) -> dict:
 
 class ReviewSourceIn(BaseModel):
     source: str = ""   # "" = main listing, a location name, or "all"
+
+
+class ReviewFilterIn(BaseModel):
+    min_stars: int = 0   # 0 = sab, 4 = 4★+, 5 = sirf 5★
+
+
+@router.put("/review-filter")
+async def set_review_filter(body: ReviewFilterIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Website par kaun se review cards dikhein. Rating/ginti Google wali hi rehti hai.
+    Google se dobara laana nahi padta — rakhe hue reviews par chhaant lagti hai."""
+    if body.min_stars not in gbp.REVIEW_MIN_STARS:
+        raise HTTPException(status_code=400, detail="Choose all reviews, 4★ and above, or 5★ only")
+    conn = await gbp.get_connection(db)
+    conn["review_min_stars"] = body.min_stars
+    await gbp.save_connection(db, conn)
+    data = dict(await app_settings.get(db, "gbp_reviews") or {})
+    if data:
+        data["min_stars"] = body.min_stars
+        await app_settings.set_value(db, "gbp_reviews", data)
+    gbp._home_cache.update(at=0.0, data=None)   # website agle load par dikhaye
+    return {"min_stars": body.min_stars, **(await status_for(db))}
 
 
 @router.put("/review-source")

@@ -84,6 +84,11 @@ _RATING_MAP = {
     "⭐ excellent": "good", "excellent": "good",
     "🙂 it was okay": "mid", "it was okay": "mid",
     "😞 needs work": "bad", "needs work": "bad",
+    # Aaj ke Hinglish buttons (order_service DELIVERED) — kuch WhatsApp
+    # client id ki jagah text bhejte hain; ye na ho to rating (aur staff ke
+    # points) chupchaap chhoot jaate.
+    "⭐ bahut achha": "good", "bahut achha": "good",
+    "🙂 theek tha": "mid", "theek tha": "mid",
 }
 
 
@@ -224,6 +229,18 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
 
     reply_key = {"good": "rate_good_reply", "mid": "rate_mid_reply", "bad": "rate_bad_reply"}[kind]
     reply_text = get_message(reply_key)
+    # Rating us order ke washer + delivery wale ke points (services/staff_scores.py)
+    from app.services import staff_scores
+
+    scored = None
+    try:
+        scored = await staff_scores.record_rating(db, customer, kind)
+    except Exception:
+        log.exception("rating_points_failed", phone=phone)
+    if scored and scored["points"] > 0 and scored["names"]:
+        reply_text += "\n" + get_message(
+            "rating_points_thanks", names=" & ".join(scored["names"]), points=str(scored["points"])
+        )
     # Google prohibits selectively soliciting positive reviews or offering
     # incentives. Offer the same neutral, optional review invitation after
     # every rating (good, mid, or bad); unhappy customers still get escalation.
@@ -260,9 +277,15 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
             )
         except SendError:
             log.exception("rate_bad_alert_failed")
+    if scored:
+        try:
+            await staff_scores.thank_staff(db, scored)
+        except Exception:
+            log.exception("rating_staff_thanks_failed")
     await audit.record(
         actor_role="customer", actor=phone, action="rating",
-        args={"rating": kind}, result="agent paused" if kind == "bad" else "thanked",
+        args={"rating": kind, **({"order": scored["order"]} if scored else {})},
+        result="agent paused" if kind == "bad" else "thanked",
     )
 
 

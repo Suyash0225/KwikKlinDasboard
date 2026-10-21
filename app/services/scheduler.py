@@ -360,6 +360,15 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
             await run_payment_reminders()
     except Exception:
         log.exception("reminder_jobs_failed")
+    # Staff: late/aaj ke kaam ki yaad (nudge ghante), shaam ko shabashi
+    try:
+        from app.services import staff_scores
+
+        async with async_session_factory() as db:
+            await staff_scores.run_work_nudges(db, now_ist, _claim)
+            await staff_scores.run_day_thanks(db, now_ist, _claim)
+    except Exception:
+        log.exception("staff_nudges_failed")
     # 09:00: hot-lead digest to the owner (human call = best converter)
     try:
         if now_ist.hour == 9 and await _claim(f"hotdigest:{now_ist.strftime('%Y-%m-%d')}"):

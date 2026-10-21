@@ -2590,7 +2590,7 @@ async function showTeam(opts = {}) {
       <div class="spine ${s.open ? "deliver" : "ready"}"></div>
       <div class="when"><b>${s.open}</b><span>open</span></div>
       <div class="body">
-        <div class="line1"><b>${esc(s.name)}</b><span class="amt">${s.done_24h} done</span></div>
+        <div class="line1"><b>${esc(s.name)}</b><span class="amt">${s.month_points ? `⭐ ${s.month_points} · ` : ""}${s.done_24h} done</span></div>
         <div class="sub">${esc(roleLabel(s.role))} · ${esc(s.phone_masked)}${s.has_login ? "" : " · no panel login"}</div>
         ${dayLine(s.today)}
       </div>
@@ -2687,6 +2687,21 @@ async function paintPushNudge() {
   bar.hidden = !show;
 }
 
+/* ─── mere points (grahak ki rating se) ─────────────────────────────── */
+const RATING_WORD = { good: "⭐ Excellent", mid: "🙂 Okay", bad: "😞 Needs work" };
+async function paintPoints() {
+  const box = $("p-points");
+  if (!box) return;
+  let d;
+  try { d = await api("/points"); } catch (e) { box.hidden = true; return; }
+  const recent = d.recent.map((r) => `<div class="od-sub"><span>${esc(r.order)} · ${esc(r.at)}</span>
+    <span>${esc(RATING_WORD[r.rating] || r.rating)}${r.points ? ` · +${r.points}` : ""}</span></div>`).join("");
+  box.innerHTML = `<div class="kv"><span>⭐ My points this month</span><b>${d.month_points}</b></div>
+    <p class="hint">${d.good} excellent · ${d.mid} okay · ${d.bad} needs work — from customer ratings after delivery.</p>
+    ${d.reward_note ? `<p class="hint">🎁 ${esc(d.reward_note)}</p>` : ""}
+    ${recent ? `<details class="od-block"><summary><b>Recent ratings</b></summary>${recent}</details>` : ""}`;
+}
+
 /* ─── main (profile) ────────────────────────────────────────────────── */
 
 function showMe() {
@@ -2700,12 +2715,14 @@ function showMe() {
       <div class="kv"><span>Plan</span><b>${esc(ME.plan)}</b></div>
       <p class="hint">Your role and access are set by the owner.</p>
     </div>
+    <div class="card" id="p-points"></div>
     <div class="card" id="p-push"></div>
     <div class="card">
       <button class="btn ghost wide mt0" id="p-pw">Change password</button>
       <button class="btn danger wide" id="p-out">Logout</button>
     </div>`;
   paintPushCard();
+  paintPoints();
   $("p-pw").onclick = changePw;
   $("p-out").onclick = async () => {
     try { await api("/logout", { method: "POST" }); } catch (e) { /* cookie waise bhi jayegi */ }

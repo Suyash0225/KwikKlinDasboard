@@ -344,6 +344,7 @@ def sent(monkeypatch) -> list[dict]:
     import app.services.bill_agent as bill_agent_module
     import app.services.escalation as escalation_module
     import app.services.tasks as tasks_module
+    import app.services.staff_scores as staff_scores_module
     import app.services.team as team_module
     import app.services.whatsapp as whatsapp_module
     import app.services.work_orders as work_orders_module
@@ -356,6 +357,8 @@ def sent(monkeypatch) -> list[dict]:
     monkeypatch.setattr(tasks_module, "send_message", fake_send)
     # every "owner ko bata do" goes through team.notify_admins
     monkeypatch.setattr(team_module, "send_message", fake_send)
+    # staff ko rating ki shabashi / kaam ki yaad
+    monkeypatch.setattr(staff_scores_module, "send_message", fake_send)
     del whatsapp_module  # the real door stays intact — see _no_live_whatsapp
     return calls
 
