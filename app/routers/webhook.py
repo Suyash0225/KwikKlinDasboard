@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 import structlog
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,6 +62,28 @@ ORDER_STATUS_QUERY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Naya kaam maangne wale shabd — "kal kapde pickup kar lo, delivery 2 din mein"
+# status ka sawaal nahi, naya order hai. Ye AI ke paas jaata hai.
+_NEW_WORK_RE = re.compile(
+    r"\b(?:pick\s?up|book|naya|nayi|new|dhul(?:wa|wana|wane|ana)|dho(?:na|ne)|press|iron|istri|"
+    r"chahiye|place|rate|price|kitna|kitne|charges?|lena|le jao|le jaiye|aa jao|bhejo)\b",
+    re.IGNORECASE,
+)
+
+
+async def _is_status_query(db: AsyncSession, customer: Customer, text: str) -> bool:
+    """Seedha status jawab sirf saaf status sawaal par.
+
+    Pehle "kapde ... delivery/ready" wala koi bhi vaakya status maana jaata
+    tha — naye pickup ki maang ("kapde dhulwane hai, ready kitne din me")
+    AI tak pahunchti hi nahi thi aur grahak ko "hum jald jawab denge" milta.
+    Ab naya kaam maangne wale shabd hon to AI.
+    """
+    if ORDER_NUMBER_RE.search(text or ""):
+        return True
+    return bool(ORDER_STATUS_QUERY_RE.search(text or "")) and not _NEW_WORK_RE.search(text or "")
+
+
 # AI signature ab whatsapp.send_message ke andar centrally lagta hai
 # (app/services/whatsapp.py: sign_ai) — har automated customer message
 # par, sirf yahan ke conversational replies par nahi.
@@ -93,10 +115,15 @@ _RATING_MAP = {
 
 
 def _match_rating(text: str) -> str | None:
-    m = re.match(r"^\[button:([^\]]+)\]", text)
+    m = re.match(r"^\[button:([^\]]+)\]\s*(.*)$", text or "")
     if not m:
-        return None
-    return _RATING_MAP.get(m.group(1).strip().lower())
+        # Kuch WhatsApp client button ka id nahi, sirf text bhejte hain —
+        # _RATING_MAP mein ye text keys isi liye hain (pehle kabhi milti nahi thi)
+        # Sirf emoji wala poora button text ("⭐ bahut achha") — normal baat
+        # mein "bahut achha" likhna rating nahi
+        plain = (text or "").strip().lower()
+        return _RATING_MAP.get(plain) if plain[:1] and not plain[:1].isalnum() else None
+    return _RATING_MAP.get(m.group(1).strip().lower()) or _RATING_MAP.get(m.group(2).strip().lower())
 
 
 def _match_payment_action(text: str) -> tuple[str, str] | None:
@@ -1439,6 +1466,11 @@ async def _handle_inbound_message(
             looks_like_automated_agent,
         )
 
+        if (text or "").lstrip().startswith("[reaction]"):
+            # 👍 par jawab nahi — pehle ye status/ack reply le leta tha aur
+            # "naya message" ban kar AI ka bana hua asli jawab rok deta tha
+            log.info("customer_reaction_no_reply", phone=phone)
+            return
         if (text or "").lstrip().startswith("[button:"):
             # Hamare hi menu ka button (Haan/Nahi, rating…) — spam/vendor ho hi
             # nahi sakta; LLM classifier se poochhna sirf deri aur risk hai
@@ -1541,14 +1573,11 @@ async def _handle_inbound_message(
         # subsequent messages stay silent while the human takeover is active.
         was_agent_paused = customer.agent_paused
         reply_intent = "transactional"
-        reply_kind = (
-            "order_status"
-            if ORDER_NUMBER_RE.search(spoken) or ORDER_STATUS_QUERY_RE.search(spoken)
-            else "customer_agent_reply"
-        )
+        status_query = await _is_status_query(db, customer, spoken)
+        reply_kind = "order_status" if status_query else "customer_agent_reply"
         reply = None
         try:
-            if ORDER_NUMBER_RE.search(spoken) or ORDER_STATUS_QUERY_RE.search(spoken):
+            if status_query:
                 reply = await _build_customer_reply(db, customer, spoken)
             elif batch_followup:
                 log.info("reply_deferred_to_followup", phone=phone)
@@ -1756,6 +1785,11 @@ async def _newer_inbound_exists(db: AsyncSession, customer_id, convo: Conversati
                     Conversation.direction == Direction.INBOUND,
                     Conversation.created_at >= convo.created_at,
                     Conversation.id != convo.id,
+                    # Reaction (👍) naya sawaal nahi — jawab rokne ki wajah nahi
+                    or_(
+                        Conversation.message_text.is_(None),
+                        ~Conversation.message_text.startswith("[reaction]"),
+                    ),
                 )
             )
         ).scalar_one()

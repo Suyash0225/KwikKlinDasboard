@@ -122,6 +122,9 @@ async def create_order(
     coupon_code: str | None = None,
     priority: str = "normal",
     bill_seconds: int | None = None,
+    # False: caller apna saaf confirmation bhejta hai (AI pickup booking) —
+    # warna grahak ko do "order mila" message jaate the
+    notify_customer: bool = True,
 ) -> Order:
     """Create an order (upserting the customer) and log RECEIVED in history.
 
@@ -282,25 +285,26 @@ async def create_order(
     date_s = _fmt_date(expected_delivery) if expected_delivery else "to be confirmed soon"
     from app.services import bill_link
 
-    await _notify_customer(
-        db, order,
-        message_key=(
-            "order_confirmed_bill" if order.total_amount is not None
-            else "order_confirmed_no_price"
-        ),
-        template_name="kk_bill_details",
-        template_params=[
-            customer_name or "there", order_number, items_text[:120],
-            total_s, advance_s, due_s, date_s,
-        ],
-        items=items_text,
-        total=total_s,
-        advance=advance_s,
-        due=due_s,
-        date=date_s,
-        # web bill + GPay/PhonePe se payment (services/bill_link.py)
-        bill_line=bill_link.message_line(await bill_link.url_for(db, order)),
-    )
+    if notify_customer:
+        await _notify_customer(
+            db, order,
+            message_key=(
+                "order_confirmed_bill" if order.total_amount is not None
+                else "order_confirmed_no_price"
+            ),
+            template_name="kk_bill_details",
+            template_params=[
+                customer_name or "there", order_number, items_text[:120],
+                total_s, advance_s, due_s, date_s,
+            ],
+            items=items_text,
+            total=total_s,
+            advance=advance_s,
+            due=due_s,
+            date=date_s,
+            # web bill + GPay/PhonePe se payment (services/bill_link.py)
+            bill_line=bill_link.message_line(await bill_link.url_for(db, order)),
+        )
 
     # The owner side hears about every new order without asking — unless he
     # is the one who just booked it (no point echoing his own message back).
@@ -410,6 +414,20 @@ async def update_status(
         raise InvalidTransitionError(
             f"{order.order_number}: {old_status.name} -> {new_status.name} is not allowed"
         )
+
+    if new_status is OrderStatus.DELIVERED:
+        # Har raasta (dashboard status, WhatsApp "done", task Done) yahin se
+        # guzarta hai. Washerman ke roke hue kapde dukaan par hain — unke
+        # rehte order DELIVERED nahi. Baaki bache kapde "sab de diye" maane
+        # jaate hain, taaki line-wise hisaab aur status ek hi baat kahein.
+        from app.services import delivery as _delivery
+
+        if _delivery.counts(order).get("held"):
+            raise InvalidTransitionError(
+                f"{order.order_number}: {_delivery.counts(order)['held']} clothes are on hold at the shop — "
+                "finish them (Hold done) before marking delivered"
+            )
+        _delivery.mark_all_delivered(order)
 
     order.status = new_status
     order.updated_at = datetime.now(timezone.utc)

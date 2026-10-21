@@ -799,6 +799,25 @@ async def confirm_pickup(db: AsyncSession, task: Task, *, done: bool, by: str) -
                 f"⚠️ {order.order_number} abhi {order.status.name} hai. "
                 "Delivery task sirf READY ya OUT_FOR_DELIVERY order par complete ho sakta hai."
             )
+        # Asli delivery wahi raasta jo app ka Deliver button hai: sirf dene
+        # layak kapde, aur roke/baaki kapde hon to order DELIVERED nahi hota
+        # (pehle seedha DELIVERED + grahak ko "thank you", aur baaki kapde
+        # hisaab se gayab).
+        from app.services import delivery as delivery_svc
+
+        try:
+            out = await delivery_svc.deliver(db, order, None, by=f"staff:{by}")
+        except delivery_svc.DeliveryError as exc:
+            return f"⚠️ {order.order_number}: {exc}"
+        if out["pending"]:
+            return (
+                f"🚚 {order.order_number}: {out['delivered_now']} kapde diye. "
+                f"{out['pending']} abhi dukaan par (roke hue/baaki) — wo aane par dobara Done karein."
+            )
+        await team.notify_admins(
+            db, f"✅ {by} ne delivery kar di ({task.code}, {order.order_number})."
+        )
+        return cfg["done_reply"]
 
     completed = await complete_task(db, task, reply=f"{cfg['word']} ho gaya", by=by)
     if not getattr(completed, "_completion_won", False):

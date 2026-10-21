@@ -819,7 +819,8 @@ async def test_order_button_done_moves_the_order(monkeypatch, sent, test_washer)
         fresh = (
             await s.execute(select(Order).where(Order.order_number == number))
         ).scalar_one()
-        assert fresh.status is OrderStatus.READY, "washer ke liye 'ho gaya' = READY"
+        # Dhulai poori -> agla stage (Iron), seedha READY nahi (iron chhoot jaata)
+        assert fresh.status is OrderStatus.IN_IRON, "washer ke liye 'ho gaya' = dhulai poori, ab iron"
 
 
 async def test_order_button_later_records_the_eta(monkeypatch, sent, test_washer) -> None:

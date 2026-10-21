@@ -52,20 +52,21 @@ ROLES = {
 _DEFAULT_SETTING = {"WASHER": "default_washer_phone", "DELIVERY": "default_delivery_phone"}
 _ORDER_FIELD = {"WASHER": "assigned_washer_id", "DELIVERY": "assigned_delivery_id"}
 # Ye statuses aane par ye kaam poore maane jaate hain
+# Pickup ke baad ka koi bhi status = pickup ho chuka (dashboard se stage
+# chhod kar aage badhaya to bhi — warna pickup task hamesha khula rehta)
 _DONE_ON = {
     OrderStatus.PICKED_UP: ("pickup",),
-    OrderStatus.IN_DRY: ("wash",),
-    OrderStatus.IN_IRON: ("wash", "dry"),
+    OrderStatus.IN_WASH: ("pickup",),
+    OrderStatus.IN_DRY: ("pickup", "wash"),
+    OrderStatus.IN_IRON: ("pickup", "wash", "dry"),
     OrderStatus.READY: ("pickup", "wash", "dry", "iron"),
     OrderStatus.OUT_FOR_DELIVERY: ("pickup", "wash", "dry", "iron"),
     OrderStatus.DELIVERED: ("pickup", "wash", "dry", "iron", "delivery"),
 }
 
+# Drying stage nahi raha — uska koi alag kaam nahi banta (pehle dry task
+# press wale ke paas tak chala jaata tha)
 _STAGE_TASKS = {
-    OrderStatus.IN_DRY: {
-        "kind": "dry",
-        "title": "{who} — drying: {items} | delivery {delivery}",
-    },
     OrderStatus.IN_IRON: {
         "kind": "iron",
         "title": "{who} — ironing: {items} | delivery {delivery}",

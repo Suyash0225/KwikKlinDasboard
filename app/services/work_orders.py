@@ -153,15 +153,21 @@ async def task_status_menu(db: AsyncSession, code: str) -> list[ListRow]:
         # A delivery task has two separate milestones. The button must say
         # what the tap actually does; a vague "Done" previously looked like
         # final delivery even though the first tap only dispatched the order.
+        # Har milestone ka apna id: server dekhta hai ki order abhi usi
+        # stage par hai — purana "Out for delivery" card dobara dabane se
+        # order DELIVERED nahi hota
+        done_id = f"task:{code}:done"
         if task.kind == "delivery":
             order = await db.get(Order, task.order_id) if task.order_id else None
             from app.models import OrderStatus
             if order is not None and order.status is OrderStatus.READY:
                 done_title = "🚚 Out for delivery"
                 done_desc = "Parcel leaves shop; confirm again when handed over"
+                done_id = f"task:{code}:ofd"
             elif order is not None and order.status is OrderStatus.OUT_FOR_DELIVERY:
                 done_title = "✅ Delivered"
                 done_desc = "Customer received the parcel"
+                done_id = f"task:{code}:delivered"
             else:
                 done_title = "✅ Done"
                 done_desc = "Confirm the task status"
@@ -169,7 +175,7 @@ async def task_status_menu(db: AsyncSession, code: str) -> list[ListRow]:
             done_title = "✅ Pickup done"
             done_desc = "Pickup completed"
         return [
-            ListRow(f"task:{code}:done", done_title, done_desc),
+            ListRow(done_id, done_title, done_desc),
             ListRow(f"task:{code}:pending", "⏳ Pending", "Still pending"),
         ]
     return [
@@ -253,6 +259,37 @@ async def resolve_worker(db: AsyncSession, order: Order, role: str = "WASHER") -
     """Backward-compatible single-recipient resolver."""
     workers = await resolve_workers(db, order, role)
     return workers[0] if workers else None
+
+
+async def announce_new_order(db: AsyncSession, order: Order) -> str:
+    """Naye bill par washerman ko khabar — par sirf jab koi aur na de raha ho.
+
+    create_order ke andar ops agent pehle hi kaam bana kar WhatsApp + push
+    bhej deta hai; uske upar ye "Naya order aaya" doosra message tha. Aur
+    pickup wale order par kapde abhi grahak ke ghar hain — washerman ko
+    tab khabar jab pickup ho. Lautata hai send_work_order jaisa outcome, ya
+    'agent' (agent ne de diya) / 'later' (pickup ke baad).
+    """
+    from app.models import OrderStatus, Task
+    from app.models.task import TASK_OPEN
+    from app.services import ops_agent
+
+    if order.status is OrderStatus.PICKUP_ASSIGNED:
+        return "later"
+    if await ops_agent.enabled(db):
+        has_task = (
+            await db.execute(
+                select(Task.id).where(
+                    Task.order_id == order.id, Task.status == TASK_OPEN,
+                    Task.kind.in_(("wash", "dry", "iron")),
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        if has_task:
+            return "agent"
+    # Agent band hai, ya usne kaam baad (delivery ke paas) ke liye rakha —
+    # washerman ko naya order abhi bata do (pehle jaisa)
+    return await send_work_order(db, order, headline="Naya order aaya")
 
 
 async def send_work_order(
