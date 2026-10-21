@@ -14,46 +14,55 @@ W, D, I, R = OrderStatus.IN_WASH, OrderStatus.IN_DRY, OrderStatus.IN_IRON, Order
 
 
 def test_default_stages_from_service_name() -> None:
+    # Dukaan ka kram: Wash -> Iron -> Ready. Drying alag stage nahi.
     assert ss.default_stages("Steam Iron") == [I]
     assert ss.default_stages("Saree Polish") == [I]
     assert ss.default_stages("Press") == [I]
-    assert ss.default_stages("Wash & Fold (kg)") == [W, D]
-    assert ss.default_stages("Wash & Iron") == [W, D, I]
-    assert ss.default_stages("Dry Clean") == [W, D, I]
-    assert ss.default_stages("") == [W, D, I]
+    assert ss.default_stages("Wash & Fold (kg)") == [W]
+    assert ss.default_stages("Wash & Iron") == [W, I]
+    assert ss.default_stages("Dry Clean") == [W, I]
+    assert ss.default_stages("") == [W, I]
 
 
 def test_order_stages_are_the_union_in_order() -> None:
-    cfg = {"Polish": ["IN_IRON"], "Fold": ["IN_WASH", "IN_DRY"]}
+    cfg = {"Polish": ["IN_IRON"], "Fold": ["IN_WASH"]}
     assert ss.stages_for_services(["Polish"], cfg) == [I]
-    assert ss.stages_for_services(["Polish", "Fold"], cfg) == [W, D, I]
+    assert ss.stages_for_services(["Polish", "Fold"], cfg) == [W, I]
     # Owner ka config naam ke andaaze se upar
     assert ss.stages_for_services(["Steam Iron"], {"Steam Iron": ["IN_WASH", "IN_IRON"]}) == [W, I]
-    # Koi service hi nahi (purana order) — pehle jaisa poora kram
-    assert ss.stages_for_services([], {}) == [W, D, I]
+    # Purane saved config ka IN_DRY ab stage nahi
+    assert ss.stages_for_services(["Old"], {"Old": ["IN_WASH", "IN_DRY", "IN_IRON"]}) == [W, I]
+    # Koi service hi nahi (purana order) — Wash -> Iron
+    assert ss.stages_for_services([], {}) == [W, I]
 
 
 def test_next_after_skips_missing_stages() -> None:
     assert ss.next_after(OrderStatus.RECEIVED, [I]) is I
     assert ss.next_after(I, [I]) is R
-    assert ss.next_after(OrderStatus.PICKED_UP, [W, D]) is W
-    assert ss.next_after(W, [W, I]) is I
-    assert ss.next_after(D, [W, D]) is R
+    assert ss.next_after(OrderStatus.PICKED_UP, [W]) is W
+    assert ss.next_after(W, [W, I]) is I       # wash ke baad seedha iron, dry nahi
+    assert ss.next_after(W, [W]) is R
     assert ss.next_after(OrderStatus.RECEIVED, []) is R
-    assert ss.next_after(OrderStatus.READY, [W, D, I]) is None
+    assert ss.next_after(OrderStatus.READY, [W, I]) is None
+    # Purana order jo Drying par khada hai — atakta nahi
+    assert ss.next_after(D, [W, I]) is I
+    assert ss.next_after(D, [W]) is R
 
 
 def test_whatsapp_menu_step() -> None:
     assert ss.menu_step(OrderStatus.RECEIVED, [I])[:2] == ("iron", "👔 Start ironing")
     assert ss.menu_step(W, [W, I])[:2] == ("iron", "👔 Washing done")
     assert ss.menu_step(I, [I])[0] == "ready"
+    assert ss.menu_step(D, [W, I])[:2] == ("iron", "👔 Drying done")
     # Deploy se pehle bana "wash" kaam sirf-press order par bhi chale
     assert ss.task_matches("wash", OrderStatus.RECEIVED, [I])
     assert not ss.task_matches("wash", I, [I])
+    assert ss.task_matches("dry", D, [W, I])
 
 
 def test_clean_config_drops_unknown_stages() -> None:
     assert ss.clean_config({"Polish": ["IN_IRON", "BOGUS", "IN_IRON"]}) == {"Polish": ["IN_IRON"]}
+    assert ss.clean_config({"Old": ["IN_WASH", "IN_DRY"]}) == {"Old": ["IN_WASH"]}
     with pytest.raises(ValueError):
         ss.clean_config(["IN_IRON"])
 

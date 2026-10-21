@@ -23,7 +23,7 @@
      it wins ties; app.css keeps layout and behaviour. -->
 <link rel="stylesheet" href="/admin/static/ui-v2.css?v=2">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
-<script src="/admin/static/app.js?v=ui2-9" defer></script>
+<script src="/admin/static/app.js?v=ui2-11" defer></script>
 <script src="/admin/static/gbp-poster.js?v=3" defer></script>
 </head>
 <body>
@@ -768,7 +768,6 @@
             <input id="rm-service" placeholder="New service name" aria-label="New service name" style="min-width:150px">
             <span class="rm-newstages" role="group" aria-label="Stages for the new service">
               <label><input type="checkbox" id="rm-st-IN_WASH" checked> Wash</label>
-              <label><input type="checkbox" id="rm-st-IN_DRY" checked> Dry</label>
               <label><input type="checkbox" id="rm-st-IN_IRON" checked> Iron</label>
             </span>
             <button class="btn sm ghost" onclick="rmAddService()">+ Add service</button>

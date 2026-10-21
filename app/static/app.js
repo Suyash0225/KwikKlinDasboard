@@ -1167,8 +1167,8 @@ const NEXT_STEP = {
   PICKUP_ASSIGNED: ["PICKED_UP", "🛵 Picked up"],
   RECEIVED: ["IN_WASH", "🧼 Start wash"],
   PICKED_UP: ["IN_WASH", "🧼 Start wash"],
-  IN_WASH: ["READY", "✨ Ready"],
-  IN_DRY: ["READY", "✨ Ready"],
+  IN_WASH: ["IN_IRON", "🔥 Send to iron"],
+  IN_DRY: ["IN_IRON", "🔥 Send to iron"],
   IN_IRON: ["READY", "✨ Ready"],
   READY: ["DELIVERED", "🚚 Deliver"],
   OUT_FOR_DELIVERY: ["DELIVERED", "✅ Delivered"],
@@ -1183,10 +1183,15 @@ const STEP_LABEL = {
 /* Dhulai shuru karte waqt service ke stages maayne rakhte hain: sirf-press
    wala order "Start wash" nahi, "Start iron" dikhaye. Baad ke stage par
    owner ka seedha "Ready" wala shortcut waisa hi. */
-const START_STEP = { IN_DRY: "💨 Start drying", IN_IRON: "🔥 Start iron", READY: "✨ Ready" };
+const START_STEP = { IN_WASH: "🧼 Start wash", IN_IRON: "🔥 Start iron", READY: "✨ Ready" };
+const SEND_STEP = { IN_IRON: "🔥 Send to iron", READY: "✨ Ready" };
 function nextStep(o) {
+  // Server service ke stages se agla kadam batata hai: Wash -> Iron -> Ready
   if (["RECEIVED", "PICKED_UP"].includes(o.status) && START_STEP[o.next_status]) {
     return [o.next_status, START_STEP[o.next_status]];
+  }
+  if (["IN_WASH", "IN_DRY", "IN_IRON"].includes(o.status) && SEND_STEP[o.next_status]) {
+    return [o.next_status, SEND_STEP[o.next_status]];
   }
   return NEXT_STEP[o.status];
 }
@@ -1220,8 +1225,10 @@ function statusModal(number, current, showAll = false) {
   }
 
   // Keep this in the same order as order_service._SEQUENCE on the server.
-  const sequence = ["RECEIVED", "PICKUP_ASSIGNED", "PICKED_UP", "IN_WASH", "IN_DRY", "IN_IRON", "READY", "OUT_FOR_DELIVERY", "DELIVERED"];
-  const index = sequence.indexOf(current);
+  // Server ke _SEQUENCE ka kram — Drying chunne ka option nahi (stage hi nahi raha)
+  const sequence = ["RECEIVED", "PICKUP_ASSIGNED", "PICKED_UP", "IN_WASH", "IN_IRON", "READY", "OUT_FOR_DELIVERY", "DELIVERED"];
+  // Purana order jo abhi "Drying" par khada hai — Washing ke baad wala maano
+  const index = sequence.indexOf(current === "IN_DRY" ? "IN_WASH" : current);
   const nexts = current === "ON_HOLD"
     ? sequence
     : sequence.filter((st) => index >= 0 && sequence.indexOf(st) > index);
@@ -4948,18 +4955,20 @@ function renderRateMatrix() {
 
 /* Service ke stages (Wash / Dry / Iron). Owner ne tay na kiya ho to naam
    se andaaza — server ka services/service_stages.py bhi yahi karta hai. */
-const STAGE_KEYS = [["IN_WASH", "Wash"], ["IN_DRY", "Dry"], ["IN_IRON", "Iron"]];
+// Dukaan ka kram: Wash -> Iron -> Ready. Drying alag stage nahi (dhulai ka hissa)
+const STAGE_KEYS = [["IN_WASH", "Wash"], ["IN_IRON", "Iron"]];
 function defaultStages(service) {
   const n = String(service || "").toLowerCase();
   const washy = ["wash", "dhulai", "laundry", "dry clean", "dryclean", "clean"].some((w) => n.includes(w));
   const pressy = ["iron", "press", "istri", "isteri", "steam", "polish", "roll"].some((w) => n.includes(w));
   if (!washy && pressy) return ["IN_IRON"];
-  if (n.includes("wash") && n.includes("fold") && !pressy) return ["IN_WASH", "IN_DRY"];
-  return ["IN_WASH", "IN_DRY", "IN_IRON"];
+  if (n.includes("wash") && n.includes("fold") && !pressy) return ["IN_WASH"];
+  return ["IN_WASH", "IN_IRON"];
 }
 function stagesOf(service) {
   const cfg = SETTINGS_CACHE.service_stages || {};
-  return Array.isArray(cfg[service]) ? cfg[service] : defaultStages(service);
+  // purane saved config mein IN_DRY ho sakta hai — wo ab stage nahi
+  return (Array.isArray(cfg[service]) ? cfg[service] : defaultStages(service)).filter((k) => k !== "IN_DRY");
 }
 function stageChips(service) {
   const on = stagesOf(service);
