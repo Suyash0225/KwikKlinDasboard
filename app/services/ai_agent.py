@@ -94,7 +94,12 @@ def _pending_intake(customer: Customer) -> dict | None:
 
 
 async def _last_outbound_is(db: AsyncSession, customer: Customer, text: str) -> bool:
-    """True only when `text` is the newest message we sent this customer."""
+    """True when the newest outbound is this message, optionally with the standard AI footer.
+
+    send_message may append the shop's configured AI disclaimer after the
+    business text. Compare the business text without that known footer so a
+    customer's "haan" can confirm the exact pickup summary they saw.
+    """
     from app.models import Conversation, Direction
 
     last_outbound = (
@@ -108,7 +113,16 @@ async def _last_outbound_is(db: AsyncSession, customer: Customer, text: str) -> 
             .limit(1)
         )
     ).scalar_one_or_none()
-    return last_outbound == text
+    if last_outbound == text:
+        return True
+    if not last_outbound or not text:
+        return False
+
+    # Footer is appended by the outbound policy, not part of the confirmation
+    # prompt itself. Only strip this exact known footer; do not fuzzy-match
+    # customer-visible content or accept an older prompt.
+    footer = "\\nThank you – Kwik Klin AI\\nAI hai — chhoti-moti galti mumkin hai"
+    return last_outbound == text + footer
 
 
 async def _has_matching_pickup_confirmation_prompt(
