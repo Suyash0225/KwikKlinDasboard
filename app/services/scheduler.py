@@ -432,10 +432,13 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
 
     # Ops agent: delivery promise ke 3 din pehle hi washer ko actual
     # kaam/ping mile. Ye DB-only planner hai — koi LLM/token nahi.
+    # Raat (quiet hours) mein nahi — dono staff ko WhatsApp bhejte hain; subah
+    # pehle ghante mein wahi kaam ho jaata hai
     try:
         from app.services import ops_agent
-        async with async_session_factory() as db:
-            await ops_agent.plan_due_wash_tasks(db)
+        if not _in_quiet_hours(now_ist):
+            async with async_session_factory() as db:
+                await ops_agent.plan_due_wash_tasks(db)
     except Exception:
         log.exception("ops_agent_wash_planner_failed")
 
@@ -444,8 +447,9 @@ async def _hourly_for_tenant(now_ist: datetime) -> None:
     try:
         from app.services import ops_agent, turnaround
 
-        async with async_session_factory() as db:
-            await ops_agent.rebalance(db)
+        if not _in_quiet_hours(now_ist):
+            async with async_session_factory() as db:
+                await ops_agent.rebalance(db)
         if 8 <= now_ist.hour <= 21:
             async with async_session_factory() as db:
                 await turnaround.run_delay_alerts(db)
@@ -785,6 +789,15 @@ async def _nightly_tick() -> None:
 
 
 async def _nightly_for_tenant(now_ist: datetime) -> None:
+    # Purane reward "expired" — ye function likha tha par kahin se chalta hi
+    # nahi tha, to tareekh nikle reward bhi "earned" dikhte rehte
+    try:
+        from app.services.rewards import expire_sweep
+
+        async with async_session_factory() as db:
+            await expire_sweep(db)
+    except Exception:
+        log.exception("reward_expire_sweep_failed")
     # STOP-rate auto-throttle (senior-architect P0)
     try:
         from app.services.leads import check_stop_throttle

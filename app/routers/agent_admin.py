@@ -16,6 +16,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -1939,8 +1940,8 @@ async def create_task_api(body: TaskIn, db: AsyncSession = Depends(get_db)) -> d
     if existing is not None:
         previous_staff_id = existing.assigned_staff_id
         existing.title = body.title.strip()
-        if staff is not None:
-            existing.assigned_staff_id = staff.id
+        if staff is not None and staff.id != previous_staff_id:
+            await task_service.apply_reassignment(db, existing, staff)
         if body.due_at is not None:
             existing.due_at = body.due_at
         existing.urgent = existing.urgent or body.urgent
@@ -2033,12 +2034,24 @@ async def edit_task_api(code: str, body: TaskEditIn, db: AsyncSession = Depends(
             customer.phone = phone
 
     task.title = body.title.strip()
-    task.assigned_staff_id = staff.id if staff else None
+    # Staff na chuna ho to purana assignment rehne do — inactive assignee
+    # dropdown mein dikhta hi nahi, aur save karte hi kaam chupchaap
+    # kisi ke naam nahi rehta tha
+    if staff is not None and staff.id != previous_staff_id:
+        await task_service.apply_reassignment(db, task, staff)
     task.kind = body.kind
     task.due_at = body.due_at
     task.urgent = body.priority == "urgent"
     db.add(task)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Us order par is kind ka khula kaam pehle se hai (ek hi ho sakta hai)
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"This order already has an open {body.kind} task — edit that one instead",
+        )
     await db.refresh(task)
 
     if previous_staff_id != task.assigned_staff_id:
@@ -2818,8 +2831,7 @@ async def assign_task_api(
     if previous_staff_id == staff.id:
         return {"ok": True, "code": task.code, "assigned_staff_id": str(staff.id), "unchanged": True}
 
-    task.assigned_staff_id = staff.id
-    db.add(task)
+    await task_service.apply_reassignment(db, task, staff)
     await db.commit()
     await db.refresh(task)
 
