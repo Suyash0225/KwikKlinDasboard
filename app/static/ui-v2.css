@@ -956,3 +956,17 @@ body.inbox-mode #sec-inbox .composer > .btn:not(.ghost) { width: 44px; height: 4
 .rev-src { margin: 14px 0 4px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: #f8fafc; }
 .rev-src label { margin-bottom: 6px; }
 .rev-src small { display: block; margin-top: 6px; }
+
+/* ── phone: smooth scroll ────────────────────────────────────────────────
+   Sticky topbar aur fixed tabbar par backdrop blur ka matlab: scroll ke har
+   frame par peeche ka content dobara blur karo. Sasta Android phone isi par
+   atakta tha ("ruk raha hai"). Phone par thos rang — dikhne mein farak
+   lagbhag nahi, scroll halka. */
+@media (max-width: 1023.98px) {
+  .topbar { background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .tabbar { background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  /* lambi list: screen se bahar ke card ka layout/paint browser chhod de */
+  .rowcards > .rowcard { content-visibility: auto; contain-intrinsic-size: auto 150px; }
+}
+/* poori screen ka blur har popup kholte waqt mehenga — sirf andhera kaafi */
+.overlay { backdrop-filter: none; -webkit-backdrop-filter: none; }

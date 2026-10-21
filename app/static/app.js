@@ -837,7 +837,11 @@ async function loadDashboard() {
   renderKpis(); renderChips(); renderOrders(); renderDashHello();
   loadWaStats();
   loadGrowthAnalytics();
-  if (!window._growthTimer) window._growthTimer = setInterval(loadGrowthAnalytics, 30000);
+  // Har 30 sec teen API call — sirf tab jab dashboard saamne khula ho.
+  // Pehle ye har screen par aur band phone par bhi chalta rehta tha.
+  if (!window._growthTimer) window._growthTimer = setInterval(() => {
+    if (!document.hidden && CURRENT === "dashboard") loadGrowthAnalytics();
+  }, 30000);
 }
 function renderDashHello() {
   const hour = new Date().getHours();
@@ -3897,7 +3901,7 @@ function renderCampaigns(camps) {
   $("camp-list").innerHTML = camps.map((c) => {
     const s = c.stats || {};
     const cls = campaignStatusClass(c.status);
-    const img = c.creative_file ? '<img class="camp-history-img" src="/admin/media/' + encodeURIComponent(c.creative_file) + '" alt="Campaign creative">' : "";
+    const img = c.creative_file ? '<img class="camp-history-img" src="/admin/media/' + encodeURIComponent(c.creative_file) + '" alt="Campaign creative" loading="lazy" decoding="async">' : "";
     const actions =
       '<details class="camp-actions"><summary aria-label="Campaign actions">⋮</summary><div>' +
       '<button onclick="openCampaignDetail(\'' + c.id + '\')">View details</button>' +
