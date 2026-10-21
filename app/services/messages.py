@@ -89,19 +89,16 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Hello {name}! Your order {order_number} is confirmed 🧺 Pickup: {pickup}. Delivery within {sla} days of pickup. — {shop}",
     },
     "thankyou_rating": {
-        "hi": "Aapka order {order_number} deliver ho gaya ✅ Dhanyawad, {shop} ko mauka dene ke liye! 🙏{staff_line}\nHamari seva kaisi lagi?",
-        "en": "Your order {order_number} has been delivered ✅ Thank you for choosing {shop}! 🙏{staff_line}\nHow was our service?",
+        "hi": "Aapka order {order_number} deliver ho gaya ✅ Dhanyawad, {shop} ko mauka dene ke liye! 🙏{staff_line}\nAapko hamari washing service kaisi lagi?",
+        "en": "Your order {order_number} has been delivered ✅ Thank you for choosing {shop}! 🙏{staff_line}\nHow did you like our washing service?",
     },
     # --- rating -> staff points (services/staff_scores.py) ---
-    # Grahak ko: kisne kaam kiya. Inaam wali line sirf tab jab owner ne
-    # Settings mein inaam chalu kiya ho — jhootha vaada nahi.
+    # Rating sirf washing ki — grahak ko bas itna ki kapde kisne taiyaar
+    # kiye. Inaam wali line sirf tab jab owner ne Settings mein inaam chalu
+    # kiya ho — jhootha vaada nahi.
     "rating_staff_line": {
-        "hi": "\nAapke kapde {washer} ne dhoye aur {delivery} ne pahunchaye. {points_note}",
-        "en": "\nYour clothes were washed by {washer} and delivered by {delivery}. {points_note}",
-    },
-    "rating_staff_line_one": {
-        "hi": "\nAapka order {name} ne sambhala. {points_note}",
-        "en": "\nYour order was handled by {name}. {points_note}",
+        "hi": "\nAapke kapde {name} ne taiyaar kiye hain. {points_note}",
+        "en": "\nYour clothes were prepared by {name}. {points_note}",
     },
     "rating_points_note": {
         "hi": "Aapki rating seedhe unke points mein judti hai.",
@@ -603,7 +600,7 @@ CUSTOMER_KEYS = frozenset({
     "payment_reminder", "payment_reminder_firm",
     "payment_thanks", "service_thanks", "review_request", "review_invitation_line", "partial_delivery",
     "delivery_update_full", "reward_earned", "not_home",
-    "rating_staff_line", "rating_staff_line_one", "rating_points_note", "rating_reward_note", "rating_points_thanks",
+    "rating_staff_line", "rating_points_note", "rating_reward_note", "rating_points_thanks",
     "start_confirmed", "stop_confirmed", "relay_message_customer",
 })
 

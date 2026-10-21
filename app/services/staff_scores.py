@@ -7,9 +7,9 @@ Teen hisse:
    Wo na mile to order ka assigned_washer / assigned_delivery. History mein
    naam kabhi "Ravi" aur kabhi "staff:Ravi" likha hota hai — dono maane.
 
-2. **Rating -> points** (`record_rating`). Delivery ke message mein grahak
-   ko bataate hain kisne kaam kiya. Wo "Bahut achha" dabaye to dono ko
-   points, staff ko turant shabashi, aur mahine ke points ek padav (50, 100…)
+2. **Rating -> points** (`record_rating`). Rating sirf washing ki hai:
+   delivery ke message mein grahak ko bataate hain kisne kapde taiyaar
+   kiye. Wo "Bahut achha" dabaye to us washerman ko points, staff ko turant shabashi, aur mahine ke points ek padav (50, 100…)
    paar karein to owner ko bhi. "Sudhar chahiye" par points nahi, staff ko
    seedhi par izzat wali baat. Ek order + ek aadmi = ek hi baar (unique).
 
@@ -103,24 +103,24 @@ async def _setting(db: AsyncSession, key: str):
 
 
 async def staff_line(db: AsyncSession, order: Order, lang: str) -> str:
-    """Delivery message ki line: "Aapke kapde Ravi ne dhoye aur Ajit ne pahunchaye."""
+    """Delivery message ki line: "Aapke kapde Ravi ne taiyaar kiye hain."
+
+    Rating sirf washing ki hoti hai, isliye naam sirf washerman ka —
+    delivery wale ka naam grahak ko ajeeb lagta tha ("kisne pahunchaya").
+    """
     from app.services.messages import get_message
 
     try:
         if not await _setting(db, "rating_show_staff_names"):
             return ""
-        w = await workers(db, order)
+        washer = (await workers(db, order)).get("washer")
+        if washer is None:
+            return ""
         note = get_message(
             "rating_reward_note" if await _setting(db, "staff_reward_enabled") else "rating_points_note",
             lang=lang,
         )
-        washer, rider = w.get("washer"), w.get("delivery")
-        if washer and rider and washer.id != rider.id:
-            return get_message("rating_staff_line", lang=lang, washer=first_name(washer.name),
-                               delivery=first_name(rider.name), points_note=note)
-        one = washer or rider
-        if one:
-            return get_message("rating_staff_line_one", lang=lang, name=first_name(one.name), points_note=note)
+        return get_message("rating_staff_line", lang=lang, name=first_name(washer.name), points_note=note)
     except Exception:
         log.exception("rating_staff_line_failed")
     return ""
@@ -167,21 +167,14 @@ async def record_rating(db: AsyncSession, customer: Customer, kind: str) -> dict
     ).scalar_one()
     if already:
         return None
-    w = await workers(db, order)
-    if not w:
+    # rating washing ki hai — points us washerman ke jisne ye kapde taiyaar kiye
+    washer = (await workers(db, order)).get("washer")
+    if washer is None:
         return None
     pts = {"good": int(await _setting(db, "staff_points_good") or 0),
            "mid": int(await _setting(db, "staff_points_mid") or 0), "bad": 0}[kind]
-    awarded: list[tuple[Staff, str]] = []
-    seen = set()
-    for role, s in w.items():
-        if s.id in seen:      # ek hi aadmi ne dhoya bhi, pahunchaya bhi — ek row
-            continue
-        seen.add(s.id)
-        both = [r for r, x in w.items() if x.id == s.id]
-        role_txt = "+".join(both)
-        db.add(StaffPoint(staff_id=s.id, order_id=order.id, rating=kind, role=role_txt[:12], points=pts))
-        awarded.append((s, role_txt))
+    db.add(StaffPoint(staff_id=washer.id, order_id=order.id, rating=kind, role="washer", points=pts))
+    awarded: list[tuple[Staff, str]] = [(washer, "washer")]
     from sqlalchemy.exc import IntegrityError
 
     try:

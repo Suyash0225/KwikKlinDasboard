@@ -71,24 +71,25 @@ async def test_customer_is_told_who_did_the_work_and_rating_gives_them_points(cl
     delivered = [m for m in sent if m["to"] == CUST_B and number in (m.get("text") or "")]
     assert delivered, "grahak ko delivery ka message"
     txt = delivered[-1]["text"]
-    assert "Awash" in txt and "Adel" in txt
+    # rating sirf washing ki — naam sirf washerman ka
+    assert "Awash" in txt and "Adel" not in txt and "washing" in txt.lower()
     assert "reward" not in txt.lower() and "inaam" not in txt.lower(), "inaam band hai to vaada nahi"
 
     sent.clear()
     await _rate(two_shops["a"], "good")
-    assert await _points(two_shops["a"]) == {"Awash": (5, "good", "washer"), "Adel": (5, "good", "delivery")}
+    assert await _points(two_shops["a"]) == {"Awash": (5, "good", "washer")}
     reply = next(m["text"] for m in sent if m["to"] == CUST_B)
-    assert "5 points" in reply and "Awash" in reply
+    assert "5 points" in reply and "Awash" in reply and "Adel" not in reply
     from app.services import background
 
     await background.drain()
     to_staff = {m["to"]: m["text"] for m in sent if m["to"] in (A_PHONE, A_DEL_PHONE)}
     assert "Shabash" in to_staff[A_PHONE] or "Well done" in to_staff[A_PHONE]
-    assert number in to_staff[A_DEL_PHONE]
+    assert A_DEL_PHONE not in to_staff
 
     # dobara dabaya — points dobara nahi
     await _rate(two_shops["a"], "good")
-    assert len(await _points(two_shops["a"])) == 2
+    assert await _points(two_shops["a"]) == {"Awash": (5, "good", "washer")}
 
     # staff app: mere points
     await _login(client, A_PHONE)
@@ -96,7 +97,7 @@ async def test_customer_is_told_who_did_the_work_and_rating_gives_them_points(cl
     assert me["month_points"] == 5 and me["good"] == 1 and me["recent"][0]["order"] == number
     await _login(client, A_MGR_PHONE)
     team = {r["name"]: r for r in (await client.get("/staff/api/team")).json()}
-    assert team["Adel"]["month_points"] == 5
+    assert team["Awash"]["month_points"] == 5 and team["Adel"]["month_points"] == 0
 
 
 async def test_bad_rating_gives_no_points_but_a_respectful_note(client, two_shops, sent) -> None:
@@ -104,7 +105,7 @@ async def test_bad_rating_gives_no_points_but_a_respectful_note(client, two_shop
     await _move(client, number)
     sent.clear()
     await _rate(two_shops["a"], "bad")
-    assert await _points(two_shops["a"]) == {"Awash": (0, "bad", "washer"), "Adel": (0, "bad", "delivery")}
+    assert await _points(two_shops["a"]) == {"Awash": (0, "bad", "washer")}
     note = next(m["text"] for m in sent if m["to"] == A_PHONE)
     assert "Sudhar chahiye" in note or "Needs work" in note
     assert "tankhwah" not in note.lower() and "salary" not in note.lower()
