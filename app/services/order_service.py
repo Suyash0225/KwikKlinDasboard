@@ -774,6 +774,7 @@ async def record_payment(
     )
 
     # Paisa aaya — owner ko turant pata chale (jab tak usne khud na likha ho).
+    number = order.order_number
     due = (order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0"))
     try:
         await _notify_admins_fyi(
@@ -784,7 +785,11 @@ async def record_payment(
             f"({order.payment_status.name}) · likha: {recorded_by}",
         )
     except Exception:
-        log.exception("payment_admin_fyi_failed", order_number=order.order_number)
+        log.exception("payment_admin_fyi_failed", order_number=number)
+    # WhatsApp fail hone par send_message session rollback karta hai aur
+    # `order` expire ho jaata hai; aage padhne se pehle taaza (paisa commit
+    # ho chuka hai — bas object purana hai).
+    await db.refresh(order)
     # Grahak ko bhi — "₹300 mil gaya, baaki ₹200". Dashboard, staff collect,
     # WhatsApp bot: paisa jahan se bhi likha jaye, grahak ko pakki raseed.
     if notify_customer:
@@ -799,6 +804,7 @@ async def record_payment(
             amount=amount_s,
             balance_line=balance,
         )
+        await db.refresh(order)
     _announce(order, "payment", by=recorded_by)
     return order
 
@@ -877,6 +883,12 @@ async def _notify_customer(
     Called AFTER the business change is committed, so a send failure can
     never lose an order update.
     """
+    # Number pehle hi utha lo. Send fail hone par send_message session ko
+    # rollback karta hai, jo `order` ko expire kar deta hai — phir neeche
+    # log line mein order.order_number padhna async mein lazy-load karta
+    # aur MissingGreenlet uthata. "NEVER raises" toot jaata aur COD collect
+    # 500 deta, jabki paisa commit ho chuka hota (staff dobara dabata).
+    number = order.order_number
     try:
         customer = await db.get(Customer, order.customer_id)
         if customer is None or customer.opted_out or not customer.is_active:
@@ -952,14 +964,14 @@ async def _notify_customer(
         # Template not approved yet / Meta down — logged, business goes on.
         log.warning(
             "notification_failed",
-            order_number=order.order_number,
+            order_number=number,
             message_key=message_key,
             error=str(exc),
         )
     except Exception:
         log.exception(
             "notification_unexpected_error",
-            order_number=order.order_number,
+            order_number=number,
             message_key=message_key,
         )
 

@@ -1080,6 +1080,11 @@ async def collect_payment(
     method = PaymentMethod.CASH if body.method == "cash" else PaymentMethod.UPI
     left = Decimal(str(body.amount))
     settled = []
+    # Pehle hi utha lo: grahak ki raseed WhatsApp se na jaye to send_message
+    # session rollback karta hai aur staff/order dono expire ho jaate hain.
+    # Uske baad unhe padhna 500 deta tha — jabki paisa commit ho chuka hota,
+    # aur delivery wala "fail" dekh kar dobara collect dabata.
+    who, tenant_id, number = p.staff.name, p.staff.tenant_id, order.order_number
 
     # Sabse purana bill pehle. Ye grahak ka apna hisaab-kitaab hai: koi bhi
     # dukaandar naya bill chukta karke purana udhaar khula nahi chhodta.
@@ -1104,28 +1109,29 @@ async def collect_payment(
             if o_due <= Decimal("0.009"):
                 continue
             take = min(left, o_due)
+            o_number = o.order_number
             # purane bill par alag-alag message nahi — ek hi paisa hai, ek hi raseed
             # (neeche is order par, ya aakhri purane bill par)
             left -= take
             await record_payment(
-                db, o, amount=take, method=method, recorded_by=p.staff.name,
+                db, o, amount=take, method=method, recorded_by=who,
                 notify_customer=left <= 0,
             )
-            settled.append({"order": o.order_number, "amount": float(take)})
+            settled.append({"order": o_number, "amount": float(take)})
 
     if left > 0:
-        await record_payment(db, order, amount=left, method=method, recorded_by=p.staff.name)
+        await record_payment(db, order, amount=left, method=method, recorded_by=who)
 
     await audit.record(
-        actor_role="staff", actor=p.staff.name, action="cod_collected",
+        actor_role="staff", actor=who, action="cod_collected",
         args={
-            "order": order.order_number, "amount": body.amount, "method": body.method,
+            "order": number, "amount": body.amount, "method": body.method,
             "settled_older": settled,
         },
-        result="ok", tenant_id=p.staff.tenant_id,
+        result="ok", tenant_id=tenant_id,
     )
     log.info(
-        "cod_collected", staff=p.staff.name, order=order.order_number,
+        "cod_collected", staff=who, order=number,
         amount=body.amount, older=len(settled),
     )
     await db.refresh(order)
