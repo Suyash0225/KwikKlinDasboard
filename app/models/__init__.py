@@ -24,6 +24,7 @@ from app.models.enums import (
     PaymentStatus,
     StaffRole,
 )
+from app.models.cash_handover import HANDOVER_CONFIRMED, HANDOVER_PENDING, CashHandover
 from app.models.escalation import Escalation
 from app.models.event import OutboundMessage, OutboundThrottle, WebhookEvent
 from app.models.expense import Expense
@@ -74,6 +75,9 @@ __all__ = [
     "CouponRedemption",
     "RewardRule",
     "CustomerReward",
+    "CashHandover",
+    "HANDOVER_CONFIRMED",
+    "HANDOVER_PENDING",
     "Customer",
     "Direction",
     "DocChunk",

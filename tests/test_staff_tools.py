@@ -110,3 +110,59 @@ async def test_damage_and_delivery_photos_are_labelled(client, two_shops, sent) 
         data={"kind": "selfie"},
     )
     assert bad.status_code == 422
+
+
+async def test_cash_handover_from_collection_to_manager_count(client, two_shops, sent) -> None:
+    """Grahak se paisa -> delivery wale ka hisaab -> manager ki ginti."""
+    n1 = await _order_for(two_shops["a"], two_shops["a_del"], CUST_A, delivery=True, total=300)
+    n2 = await _order_for(two_shops["a"], two_shops["a_del"], CUST_A, delivery=True, total=200)
+    await _login(client, A_DEL_PHONE)
+    assert (await client.post(f"/staff/api/orders/{n1}/collect", json={"amount": 300, "method": "cash"})).status_code == 200
+    assert (await client.post(f"/staff/api/orders/{n2}/collect", json={"amount": 200, "method": "upi"})).status_code == 200
+
+    c = (await client.get("/staff/api/cash")).json()
+    assert c["cash"] == 300 and c["upi"] == 200 and c["count"] == 2
+    assert {p["order"] for p in c["payments"]} == {n1, n2}
+
+    # jitna liya usse zyada nahi de sakta; kam de to wajah likhni padti hai
+    assert (await client.post("/staff/api/cash/handover", json={"handed_cash": 400})).status_code == 400
+    assert (await client.post("/staff/api/cash/handover", json={"handed_cash": 250})).status_code == 400
+    sent.clear()
+    r = await client.post("/staff/api/cash/handover", json={"handed_cash": 250, "note": "petrol 50"})
+    assert r.status_code == 201, r.text
+    hid = r.json()["id"]
+    assert r.json()["status"] == "PENDING" and r.json()["cash_collected"] == 300
+
+    from app.services import background
+
+    await background.drain()
+    assert any("handing over ₹250" in (m.get("text") or "") for m in sent)
+
+    # hisaab de diya — ab haath khaali, dobara wahi paisa nahi ginta
+    c2 = (await client.get("/staff/api/cash")).json()
+    assert c2["count"] == 0 and c2["cash"] == 0
+    assert c2["recent"][0]["id"] == hid
+    assert (await client.post("/staff/api/cash/handover", json={"handed_cash": 0})).status_code == 400
+
+    # delivery wala khud pakka nahi kar sakta
+    assert (await client.get("/staff/api/cash/handovers")).status_code == 403
+
+    await _login(client, A_MGR_PHONE)
+    assert (await client.get("/staff/api/today")).json()["cash_to_confirm"] == 1
+    lst = (await client.get("/staff/api/cash/handovers")).json()
+    assert [h["id"] for h in lst["pending"]] == [hid]
+    sent.clear()
+    ok = await client.post(f"/staff/api/cash/handovers/{hid}/confirm", json={"received_cash": 240})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["status"] == "CONFIRMED" and ok.json()["short"] == 10
+    await background.drain()
+    assert any("Cash mismatch" in (m.get("text") or "") for m in sent)
+    again = await client.post(f"/staff/api/cash/handovers/{hid}/confirm", json={"received_cash": 250})
+    assert again.status_code == 409
+    assert (await client.get("/staff/api/today")).json()["cash_to_confirm"] == 0
+
+
+async def test_washerman_has_no_cash_screen(client, two_shops) -> None:
+    await _login(client, A_PHONE)
+    assert (await client.get("/staff/api/cash")).status_code == 403
+    assert (await client.post("/staff/api/cash/handover", json={"handed_cash": 1})).status_code == 403

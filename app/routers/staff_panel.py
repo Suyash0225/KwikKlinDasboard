@@ -13,6 +13,7 @@ import asyncio
 import re
 import uuid as uuid_module
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 import structlog
 from fastapi import (
@@ -2202,11 +2203,252 @@ async def today_summary(
         )
     ).scalar_one()
     if p.is_manager:
+        from app.models import CashHandover, HANDOVER_PENDING
+
+        out["cash_to_confirm"] = (
+            await db.execute(
+                select(func.count()).select_from(CashHandover)
+                .where(CashHandover.status == HANDOVER_PENDING)
+            )
+        ).scalar_one()
         out["shop_pending"] = await _count(Task.status == TASK_OPEN)
         out["shop_done_today"] = await _count(
             Task.status == TASK_DONE, Task.completed_at >= start
         )
     return out
+
+
+# ------------------------------------------------- shaam ka cash hisaab ----
+
+# Pehli baar hisaab de raha ho to kitna peeche tak dekhein. Iske pehle ka
+# paisa purane tareeke se (bina is screen ke) dukaan tak pahunch chuka hai.
+CASH_FIRST_LOOKBACK = timedelta(days=30)
+
+
+async def _cash_since(db: AsyncSession, staff: Staff) -> datetime:
+    """Is aadmi ka pichhla hisaab jahan khatam hua — agla wahin se."""
+    from app.models import CashHandover
+
+    last = (
+        await db.execute(
+            select(func.max(CashHandover.period_end)).where(CashHandover.staff_id == staff.id)
+        )
+    ).scalar_one_or_none()
+    return last or (datetime.now(timezone.utc) - CASH_FIRST_LOOKBACK)
+
+
+async def _cash_in_hand(db: AsyncSession, staff: Staff, since: datetime, until: datetime) -> dict:
+    """`since` ke baad aur `until` tak is aadmi ke naam par jo paisa aaya."""
+    from app.models import Payment, PaymentMethod
+
+    rows = (
+        await db.execute(
+            select(Payment, Order.order_number)
+            .join(Order, Order.id == Payment.order_id)
+            .where(
+                Payment.recorded_by == staff.name,
+                Payment.received_at > since,
+                Payment.received_at <= until,
+            )
+            .order_by(Payment.received_at)
+        )
+    ).all()
+    cash = sum((pay.amount for pay, _ in rows if pay.method is PaymentMethod.CASH), Decimal("0"))
+    upi = sum((pay.amount for pay, _ in rows if pay.method is not PaymentMethod.CASH), Decimal("0"))
+    return {
+        "cash": cash, "upi": upi, "count": len(rows),
+        "payments": [
+            {
+                "order": number, "amount": float(pay.amount),
+                "method": pay.method.name.lower(),
+                "at": pay.received_at.astimezone(IST).strftime("%d %b, %I:%M %p"),
+            }
+            for pay, number in rows
+        ],
+    }
+
+
+def _handover_out(h) -> dict:
+    received = float(h.received_cash) if h.received_cash is not None else None
+    return {
+        "id": str(h.id),
+        "staff": h.staff_name,
+        "status": h.status,
+        "cash_collected": float(h.cash_collected),
+        "upi_collected": float(h.upi_collected),
+        "payments": h.payments_count,
+        "handed_cash": float(h.handed_cash),
+        "received_cash": received,
+        "short": round(float(h.handed_cash) - received, 2) if received is not None else None,
+        "note": h.note or "",
+        "from": h.period_start.astimezone(IST).strftime("%d %b, %I:%M %p"),
+        "to": h.period_end.astimezone(IST).strftime("%d %b, %I:%M %p"),
+        "confirmed_by": h.confirmed_by,
+    }
+
+
+@router.get("/cash")
+async def my_cash(
+    p: StaffPrincipal = Depends(require_biller("cod_collection")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Mere haath mein abhi kitna paisa hai — pichhle hisaab ke baad se."""
+    from app.models import CashHandover
+
+    since = await _cash_since(db, p.staff)
+    # database ki ghadi — payments.received_at bhi wahi likhti hai
+    now = (await db.execute(select(func.now()))).scalar_one()
+    hand = await _cash_in_hand(db, p.staff, since, now)
+    recent = (
+        await db.execute(
+            select(CashHandover).where(CashHandover.staff_id == p.staff.id)
+            .order_by(CashHandover.period_end.desc()).limit(5)
+        )
+    ).scalars().all()
+    return {
+        "since": since.astimezone(IST).strftime("%d %b, %I:%M %p"),
+        "cash": float(hand["cash"]), "upi": float(hand["upi"]), "count": hand["count"],
+        "payments": hand["payments"],
+        "recent": [_handover_out(h) for h in recent],
+    }
+
+
+class HandoverIn(BaseModel):
+    handed_cash: float = Field(ge=0)
+    note: str = Field(default="", max_length=200)
+
+
+@router.post("/cash/handover", status_code=201)
+async def hand_over_cash(
+    body: HandoverIn,
+    p: StaffPrincipal = Depends(require_biller("cod_collection")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """"Itna cash de raha hoon" — manager ke gin-ne tak PENDING.
+
+    Rakam ledger se nikalti hai, staff ke bolne se nahi. Staff sirf ye
+    likhta hai ki haath mein kitna de raha hai; kam ho to note mein wajah
+    (jaise petrol ka kharcha).
+    """
+    from app.models import CashHandover, HANDOVER_PENDING
+
+    since = await _cash_since(db, p.staff)
+    # database ki ghadi — payments.received_at bhi wahi likhti hai
+    now = (await db.execute(select(func.now()))).scalar_one()
+    hand = await _cash_in_hand(db, p.staff, since, now)
+    if hand["count"] == 0:
+        raise HTTPException(status_code=400, detail="Nothing collected since your last handover")
+    handed = Decimal(str(body.handed_cash)).quantize(Decimal("0.01"))
+    if handed > hand["cash"] + Decimal("0.01"):
+        raise HTTPException(status_code=400, detail=f"You collected only ₹{hand['cash']:.0f} in cash")
+    note = body.note.strip()
+    if handed < hand["cash"] - Decimal("0.01") and len(note) < 3:
+        raise HTTPException(status_code=400, detail="Handing over less cash — write the reason in the note")
+    h = CashHandover(
+        staff_id=p.staff.id, staff_name=p.staff.name,
+        period_start=since, period_end=now,
+        cash_collected=hand["cash"], upi_collected=hand["upi"], payments_count=hand["count"],
+        handed_cash=handed, note=note or None, status=HANDOVER_PENDING,
+    )
+    db.add(h)
+    await db.commit()
+    await db.refresh(h)
+
+    from app.services import background, team
+
+    msg = (
+        f"💵 {p.staff.name} is handing over ₹{handed:.0f} cash"
+        f" (collected ₹{hand['cash']:.0f} cash + ₹{hand['upi']:.0f} UPI, {hand['count']} payments)"
+        + (f" — {note}" if note else "")
+        + "\nCount it and confirm in the staff app."
+    )
+    _from = p.staff.phone
+    background.run_after(
+        lambda bg: team.notify_admins(bg, msg, skip_phone=_from),
+        tenant_id=p.staff.tenant_id, label="cash_handover_notify",
+    )
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="cash_handover",
+        args={"handed": float(handed), "cash": float(hand["cash"]), "upi": float(hand["upi"])},
+        result="pending", tenant_id=p.staff.tenant_id,
+    )
+    return _handover_out(h)
+
+
+@router.get("/cash/handovers")
+async def cash_handovers(
+    p: StaffPrincipal = Depends(require_manager),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Manager: kiska paisa ginna baaki hai, aur haal ke pakke hisaab."""
+    from app.models import CashHandover, HANDOVER_PENDING
+
+    pending = (
+        await db.execute(
+            select(CashHandover).where(CashHandover.status == HANDOVER_PENDING)
+            .order_by(CashHandover.created_at)
+        )
+    ).scalars().all()
+    done = (
+        await db.execute(
+            select(CashHandover).where(CashHandover.status != HANDOVER_PENDING)
+            .order_by(CashHandover.confirmed_at.desc()).limit(20)
+        )
+    ).scalars().all()
+    return {"pending": [_handover_out(h) for h in pending], "recent": [_handover_out(h) for h in done]}
+
+
+class ConfirmHandoverIn(BaseModel):
+    received_cash: float = Field(ge=0)
+
+
+@router.post("/cash/handovers/{handover_id}/confirm")
+async def confirm_handover(
+    handover_id: uuid_module.UUID,
+    body: ConfirmHandoverIn,
+    p: StaffPrincipal = Depends(require_manager),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Manager ne gin liya. Jo mila wahi likhte hain — farak ho to dono
+    rakam rehti hain aur owner ko khabar jaati hai."""
+    from app.models import CashHandover, HANDOVER_CONFIRMED, HANDOVER_PENDING
+
+    h = await db.get(CashHandover, handover_id)
+    if h is None:
+        raise HTTPException(status_code=404, detail="Handover not found")
+    if h.status != HANDOVER_PENDING:
+        raise HTTPException(status_code=409, detail="This handover is already confirmed")
+    # apna hi paisa khud pakka nahi — owner (ADMIN) ka apwaad, wahi aakhri haath hai
+    if h.staff_id == p.staff.id and p.staff.role is not StaffRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Someone else has to count your cash")
+    received = Decimal(str(body.received_cash)).quantize(Decimal("0.01"))
+    h.received_cash = received
+    h.status = HANDOVER_CONFIRMED
+    h.confirmed_by = p.staff.name
+    h.confirmed_at = datetime.now(timezone.utc)
+    db.add(h)
+    await db.commit()
+
+    gap = h.handed_cash - received
+    if abs(gap) > Decimal("0.009"):
+        from app.services import background, team
+
+        msg = (
+            f"⚠️ Cash mismatch: {h.staff_name} said ₹{h.handed_cash:.0f},"
+            f" {p.staff.name} counted ₹{received:.0f} ({'short' if gap > 0 else 'extra'} ₹{abs(gap):.0f})."
+        )
+        _from = p.staff.phone
+        background.run_after(
+            lambda bg: team.notify_admins(bg, msg, skip_phone=_from),
+            tenant_id=p.staff.tenant_id, label="cash_mismatch_notify",
+        )
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="cash_handover_confirmed",
+        args={"handover": str(h.id), "staff": h.staff_name, "handed": float(h.handed_cash),
+              "received": float(received)},
+        result="mismatch" if abs(gap) > Decimal("0.009") else "ok", tenant_id=p.staff.tenant_id,
+    )
+    return _handover_out(h)
 
 
 async def _route_query(db: AsyncSession, p: StaffPrincipal, tab: str = "todo"):

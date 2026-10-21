@@ -301,11 +301,14 @@ async function loadToday() {
   try {
     const t = (BOOT && BOOT.today) || await api("/today");
     if (BOOT) BOOT.today = null;
-    const cell = (label, value, cls = "") => `<div class="${cls}"><b>${value}</b>${label}</div>`;
+    const cell = (label, value, cls = "", tap = "") => tap
+      ? `<button type="button" class="${cls} tap" data-today="${tap}"><b>${value}</b>${label}</button>`
+      : `<div class="${cls}"><b>${value}</b>${label}</div>`;
     $("today").innerHTML =
       cell("to do", t.pending, "left") +
       cell("done today", t.done_today) +
-      (t.can_collect ? cell("collected", money(t.collected_today), "cash") : "") +
+      (t.can_collect ? cell("collected ›", money(t.collected_today), "cash", "cash") : "") +
+      (t.cash_to_confirm ? cell("to count ›", `💵 ${t.cash_to_confirm}`, "cash alert", "count") : "") +
       (t.shop_pending !== undefined ? cell("shop total", t.shop_pending) : "");
     $("today").hidden = !(NAV === "work" || NAV === "bills");
     LATE_N = t.late || 0;
@@ -314,6 +317,96 @@ async function loadToday() {
     $("today").hidden = true;   // hisaab na mile to chup — kaam chalta rahe
     $("latebar").hidden = true;
   }
+}
+
+$("today").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-today]");
+  if (!b) return;
+  if (b.dataset.today === "cash") cashSheet();
+  else if (b.dataset.today === "count") countCash();
+});
+
+/* ─── shaam ka cash hisaab ──────────────────────────────────────────── */
+/* Delivery wala din bhar paisa leta hai; shaam ko "itna cash de raha
+   hoon". Rakam server ledger se ginta hai — aadmi sirf ye likhta hai ki
+   haath mein kitna de raha hai (kam ho to wajah). Manager gin kar pakka
+   karta hai; farak ho to dono rakam rehti hain aur owner ko khabar. */
+const HO_STATUS = (h) => h.status === "PENDING" ? `<span class="tag late">waiting for count</span>`
+  : h.short ? `<span class="tag late">${h.short > 0 ? "short" : "extra"} ${money(Math.abs(h.short))}</span>`
+  : `<span class="tag ready">✓ counted</span>`;
+async function cashSheet() {
+  let c;
+  try { c = await api("/cash"); } catch (e) { toast(e.message, true); return; }
+  const list = c.payments.map((p) => `<div class="od-sub"><span>${esc(p.order)} · ${esc(p.at)}</span>
+    <span>${p.method === "cash" ? "💵" : "📱"} ${money(p.amount)}</span></div>`).join("");
+  const recent = c.recent.map((h) => `<div class="od-sub"><span>${esc(h.to)} · ${money(h.handed_cash)}</span>${HO_STATUS(h)}</div>`).join("");
+  openModal(`<h3>💵 My cash</h3>
+    <p class="said">Since ${esc(c.since)} · ${c.count} payment${c.count === 1 ? "" : "s"}</p>
+    <div class="od-block">
+      <div class="kv"><span>Cash in hand</span><b>${money(c.cash)}</b></div>
+      <div class="kv"><span>UPI (already with the shop)</span><b>${money(c.upi)}</b></div>
+    </div>
+    ${list ? `<details class="od-block"><summary><b>Payments</b></summary>${list}</details>` : ""}
+    ${c.count ? `<label for="ho-amt">Cash you are handing over</label>
+    <input id="ho-amt" type="number" inputmode="decimal" min="0" step="1" value="${c.cash}">
+    <label for="ho-note">Note — needed if you give less</label>
+    <input id="ho-note" type="text" maxlength="150" placeholder="e.g. ₹50 petrol">
+    <div class="err" id="ho-err"></div>` : `<p class="said">Nothing collected since your last handover.</p>`}
+    ${recent ? `<div class="od-block"><div class="od-head"><b>Recent handovers</b></div>${recent}</div>` : ""}
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Close</button>
+      ${c.count ? `<button class="btn go" id="ho-go">Hand over</button>` : ""}
+    </div>`);
+  if (!c.count) return;
+  const paint = () => {
+    const v = parseFloat($("ho-amt").value);
+    $("ho-go").textContent = v >= 0 ? `Hand over ${money(v)}` : "Hand over";
+  };
+  $("ho-amt").oninput = paint; paint();
+  $("ho-go").onclick = (e) => {
+    const handed = parseFloat($("ho-amt").value);
+    const note = $("ho-note").value.trim();
+    if (!(handed >= 0)) { $("ho-err").textContent = "Enter the cash amount."; return; }
+    if (handed > c.cash + 0.01) { $("ho-err").textContent = `You collected only ${money(c.cash)} in cash.`; return; }
+    if (handed < c.cash - 0.01 && note.length < 3) { $("ho-err").textContent = "Giving less — write the reason in the note."; return; }
+    return busy(e.currentTarget, async () => {
+      await api("/cash/handover", { method: "POST", body: { handed_cash: handed, note } });
+      closeModal();
+      toast("Handed over — your manager will count it");
+      loadToday();
+    });
+  };
+}
+
+/* Manager: kiska paisa ginna baaki hai. Jo gina wahi likho. */
+async function countCash() {
+  let d;
+  try { d = await api("/cash/handovers"); } catch (e) { toast(e.message, true); return; }
+  const rows = d.pending.map((h) => `<div class="od-block" data-ho="${esc(h.id)}">
+      <div class="od-head"><b>${esc(h.staff)}</b><span>${esc(h.to)}</span></div>
+      <div class="kv"><span>Says cash</span><b>${money(h.handed_cash)}</b></div>
+      <div class="kv"><span>Collected (ledger)</span><b>${money(h.cash_collected)} cash · ${money(h.upi_collected)} UPI</b></div>
+      ${h.note ? `<p class="note">${esc(h.note)}</p>` : ""}
+      <label for="cc-${esc(h.id)}">You counted</label>
+      <input id="cc-${esc(h.id)}" type="number" inputmode="decimal" min="0" step="1" value="${h.handed_cash}">
+      <button class="btn go wide" data-confirm="${esc(h.id)}">Confirm count</button>
+    </div>`).join("");
+  openModal(`<h3>💵 Cash to count</h3>
+    ${rows || `<p class="said">Nothing waiting — all handovers are counted.</p>`}
+    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
+  $("modal-body").querySelectorAll("[data-confirm]").forEach((b) => {
+    b.onclick = () => {
+      const id = b.dataset.confirm;
+      const v = parseFloat($(`cc-${id}`).value);
+      if (!(v >= 0)) { toast("Enter what you counted", true); return; }
+      return busy(b, async () => {
+        const r = await api(`/cash/handovers/${encodeURIComponent(id)}/confirm`, { method: "POST", body: { received_cash: v } });
+        toast(r.short ? `Counted — ${r.short > 0 ? "short" : "extra"} ${money(Math.abs(r.short))}, owner told` : "Counted ✅");
+        closeModal(); loadToday();
+        if (NAV === "team") showTeam({ quiet: true });
+      });
+    };
+  });
 }
 
 /* Beeta hua kaam khud bolna chahiye.

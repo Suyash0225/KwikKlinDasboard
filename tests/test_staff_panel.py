@@ -174,6 +174,10 @@ async def two_shops():
         ).scalars().all()
     await purge_phones(CUST_A, CUST_B, *tenant_customer_phones)
     async with async_session_factory() as db:
+        await db.execute(sqltext(
+            "DELETE FROM cash_handovers WHERE tenant_id IN"
+            " (SELECT id FROM tenants WHERE slug IN ('panel-a','panel-b'))"
+        ))
         await db.execute(sqltext("DELETE FROM tenants WHERE slug IN ('panel-a','panel-b')"))
         await db.commit()
 
