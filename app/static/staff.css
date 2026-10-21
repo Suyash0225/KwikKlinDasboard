@@ -699,3 +699,18 @@ h3.mt-lg { margin-top: 20px; }
 /* Team tab ke hisse: atke order, team */
 .sechead { margin: 14px 2px 8px; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); }
 .sechead:first-child { margin-top: 0; }
+
+/* Bag sheet: likho -> chhota dropdown, neeche sirf bore ke kapde */
+.bag-search { position: relative; }
+.bag-sug {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5;
+  background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px;
+  box-shadow: 0 12px 28px -10px rgba(19,24,32,.35); overflow: hidden auto; max-height: 260px;
+}
+.bag-sug .item-row { min-height: 46px; }
+.bag-sug .ir-price { font-size: 12px; }
+.bag-in-head { display: flex; justify-content: space-between; align-items: baseline; margin: 12px 2px 0; font-size: 13px; color: var(--ink-3); }
+.bag-in-head b { color: var(--ink-2); text-transform: uppercase; letter-spacing: .05em; font-size: 12px; }
+.bag-list .ir-plus { cursor: pointer; }
+.item-row.flash { animation: bagflash 1s ease-out; }
+@keyframes bagflash { from { background: #fde7c8; } }

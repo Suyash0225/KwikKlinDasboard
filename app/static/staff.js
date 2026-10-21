@@ -1988,12 +1988,24 @@ function bagSheet(svc) {
       </div>
       <span class="bag-unit">kg</span>
     </div>
-    <input id="bg-q" type="search" placeholder="Search cloth — e.g. shirt" autocomplete="off" enterkeyhint="done" aria-label="Search cloth">
+    <div class="bag-search">
+      <input id="bg-q" type="search" placeholder="Type a cloth — e.g. shirt" autocomplete="off" enterkeyhint="done"
+        aria-label="Add a cloth" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="bg-sug">
+      <div class="bag-sug" id="bg-sug" role="listbox" hidden></div>
+    </div>
+    <div class="bag-in-head"><b>In the bag</b><span id="bg-count"></span></div>
     <div class="item-list bag-list" id="bg-list" aria-live="polite"></div>`, "bag");
 
-  const kgIn = $("bg-kg"), qIn = $("bg-q"), list = $("bg-list");
+  /* Kapda likho -> neeche chhota dropdown (5 tak). Mila to tap, na mila to
+     "＋ Add 'naam'". Pehle poori 40 kapdon ki list hamesha khuli rehti thi —
+     chhote phone par keyboard ke saath bore ki ginti hi chhup jaati thi.
+     Ab neeche sirf wahi jo bore mein hai, − ginti +. */
+  const kgIn = $("bg-kg"), qIn = $("bg-q"), list = $("bg-list"), sug = $("bg-sug");
+  const SUG_MAX = 5;
   const paintSum = () => {
-    $("bg-sum").textContent = `${money(line.rate)}/kg · ${money(line.qty * line.rate)} · ${piecesCount(line.pieces)} clothes`;
+    const n = piecesCount(line.pieces);
+    $("bg-sum").textContent = `${money(line.rate)}/kg · ${money(line.qty * line.rate)} · ${n} clothes`;
+    $("bg-count").textContent = n ? `${n} pcs` : "";
   };
   const bump = (type, by) => {
     const p = line.pieces.find((x) => x.type.toLowerCase() === type.toLowerCase());
@@ -2003,54 +2015,84 @@ function bagSheet(svc) {
     touched = true;
     if (navigator.vibrate) navigator.vibrate(by > 0 ? 12 : 8);
   };
-  let shown = [];
-  const paintList = () => {
-    const raw = qIn.value.trim().replace(/\s+/g, " ");
-    const q = raw.toLowerCase();
-    shown = names.filter((n) => !q || n.toLowerCase().includes(q));
-    const inBag = new Map(line.pieces.map((p) => [p.type.toLowerCase(), p.qty]));
-    let html = shown.map((n, i) => {
-      const c = inBag.get(n.toLowerCase());
-      return `<button type="button" class="item-row${c ? " in" : ""}" data-pc="${i}">
-        <span class="ir-name">${esc(n)}</span>
-        ${c ? `<span class="ir-step"><span class="ir-minus" data-minus="1" role="button" aria-label="One less">−</span><b>${c}</b><span class="ir-plus" aria-hidden="true">＋</span></span>`
-            : `<span class="ir-add">＋</span>`}
-      </button>`;
-    }).join("");
-    // milte-julte naam mil gaye to "Add shi" sirf bheed — tabhi jab kuch na mile
-    if (q && !shown.length) {
-      html += `<button type="button" class="item-row create" data-addpc="1">＋ Add “${esc(raw)}” to the bag</button>`;
-    }
-    list.innerHTML = html;
+  const clean = (v) => String(v || "").trim().replace(/\s+/g, " ").slice(0, 60);
+  let shown = [], lastAdded = "";
+  const paintBag = () => {
+    list.innerHTML = line.pieces.length
+      ? line.pieces.map((p, i) => `<div class="item-row in${p.type === lastAdded ? " flash" : ""}">
+          <span class="ir-name">${esc(p.type)}</span>
+          <span class="ir-step"><span class="ir-minus" data-bm="${i}" role="button" aria-label="One less ${esc(p.type)}">−</span><b>${p.qty}</b><span class="ir-plus" data-bp="${i}" role="button" aria-label="One more ${esc(p.type)}">＋</span></span>
+        </div>`).join("")
+      : `<p class="ir-none">Nothing yet — type a cloth above, e.g. shirt, pant, saree.</p>`;
     paintSum();
   };
+  const hideSug = () => { sug.hidden = true; qIn.setAttribute("aria-expanded", "false"); };
+  const paintSug = () => {
+    const raw = clean(qIn.value), q = raw.toLowerCase();
+    if (!q) { shown = []; hideSug(); return; }
+    // shuru se milne wale pehle ("sh" -> Shirt, Shorts), phir beech se (T-shirt)
+    const starts = names.filter((n) => n.toLowerCase().startsWith(q));
+    const inside = names.filter((n) => !n.toLowerCase().startsWith(q) && n.toLowerCase().includes(q));
+    shown = starts.concat(inside).slice(0, SUG_MAX);
+    const inBag = new Map(line.pieces.map((p) => [p.type.toLowerCase(), p.qty]));
+    // milte-julte naam mil gaye to "Add sh" sirf bheed — Add tabhi jab kuch na mile
+    const addRow = shown.length ? "" : `<button type="button" class="item-row create" role="option" data-addpc="1">＋ Add “${esc(raw)}” to the bag</button>`;
+    sug.innerHTML = addRow + shown.map((n, i) => {
+      const c = inBag.get(n.toLowerCase());
+      return `<button type="button" class="item-row" role="option" data-pc="${i}">
+        <span class="ir-name">${esc(n)}</span>${c ? `<small class="ir-price">× ${c} in bag</small>` : ""}<span class="ir-add">＋</span>
+      </button>`;
+    }).join("");
+    sug.hidden = false;
+    // keyboard khula ho to sheet chhoti — dropdown utna hi jitni jagah bachi
+    const room = qIn.closest(".modal").getBoundingClientRect().bottom - qIn.getBoundingClientRect().bottom - 12;
+    sug.style.maxHeight = `${Math.max(96, Math.min(260, room))}px`;
+    qIn.setAttribute("aria-expanded", "true");
+  };
   const add = (name) => {
-    let type = String(name || "").trim().replace(/\s+/g, " ").slice(0, 60);
+    let type = clean(name);
     if (!type) return;
     type = type[0].toUpperCase() + type.slice(1);   // "pillow cover" -> "Pillow cover"
-    if (!names.some((n) => n.toLowerCase() === type.toLowerCase())) names.unshift(type);
+    const known = names.find((n) => n.toLowerCase() === type.toLowerCase());
+    if (known) type = known; else names.unshift(type);
     bump(type, 1);
-    // search se joda: khaana saaf, keyboard khula rahe — agla kapda likho
-    if (qIn.value) { qIn.value = ""; qIn.focus(); }
-    paintList();
+    lastAdded = (line.pieces.find((x) => x.type.toLowerCase() === type.toLowerCase()) || {}).type || type;
+    // khaana saaf, keyboard khula — agla kapda seedha likho
+    qIn.value = "";
+    qIn.focus();
+    hideSug();
+    paintBag();
   };
-  // Search khula ho aur row dabayi to input ka focus na chhoote — warna
+  // Dropdown ya bore ki row dabane par input ka focus na chhoote — warna
   // keyboard band hokar dobara khulta aur poori sheet uchhalti.
-  list.onmousedown = (ev) => { if (document.activeElement === qIn) ev.preventDefault(); };
-  list.onclick = (ev) => {
+  const keepFocus = (ev) => { if (document.activeElement === qIn) ev.preventDefault(); };
+  sug.onmousedown = keepFocus;
+  list.onmousedown = keepFocus;
+  sug.onclick = (ev) => {
     const row = ev.target.closest("[data-pc], [data-addpc]");
     if (!row) return;
-    if (row.dataset.addpc) return add(qIn.value);
-    const name = shown[parseInt(row.dataset.pc, 10)];
-    if (ev.target.closest("[data-minus]")) { bump(name, -1); paintList(); return; }
-    add(name);
+    add(row.dataset.addpc ? qIn.value : shown[parseInt(row.dataset.pc, 10)]);
   };
-  qIn.oninput = paintList;
+  list.onclick = (ev) => {
+    const btn = ev.target.closest("[data-bm], [data-bp]");
+    if (!btn) return;
+    const minus = btn.dataset.bm !== undefined;
+    const p = line.pieces[parseInt(minus ? btn.dataset.bm : btn.dataset.bp, 10)];
+    if (!p) return;
+    lastAdded = "";
+    bump(p.type, minus ? -1 : 1);
+    paintBag();
+  };
+  qIn.oninput = paintSug;
+  qIn.onfocus = paintSug;
+  qIn.onblur = () => setTimeout(hideSug, 150);
   qIn.onkeydown = (ev) => {
+    if (ev.key === "Escape") { ev.stopPropagation(); qIn.value = ""; hideSug(); return; }
     if (ev.key !== "Enter") return;
     ev.preventDefault();
-    if (!qIn.value.trim()) { qIn.blur(); return; }
-    const first = list.querySelector("[data-pc], [data-addpc]");
+    if (!clean(qIn.value)) { qIn.blur(); return; }
+    // Enter = pehla sujhaav (ya "Add", agar kuch na mila)
+    const first = sug.querySelector("[data-pc], [data-addpc]");
     if (first) first.click();
   };
   kgIn.onfocus = () => kgIn.select();
@@ -2084,7 +2126,7 @@ function bagSheet(svc) {
     }
     renderCart();
   };
-  paintList();
+  paintBag();
   // nayi line: pehle wazan (number keyboard), phir kapde
   if (fresh) kgIn.focus();
 }
