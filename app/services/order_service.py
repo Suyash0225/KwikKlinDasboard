@@ -942,6 +942,10 @@ async def _notify_customer(
     # 500 deta, jabki paisa commit ho chuka hota (staff dobara dabata).
     number = order.order_number
     try:
+        # {shop} mein is dukaan ka naam aaye (shop_identity cache garam karo)
+        from app.services import shop_identity
+
+        await shop_identity.current(db, getattr(order, "tenant_id", None))
         customer = await db.get(Customer, order.customer_id)
         if customer is None or customer.opted_out or not customer.is_active:
             log.info(

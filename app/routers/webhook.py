@@ -133,6 +133,10 @@ def _match_payment_action(text: str) -> tuple[str, str] | None:
     return m.group(1), m.group(2)
 
 
+# Webhook ke saare jawab (Pay button, rating ka shukriya, START, media) grahak
+# ke APNE message ka turant jawab hain — quiet hours (21-09) mein bhi jaate
+# hain (urgent=True). Pehle raat 10 baje "Pay" dabane par SendError aata,
+# inbound pehle hi save ho chuka hota, aur retry bhi kuch nahi karta tha.
 async def _handle_payment_action(
     db: AsyncSession, customer: Customer, phone: str, order_number: str, action: str
 ) -> None:
@@ -158,7 +162,7 @@ async def _handle_payment_action(
                 db,
                 to_phone=phone,
                 text="✅ Aapka koi outstanding bill nahi mila. Dhanyawad!",
-                intent="transactional", outbound_kind="bill",
+                intent="transactional", outbound_kind="bill", urgent=True,
             )
             return
 
@@ -172,14 +176,14 @@ async def _handle_payment_action(
                     db,
                     to_phone=phone,
                     text="⚠️ Payment link abhi available nahi hai. Kripya thodi der baad try karein.",
-                    intent="transactional", outbound_kind="bill",
+                    intent="transactional", outbound_kind="bill", urgent=True,
                 )
                 return
             await send_message(
                 db,
                 to_phone=phone,
                 text=f"💰 Apne outstanding bills dekhkar payment karne ke liye yahan tap karein:\n{link}",
-                intent="transactional", outbound_kind="bill",
+                intent="transactional", outbound_kind="bill", urgent=True,
             )
             return
 
@@ -188,7 +192,7 @@ async def _handle_payment_action(
                 db,
                 to_phone=phone,
                 text="👍 Theek hai, aapne payment kar diya hai. Hum outstanding payment verify karke update kar denge. Dhanyawad! 🙏",
-                intent="transactional", outbound_kind="bill",
+                intent="transactional", outbound_kind="bill", urgent=True,
             )
             try:
                 await send_message(
@@ -212,7 +216,7 @@ async def _handle_payment_action(
         await send_message(
             db, to_phone=phone,
             text="⚠️ Ye bill ab available nahi hai. Kripya message karke batayein.",
-            intent="transactional", outbound_kind="bill",
+            intent="transactional", outbound_kind="bill", urgent=True,
         )
         return
 
@@ -223,14 +227,14 @@ async def _handle_payment_action(
             db,
             to_phone=phone,
             text=f"💰 Payment ke liye yahan tap karein:\n{link}",
-            intent="transactional", outbound_kind="bill",
+            intent="transactional", outbound_kind="bill", urgent=True,
         )
         return
 
     if order.payment_status is PaymentStatus.PAID:
         await send_message(
             db, to_phone=phone, text="✅ Haan, payment already receive ho chuka hai. Dhanyawad! 🙏",
-            intent="transactional", outbound_kind="bill",
+            intent="transactional", outbound_kind="bill", urgent=True,
         )
         return
 
@@ -238,7 +242,7 @@ async def _handle_payment_action(
         db,
         to_phone=phone,
         text="👍 Theek hai, aapne payment kar diya hai. Hum payment verify karke update kar denge. Dhanyawad! 🙏",
-        intent="transactional", outbound_kind="bill",
+        intent="transactional", outbound_kind="bill", urgent=True,
     )
     try:
         await send_message(
@@ -284,7 +288,7 @@ async def _handle_rating(db: AsyncSession, customer: Customer, phone: str, kind:
     try:
         await send_message(
             db, to_phone=phone, text=reply_text,
-            intent="transactional", outbound_kind="review_request",
+            intent="transactional", outbound_kind="review_request", urgent=True,
         )
     except SendError:
         log.exception("rating_reply_failed", phone=phone)
@@ -1335,7 +1339,7 @@ async def _handle_inbound_message(
             await send_message(
                 db, to_phone=phone,
                 text="Media receive hui, lekin download nahi ho paya. Please dobara bhejein ya caption/text mein bata dein.",
-                intent="transactional", outbound_kind="service_reply",
+                intent="transactional", outbound_kind="service_reply", urgent=True,
             )
         except SendError:
             log.exception("inbound_media_unavailable_ack_failed", phone=phone)
@@ -1451,7 +1455,7 @@ async def _handle_inbound_message(
             try:
                 await send_message(
                     db, to_phone=phone, text=get_message("start_confirmed"),
-                    intent="transactional", outbound_kind="service_reply",
+                    intent="transactional", outbound_kind="service_reply", urgent=True,
                 )
             except SendError:
                 log.exception("start_confirm_send_failed", phone=phone)
@@ -1466,6 +1470,11 @@ async def _handle_inbound_message(
             looks_like_automated_agent,
         )
 
+        if customer.opted_out:
+            # STOP ke baad koi automated jawab ja hi nahi sakta (outbound policy
+            # rokti hai) — LLM chalana sirf kharcha tha. START upar sambhal liya.
+            log.info("opted_out_inbound_no_reply", phone=phone)
+            return
         if (text or "").lstrip().startswith("[reaction]"):
             # 👍 par jawab nahi — pehle ye status/ack reply le leta tha aur
             # "naya message" ban kar AI ka bana hua asli jawab rok deta tha
@@ -1573,6 +1582,10 @@ async def _handle_inbound_message(
         # subsequent messages stay silent while the human takeover is active.
         was_agent_paused = customer.agent_paused
         reply_intent = "transactional"
+        # {shop} wale fixed jawab (ack, complaint) mein is dukaan ka naam
+        from app.services import shop_identity
+
+        await shop_identity.current(db, getattr(customer, "tenant_id", None))
         status_query = await _is_status_query(db, customer, spoken)
         reply_kind = "order_status" if status_query else "customer_agent_reply"
         reply = None
@@ -1582,7 +1595,9 @@ async def _handle_inbound_message(
             elif batch_followup:
                 log.info("reply_deferred_to_followup", phone=phone)
             else:
-                reply = await build_ai_reply(db, customer, spoken, conversation_id=convo.id)
+                reply = await build_ai_reply(
+                    db, customer, spoken, conversation_id=convo.id, preclassified=True,
+                )
                 # Empty string means the fixed AI-failure acknowledgement was
                 # already sent within the customer's one-hour cooldown. Do not
                 # replace it with another rule-based reply.

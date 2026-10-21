@@ -645,7 +645,13 @@ def get_message(key: str, lang: str | None = None, **fmt: str) -> str:
         raise
     lang = lang or lang_for(key)
     text = _OVERRIDES.get(key) or by_lang.get(lang) or by_lang.get(DEFAULT_LANG) or by_lang["en"]
-    fmt.setdefault("shop", settings.SHOP_NAME)
+    if "shop" not in fmt:
+        # Is request ki dukaan ka naam (shop_identity cache), platform ka nahi
+        from app.services import shop_identity, tenant_context
+
+        fmt["shop"] = (
+            shop_identity.cached_name(tenant_context.effective_tenant_id()) or settings.SHOP_NAME
+        )
     # Bill links are optional; older callers may not provide one.
     fmt.setdefault("bill_line", "")
     fmt.setdefault("staff_line", "")
