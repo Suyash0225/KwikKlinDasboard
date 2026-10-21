@@ -175,6 +175,14 @@ async def two_shops():
     await purge_phones(CUST_A, CUST_B, *tenant_customer_phones)
     async with async_session_factory() as db:
         await db.execute(sqltext(
+            "DELETE FROM push_subscriptions WHERE tenant_id IN"
+            " (SELECT id FROM tenants WHERE slug IN ('panel-a','panel-b'))"
+        ))
+        await db.execute(sqltext(
+            "DELETE FROM settings_kv WHERE key = 'webpush_vapid_private' AND tenant_id IN"
+            " (SELECT id FROM tenants WHERE slug IN ('panel-a','panel-b'))"
+        ))
+        await db.execute(sqltext(
             "DELETE FROM cash_handovers WHERE tenant_id IN"
             " (SELECT id FROM tenants WHERE slug IN ('panel-a','panel-b'))"
         ))

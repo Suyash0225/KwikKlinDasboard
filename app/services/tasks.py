@@ -236,6 +236,14 @@ async def create_task(
         return duplicate
 
     if notify and staff is not None:
+        # App band ho tab bhi phone par — WhatsApp API na juda ho to yahi ek rasta hai
+        from app.services import web_push
+
+        await web_push.notify(
+            db, task.tenant_id, staff_ids=[staff.id],
+            title="🧺 New job" + (" (urgent)" if urgent else ""), body=f"{task.code}: {task.title}"[:200],
+            tag=task.code,
+        )
         sent = await _send_to_assignee(db, task, staff, first=True)
         if sent:
             task.last_ping_at = datetime.now(timezone.utc)

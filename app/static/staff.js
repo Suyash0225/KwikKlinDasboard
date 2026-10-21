@@ -291,6 +291,8 @@ async function start() {
   startLive();
   paintOutbox();
   flushOutbox();
+  pushSync();
+  paintPushNudge();
 }
 
 /* ─── role ke hisaab se nav ─────────────────────────────────────────── */
@@ -343,6 +345,7 @@ function go(nav, push = true) {
   // Hisaab kaam ke baare mein hai — form aur profile par sirf jagah khata hai
   $("today").hidden = !(nav === "work" || nav === "bills");
   $("latebar").hidden = true;        // paintLate() isse wapas laayega
+  if ($("pushbar")) paintPushNudge();
   $("nav").querySelectorAll("[data-nav]").forEach((b) => b.classList.toggle("on", b.dataset.nav === nav));
   if (nav === "work") loadWork();
   else if (nav === "bills") loadBills();
@@ -2598,6 +2601,92 @@ async function showTeam(opts = {}) {
   $("list").querySelectorAll("[data-stuck]").forEach((r) => { r.onclick = () => orderDetailModal(r.dataset.stuck); });
 }
 
+/* ─── phone par notification (Web Push) ─────────────────────────────── */
+/* Live updates (SSE) sirf khule app tak pahunchte hain. Phone jeb mein ho
+   to naya kaam, owner ka jawab ya ginne wala cash notification se aata
+   hai — service worker dikhata hai, tap = app khulta hai. */
+const PUSH_OK = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const PUSH_NUDGE_KEY = "kk_push_nudge_off";
+function b64ToBytes(s) {
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const raw = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+async function pushState() {
+  if (!PUSH_OK) return "unsupported";
+  if (Notification.permission === "denied") return "blocked";
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    return (await reg.pushManager.getSubscription()) ? "on" : "off";
+  } catch (e) { return "off"; }
+}
+async function pushOn() {
+  const { key } = await api("/push/key");
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") throw new Error("Notifications were not allowed — allow them in the browser settings");
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  const opts = { userVisibleOnly: true, applicationServerKey: b64ToBytes(key) };
+  try { sub = sub || await reg.pushManager.subscribe(opts); }
+  catch (e) {
+    // purani chaabi wala subscription atka ho to hata kar dobara
+    if (sub) await sub.unsubscribe();
+    sub = await reg.pushManager.subscribe(opts);
+  }
+  await api("/push/subscribe", { method: "POST", body: sub.toJSON() });
+}
+async function pushOff() {
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (!sub) return;
+  await api("/push/unsubscribe", { method: "POST", body: { endpoint: sub.endpoint } }).catch(() => {});
+  await sub.unsubscribe();
+}
+/* Login par: is phone ka subscription is aadmi ke naam (ek phone, do log) */
+async function pushSync() {
+  if ((await pushState()) !== "on" || Notification.permission !== "granted") return;
+  try {
+    const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+    if (sub) await api("/push/subscribe", { method: "POST", body: sub.toJSON() });
+  } catch (e) { /* agli baar */ }
+}
+const PUSH_WORD = {
+  on: ["On", "New jobs, owner replies and cash to count come to this phone."],
+  off: ["Off", "Turn on to get new jobs on this phone even when the app is closed."],
+  blocked: ["Blocked", "Notifications are blocked for this site — allow them in the browser settings."],
+  unsupported: ["Not available", "This browser cannot show notifications. Install the app from Chrome."],
+};
+async function paintPushCard() {
+  const box = $("p-push");
+  if (!box) return;
+  const st = await pushState();
+  const [word, hint] = PUSH_WORD[st];
+  box.innerHTML = `<div class="kv"><span>🔔 Phone notifications</span><b>${word}</b></div>
+    <p class="hint">${esc(hint)}</p>
+    ${st === "off" ? `<button class="btn go wide" id="p-push-on">Turn on</button>`
+      : st === "on" ? `<button class="btn ghost wide" id="p-push-off">Turn off</button>` : ""}`;
+  if ($("p-push-on")) $("p-push-on").onclick = (e) => busy(e.currentTarget, async () => { await pushOn(); toast("Notifications on 🔔"); paintPushCard(); paintPushNudge(); });
+  if ($("p-push-off")) $("p-push-off").onclick = (e) => busy(e.currentTarget, async () => { await pushOff(); toast("Notifications off"); paintPushCard(); });
+}
+/* Kaam ki screen par ek baar ki yaad — "na" bolo to phir nahi */
+async function paintPushNudge() {
+  let bar = $("pushbar");
+  let off = false;
+  try { off = localStorage.getItem(PUSH_NUDGE_KEY) === "1"; } catch (e) { /* private mode */ }
+  const show = !off && NAV === "work" && (await pushState()) === "off";
+  if (!bar) {
+    if (!show) return;
+    bar = document.createElement("div");
+    bar.id = "pushbar"; bar.className = "routebar pushbar";
+    bar.innerHTML = `<span>🔔 Get new jobs on your phone, even when the app is closed</span>
+      <span class="pushbar-acts"><button class="btn ghost sm" id="pb-no">Later</button><button class="btn go sm" id="pb-yes">Turn on</button></span>`;
+    $("latebar").insertAdjacentElement("beforebegin", bar);
+    $("pb-yes").onclick = (e) => busy(e.currentTarget, async () => { await pushOn(); toast("Notifications on 🔔"); bar.hidden = true; });
+    $("pb-no").onclick = () => { try { localStorage.setItem(PUSH_NUDGE_KEY, "1"); } catch (e) { /* */ } bar.hidden = true; };
+  }
+  bar.hidden = !show;
+}
+
 /* ─── main (profile) ────────────────────────────────────────────────── */
 
 function showMe() {
@@ -2611,10 +2700,12 @@ function showMe() {
       <div class="kv"><span>Plan</span><b>${esc(ME.plan)}</b></div>
       <p class="hint">Your role and access are set by the owner.</p>
     </div>
+    <div class="card" id="p-push"></div>
     <div class="card">
       <button class="btn ghost wide mt0" id="p-pw">Change password</button>
       <button class="btn danger wide" id="p-out">Logout</button>
     </div>`;
+  paintPushCard();
   $("p-pw").onclick = changePw;
   $("p-out").onclick = async () => {
     try { await api("/logout", { method: "POST" }); } catch (e) { /* cookie waise bhi jayegi */ }

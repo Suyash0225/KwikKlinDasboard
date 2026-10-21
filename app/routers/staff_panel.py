@@ -2407,6 +2407,83 @@ async def today_summary(
     return out
 
 
+# ------------------------------------------------- phone par notification ----
+
+
+@router.get("/push/key")
+async def push_key(
+    p: StaffPrincipal = Depends(current_staff), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Browser ko subscribe karne ke liye dukaan ki public VAPID chaabi."""
+    from app.services import web_push
+
+    key = await web_push.public_key(db)
+    if not key:
+        raise HTTPException(status_code=503, detail="Phone notifications are not set up on this server")
+    return {"key": key}
+
+
+class PushKeysIn(BaseModel):
+    p256dh: str = Field(min_length=20, max_length=200)
+    auth: str = Field(min_length=8, max_length=100)
+
+
+class PushSubscribeIn(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=2000)
+    keys: PushKeysIn
+
+
+@router.post("/push/subscribe")
+async def push_subscribe(
+    body: PushSubscribeIn,
+    request: Request,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Is phone par notification chalu. Wahi phone dobara aaye to row wahi."""
+    from app.models import PushSubscription
+    from app.services import web_push
+
+    if not web_push.allowed_endpoint(body.endpoint):
+        raise HTTPException(status_code=400, detail="That is not a browser push address")
+    origin = f"{request.url.scheme}://{request.url.netloc}"[:200]
+    sub = (
+        await db.execute(select(PushSubscription).where(PushSubscription.endpoint == body.endpoint))
+    ).scalar_one_or_none()
+    if sub is None:
+        sub = PushSubscription(endpoint=body.endpoint, staff_id=p.staff.id,
+                               p256dh=body.keys.p256dh, auth=body.keys.auth, origin=origin)
+        db.add(sub)
+    else:
+        # phone kisi aur ke haath gaya (ek phone, do login) — khabar ab naye aadmi ki
+        sub.staff_id, sub.p256dh, sub.auth, sub.origin = p.staff.id, body.keys.p256dh, body.keys.auth, origin
+    await db.commit()
+    return {"ok": True}
+
+
+class PushUnsubscribeIn(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=2000)
+
+
+@router.post("/push/unsubscribe")
+async def push_unsubscribe(
+    body: PushUnsubscribeIn,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from sqlalchemy import delete
+
+    from app.models import PushSubscription
+
+    await db.execute(
+        delete(PushSubscription).where(
+            PushSubscription.endpoint == body.endpoint, PushSubscription.staff_id == p.staff.id
+        )
+    )
+    await db.commit()
+    return {"ok": True}
+
+
 # ------------------------------------------------- shaam ka cash hisaab ----
 
 # Pehli baar hisaab de raha ho to kitna peeche tak dekhein. Iske pehle ka
@@ -2552,6 +2629,13 @@ async def hand_over_cash(
         + "\nCount it and confirm in the staff app."
     )
     _from = p.staff.phone
+    from app.services import web_push
+    from app.services.staff_auth import MANAGER_ROLES
+
+    await web_push.notify(
+        db, p.staff.tenant_id, roles=MANAGER_ROLES,
+        title="💵 Cash to count", body=f"{p.staff.name} handed over ₹{handed:.0f}", tag="cash",
+    )
     background.run_after(
         lambda bg: team.notify_admins(bg, msg, skip_phone=_from),
         tenant_id=p.staff.tenant_id, label="cash_handover_notify",

@@ -7,6 +7,8 @@ Fixtures test_staff_panel se — wahi do dukaanein, wahi log.
 import re
 from pathlib import Path
 
+import pytest
+
 from sqlalchemy import text as sqltext
 
 from app.database import async_session_factory
@@ -285,3 +287,90 @@ async def test_deliver_survives_whatsapp_being_down(client, two_shops, sent, mon
     r = await client.post(f"/staff/api/orders/{number}/deliver", json={"items": None})
     assert r.status_code == 200, r.text
     assert (await client.get(f"/staff/api/orders/{number}")).json()["status"] == "DELIVERED"
+
+
+def _browser_keys() -> dict:
+    """Asli browser jaisi chaabiyan — encryption sach mein chale."""
+    import base64
+    import os
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()  # noqa: E731
+    pub = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
+    )
+    return {"p256dh": b64(pub), "auth": b64(os.urandom(16))}
+
+
+# Push background mein apne session se purane phone hatata hai — test ka
+# saajha connection (savepoints) ise saath-saath chalne nahi deta.
+@pytest.mark.requires_independent_sessions
+async def test_push_subscription_and_a_new_job_reaches_the_phone(client, two_shops, sent, monkeypatch) -> None:
+    from app.models import Staff
+    from app.services import background, tasks as task_service, tenant_context, web_push
+    from app.services.order_service import create_order
+
+    calls = []
+
+    async def fake_post(endpoint, body, headers):
+        calls.append((endpoint, headers, body))
+        return 410 if "gone" in endpoint else 201
+
+    monkeypatch.setattr(web_push, "_post", fake_post)
+    await _login(client, A_DEL_PHONE)
+    k1 = (await client.get("/staff/api/push/key")).json()["key"]
+    assert k1 == (await client.get("/staff/api/push/key")).json()["key"], "chaabi ek baar banti hai"
+
+    # sirf asli push service — warna server manmaani jagah POST karta (SSRF)
+    bad = await client.post("/staff/api/push/subscribe",
+                            json={"endpoint": "https://169.254.169.254/latest", "keys": _browser_keys()})
+    assert bad.status_code == 400
+    ep = "https://fcm.googleapis.com/fcm/send/abc123"
+    ok = await client.post("/staff/api/push/subscribe", json={"endpoint": ep, "keys": _browser_keys()})
+    assert ok.status_code == 200, ok.text
+    gone_ep = "https://fcm.googleapis.com/fcm/send/gone-1"
+    await client.post("/staff/api/push/subscribe", json={"endpoint": gone_ep, "keys": _browser_keys()})
+
+    token = tenant_context.current_tenant_id.set(two_shops["a"])
+    try:
+        async with async_session_factory() as db:
+            order = await create_order(db, customer_phone=CUST_A, customer_name="Push Grahak",
+                                       items=[{"type": "Kurta", "qty": 1}], created_by="test")
+            st = await db.get(Staff, two_shops["a_del"])
+            await task_service.create_task(db, title="Pickup karo", staff=st, order=order, kind="pickup")
+    finally:
+        tenant_context.current_tenant_id.reset(token)
+    await background.drain()
+    await background.drain()      # 410 wale phone ki safai push ke baad chalti hai
+
+    sent_to = {c[0] for c in calls}
+    assert ep in sent_to and gone_ep in sent_to
+    _, headers, body = next(c for c in calls if c[0] == ep)
+    assert headers["Content-Encoding"] == "aes128gcm" and headers["Authorization"].startswith("vapid t=")
+    assert b"Pickup karo" not in body, "message encrypted jaata hai"
+    async with async_session_factory() as db:
+        left = (await db.execute(sqltext(
+            "SELECT endpoint FROM push_subscriptions WHERE tenant_id = :t"), {"t": str(two_shops["a"])}
+        )).scalars().all()
+    assert left == [ep], "410 wala phone hat gaya"
+
+    await client.post("/staff/api/push/unsubscribe", json={"endpoint": ep})
+    async with async_session_factory() as db:
+        n = (await db.execute(sqltext(
+            "SELECT count(*) FROM push_subscriptions WHERE tenant_id = :t"), {"t": str(two_shops["a"])}
+        )).scalar_one()
+    assert n == 0
+
+
+def test_only_real_push_services_are_allowed() -> None:
+    from app.services.web_push import allowed_endpoint
+
+    assert allowed_endpoint("https://fcm.googleapis.com/fcm/send/x")
+    assert allowed_endpoint("https://web.push.apple.com/QAB")
+    assert allowed_endpoint("https://updates.push.services.mozilla.com/wpush/v2/x")
+    assert not allowed_endpoint("http://fcm.googleapis.com/x")
+    assert not allowed_endpoint("https://fcm.googleapis.com.evil.example/x")
+    assert not allowed_endpoint("https://evilpush.apple.com.example/x")
+    assert not allowed_endpoint("https://localhost:8000/x")

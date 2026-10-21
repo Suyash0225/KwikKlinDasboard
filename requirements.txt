@@ -19,6 +19,10 @@ python-dotenv==1.2.2
 # --- HTTP client (WhatsApp Cloud API calls, Phase 2) ---
 httpx==0.28.1
 cryptography==46.0.6
+# --- Staff app Web Push (services/web_push.py): VAPID + RFC 8291 encryption.
+# pywebpush nahi — wo cryptography>=47 aur aiohttp/requests maangta hai.
+py-vapid==1.9.6
+http-ece==1.2.1
 
 # --- Scheduler (daily staff check-ins, follow-ups — Phase 5) ---
 apscheduler==3.11.3

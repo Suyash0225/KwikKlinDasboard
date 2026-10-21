@@ -240,3 +240,6 @@ details.od-block > summary { cursor: pointer; list-style: none; }
 details.od-block > summary::-webkit-details-marker { display: none; }
 /* bina signal ke ruke kaam — late wali patti jaisi, par neeli */
 .latebar.outbar { background: #eef2ff; color: #3730a3; border-color: #c7d2fe; }
+/* notification ki ek baar ki yaad */
+.routebar.pushbar { margin: 10px var(--gutter) 0; flex-wrap: wrap; }
+.pushbar-acts { display: flex; gap: 6px; margin-left: auto; }

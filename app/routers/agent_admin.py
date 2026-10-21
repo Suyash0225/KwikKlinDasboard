@@ -2119,6 +2119,13 @@ async def reply_to_task(
 
     delivered = False
     staff = await db.get(_S, task.assigned_staff_id) if task.assigned_staff_id else None
+    if staff is not None:
+        from app.services import web_push
+
+        await web_push.notify(
+            db, staff.tenant_id, staff_ids=[staff.id],
+            title=f"💬 Owner replied — {task.code}", body=text[:120], tag=f"reply-{task.code}",
+        )
     wa_text = f"[{task.code}] {task.title}\n\nJawab: {text[:500]}"
     if staff is not None:
         try:
@@ -2516,12 +2523,12 @@ async def agents_overview(db: AsyncSession = Depends(get_db)) -> dict:
 
 
 # Settings whose values are credentials — never sent back to the browser.
-_SECRET_SETTINGS = {"ig_access_token", "gbp_connection"}
+_SECRET_SETTINGS = {"ig_access_token", "gbp_connection", "webpush_vapid_private"}
 # Sirf vendor Control panel likhta hai (routers/control.py) — dukaan ke
 # dashboard ke generic settings PUT se nahi, warna koi token/listing badal de.
 _READONLY_SETTINGS = {
     "gbp_connection", "gbp_reviews", "ig_user_id", "ig_access_token",
-    "home_tenant_slug", "public_url_fixed",
+    "home_tenant_slug", "public_url_fixed", "webpush_vapid_private",
 }
 _SECRET_MASK = "••••••••"
 
