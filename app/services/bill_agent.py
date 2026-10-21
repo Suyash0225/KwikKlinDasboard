@@ -442,7 +442,7 @@ async def _handle_task_button(
             return await task_service.confirm_pickup(
                 db, task, done=True, by=staff.name if staff else sender_label
             )
-        if role not in {"WASHER", "SUPERVISOR", "ADMIN", "MANAGER"}:
+        if role not in {"WASHER", "IRONER", "SUPERVISOR", "ADMIN", "MANAGER"}:
             return "This task is assigned to a different role."
         return await _close_task_by_code(db, sender_phone, sender_label, code)
 
@@ -468,7 +468,7 @@ async def _handle_task_button(
 
     # Washer/supervisor menu: update the order stage deterministically.
     if action in {"wash", "dry", "iron", "ready"}:
-        if role not in {"WASHER", "SUPERVISOR", "ADMIN", "MANAGER"}:
+        if role not in {"WASHER", "IRONER", "SUPERVISOR", "ADMIN", "MANAGER"}:
             return "Ye status option sirf washing staff ke liye hai."
         if task.order_id is None:
             return f"*{task.code}* order se linked nahi hai, isliye order status update nahi kiya ja sakta."
@@ -480,20 +480,14 @@ async def _handle_task_button(
         # Do not trust an old WhatsApp list card: only the next legal
         # processing step can be selected, even though the general order
         # state machine permits skipping stages for manager corrections.
-        next_action = {
-            OrderStatus.RECEIVED: "wash",
-            OrderStatus.PICKED_UP: "wash",
-            OrderStatus.IN_WASH: "dry",
-            OrderStatus.IN_DRY: "iron",
-            OrderStatus.IN_IRON: "ready",
-        }.get(order.status)
-        expected_task_kind = {
-            "wash": "wash",
-            "dry": "wash",
-            "iron": "dry",
-            "ready": "iron",
-        }[action]
-        if action != next_action or task.kind != expected_task_kind:
+        # Agla kadam service ke stages se (service_stages): sirf-press order
+        # RECEIVED se seedha ironing, Wash & Fold dry ke baad Ready.
+        from app.services import service_stages
+
+        stages = await service_stages.stages_for(db, order)
+        step = service_stages.menu_step(order.status, stages)
+        next_action = step[0] if step else None
+        if action != next_action or not service_stages.task_matches(task.kind, order.status, stages):
             return (
                 f"⚠️ *{order.order_number}* abhi {status_label(order.status)} stage par hai. "
                 "Purana menu use na karein; current stage ka task dobara khol kar next step chunein."
@@ -3546,11 +3540,14 @@ async def _apply_relay(
 
 # Role scoping (owner's spec): washerman delivery ka status nahi badal
 # sakta, delivery boy dhulai ka nahi. Manager sab kuch.
+_WASH_FLOOR_STATUSES = {
+    OrderStatus.IN_WASH, OrderStatus.IN_DRY, OrderStatus.IN_IRON,
+    OrderStatus.READY,
+}
 _ROLE_STATUSES = {
-    "WASHER": {
-        OrderStatus.IN_WASH, OrderStatus.IN_DRY, OrderStatus.IN_IRON,
-        OrderStatus.READY,
-    },
+    # Washerman aur press wala ek hi kataar par — dono saare dhulai stage
+    "WASHER": _WASH_FLOOR_STATUSES,
+    "IRONER": _WASH_FLOOR_STATUSES,
     "DELIVERY": {
         OrderStatus.PICKUP_ASSIGNED, OrderStatus.PICKED_UP,
         OrderStatus.OUT_FOR_DELIVERY, OrderStatus.DELIVERED,
@@ -3580,7 +3577,7 @@ async def _apply_done(
             if order.status is OrderStatus.OUT_FOR_DELIVERY
             else OrderStatus.PICKED_UP
         )
-    elif role == "WASHER":
+    elif role in ("WASHER", "IRONER"):
         target = OrderStatus.READY
     else:
         return get_message("staff_cmd_unknown")

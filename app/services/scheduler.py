@@ -843,7 +843,7 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
                 select(Staff).where(
                     Staff.is_active,
                     Staff.ai_agent_enabled.is_(True),
-                    Staff.role.in_((StaffRole.WASHER, StaffRole.DELIVERY)),
+                    Staff.role.in_((StaffRole.WASHER, StaffRole.IRONER, StaffRole.DELIVERY)),
                 )
             )
         ).scalars().all()
@@ -1164,6 +1164,10 @@ async def _pending_orders_for(db, st: Staff, default_phone: str) -> list[Order]:
     cond = Order.status.in_(ACTIVE_STATUSES)
     q = select(Order).where(cond).order_by(Order.priority.desc(), Order.created_at)
     rows = (await db.execute(q)).scalars().all()
+    if st.role.name == "IRONER":
+        # Press wale ke naam koi order nahi hota — uska kaam wo hai jo press
+        # par pahunch chuka hai (washerman ne "Send to iron" kiya)
+        return [o for o in rows if o.status is OrderStatus.IN_IRON]
     is_delivery = st.role.name == "DELIVERY"
     stages = _DELIVERY_STAGES if is_delivery else _WASH_STAGES
     is_default = bool(default_phone) and st.phone == default_phone

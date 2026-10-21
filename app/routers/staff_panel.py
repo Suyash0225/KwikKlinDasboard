@@ -38,7 +38,7 @@ from app.models import (
     StaffRole,
     Task,
 )
-from app.services import audit, delivery, plans, receipt
+from app.services import audit, delivery, plans, receipt, service_stages
 from app.services.auth import verify_password
 from app.services.staff_auth import (
     STAFF_COOKIE,
@@ -367,18 +367,21 @@ async def _prefetch(db: AsyncSession, tasks: list[Task], p: StaffPrincipal) -> d
     if order_ids:
         rows = (await db.execute(select(Order).where(Order.id.in_(order_ids)))).scalars().all()
         orders = {o.id: o for o in rows}
-        cust_ids = {o.customer_id for o in rows if o.customer_id}
-        if cust_ids:
-            crows = (
-                await db.execute(select(Customer).where(Customer.id.in_(cust_ids)))
-            ).scalars().all()
-            customers = {c.id: c for c in crows}
+    # Bina order wale kaam (dashboard ka pickup) ka grahak bhi isi query mein
+    cust_ids = {o.customer_id for o in orders.values() if o.customer_id}
+    cust_ids |= {t.customer_id for t in tasks if t.customer_id and not t.order_id}
+    if cust_ids:
+        crows = (
+            await db.execute(select(Customer).where(Customer.id.in_(cust_ids)))
+        ).scalars().all()
+        customers = {c.id: c for c in crows}
     if p.is_manager:
         sids = {t.assigned_staff_id for t in tasks if t.assigned_staff_id}
         if sids:
             srows = (await db.execute(select(Staff).where(Staff.id.in_(sids)))).scalars().all()
             staff = {st.id: st for st in srows}
-    return {"orders": orders, "customers": customers, "staff": staff}
+    stage_cfg = await service_stages.config(db) if orders else {}
+    return {"orders": orders, "customers": customers, "staff": staff, "stage_cfg": stage_cfg}
 
 
 def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
@@ -386,6 +389,9 @@ def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
     card: dict = {
         "code": t.code,
         "title": t.title,
+        # Panel isi se tay karta hai ki row par kaunsa kaam dikhe (pickup ka
+        # "Create bill" bhi) — pehle bheja hi nahi jaata tha
+        "kind": t.kind,
         "status": t.status,
         "urgent": t.urgent,
         "age_hours": int((datetime.now(timezone.utc) - t.created_at).total_seconds() // 3600),
@@ -408,12 +414,17 @@ def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
             "items": items_summary(order),
             "delivery": order.expected_delivery.isoformat() if order.expected_delivery else None,
             "status": order.status.name,
+            "next": service_stages.next_name(order, pre["stage_cfg"]),
             "notes": order.notes,
             "clothes": delivery.counts(order),
         }
         if can_money(p):
             card["order"]["total"] = float(order.total_amount or 0)
             card["order"]["due"] = float((order.total_amount or 0) - (order.amount_paid or 0))
+    elif t.customer_id:
+        cust = pre["customers"].get(t.customer_id)
+        if cust is not None:
+            card["customer"] = {"name": cust.name or "Customer", "phone_masked": mask_phone(cust.phone)}
     return card
 
 
@@ -747,6 +758,7 @@ async def order_detail(
         "clothes": delivery.counts(order),
         "urgent": order.priority == "urgent",
         "status": order.status.name,
+        "next": service_stages.next_name(order, await service_stages.config(db)),
         "delivery": order.expected_delivery.isoformat() if order.expected_delivery else None,
         "notes": order.notes,
     }
@@ -789,7 +801,15 @@ async def order_detail(
 # Kaun kya kar sakta hai — bill_agent ke "done" command wala hi niyam:
 # delivery wala pickup/delivery, washerman dhulai. Manager/owner sab.
 _DELIVERY_ROLES = (StaffRole.DELIVERY, StaffRole.MANAGER, StaffRole.SUPERVISOR, StaffRole.ADMIN)
-_WASH_ROLES = (StaffRole.WASHER, StaffRole.MANAGER, StaffRole.SUPERVISOR, StaffRole.ADMIN)
+_WASH_ROLES = (StaffRole.WASHER, StaffRole.IRONER, StaffRole.MANAGER, StaffRole.SUPERVISOR, StaffRole.ADMIN)
+# Dhulai ki kataar washerman aur press wale ki saanjhi hai. Task/assigned_washer
+# sirf ye batata hai ki pehle kise bheja gaya — status koi bhi badha sakta
+# hai. Pehle doosre washerman ko "This order is not yours" milta tha.
+_WASH_FLOOR_ROLES = (StaffRole.WASHER, StaffRole.IRONER)
+_WASH_STAGES = (
+    OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
+    OrderStatus.IN_DRY, OrderStatus.IN_IRON,
+)
 
 
 def _role_or_403(p: StaffPrincipal, roles, what: str) -> None:
@@ -999,6 +1019,56 @@ async def order_washing(
         result="ok" if check["ok"] else "mismatch", tenant_id=p.staff.tenant_id,
     )
     return {**out, "check": check}
+
+
+@router.post("/orders/{number}/ironing")
+async def order_ironing(
+    number: str,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Dhulai done — kapde press wale ke paas (IN_IRON)."""
+    _role_or_403(p, _WASH_ROLES, "Ironing")
+    order = await _my_order(db, p, number)
+    try:
+        return await delivery.ironing(db, order, by=p.staff.name)
+    except delivery.DeliveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+class AdvanceIn(BaseModel):
+    # Jo button aadmi ne dekha tha — purani screen se galat stage na lage
+    to: OrderStatus
+
+
+@router.post("/orders/{number}/advance")
+async def order_advance(
+    number: str,
+    body: AdvanceIn,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Dhulai ki kataar ka agla stage — service ke stages ke hisaab se.
+
+    Sirf-press order RECEIVED se seedha ironing, Wash & Fold dry ke baad
+    Ready. Kaun sa stage agla hai ye server tay karta hai; `to` sirf ye
+    pakka karta hai ki screen purani nahi thi.
+    """
+    _role_or_403(p, _WASH_ROLES, "Washing")
+    order = await _my_order(db, p, number)
+    nxt = await service_stages.next_stage(db, order)
+    if nxt is None or nxt is not body.to:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{order.order_number} is {order.status.name} — refresh and try again",
+        )
+    from app.services.order_service import InvalidTransitionError, update_status
+
+    try:
+        await update_status(db, order, nxt, changed_by=p.staff.name)
+    except InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"order_number": order.order_number, "status": order.status.name}
 
 
 @router.post("/orders/{number}/ready")
@@ -1446,7 +1516,18 @@ async def pickup_bill_context(
     if task.assigned_staff_id != p.staff.id and not p.is_manager:
         raise HTTPException(status_code=403, detail="This pickup is assigned to another delivery person")
     if task.order_id is None:
-        raise HTTPException(status_code=409, detail="Pickup task has no order")
+        # Owner ne dashboard se pickup diya — sirf grahak chuna, order abhi
+        # bana hi nahi. Bill yahin se naya order banayega.
+        customer = await db.get(Customer, task.customer_id) if task.customer_id else None
+        if customer is None:
+            raise HTTPException(status_code=409, detail="Pickup task has no customer — ask the owner to add one")
+        return {
+            "task_code": task.code,
+            "order_number": None,
+            "customer_ref": str(customer.id),
+            "customer_name": customer.name or "",
+            "customer_phone": normalize_phone(customer.phone),
+        }
     order = await db.get(Order, task.order_id)
     if order is None or order.status is not OrderStatus.PICKUP_ASSIGNED:
         raise HTTPException(status_code=409, detail="This pickup is no longer awaiting collection")
@@ -1608,8 +1689,34 @@ async def create_bill(
             raise HTTPException(status_code=409, detail="Pickup task is already complete")
         if pickup_task.assigned_staff_id != p.staff.id and not p.is_manager:
             raise HTTPException(status_code=403, detail="This pickup is assigned to another delivery person")
-        if pickup_task.order_id is None:
-            raise HTTPException(status_code=409, detail="Pickup task has no order")
+    if pickup_task is not None and pickup_task.order_id is None:
+        # Bina order wala pickup (dashboard se sirf grahak ke saath diya gaya):
+        # bill naya order banata hai, phir neeche wahi raasta — task band,
+        # order PICKED_UP.
+        task_customer = await db.get(Customer, pickup_task.customer_id) if pickup_task.customer_id else None
+        if task_customer is None:
+            raise HTTPException(status_code=409, detail="Pickup task has no customer")
+        if normalize_phone(phone) != normalize_phone(task_customer.phone):
+            raise HTTPException(status_code=409, detail="Customer does not match this pickup")
+        order = await create_order(
+            db,
+            customer_phone=normalize_phone(task_customer.phone),
+            customer_name=name or None,
+            items=items,
+            total_amount=total,
+            discount_amount=discount or None,
+            expected_delivery=delivery,
+            advance_hint=Decimal(str(body.advance)) if body.advance else None,
+            created_by=p.staff.name,
+            needs_pickup=False,
+            priority="urgent" if body.urgent else "normal",
+            bill_seconds=body.bill_seconds,
+            coupon_code=body.coupon_code.strip() or None,
+        )
+        pickup_task.order_id = order.id
+        db.add(pickup_task)
+        await db.commit()
+    elif pickup_task is not None:
         existing = (
             await db.execute(
                 select(Order).where(Order.id == pickup_task.order_id).with_for_update()
@@ -2026,6 +2133,9 @@ async def _my_order(db: AsyncSession, p: StaffPrincipal, number: str) -> Order:
     if order is None:
         raise HTTPException(status_code=404, detail=f"{number} not found")
     if p.is_manager:
+        return order
+    if p.staff.role in _WASH_FLOOR_ROLES and order.status in _WASH_STAGES:
+        # Wahi saanjhi kataar jo /route dikhata hai — dikhe to khule bhi
         return order
     mine = (
         await db.execute(
@@ -2792,10 +2902,7 @@ async def _route_query(db: AsyncSession, p: StaffPrincipal, tab: str = "todo"):
     deta hai.
     """
     is_delivery = p.staff.role is StaffRole.DELIVERY
-    wash_stages = (
-        OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
-        OrderStatus.IN_DRY, OrderStatus.IN_IRON,
-    )
+    wash_stages = _WASH_STAGES
     road_stages = (OrderStatus.PICKUP_ASSIGNED, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)
     if p.is_manager:
         # Manager/owner/supervisor ko dukaan ka POORA chalta kaam — dhulai bhi,
@@ -2872,6 +2979,7 @@ async def my_route(
 
     # Route band ho to pata bhejte hi nahi — UI mein chhupana kaafi nahi
     show_route = bool(await app_settings.get(db, "staff_show_route"))
+    stage_cfg = await service_stages.config(db)
     stops = []
     for o in rows:
         cust = customers.get(o.customer_id)
@@ -2892,6 +3000,7 @@ async def my_route(
                    if can_contact(p) else {"address": ""}),
                 "items": items_summary(o),
                 "status": o.status.name,
+                "next": service_stages.next_name(o, stage_cfg),
                 "urgent": o.priority == "urgent",
                 **({"due": float((o.total_amount or 0) - (o.amount_paid or 0))} if can_money(p) else {}),
                 "delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,

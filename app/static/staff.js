@@ -15,7 +15,7 @@
 
 const $ = (id) => document.getElementById(id);
 let ME = null;
-let NAV = "work";        // work | bills | new | exp | team | me
+let NAV = "work";        // work | tasks | bills | new | exp | team | me
 let FILTER = "all";      // chips ki chuni hui value (har screen ki apni)
 let WORK = [];           // kaam ki poori list (server se milaya hua)
 let UNREAD = 0;
@@ -228,7 +228,7 @@ function whenParts(iso) {
 }
 
 const ROLE = {
-  WASHER: "Washerman", DELIVERY: "Delivery",
+  WASHER: "Washerman", IRONER: "Ironing / Press", DELIVERY: "Delivery",
   // Senior aadmi — kaam bhi karta hai aur dekh-rekh bhi. Use sirf "Washerman"
   // likhna uske kaam ko chhota dikhata hai.
   SUPERVISOR: "Washerman / Manager", MANAGER: "Manager", ADMIN: "Owner",
@@ -288,6 +288,7 @@ async function start() {
   go("work");
   loadToday();
   loadBell();
+  countTasks();
   startLive();
   paintOutbox();
   flushOutbox();
@@ -306,7 +307,8 @@ async function start() {
 const canBill = () => ME.can_bill && ME.features.includes("billing");
 
 function navItems() {
-  const out = [["work", "i-basket", "Work"]];
+  // Tasks har kisi ke liye — owner ka diya kaam ek jagah, kaam ki list mein nahi dabta
+  const out = [["work", "i-basket", "Work"], ["tasks", "i-task", "Tasks"]];
   if (canBill()) {
     out.push(["bills", "i-receipt", "Bills"], ["new", "i-plus", "New"]);
   }
@@ -322,7 +324,7 @@ const icon = (id) => `<svg class="ic" aria-hidden="true"><use href="/admin/stati
 
 function renderNav() {
   $("nav").innerHTML = navItems().map(([k, ic, label]) =>
-    `<button data-nav="${k}" class="${NAV === k ? "on" : ""}${k === "new" ? " fab" : ""}"><i>${icon(ic)}</i>${label}</button>`).join("");
+    `<button data-nav="${k}" class="${NAV === k ? "on" : ""}${k === "new" ? " fab" : ""}"><i>${icon(ic)}${k === "tasks" ? `<span class="nav-n" id="tasksN" hidden>0</span>` : ""}</i>${label}</button>`).join("");
   $("nav").querySelectorAll("[data-nav]").forEach((b) => { b.onclick = () => go(b.dataset.nav); });
 }
 
@@ -348,6 +350,7 @@ function go(nav, push = true) {
   if ($("pushbar")) paintPushNudge();
   $("nav").querySelectorAll("[data-nav]").forEach((b) => b.classList.toggle("on", b.dataset.nav === nav));
   if (nav === "work") loadWork();
+  else if (nav === "tasks") showTasks();
   else if (nav === "bills") loadBills();
   else if (nav === "new") showNewBill();
   else if (nav === "exp") showExpenses();
@@ -359,13 +362,14 @@ $("btn-refresh").onclick = (e) => {
   const b = e.currentTarget;
   b.classList.add("turn"); setTimeout(() => b.classList.remove("turn"), 650);
   refreshCurrent({ quiet: false });
-  loadToday(); loadBell();
+  loadToday(); loadBell(); countTasks();
 };
 $("pw-open").onclick = changePw;
 $("btn-bell").onclick = showBell;
 
 function refreshCurrent(opts = {}) {
   if (NAV === "work") loadWork(opts);
+  else if (NAV === "tasks") showTasks(opts);
   else if (NAV === "bills") loadBills(opts);
   else if (NAV === "team") showTeam(opts);
 }
@@ -590,6 +594,83 @@ function workChips() {
 }
 
 let WORK_SEQ = 0, MORE_LEFT = false;
+/* ─── Tasks — har staff ka alag section ────────────────────────────────
+   Owner/agent ka diya har kaam yahan, ek card par: kya karna hai, kis order
+   ka, kab se pada hai, aur Done / owner se poochho. Work tab order ki
+   haalat dikhata hai; ye tab sirf "mujhe kya kaam diya gaya". */
+let TASK_TAB = "open";
+const TASK_KIND = {
+  wash: "Washing", dry: "Drying", iron: "Ironing", pickup: "Pickup", delivery: "Delivery",
+};
+function setTasksBadge(n) {
+  const b = $("tasksN");
+  if (!b) return;
+  b.textContent = n > 99 ? "99+" : String(n);
+  b.hidden = !n;
+}
+async function countTasks() {
+  try { setTasksBadge((await api("/tasks?tab=mine&limit=1")).total || 0); } catch (e) { /* badge hi hai */ }
+}
+async function showTasks(opts = {}) {
+  $("chips").innerHTML = [["open", "Open"], ["done", "Done"]].map(([v, label]) =>
+    `<button data-tchip="${v}" class="${TASK_TAB === v ? "on" : ""}">${label}</button>`).join("");
+  $("chips").querySelectorAll("[data-tchip]").forEach((b) => {
+    b.onclick = () => { TASK_TAB = b.dataset.tchip; showTasks(); };
+  });
+  if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
+  let r;
+  try { r = await api(`/tasks?tab=${TASK_TAB === "done" ? "done" : "mine"}&limit=100`); }
+  catch (e) { $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (NAV !== "tasks") return;
+  const open = TASK_TAB === "open";
+  if (open) setTasksBadge(r.total || 0);
+  const rows = (r.tasks || []).slice().sort((a, b) => open ? (b.urgent - a.urgent) || (b.age_hours - a.age_hours) : 0);
+  if (!rows.length) {
+    $("list").innerHTML = `<div class="empty"><b>${open ? "No tasks right now" : "Nothing done yet"}</b>${open ? "When the owner gives you a task, it shows up here." : "Tasks you close show up here."}</div>`;
+    return;
+  }
+  $("list").innerHTML = rows.map(taskCard).join("");
+  $("list").querySelectorAll("[data-tdo]").forEach((b) => {
+    b.onclick = () => {
+      const code = b.dataset.code;
+      if (b.dataset.tdo === "bill") return openPickupBill(code);
+      if (b.dataset.tdo === "done") return askDone(code);
+      if (b.dataset.tdo === "ask") return openThread(code);
+      if (b.dataset.tdo === "order") return orderDetailModal(b.dataset.num);
+    };
+  });
+}
+/* Pickup kaam par seedha bill — par sirf tab jab abhi kapde lene baaki hon
+   (order bana hi nahi, ya order abhi pickup ke intezaar mein hai) */
+function canPickupBill(t) {
+  if (t.kind !== "pickup" || t.status !== "OPEN" || !canBill() || !DELIVERY_ROLES.includes(ME.role)) return false;
+  return !t.order ? !!t.customer : t.order.status === "PICKUP_ASSIGNED" && !(t.order.total > 0);
+}
+function taskCard(t) {
+  const o = t.order;
+  const open = t.status === "OPEN";
+  const age = t.age_hours < 1 ? "just now" : t.age_hours < 24 ? `${t.age_hours}h ago` : `${Math.floor(t.age_hours / 24)}d ago`;
+  return `<article class="row tcard${t.urgent && open ? " urgent" : ""}">
+    <div class="spine ${t.urgent && open ? "late" : ""}"></div>
+    <div class="body">
+      <div class="line1"><b>${t.urgent && open ? "🔴 " : ""}${esc(t.title)}</b></div>
+      <div class="sub"><span class="tag task">${esc(TASK_KIND[t.kind] || "Job")}</span>${esc(t.code)} · ${esc(age)}${t.eta_text ? ` · ⏰ ${esc(t.eta_text)}` : ""}</div>
+      ${o ? `<div class="sub mt-xs">🧺 ${esc(o.number)} · ${esc(o.customer)}${o.items ? " · " + esc(o.items) : ""}</div>`
+        : t.customer ? `<div class="sub mt-xs">👤 ${esc(t.customer.name)}</div>` : ""}
+      ${t.cancel_requested ? `<div class="sub mt-xs"><span class="tag late">Cancel requested</span>${esc(t.cancel_reason || "")}</div>` : ""}
+      ${t.reply && !open ? `<div class="sub note">✓ ${esc(t.reply)}</div>` : ""}
+      ${open ? `<div class="acts">
+        ${canPickupBill(t)
+          ? `<button class="btn go sm" data-tdo="bill" data-code="${esc(t.code)}">🧾 Create bill &amp; pick up</button>
+             <button class="btn ghost sm" data-tdo="done" data-code="${esc(t.code)}">✓ Done</button>`
+          : `<button class="btn go sm" data-tdo="done" data-code="${esc(t.code)}">✓ Done</button>`}
+        ${ME.can_ask ? `<button class="btn ghost sm" data-tdo="ask" data-code="${esc(t.code)}">❓ Ask owner</button>` : ""}
+        ${o ? `<button class="btn ghost sm" data-tdo="order" data-num="${esc(o.number)}">👁 Order</button>` : ""}
+      </div>` : ""}
+    </div>
+  </article>`;
+}
+
 async function loadWork(opts = {}) {
   if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
   const mine = ++WORK_SEQ;
@@ -627,7 +708,7 @@ async function loadWork(opts = {}) {
       type: "stop", chip: k.chip, spine: w.late ? "late" : k.spine, kindLabel: k.label,
       number: s.number, who: s.customer, items: s.items, due: s.due,
       address: s.address, urgent: s.urgent, when: w, late: w.late, tasks: [],
-      hasOrder: true, status: s.status, clothes: s.clothes,
+      hasOrder: true, status: s.status, next: s.next, clothes: s.clothes,
     };
     byOrder.set(s.number, item);
     page.push(item);
@@ -641,12 +722,14 @@ async function loadWork(opts = {}) {
       : { top: `${t.age_hours}h`, sub: "waiting", late: t.age_hours > 24 };
     page.push({
       type: "task", chip: "task", spine: t.urgent || w.late ? "late" : "", kindLabel: "Job",
-      number: t.order ? t.order.number : t.code, who: t.order ? t.order.customer : t.title,
+      number: t.order ? t.order.number : t.code,
+      who: t.order ? t.order.customer : t.customer ? `${t.customer.name} — ${t.title}` : t.title,
       items: t.order ? t.order.items : "", due: t.order ? t.order.due : 0,
       // Bina order wale kaam par paisa hota hi nahi — na rakam dikhani hai
       // na "chukta" ka ✓, warna aadmi samajhta hai ki paisa aa gaya.
       noMoney: !t.order,
-      hasOrder: !!t.order, status: t.order ? t.order.status : null, clothes: t.order ? t.order.clothes : null,
+      hasOrder: !!t.order, status: t.order ? t.order.status : null, next: t.order ? t.order.next : null,
+      clothes: t.order ? t.order.clothes : null,
       // Title upar bold mein aa chuka hai; dobara neeche likhna sirf
       // shor hai. Neeche wahi jab order ka naam upar ho.
       urgent: t.urgent, when: w, late: !!w.late, tasks: [t],
@@ -754,7 +837,15 @@ function moreBar(shown, total, fn) {
    kisi par Done, kisi par sirf collect — delivery boy samajh nahi paata tha
    ki kis row par kya dabana hai. Ab kram hamesha: Call · kaam · ₹ · ⋯ */
 const DELIVERY_ROLES = ["DELIVERY", "MANAGER", "SUPERVISOR", "ADMIN"];
-const WASH_ROLES = ["WASHER", "MANAGER", "SUPERVISOR", "ADMIN"];
+const WASH_ROLES = ["WASHER", "IRONER", "MANAGER", "SUPERVISOR", "ADMIN"];
+const WASH_STAGES = ["RECEIVED", "PICKED_UP", "IN_WASH", "IN_DRY", "IN_IRON"];
+const STEP_START = { IN_DRY: "Start drying", IN_IRON: "Start iron", READY: "Ready" };
+const STEP_SEND = { IN_DRY: "Send to dry", IN_IRON: "Send to iron", READY: "Ready" };
+const STEP_ASK = {
+  IN_DRY: ["Move clothes to drying?", "Yes, drying"],
+  IN_IRON: ["Send clothes for ironing?", "Yes, send to iron"],
+  READY: ["Clothes done and ready?", "Yes, ready"],
+};
 function primaryAction(w) {
   const t = w.tasks && w.tasks[0];
   const s = w.status;
@@ -766,14 +857,29 @@ function primaryAction(w) {
     const t = w.tasks && w.tasks.find((x) => x.kind === "pickup" && x.status === "OPEN");
     return t ? { act: "pickup_bill", label: "Create bill & pick up", code: t.code } : { act: "pickup", label: "Picked up" };
   }
-  if (s && ["RECEIVED", "PICKED_UP"].includes(s) && WASH_ROLES.includes(ME.role)) {
-    return { act: "washing", label: "Start wash" };
+  // Agla stage server batata hai — service ke stages se. Sirf-press wala
+  // kapda "Start wash" nahi dikhata, seedha "Start iron".
+  if (s && WASH_STAGES.includes(s) && WASH_ROLES.includes(ME.role) && w.next) {
+    if (w.next === "IN_WASH") return { act: "washing", label: "Start wash" };
+    const before = ["RECEIVED", "PICKED_UP"].includes(s);
+    return { act: "advance", to: w.next, label: (before ? STEP_START : STEP_SEND)[w.next] };
   }
-  if (s && ["IN_WASH", "IN_DRY", "IN_IRON"].includes(s) && WASH_ROLES.includes(ME.role)) {
-    return { act: "ready", label: "Ready" };
+  // Owner ka pickup kaam (bina order) — seedha bill, grahak bhara hua
+  if (t && t.kind === "pickup" && canBill() && DELIVERY_ROLES.includes(ME.role)) {
+    return { act: "pickup_bill", label: "Create bill & pick up", code: t.code };
   }
   if (t) return { act: "done", label: "Done", code: t.code };
   return null;
+}
+
+/* Owner ka diya alag kaam jo kisi order par hai. Order ki row ka bada
+   button status ka hota hai ("Start wash"), isliye ye kaam pehle row mein
+   chhup jaata tha — sirf ⋯ menu mein milta tha. Dhulai/pickup ke apne kaam
+   status hi hain, unhe dobara nahi dikhate. */
+const STAGE_TASK_KINDS = ["wash", "dry", "iron", "pickup", "delivery"];
+function ownerJobs(w) {
+  if (w.type !== "stop") return [];
+  return (w.tasks || []).filter((t) => t.status === "OPEN" && !STAGE_TASK_KINDS.includes(t.kind));
 }
 
 function workRow(w) {
@@ -799,16 +905,23 @@ function workRow(w) {
       ${queued.length ? `<div class="sub mt-xs"><span class="tag deliver">⏳ ${esc(queued.join(", "))} — waiting for signal</span></div>` : ""}
       ${partial ? `<div class="sub mt-xs"><span class="tag late">${w.clothes.pending} pending</span>${w.clothes.delivered} of ${w.clothes.total} delivered</div>` : ""}
       ${w.title && w.type === "task" ? `<div class="sub note">${esc(w.title)}</div>` : ""}
+      ${ownerJobs(w).map((j) => `<div class="job">
+        <span>📌 ${esc(j.title)}</span>
+        <button class="btn ghost sm" data-do="done" data-code="${esc(j.code)}">✓ Done</button>
+      </div>`).join("")}
       ${asked ? `<div class="sub mt-xs"><span class="tag late">Cancel maanga</span>${esc(t.cancel_reason || "")}</div>` : ""}
       ${ME.show_route && w.address ? `<div class="sub mt-xs">📍 ${esc(w.address)}</div>` : ""}
-      <div class="acts">
+      ${isDeliveryBoy() ? `<div class="acts compact">
+        ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}${main.to ? ` data-to="${esc(main.to)}"` : ""}>${esc(main.label)}</button>` : ""}
+        <button class="btn ghost sm more" data-do="more" aria-label="More options">⋯</button>
+      </div>` : `<div class="acts">
         ${w.hasOrder && ME.can_contact ? `<button class="btn ghost sm" data-do="call">Call</button>` : ""}
-        ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}>${esc(main.label)}</button>` : ""}
+        ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}${main.to ? ` data-to="${esc(main.to)}"` : ""}>${esc(main.label)}</button>` : ""}
         ${ME.show_route && w.address ? `<button class="btn ghost sm" data-do="map" data-addr="${esc(w.address)}">Route</button>` : ""}
         ${ME.can_money && ME.features.includes("cod_collection") && w.due > 0
           ? `<button class="btn money sm" data-do="pay" data-due="${w.due}">${money(w.due)} collect</button>` : ""}
         <button class="btn ghost sm" data-do="more" aria-label="More">⋯</button>
-      </div>
+      </div>`}
     </div>
   </article>`;
 }
@@ -826,7 +939,8 @@ function runAction(act, num, d = {}) {
   if (act === "pickup_bill") return openPickupBill(d.code);
   if (act === "pickup") return confirmStep(num, "picked-up", "Picked up the clothes?", "Yes, picked up");
   if (act === "washing") return washStartModal(num);
-  if (act === "ready") return confirmStep(num, "ready", "Clothes washed and ready?", "Yes, ready");
+  if (act === "advance" && STEP_ASK[d.to]) return confirmStep(num, "advance", STEP_ASK[d.to][0], STEP_ASK[d.to][1], { to: d.to });
+  if (act === "ready") return confirmStep(num, "ready", "Clothes done and ready?", "Yes, ready");
 }
 
 function wireRows() {
@@ -871,7 +985,7 @@ async function orderDetailModal(number) {
   try { o = await api(`/orders/${encodeURIComponent(number)}`); }
   catch (e) { toast(e.message, true); return; }
   const w = WORK.find((x) => x.number === number) || { tasks: [], hasOrder: true };
-  const main = primaryAction({ ...w, status: o.status, clothes: o.clothes });
+  const main = primaryAction({ ...w, status: o.status, next: o.next, clothes: o.clothes });
   const c = o.clothes || { total: 0, delivered: 0, pending: 0 };
   const lineHtml = (o.lines || []).map((l) => {
     const tag = (d, q) => d >= q ? `<span class="dl-tag ok">✓ delivered</span>`
@@ -900,7 +1014,7 @@ async function orderDetailModal(number) {
     ${o.notes ? `<div class="od-block"><b>Notes</b><p class="note">${esc(o.notes)}</p></div>` : ""}
     <div class="btnrow">
       ${ME.can_contact ? `<button class="btn ghost" data-od="call">📞 Call</button>` : ""}
-      ${main ? `<button class="btn go" data-od="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}>${esc(main.label)}</button>` : ""}
+      ${main ? `<button class="btn go" data-od="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}${main.to ? ` data-to="${esc(main.to)}"` : ""}>${esc(main.label)}</button>` : ""}
       ${o.can_collect && o.due > 0 ? `<button class="btn money" data-od="pay" data-due="${o.due}">${money(o.due)} collect</button>` : ""}
     </div>
     <div class="btnrow">
@@ -1176,7 +1290,42 @@ function askNotHome(number) {
   });
 }
 
+/* Delivery boy ki row saaf: ek kaam ka button (Deliver / Pickup) + ⋯.
+   Pehle Call · Deliver · Route · ₹ collect · ⋯ ek line mein the aur bada
+   Deliver button baaki sabko daba deta tha. Call/Route "Full details" mein. */
+const isDeliveryBoy = () => ME.role === "DELIVERY";
+
+/* Delivery ka ⋯: sirf Full details, Payment (kitna mila / kitna baaki), Close */
+async function deliveryMenu(number) {
+  const w = WORK.find((x) => x.number === number) || {};
+  if (!w.hasOrder) return moreMenuFull(number);
+  openModal(`<h3>${esc(number)}</h3><p class="said">${esc(w.who || "")}</p>
+    <div class="paysum" id="dm-pay"><span class="muted">Loading payment…</span></div>
+    <div class="btnrow stack">
+      <button class="btn ghost" data-act="detail" data-arg="${esc(number)}">👁 Full details</button>
+      <span id="dm-collect"></span>
+    </div>
+    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
+  let o;
+  try { o = await api(`/orders/${encodeURIComponent(number)}`); }
+  catch (e) { if ($("dm-pay")) $("dm-pay").innerHTML = `<span class="muted">${esc(e.message)}</span>`; return; }
+  if (!$("dm-pay")) return;   // menu band ho chuka
+  const total = Number(o.total || 0), paid = Number(o.paid || 0), due = Math.max(0, Number(o.due || 0));
+  $("dm-pay").innerHTML = `
+    <div><span>Bill</span><b>${money(total)}</b></div>
+    <div><span>Collected</span><b class="ok">${money(paid)}</b></div>
+    <div><span>Still to collect</span><b class="${due > 0 ? "due" : "ok"}">${due > 0 ? money(due) : "Fully paid ✓"}</b></div>`;
+  if (o.can_collect && due > 0) {
+    $("dm-collect").outerHTML = `<button class="btn money" id="dm-go">💵 Collect payment · ${money(due)}</button>`;
+    $("dm-go").onclick = () => { closeModal(); askCollect(number, due); };
+  }
+}
+
 function moreMenu(number) {
+  if (isDeliveryBoy()) return deliveryMenu(number);
+  return moreMenuFull(number);
+}
+function moreMenuFull(number) {
   const w = WORK.find((x) => x.number === number) || {};
   const t = (w.tasks || [])[0];
   openModal(`<h3>${esc(number)}</h3>
@@ -1211,7 +1360,7 @@ function askDone(code) {
     </div>`);
   $("m-ok").onclick = (e) => busy(e.currentTarget, async () => {
     await api(`/tasks/${encodeURIComponent(code)}/done`, { method: "POST", body: { note: $("m-note").value.trim() } });
-    closeModal(); toast(`${code} closed ✅`); loadWork(); loadToday();
+    closeModal(); toast(`${code} closed ✅`); refreshCurrent({ quiet: true }); loadToday(); countTasks();
   });
 }
 
@@ -1813,11 +1962,12 @@ async function showNewBill() {
     $("b-phone").disabled = true;
     $("b-picked").hidden = false;
     $("b-picked").className = "picked";
-    $("b-picked").textContent = `🛵 Pickup ${ctx.order_number} · ${ctx.customer_name || "Customer"}`;
+    const pk = ctx.order_number ? `Pickup ${ctx.order_number}` : `Pickup ${ctx.task_code}`;
+    $("b-picked").textContent = `🛵 ${pk} · ${ctx.customer_name || "Customer"}`;
     NEEDS_PICKUP = false;
     $("b-pickhint").textContent = "Pickup task linked — this bill completes the collection. No second pickup will be created.";
     $("b-pickup-banner").hidden = false;
-    $("b-pickup-banner").innerHTML = `<b>🛵 Pickup ${esc(ctx.order_number)}</b><span>${esc(ctx.customer_name || "Customer")} · add the clothes you collected, then create the bill</span>`;
+    $("b-pickup-banner").innerHTML = `<b>🛵 ${esc(pk)}</b><span>${esc(ctx.customer_name || "Customer")} · add the clothes you collected, then create the bill</span>`;
     $("b-save").textContent = "Create bill & finish pickup";
   }
   renderCart();
@@ -2030,9 +2180,11 @@ function bagSheet(svc) {
     type = type[0].toUpperCase() + type.slice(1);   // "pillow cover" -> "Pillow cover"
     if (!names.some((n) => n.toLowerCase() === type.toLowerCase())) names.unshift(type);
     bump(type, 1);
-    // search se joda: khaana saaf, keyboard khula rahe — agla kapda likho
-    if (qIn.value) { qIn.value = ""; qIn.focus(); }
+    // Search waisa hi rahe — chuna hua kapda ungli ke neeche − n + ke saath
+    // tika rahe (pehle khaana saaf hote hi poori list aa jaati aur kapda
+    // "gayab" ho jaata). Text select: agla naam likhte hi purana hat jaata hai.
     paintList();
+    if (qIn.value) { qIn.focus(); qIn.select(); }
   };
   // Search khula ho aur row dabayi to input ka focus na chhoote — warna
   // keyboard band hokar dobara khulta aur poori sheet uchhalti.
@@ -2110,10 +2262,10 @@ function tapItem(r) {
     CART.push({ service: r.service, garment: r.garment, qty: 1, rate: r.rate, card: r.rate, unit: r.unit || "pc", pieces: [] });
     idx = CART.length - 1;
   }
-  // search se joda tha to khaana saaf karke wahin focus — agla kapda seedha
-  // likho. Bina search ke tap kiya ho to keyboard zabardasti nahi kholte.
+  // Search waisa hi rahe — kapda list mein − n + ke saath tika rahe, jab tak
+  // aadmi ginti badha/ghata le. Text select: agla naam likhte hi hat jaata hai.
+  // Bina search ke tap kiya ho to keyboard zabardasti nahi kholte.
   const searched = $("b-q") && $("b-q").value.trim();
-  if (searched) $("b-q").value = "";
   renderCart();
   if (navigator.vibrate) navigator.vibrate(12);   // haath ko pata chale ki juda
   if (r.unit === "kg") {
@@ -2121,6 +2273,7 @@ function tapItem(r) {
     if (inp) { inp.focus(); inp.select(); }
   } else if (searched) {
     $("b-q").focus();
+    $("b-q").select();
   }
   // No toast: the row itself now shows − n +, and a stack of "added" toasts
   // covered the very list being tapped on a small phone.
@@ -2929,6 +3082,7 @@ function tick() {
   refreshCurrent({ quiet: true });
   loadToday();
   loadBell();
+  countTasks();
   if (!LIVE) startLive();     // stream toot gayi thi to dobara jodo
 }
 function soon() { clearTimeout(LIVE_TIMER); LIVE_TIMER = setTimeout(tick, 400); }

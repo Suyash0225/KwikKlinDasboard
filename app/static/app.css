@@ -369,6 +369,25 @@ a { color: var(--brand-600); text-decoration: none; }
   font-size: 11px; line-height: 1; padding: 3px 4px; border-radius: 6px;
 }
 .rm-x:hover { color: var(--danger); background: var(--danger-50); }
+/* Service ke stages — header mein chhote toggle */
+.rm-stages { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+.rm-stage {
+  border: 1px solid var(--line); background: var(--n0); color: var(--ink-3, #667085);
+  font-size: 11px; line-height: 1; padding: 4px 7px; border-radius: 999px; cursor: pointer;
+  text-transform: none; letter-spacing: 0;
+}
+.rm-stage.on { background: var(--brand-50); border-color: var(--brand); color: var(--brand-600); font-weight: 600; }
+.rm-newstages { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; flex-wrap: wrap; }
+/* .filters input ka 150px/44px niyam checkbox par nahi — label hi bada touch target */
+.rm-newstages label {
+  display: inline-flex; gap: 6px; align-items: center; margin: 0; cursor: pointer;
+  min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px;
+}
+.filters .rm-newstages input { flex: none; width: auto; min-width: 0; min-height: 0; margin: 0; }
+@media (max-width: 600px) {
+  /* Phone par chips ungli se dabane layak */
+  .rm-stage { padding: 7px 10px; font-size: 12px; }
+}
 /* IMP_006: stage timer — kitni der se is stage par / hadd */
 .stagetime { display: inline-block; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink-3, #667085); white-space: nowrap; }
 .stagetime.warn { color: #b45309; }

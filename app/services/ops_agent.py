@@ -70,6 +70,19 @@ _STAGE_TASKS = {
 }
 _WASHABLE = (OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
              OrderStatus.IN_DRY, OrderStatus.IN_IRON)
+# Pehla kaam service par nirbhar: sirf-press order ka pehla kaam "iron" hai
+_PROCESS_KINDS = ("wash", "dry", "iron")
+_KIND_LABEL = {"wash": "wash & iron", "dry": "drying", "iron": "ironing"}
+
+
+async def _first_task(db: AsyncSession, order: Order) -> tuple[str, str]:
+    from app.services import service_stages
+
+    stages = await service_stages.stages_for(db, order)
+    kind = service_stages.task_kind(OrderStatus.RECEIVED, stages) or "wash"
+    return kind, _KIND_LABEL[kind]
+
+
 # Only these stages can legitimately be waiting for a new wash task.
 _WASH_PLANNABLE = (OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH)
 
@@ -164,7 +177,7 @@ async def on_order_created(db: AsyncSession, order: Order) -> dict:
                 order.assigned_washer_id = washer.id
                 db.add(order)
                 await db.commit()
-            if not await _open_tasks(db, order.id, ("wash",)):
+            if not await _open_tasks(db, order.id, _PROCESS_KINDS):
                 customer = await db.get(Customer, order.customer_id)
                 who = (customer.name or customer.phone) if customer else "Customer"
                 # Washing is planned from the delivery promise, not from
@@ -182,11 +195,12 @@ async def on_order_created(db: AsyncSession, order: Order) -> dict:
                         )
                     )
                 ):
+                    kind, label = await _first_task(db, order)
                     task = await task_service.create_task(
                         db,
-                        title=f"{who} — wash & iron: {items_summary(order)[:160]}",
+                        title=f"{who} — {label}: {items_summary(order)[:160]}",
                         staff=washer, order=order, urgent=order.priority == "urgent",
-                        created_by="agent", kind="wash",
+                        created_by="agent", kind=kind,
                         notify=True,
                     )
                     out["wash"] = {"code": task.code, "staff": washer.name}
@@ -241,7 +255,7 @@ async def plan_due_wash_tasks(db: AsyncSession, *, today=None) -> int:
 
     created = 0
     for order in rows:
-        if await _open_tasks(db, order.id, ("wash",)):
+        if await _open_tasks(db, order.id, _PROCESS_KINDS):
             continue
         washer = await pick_staff(db, "WASHER", order)
         if washer is None:
@@ -252,14 +266,15 @@ async def plan_due_wash_tasks(db: AsyncSession, *, today=None) -> int:
             await db.commit()
         customer = await db.get(Customer, order.customer_id)
         who = (customer.name or customer.phone) if customer else "Customer"
+        kind, label = await _first_task(db, order)
         task = await task_service.create_task(
             db,
-            title=f"{who} — wash & iron: {items_summary(order)[:160]} | delivery {order.expected_delivery.strftime('%d %b')}",
+            title=f"{who} — {label}: {items_summary(order)[:160]} | delivery {order.expected_delivery.strftime('%d %b')}",
             staff=washer,
             order=order,
             urgent=order.priority == "urgent" or order.expected_delivery <= today + timedelta(days=1),
             created_by="ops-agent",
-            kind="wash",
+            kind=kind,
             notify=True,
         )
         created += 1
@@ -341,7 +356,7 @@ async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStat
         # actually collected the clothes. Once PICKED_UP is committed, create
         # the wash task immediately (without the 3-day planning delay).
         if new_status is OrderStatus.PICKED_UP and await enabled(db):
-            if not await _open_tasks(db, order.id, ("wash",)):
+            if not await _open_tasks(db, order.id, _PROCESS_KINDS):
                 from app.models import Customer
                 from app.services import tasks as task_service
                 from app.services.work_orders import items_summary
@@ -354,14 +369,15 @@ async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStat
                         await db.commit()
                     customer = await db.get(Customer, order.customer_id)
                     who = (customer.name or customer.phone) if customer else "Customer"
+                    kind, label = await _first_task(db, order)
                     await task_service.create_task(
                         db,
-                        title=f"{who} — wash & iron: {items_summary(order)[:160]}",
+                        title=f"{who} — {label}: {items_summary(order)[:160]}",
                         staff=washer,
                         order=order,
                         urgent=order.priority == "urgent",
                         created_by="ops-agent",
-                        kind="wash",
+                        kind=kind,
                         notify=True,
                     )
 
@@ -381,35 +397,50 @@ async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStat
 
 
 async def on_task_done(db: AsyncSession, task: Task, by: str) -> None:
-    """A processing task is a real workflow step, not a shortcut to READY."""
-    targets = {
-        "wash": (OrderStatus.IN_WASH, OrderStatus.IN_DRY),
-        "dry": (OrderStatus.IN_DRY, OrderStatus.IN_IRON),
-        "iron": (OrderStatus.IN_IRON, OrderStatus.READY),
-    }
-    if task.kind not in targets or task.order_id is None:
+    """A processing task is a real workflow step, not a shortcut to READY.
+
+    Agla stage service ke hisaab se (service_stages): sirf-press wala order
+    iron ke baad seedha READY, Wash & Fold dry ke baad READY.
+    """
+    from app.services import service_stages
+
+    stage_of = {v: k for k, v in service_stages.KIND.items()}
+    if task.kind not in stage_of or task.order_id is None:
         return
-    expected, target = targets[task.kind]
+    stage = stage_of[task.kind]
     try:
         from app.services import order_service
 
         order = await db.get(Order, task.order_id)
         if order is None:
             return
+        stages = await service_stages.stages_for(db, order)
 
-        # A drop-off order can start at RECEIVED; record IN_WASH before
-        # moving the completed wash into drying. Pickup orders reach
-        # IN_WASH after the pickup/status transition.
-        if task.kind == "wash" and order.status in (OrderStatus.RECEIVED, OrderStatus.PICKED_UP):
-            await order_service.update_status(
-                db, order, OrderStatus.IN_WASH, changed_by=f"staff:{by}"
-            )
-            order = await db.get(Order, task.order_id)
+        if order.status in service_stages.BEFORE:
+            # A drop-off order can start at RECEIVED. IN_WASH is recorded for
+            # the timeline; a stage that spawns its own task (dry/iron) is
+            # skipped over, or this very task would be created again.
+            if stage in stages and stage not in _STAGE_TASKS:
+                await order_service.update_status(
+                    db, order, stage, changed_by=f"staff:{by}"
+                )
+                order = await db.get(Order, task.order_id)
+            elif stage in stages:
+                target = service_stages.next_after(stage, stages)
+                await order_service.update_status(
+                    db, order, target, changed_by=f"staff:{by}"
+                )
+                return
 
-        if order is not None and order.status is expected:
-            await order_service.update_status(
-                db, order, target, changed_by=f"staff:{by}"
-            )
+        if order is not None and (
+            order.status is stage
+            or (order.status in service_stages.BEFORE and stage not in stages)
+        ):
+            target = service_stages.next_after(order.status, stages)
+            if target is not None:
+                await order_service.update_status(
+                    db, order, target, changed_by=f"staff:{by}"
+                )
     except Exception:
         log.exception("ops_agent_stage_done_failed", code=task.code, kind=task.kind)
 

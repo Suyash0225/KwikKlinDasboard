@@ -118,6 +118,19 @@ def temp_password() -> str:
     return "kk-" + "".join(secrets.choice(_TEMP_ALPHABET) for _ in range(10))
 
 
+def simple_temp_password(name: str) -> str:
+    """Staff ka pehla password — naam + 4 ank, jaise "ravi4821".
+
+    Owner ka kehna: "kk-x7mq…" staff ko bolna/type karna bahut mushkil tha.
+    Ye sirf pehli baar ke liye hai — login par badalna padta hai
+    (must_change_password), aur galat koshishen throttle hoti hain.
+    """
+    word = "".join(ch for ch in (name or "").split(" ")[0].lower() if "a" <= ch <= "z")[:6]
+    if len(word) < 4:
+        word = "kwik"
+    return word + "".join(secrets.choice("23456789") for _ in range(4))
+
+
 # --- throttle ---------------------------------------------------------------
 
 

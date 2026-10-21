@@ -206,6 +206,9 @@ DEFAULTS: dict[str, Any] = {
     "urgent_delivery_days": 1,
     # named discount presets for New Bill [{name, type: percent|flat, value}]
     "discount_presets": [],
+    # Har service ke stages — {"Steam Iron": ["IN_IRON"], ...}. Jo service
+    # yahan nahi, uska andaaza naam se (services/service_stages.py).
+    "service_stages": {},
     # owner ki apni expense categories (built-in list services/expenses.py
     # mein; ye usme JUDTI hain, uski jagah nahi)
     "expense_categories": [],

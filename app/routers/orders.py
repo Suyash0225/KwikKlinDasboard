@@ -448,12 +448,18 @@ async def _order_out(
     order: Order,
     include_notes: bool = False,
     customer: Customer | None = None,
+    stage_cfg: dict | None = None,
 ) -> OrderOut:
+    from app.services import service_stages
+
     if customer is None:
         customer = await db.get(Customer, order.customer_id)
+    if stage_cfg is None:
+        stage_cfg = await service_stages.config(db)
     return OrderOut(
         order_number=order.order_number,
         status=order.status.name,
+        next_status=service_stages.next_name(order, stage_cfg),
         customer_phone=customer.phone if customer else "?",
         customer_name=customer.name if customer else None,
         items=order.items,
@@ -544,7 +550,10 @@ async def list_orders(
     if customer_phone:
         q = q.where(Customer.phone == customer_phone.strip())
     rows = (await db.execute(q)).all()
-    return [await _order_out(db, o, customer=c) for o, c in rows]
+    from app.services import service_stages
+
+    cfg = await service_stages.config(db)   # ek baar, har order par nahi
+    return [await _order_out(db, o, customer=c, stage_cfg=cfg) for o, c in rows]
 
 
 @router.get("/{order_number}/receipt", dependencies=[Depends(require_admin_key)])
