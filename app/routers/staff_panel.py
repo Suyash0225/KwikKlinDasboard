@@ -367,12 +367,14 @@ async def _prefetch(db: AsyncSession, tasks: list[Task], p: StaffPrincipal) -> d
     if order_ids:
         rows = (await db.execute(select(Order).where(Order.id.in_(order_ids)))).scalars().all()
         orders = {o.id: o for o in rows}
-        cust_ids = {o.customer_id for o in rows if o.customer_id}
-        if cust_ids:
-            crows = (
-                await db.execute(select(Customer).where(Customer.id.in_(cust_ids)))
-            ).scalars().all()
-            customers = {c.id: c for c in crows}
+    # Bina order wale kaam (dashboard ka pickup) ka grahak bhi isi query mein
+    cust_ids = {o.customer_id for o in orders.values() if o.customer_id}
+    cust_ids |= {t.customer_id for t in tasks if t.customer_id and not t.order_id}
+    if cust_ids:
+        crows = (
+            await db.execute(select(Customer).where(Customer.id.in_(cust_ids)))
+        ).scalars().all()
+        customers = {c.id: c for c in crows}
     if p.is_manager:
         sids = {t.assigned_staff_id for t in tasks if t.assigned_staff_id}
         if sids:
@@ -419,6 +421,10 @@ def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
         if can_money(p):
             card["order"]["total"] = float(order.total_amount or 0)
             card["order"]["due"] = float((order.total_amount or 0) - (order.amount_paid or 0))
+    elif t.customer_id:
+        cust = pre["customers"].get(t.customer_id)
+        if cust is not None:
+            card["customer"] = {"name": cust.name or "Customer", "phone_masked": mask_phone(cust.phone)}
     return card
 
 
@@ -1510,7 +1516,18 @@ async def pickup_bill_context(
     if task.assigned_staff_id != p.staff.id and not p.is_manager:
         raise HTTPException(status_code=403, detail="This pickup is assigned to another delivery person")
     if task.order_id is None:
-        raise HTTPException(status_code=409, detail="Pickup task has no order")
+        # Owner ne dashboard se pickup diya — sirf grahak chuna, order abhi
+        # bana hi nahi. Bill yahin se naya order banayega.
+        customer = await db.get(Customer, task.customer_id) if task.customer_id else None
+        if customer is None:
+            raise HTTPException(status_code=409, detail="Pickup task has no customer — ask the owner to add one")
+        return {
+            "task_code": task.code,
+            "order_number": None,
+            "customer_ref": str(customer.id),
+            "customer_name": customer.name or "",
+            "customer_phone": normalize_phone(customer.phone),
+        }
     order = await db.get(Order, task.order_id)
     if order is None or order.status is not OrderStatus.PICKUP_ASSIGNED:
         raise HTTPException(status_code=409, detail="This pickup is no longer awaiting collection")
@@ -1672,8 +1689,34 @@ async def create_bill(
             raise HTTPException(status_code=409, detail="Pickup task is already complete")
         if pickup_task.assigned_staff_id != p.staff.id and not p.is_manager:
             raise HTTPException(status_code=403, detail="This pickup is assigned to another delivery person")
-        if pickup_task.order_id is None:
-            raise HTTPException(status_code=409, detail="Pickup task has no order")
+    if pickup_task is not None and pickup_task.order_id is None:
+        # Bina order wala pickup (dashboard se sirf grahak ke saath diya gaya):
+        # bill naya order banata hai, phir neeche wahi raasta — task band,
+        # order PICKED_UP.
+        task_customer = await db.get(Customer, pickup_task.customer_id) if pickup_task.customer_id else None
+        if task_customer is None:
+            raise HTTPException(status_code=409, detail="Pickup task has no customer")
+        if normalize_phone(phone) != normalize_phone(task_customer.phone):
+            raise HTTPException(status_code=409, detail="Customer does not match this pickup")
+        order = await create_order(
+            db,
+            customer_phone=normalize_phone(task_customer.phone),
+            customer_name=name or None,
+            items=items,
+            total_amount=total,
+            discount_amount=discount or None,
+            expected_delivery=delivery,
+            advance_hint=Decimal(str(body.advance)) if body.advance else None,
+            created_by=p.staff.name,
+            needs_pickup=False,
+            priority="urgent" if body.urgent else "normal",
+            bill_seconds=body.bill_seconds,
+            coupon_code=body.coupon_code.strip() or None,
+        )
+        pickup_task.order_id = order.id
+        db.add(pickup_task)
+        await db.commit()
+    elif pickup_task is not None:
         existing = (
             await db.execute(
                 select(Order).where(Order.id == pickup_task.order_id).with_for_update()

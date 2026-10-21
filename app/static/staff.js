@@ -633,11 +633,18 @@ async function showTasks(opts = {}) {
   $("list").querySelectorAll("[data-tdo]").forEach((b) => {
     b.onclick = () => {
       const code = b.dataset.code;
+      if (b.dataset.tdo === "bill") return openPickupBill(code);
       if (b.dataset.tdo === "done") return askDone(code);
       if (b.dataset.tdo === "ask") return openThread(code);
       if (b.dataset.tdo === "order") return orderDetailModal(b.dataset.num);
     };
   });
+}
+/* Pickup kaam par seedha bill — par sirf tab jab abhi kapde lene baaki hon
+   (order bana hi nahi, ya order abhi pickup ke intezaar mein hai) */
+function canPickupBill(t) {
+  if (t.kind !== "pickup" || t.status !== "OPEN" || !canBill() || !DELIVERY_ROLES.includes(ME.role)) return false;
+  return !t.order ? !!t.customer : t.order.status === "PICKUP_ASSIGNED" && !(t.order.total > 0);
 }
 function taskCard(t) {
   const o = t.order;
@@ -648,11 +655,15 @@ function taskCard(t) {
     <div class="body">
       <div class="line1"><b>${t.urgent && open ? "🔴 " : ""}${esc(t.title)}</b></div>
       <div class="sub"><span class="tag task">${esc(TASK_KIND[t.kind] || "Job")}</span>${esc(t.code)} · ${esc(age)}${t.eta_text ? ` · ⏰ ${esc(t.eta_text)}` : ""}</div>
-      ${o ? `<div class="sub mt-xs">🧺 ${esc(o.number)} · ${esc(o.customer)}${o.items ? " · " + esc(o.items) : ""}</div>` : ""}
+      ${o ? `<div class="sub mt-xs">🧺 ${esc(o.number)} · ${esc(o.customer)}${o.items ? " · " + esc(o.items) : ""}</div>`
+        : t.customer ? `<div class="sub mt-xs">👤 ${esc(t.customer.name)}</div>` : ""}
       ${t.cancel_requested ? `<div class="sub mt-xs"><span class="tag late">Cancel requested</span>${esc(t.cancel_reason || "")}</div>` : ""}
       ${t.reply && !open ? `<div class="sub note">✓ ${esc(t.reply)}</div>` : ""}
       ${open ? `<div class="acts">
-        <button class="btn go sm" data-tdo="done" data-code="${esc(t.code)}">✓ Done</button>
+        ${canPickupBill(t)
+          ? `<button class="btn go sm" data-tdo="bill" data-code="${esc(t.code)}">🧾 Create bill &amp; pick up</button>
+             <button class="btn ghost sm" data-tdo="done" data-code="${esc(t.code)}">✓ Done</button>`
+          : `<button class="btn go sm" data-tdo="done" data-code="${esc(t.code)}">✓ Done</button>`}
         ${ME.can_ask ? `<button class="btn ghost sm" data-tdo="ask" data-code="${esc(t.code)}">❓ Ask owner</button>` : ""}
         ${o ? `<button class="btn ghost sm" data-tdo="order" data-num="${esc(o.number)}">👁 Order</button>` : ""}
       </div>` : ""}
@@ -711,7 +722,8 @@ async function loadWork(opts = {}) {
       : { top: `${t.age_hours}h`, sub: "waiting", late: t.age_hours > 24 };
     page.push({
       type: "task", chip: "task", spine: t.urgent || w.late ? "late" : "", kindLabel: "Job",
-      number: t.order ? t.order.number : t.code, who: t.order ? t.order.customer : t.title,
+      number: t.order ? t.order.number : t.code,
+      who: t.order ? t.order.customer : t.customer ? `${t.customer.name} — ${t.title}` : t.title,
       items: t.order ? t.order.items : "", due: t.order ? t.order.due : 0,
       // Bina order wale kaam par paisa hota hi nahi — na rakam dikhani hai
       // na "chukta" ka ✓, warna aadmi samajhta hai ki paisa aa gaya.
@@ -851,6 +863,10 @@ function primaryAction(w) {
     if (w.next === "IN_WASH") return { act: "washing", label: "Start wash" };
     const before = ["RECEIVED", "PICKED_UP"].includes(s);
     return { act: "advance", to: w.next, label: (before ? STEP_START : STEP_SEND)[w.next] };
+  }
+  // Owner ka pickup kaam (bina order) — seedha bill, grahak bhara hua
+  if (t && t.kind === "pickup" && canBill() && DELIVERY_ROLES.includes(ME.role)) {
+    return { act: "pickup_bill", label: "Create bill & pick up", code: t.code };
   }
   if (t) return { act: "done", label: "Done", code: t.code };
   return null;
@@ -1908,11 +1924,12 @@ async function showNewBill() {
     $("b-phone").disabled = true;
     $("b-picked").hidden = false;
     $("b-picked").className = "picked";
-    $("b-picked").textContent = `🛵 Pickup ${ctx.order_number} · ${ctx.customer_name || "Customer"}`;
+    const pk = ctx.order_number ? `Pickup ${ctx.order_number}` : `Pickup ${ctx.task_code}`;
+    $("b-picked").textContent = `🛵 ${pk} · ${ctx.customer_name || "Customer"}`;
     NEEDS_PICKUP = false;
     $("b-pickhint").textContent = "Pickup task linked — this bill completes the collection. No second pickup will be created.";
     $("b-pickup-banner").hidden = false;
-    $("b-pickup-banner").innerHTML = `<b>🛵 Pickup ${esc(ctx.order_number)}</b><span>${esc(ctx.customer_name || "Customer")} · add the clothes you collected, then create the bill</span>`;
+    $("b-pickup-banner").innerHTML = `<b>🛵 ${esc(pk)}</b><span>${esc(ctx.customer_name || "Customer")} · add the clothes you collected, then create the bill</span>`;
     $("b-save").textContent = "Create bill & finish pickup";
   }
   renderCart();

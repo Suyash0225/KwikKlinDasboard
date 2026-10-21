@@ -152,3 +152,72 @@ async def test_pickup_bill_reuses_old_order_and_is_visible_in_recent_bills(
                 {"t": str(two_shops["a"])},
             )
             await db.commit()
+
+
+async def test_dashboard_pickup_task_without_order_opens_prefilled_bill(
+    client, two_shops, sent
+):
+    """Owner ne dashboard se pickup diya — sirf grahak, order nahi. Delivery
+    wala task se seedha bill banata hai: grahak bhara hua, naya order bane,
+    task band aur order PICKED_UP."""
+    from app.models import Customer
+    from app.utils.phone import normalize_phone
+
+    await _panel_rate(two_shops["a"], service="PickupNoOrderSvc", garment="Shirt", rate="40")
+    try:
+        token = tenant_context.current_tenant_id.set(two_shops["a"])
+        try:
+            async with async_session_factory() as db:
+                cust = (
+                    await db.execute(select(Customer).where(Customer.phone == normalize_phone(CUST_A)))
+                ).scalar_one_or_none()
+                if cust is None:
+                    cust = Customer(phone=normalize_phone(CUST_A), name="Pickup Seedha")
+                    db.add(cust)
+                    await db.commit()
+                delivery = (
+                    await db.execute(
+                        select(Staff).where(Staff.phone == A_DEL_PHONE, Staff.tenant_id == two_shops["a"])
+                    )
+                ).scalar_one()
+                task = await task_service.create_task(
+                    db, title="Sharma ji ke ghar se kapde lao", staff=delivery,
+                    notify=False, kind="pickup", customer=cust,
+                )
+                code, cust_id = task.code, cust.id
+        finally:
+            tenant_context.current_tenant_id.reset(token)
+
+        await _login(client, A_DEL_PHONE)
+        card = next(t for t in (await client.get("/staff/api/tasks?tab=mine")).json()["tasks"] if t["code"] == code)
+        assert card["kind"] == "pickup" and "order" not in card and card["customer"]["name"]
+
+        ctx = await client.get(f"/staff/api/tasks/{code}/bill-context")
+        assert ctx.status_code == 200, ctx.text
+        ctx = ctx.json()
+        assert ctx["order_number"] is None and ctx["customer_ref"] == str(cust_id)
+
+        payload = {
+            "pickup_task_code": code, "customer_ref": ctx["customer_ref"], "customer_phone": "",
+            "customer_name": ctx["customer_name"],
+            "items": [{"service": "PickupNoOrderSvc", "garment": "Shirt", "qty": 3}],
+        }
+        r = await client.post("/staff/api/bills", json=payload)
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["pickup_completed"] is True and body["total"] == 120.0
+
+        async with async_session_factory() as db:
+            order = (await db.execute(select(Order).where(Order.order_number == body["order_number"]))).scalar_one()
+            assert order.status is OrderStatus.PICKED_UP and order.customer_id == cust_id
+            task = (await db.execute(select(Task).where(Task.code == code))).scalar_one()
+            assert task.status == "DONE" and task.order_id == order.id
+
+        assert (await client.post("/staff/api/bills", json=payload)).status_code == 409
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(
+                sqltext("DELETE FROM rate_card WHERE tenant_id = :t AND service = 'PickupNoOrderSvc'"),
+                {"t": str(two_shops["a"])},
+            )
+            await db.commit()
