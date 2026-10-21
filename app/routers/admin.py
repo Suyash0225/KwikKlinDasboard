@@ -1292,6 +1292,59 @@ async def rate_update(rate_id: str, body: RateUpdateIn, db: AsyncSession = Depen
     return {"ok": True}
 
 
+class RateRenameIn(BaseModel):
+    kind: str = Field(pattern="^(service|garment)$")
+    old: str = Field(min_length=1, max_length=60)
+    new: str = Field(min_length=1, max_length=60)
+
+
+@router.post("/api/rates/rename", dependencies=[Depends(require_admin_owner)])
+async def rates_rename(body: RateRenameIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Matrix ka poora column (service) ya row (garment) ka naam badlo.
+
+    Daam wahi rehte hain, sirf naam badalta hai — saari rows ek saath.
+    Purane bill apni line mein naam copy rakhte hain, unpar asar nahi.
+    Service ke stages bhi naye naam par chale jaate hain.
+    """
+    old, new = body.old.strip(), body.new.strip()
+    if not new:
+        raise HTTPException(status_code=400, detail="New name cannot be empty")
+    if old == new:
+        return {"renamed": 0}
+    col = Rate.service if body.kind == "service" else Rate.garment
+    rows = (await db.execute(select(Rate).where(col == old))).scalars().all()
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"{old} not found")
+    # Naya naam pehle se hai to wahi jodi (service+garment) dobara ban jaati
+    for r in rows:
+        svc = new if body.kind == "service" else r.service
+        gar = new if body.kind == "garment" else r.garment
+        clash = (
+            await db.execute(
+                select(Rate.id).where(Rate.service == svc, Rate.garment == gar, Rate.id != r.id)
+            )
+        ).scalar_one_or_none()
+        if clash is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{svc}{' / ' + gar if gar else ''} already has a rate — remove one first",
+            )
+    for r in rows:
+        setattr(r, body.kind, new)
+    await db.commit()
+    if body.kind == "service":
+        from app.services import app_settings
+
+        stages = await app_settings.get(db, "service_stages")
+        if isinstance(stages, dict) and old in stages:
+            stages = {**stages, new: stages[old]}
+            stages.pop(old, None)
+            await app_settings.set_value(db, "service_stages", stages)
+    site_rates.invalidate_cache()
+    log.info("rates_renamed", kind=body.kind, old=old, new=new, count=len(rows))
+    return {"renamed": len(rows)}
+
+
 @router.delete("/api/rates/{rate_id}", dependencies=[Depends(require_admin_owner)])
 async def rate_delete(rate_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     """Galti se bana daam hatao. Purane bill par asar nahi — bill apni line
@@ -1609,7 +1662,7 @@ async def grant_panel_access(
     # aur owner ka darja chheenna do alag baatein hain; ye endpoint sirf
     # pehla kaam karta hai.
 
-    temp = auth_service.temp_password()
+    temp = auth_service.simple_temp_password(staff.name)
     await staff_auth.set_password(db, staff, temp, temp=True)
     await staff_auth.revoke_all(db, staff.id)   # purane phone ke session khatam
     await audit.record(

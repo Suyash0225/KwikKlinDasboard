@@ -4929,15 +4929,19 @@ function renderRateMatrix() {
         placeholder="₹" onchange="rmCell('${esc(g)}','${esc(s)}',this.value,'${r ? r.id : ""}')"></td>`;
   };
   const x = (fn, arg, title) => `<button type="button" class="rm-x" title="${esc(title)}" aria-label="${esc(title)}" onclick="${fn}('${esc(arg)}')">✕</button>`;
+  // Sirf saved naam badle ja sakte hain — naya (bina daam) abhi DB mein hai hi nahi
+  const saved = (kind, name) => RM_RATES.some((r) => r[kind] === name);
+  const pen = (kind, name) => saved(kind, name)
+    ? `<button type="button" class="rm-x" title="Rename ${esc(name)}" aria-label="Rename ${esc(name)}" onclick="rmRename('${kind}','${esc(name)}')">✏️</button>` : "";
   $("rate-matrix").innerHTML = `
     <p class="muted" style="margin:0 0 8px">Under each service, tap Wash / Dry / Iron to choose the stages its clothes go through. An iron-only service skips washing and drying.</p>
     <table class="tbl keep" style="min-width:${180 + services.length * 125}px"><thead><tr>
-      <th>Laundry garment name</th>${services.map((s) => `<th><span class="rm-h">${esc(s)}${x("rmDeleteService", s, `Remove service ${s}`)}</span>${stageChips(s)}</th>`).join("")}
+      <th>Laundry garment name</th>${services.map((s) => `<th><span class="rm-h">${esc(s)}${pen("service", s)}${x("rmDeleteService", s, `Remove service ${s}`)}</span>${stageChips(s)}</th>`).join("")}
     </tr></thead><tbody>
-      ${garments.map((g) => `<tr><td><span class="rm-h"><b style="font-size:13px;text-transform:none;letter-spacing:0">${esc(g)}</b>${x("rmDeleteGarment", g, `Remove ${g}`)}</span></td>${services.map((s) => cell(g, s)).join("")}</tr>`).join("")}
+      ${garments.map((g) => `<tr><td><span class="rm-h"><b style="font-size:13px;text-transform:none;letter-spacing:0">${esc(g)}</b>${pen("garment", g)}${x("rmDeleteGarment", g, `Remove ${g}`)}</span></td>${services.map((s) => cell(g, s)).join("")}</tr>`).join("")}
     </tbody></table>`;
   $("rate-kg").innerHTML = kg.map((r) => `
-    <div class="sumrow"><span>${esc(r.service)}${stageChips(r.service)}</span>
+    <div class="sumrow"><span><span class="rm-h">${esc(r.service)}<button type="button" class="rm-x" title="Rename ${esc(r.service)}" aria-label="Rename ${esc(r.service)}" onclick="rmRename('service','${esc(r.service)}')">✏️</button></span>${stageChips(r.service)}</span>
       <span style="max-width:120px"><input aria-label="${esc(r.service)} selling rate per kg" title="Selling rate per kg" type="number" step="0.5" value="${r.rate}" onchange="updRate('${r.id}', this.value, null)"></span></div>`).join("")
     || `<p class="muted">No per-kg services yet.</p>`;
 }
@@ -4990,6 +4994,33 @@ async function rmCell(garment, service, value, id) {
     RM_RATES = await api("/admin/api/rates");
     renderRateMatrix();
   } catch (e) { toast(e.message, true); }
+}
+/* ✏️ Naam badlo — daam wahi rehte hain, DB mein saari rows ek saath */
+function rmRename(kind, name) {
+  const what = kind === "service" ? "service" : "item";
+  openModal(`<h3>Rename ${what}</h3>
+    <div class="frm"><div class="setfield"><label for="rn-name">New name</label>
+      <input id="rn-name" maxlength="60" value="${esc(name)}">
+      <small class="fielderr" id="rn-err"></small></div></div>
+    <p class="muted">Rates stay the same. Old bills keep the old name.</p>
+    <div class="btnrow">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="rn-save">Save</button>
+    </div>`);
+  $("rn-save").onclick = (e) => busy(e.target, async () => {
+    const neu = $("rn-name").value.trim();
+    if (!neu) { $("rn-err").textContent = "Name cannot be empty."; return; }
+    if (neu === name) { closeModal(); return; }
+    try {
+      await api("/admin/api/rates/rename", { method: "POST", body: { kind, old: name, new: neu } });
+    } catch (err) { $("rn-err").textContent = err.message; return; }
+    const st = SETTINGS_CACHE.service_stages;
+    if (kind === "service" && st && st[name]) { st[neu] = st[name]; delete st[name]; }
+    closeModal();
+    RM_RATES = await api("/admin/api/rates");
+    renderRateMatrix();
+    toast(`${name} → ${neu} saved`);
+  });
 }
 async function rmDeleteGroup(kind, name) {
   const saved = RM_RATES.filter((r) => r.unit === "pc" && r[kind] === name).length;
@@ -5207,6 +5238,15 @@ async function updStaff(id, body) {
   catch (e) { toast(e.message, true); }
 }
 
+// Staff edit ka poora dropdown — pehle sirf Washer/Delivery tha, aur
+// Supervisor/Manager ko edit karke save karte hi wo Washer ban jaata tha
+const EDIT_ROLES = [
+  ["WASHER", "Washerman — washing &amp; ironing"],
+  ["IRONER", "Ironing / Press — gets clothes after washing"],
+  ["DELIVERY", "Delivery — pickup and delivery"],
+  ["SUPERVISOR", "Washerman / Manager — works, and oversees everyone"],
+  ["MANAGER", "Manager — oversees only"],
+];
 function editStaffModal(id) {
   const s = staffById(id);
   if (!s) return;
@@ -5219,12 +5259,12 @@ function editStaffModal(id) {
       <div class="setfield"><label for="es-phone">Phone</label>
         <input id="es-phone" inputmode="numeric" value="${esc(digits)}">
         <small class="fielderr" id="es-phone-err"></small></div>
+      ${s.role === "ADMIN" ? `<div class="setfield"><label>Role</label>
+        <p class="muted" style="margin:0">Owner — full access (does not change here)</p></div>` : `
       <div class="setfield"><label for="es-role">Role</label>
         <select id="es-role">
-          <option value="WASHER" ${s.role === "WASHER" ? "selected" : ""}>Washer (washing &amp; ironing)</option>
-          <option value="IRONER" ${s.role === "IRONER" ? "selected" : ""}>Ironing / Press</option>
-          <option value="DELIVERY" ${s.role === "DELIVERY" ? "selected" : ""}>Delivery</option>
-        </select></div>
+          ${EDIT_ROLES.map(([v, label]) => `<option value="${v}" ${s.role === v ? "selected" : ""}>${label}</option>`).join("")}
+        </select></div>`}
     </div>
     <div class="btnrow">
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
@@ -5238,7 +5278,10 @@ function editStaffModal(id) {
     if (name.length < 2) { $("es-name-err").textContent = "Name must be at least 2 characters."; bad = true; }
     if (phone.length !== 10) { $("es-phone-err").textContent = "Phone must be exactly 10 digits."; bad = true; }
     if (bad) return;
-    const res = await api(`/admin/api/staff/${id}`, { method: "PUT", body: { name, phone, role: $("es-role").value } });
+    // Owner ka darja yahan se kabhi nahi badalta — role bhejte hi nahi
+    const body = { name, phone };
+    if ($("es-role")) body.role = $("es-role").value;
+    const res = await api(`/admin/api/staff/${id}`, { method: "PUT", body });
     closeModal();
     // save ke turant baad batao ki agent ab kya karega — aur agar wo number
     // customer ka bhi hai to chetavni, jo chhupani nahi chahiye
