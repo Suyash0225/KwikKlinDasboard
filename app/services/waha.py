@@ -235,30 +235,3 @@ async def send_image(
     return _message_id(data)
 
 
-async def send_link_preview(
-    phone: str,
-    text: str,
-    *,
-    preview_url: str,
-    title: str,
-    description: str,
-    image_url: str | None = None,
-) -> str:
-    preview = {
-        "url": preview_url,
-        "title": title[:120],
-        "description": description[:240],
-    }
-    if image_url:
-        preview["image"] = {"url": image_url}
-    data = await _post(
-        "/api/send/link-custom-preview",
-        {
-            "session": settings.WAHA_SESSION,
-            "chatId": chat_id(phone),
-            "text": text,
-            "linkPreviewHighQuality": True,
-            "preview": preview,
-        },
-    )
-    return _message_id(data)

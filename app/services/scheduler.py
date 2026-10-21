@@ -35,6 +35,9 @@ from app.services.order_service import ACTIVE_STATUSES
 from app.services.whatsapp import ListRow, SendError, WindowClosedError, send_message
 from app.services.work_orders import items_summary
 from app.services.tenant_context import manager_phone
+# _nightly_tick isse system context leta hai — pehle import hi nahi tha, aur
+# KPI snapshot / credits expiry har raat NameError se chupchaap fail hote the
+from app.services import tenant_context
 
 log = structlog.get_logger()
 
@@ -572,148 +575,6 @@ _PING_RULES = {
 }
 
 
-async def run_follow_up_pings() -> int:
-    """At 10:00, 15:00, and 18:00 IST: ping responsible staff on stale orders;
-    6h+ stale -> manager escalation. Idempotent per scheduled window."""
-    from app.models import OrderStatusHistory
-    from app.services.work_orders import send_work_order
-    from app.services import team
-
-    from app.models import TASK_OPEN, Task
-    from app.services.tasks import JOB_KINDS
-
-    now = datetime.now(timezone.utc)
-    now_ist = datetime.now(IST)
-    if _in_quiet_hours(now_ist):
-        return 0
-    window_key = now_ist.strftime("%Y-%m-%d-%H")
-    sends = 0
-    async with async_session_factory() as db:
-        for status, (stale_h, role, question) in _PING_RULES.items():
-            rows = (
-                (await db.execute(select(Order).where(Order.status == status)))
-                .scalars()
-                .all()
-            )
-            for o in rows:
-                last_change = (
-                    await db.execute(
-                        select(func.max(OrderStatusHistory.changed_at)).where(
-                            OrderStatusHistory.order_id == o.id
-                        )
-                    )
-                ).scalar_one() or o.created_at
-                stale_hours = (now - last_change).total_seconds() / 3600
-                if stale_hours < stale_h:
-                    continue
-                if stale_hours >= 6:
-                    if await _claim(f"esc6h:{o.order_number}:{now_ist.strftime('%Y-%m-%d')}"):
-                        try:
-                            await send_message(
-                                db, to_phone=await team.primary_admin_phone(db),
-                                text=(
-                                    f"🚨 *ESCALATION — {o.order_number}*\n"
-                                    f"━━━━━━━━━━━━━━\n"
-                                    f"📌 *Status:* {o.status.name}\n"
-                                    f"⏱️ *Stuck:* {int(stale_hours)} ghante\n"
-                                    f"⚠️ Staff ka response nahi aaya — please check."
-                                ),
-                            )
-                        except SendError as exc:
-                            log.info("esc6h_not_sent")
-                            if not exc.transient:
-                                await _unclaim(
-                                    f"esc6h:{o.order_number}:{now_ist.strftime('%Y-%m-%d')}"
-                                )
-                # A live pickup/delivery task already has its own follow-up
-                # clock — two reminders for one job reads as spam.
-                job_open = (
-                    await db.execute(
-                        select(Task.id).where(
-                            Task.order_id == o.id,
-                            Task.kind.in_(JOB_KINDS),
-                            Task.status == TASK_OPEN,
-                        )
-                    )
-                ).first()
-                if job_open is not None:
-                    continue
-                if not await _claim(f"ping:{o.order_number}:{window_key}"):
-                    continue
-                outcome = await send_work_order(
-                    db, o, headline=f"⏰ Reminder: {question}",
-                    extra="Ho gaya to reply karein: done " + o.order_number,
-                    role=role,
-                )
-                if outcome in ("sent", "sent_template"):
-                    sends += 1
-        if sends:
-            await audit.record(
-                actor_role="system", actor="scheduler", action="follow_up_pings",
-                args={"window": window_key}, result=f"pinged {sends}",
-            )
-    return sends
-
-
-async def run_daily_summary() -> None:
-    """21:00 IST: owner's one-look day summary (internal — quiet-hour exempt)."""
-    now_ist = datetime.now(IST)
-    day_key = now_ist.strftime("%Y-%m-%d")
-    if not await _claim(f"daysum:{day_key}"):
-        return
-    today_start = now_ist.replace(hour=0, minute=0, second=0).astimezone(timezone.utc)
-    async with async_session_factory() as db:
-        new_n = (
-            await db.execute(
-                select(func.count()).select_from(Order).where(Order.created_at >= today_start)
-            )
-        ).scalar_one()
-        delivered_n = (
-            await db.execute(
-                select(func.count()).select_from(Order).where(
-                    Order.actual_delivery >= today_start
-                )
-            )
-        ).scalar_one()
-        by_status = (
-            await db.execute(
-                select(Order.status, func.count())
-                .where(Order.status.in_(ACTIVE_STATUSES))
-                .group_by(Order.status)
-            )
-        ).all()
-        late = (
-            (
-                await db.execute(
-                    select(Order).where(
-                        Order.expected_delivery < today_ist(),
-                        Order.status.notin_(
-                            (OrderStatus.DELIVERED, OrderStatus.CANCELLED)
-                        ),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        status_line = " | ".join(f"{s.name}: {c}" for s, c in by_status) or "koi active nahi"
-        late_line = "\n".join(f"- {o.order_number} (tha {o.expected_delivery})" for o in late[:10]) or "koi nahi 🎉"
-        text = (
-            f"🌙 Aaj ka summary ({now_ist.strftime('%d %b')}):\n"
-            f"Naye order: {new_n} | Deliver hue: {delivered_n}\n"
-            f"Active: {status_line}\n"
-            f"LATE ORDERS:\n{late_line}"
-        )
-        try:
-            await send_message(db, to_phone=manager_phone(), text=text)
-        except SendError as exc:
-            log.info("daily_summary_not_sent")
-            if not exc.transient:  # transient goes via outbound_queue
-                await _unclaim(f"daysum:{day_key}")
-        await audit.record(
-            actor_role="system", actor="scheduler", action="daily_summary",
-            args={"date": day_key}, result=f"new={new_n} late={len(late)}",
-        )
 
 
 async def _nightly_tick() -> None:
@@ -1046,19 +907,6 @@ async def run_standup(force: bool = False, key_prefix: str = "standup") -> int:
                     else:
                         other_tasks.append((task, who, order, customer, flag))
 
-                def _task_line(row):
-                    task, who, order, customer, flag = row
-                    customer_name = (customer.name or customer.phone) if customer else ""
-                    order_no = order.order_number if order else ""
-                    due = ""
-                    if order and order.total_amount is not None:
-                        paid = order.amount_paid or Decimal("0")
-                        due_amount = order.total_amount - paid
-                        if due_amount > 0:
-                            due = f" · Due ₹{due_amount:g}"
-                    context = " · ".join(x for x in (order_no, customer_name) if x)
-                    context = f" · {context}" if context else ""
-                    return f"• {task.code} · {who} · {title[:140]}{context}{due}{flag}"
 
                 if payment_tasks:
                     manager_text.append("")

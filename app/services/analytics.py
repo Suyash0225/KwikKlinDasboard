@@ -46,32 +46,6 @@ async def ga4_realtime(db) -> dict:
     }
 
 
-async def ga4_daily(db, days: int = 7) -> dict:
-    conn = await _ga_connection(db)
-    property_id = str(conn.get("property_id") or "")
-    if not property_id:
-        return {"configured": False, "rows": []}
-    token = await _ga_access_token(db)
-    url = f"https://analyticsdata.googleapis.com/v1beta/properties/{property_id}:runReport"
-    body = {
-        "dateRanges": [{"startDate": f"{max(1, days)}daysAgo", "endDate": "today"}],
-        "dimensions": [{"name": "date"}],
-        "metrics": [{"name": "activeUsers"}, {"name": "screenPageViews"}, {"name": "eventCount"}],
-    }
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.post(url, headers={"Authorization": f"Bearer {token}"}, json=body)
-    if r.status_code != 200:
-        raise AnalyticsError(f"GA4 report error {r.status_code}")
-    out = []
-    for row in (r.json() or {}).get("rows") or []:
-        out.append({
-            "date": (row.get("dimensionValues") or [{}])[0].get("value"),
-            "active_users": int(row["metricValues"][0].get("value") or 0),
-            "views": int(row["metricValues"][1].get("value") or 0),
-            "events": int(row["metricValues"][2].get("value") or 0),
-        })
-    return {"configured": True, "rows": out}
-
 
 async def gbp_performance(db, days: int = 30) -> dict:
     conn = await gbp.get_connection(db)
