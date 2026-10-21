@@ -151,7 +151,8 @@ async def test_cancelled_pickup_never_creates_washer_task(shop) -> None:
     assert not [t for t in ts if t.kind == "wash"]
 
 
-async def test_wash_dry_iron_pipeline_hands_delivery_to_boy(shop) -> None:
+async def test_wash_iron_pipeline_hands_delivery_to_boy(shop) -> None:
+    """Kram: Wash -> Iron -> Ready -> Delivery. Dry ka koi kaam nahi banta."""
     o = await _order()
     wash = (await _tasks(o.id))[0]
 
@@ -160,19 +161,10 @@ async def test_wash_dry_iron_pipeline_hands_delivery_to_boy(shop) -> None:
         await task_service.complete_task(db, t, by="Opswash Two")
 
     async with async_session_factory() as db:
-        assert (await db.get(Order, o.id)).status is OrderStatus.IN_DRY
-    kinds = {t.kind: t for t in await _tasks(o.id)}
-    assert kinds["wash"].status == "DONE"
-    assert kinds["dry"].status == "OPEN"
-
-    async with async_session_factory() as db:
-        t = await db.get(Task, kinds["dry"].id)
-        await task_service.complete_task(db, t, by="Opswash Two")
-
-    async with async_session_factory() as db:
         assert (await db.get(Order, o.id)).status is OrderStatus.IN_IRON
     kinds = {t.kind: t for t in await _tasks(o.id)}
-    assert kinds["dry"].status == "DONE"
+    assert "dry" not in kinds
+    assert kinds["wash"].status == "DONE"
     assert kinds["iron"].status == "OPEN"
 
     async with async_session_factory() as db:
@@ -356,3 +348,26 @@ async def test_work_order_resolver_sends_to_one_agent_enabled_worker(shop) -> No
             switches.pop(str(shop["w1"]), None)
             switches.pop(str(shop["w2"]), None)
             await app_settings.set_value(db, "staff_agent_switches", switches)
+
+
+async def test_iron_task_goes_to_the_ironer(shop) -> None:
+    """Dukaan mein press wala ho to iron ka kaam usi ko — washerman ko nahi."""
+    IRON = "+919999900295"
+    await _purge_staff(IRON)
+    ironer = await _staff(shop["t"], IRON, "Opsiron", StaffRole.IRONER)
+    try:
+        o = await _order()
+        wash = (await _tasks(o.id))[0]
+        assert wash.assigned_staff_id in (shop["w1"], shop["w2"])
+        async with async_session_factory() as db:
+            await task_service.complete_task(db, await db.get(Task, wash.id), by="Opswash One")
+        iron = next(t for t in await _tasks(o.id) if t.kind == "iron")
+        assert iron.status == "OPEN" and iron.assigned_staff_id == ironer
+        async with async_session_factory() as db:
+            # Order ka washer column dhulai wale ka hi rehta hai
+            assert (await db.get(Order, o.id)).assigned_washer_id != ironer
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(sqltext("UPDATE tasks SET assigned_staff_id = NULL WHERE assigned_staff_id = :s"), {"s": str(ironer)})
+            await db.commit()
+        await _purge_staff(IRON)

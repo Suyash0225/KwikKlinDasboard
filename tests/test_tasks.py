@@ -554,24 +554,20 @@ async def test_task_status_menu_enforces_sequential_wash_dry_iron_ready(client, 
             current_task = await task_service.get_by_code(db, code)
             assert current_task.status == TASK_OPEN
 
+        # Kram: Wash -> Iron -> Ready. Purana "dry" button ab nahi chalta.
         await post(f"[button:task:{code}:dry] Washing done")
         async with async_session_factory() as db:
-            current = await db.get(type(order), order_id)
-            assert current.status is OrderStatus.IN_DRY
-            completed_wash = await task_service.get_by_code(db, code)
-            assert completed_wash.status == TASK_DONE
-            dry_task = (await db.execute(
-                select(Task).where(
-                    Task.order_id == order_id, Task.kind == "dry", Task.status == TASK_OPEN
-                ).order_by(Task.created_at.desc())
-            )).scalars().first()
-            assert dry_task is not None, "IN_DRY must create the drying-stage task"
-            dry_code = dry_task.code
+            assert (await db.get(type(order), order_id)).status is OrderStatus.IN_WASH
 
-        await post(f"[button:task:{dry_code}:iron] Drying done")
+        await post(f"[button:task:{code}:iron] Washing done")
         async with async_session_factory() as db:
             current = await db.get(type(order), order_id)
             assert current.status is OrderStatus.IN_IRON
+            completed_wash = await task_service.get_by_code(db, code)
+            assert completed_wash.status == TASK_DONE
+            assert not (await db.execute(
+                select(Task).where(Task.order_id == order_id, Task.kind == "dry")
+            )).scalars().first(), "no drying task in the Wash -> Iron flow"
             iron_task = (await db.execute(
                 select(Task).where(
                     Task.order_id == order_id, Task.kind == "iron", Task.status == TASK_OPEN

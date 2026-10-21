@@ -1,22 +1,28 @@
 """Har service ke apne stages — sirf-press wala kapda dhulai se nahi guzarta.
 
 Owner rate card mein service banate waqt tay karta hai ki us service mein
-kaun se stage hain (Wash / Dry / Iron). Order ke stages = uske saare
-kapdon ki services ka jod, hamesha isi kram mein. Order agle stage par
-jaata hai; koi stage na bache to seedha READY.
+kaun se stage hain (Wash / Iron). Order ke stages = uske saare kapdon ki
+services ka jod, hamesha isi kram mein. Order agle stage par jaata hai;
+koi stage na bache to seedha READY.
+
+Dukaan ka kram: Wash -> Iron -> Ready -> Delivery. Drying alag stage NAHI
+hai (owner: "drying pe click karna padta tha, aur dry ka task press wale
+ke paas chala jaata tha") — wo dhulai ka hissa hai. Purane order jo
+IN_DRY par khade hain, wahan se seedha Iron/Ready jaate hain.
 
 Jis service ka owner ne kuch tay nahi kiya, uska andaaza naam se: "Steam
-Iron", "Press", "Polish" -> sirf Iron; "Wash & Fold" -> Wash + Dry; baaki
-sab pehle jaisa poora Wash -> Dry -> Iron. Isliye purani dukaanon par
-kuch nahi badalta jab tak naam saaf na kahe.
+Iron", "Press", "Polish" -> sirf Iron; "Wash & Fold" -> sirf Wash; baaki
+sab Wash -> Iron.
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Order, OrderStatus
 
-STAGES = (OrderStatus.IN_WASH, OrderStatus.IN_DRY, OrderStatus.IN_IRON)
+STAGES = (OrderStatus.IN_WASH, OrderStatus.IN_IRON)
 FULL = list(STAGES)
+# Kram ki tulna ke liye — IN_DRY purane order ke liye beech mein rehta hai
+_SEQ = (OrderStatus.IN_WASH, OrderStatus.IN_DRY, OrderStatus.IN_IRON)
 # Task.kind aur WhatsApp menu ka action — dono isi naam se chalte hain
 KIND = {OrderStatus.IN_WASH: "wash", OrderStatus.IN_DRY: "dry", OrderStatus.IN_IRON: "iron"}
 ACTION = {**KIND, OrderStatus.READY: "ready"}
@@ -33,7 +39,7 @@ def default_stages(service: str) -> list[OrderStatus]:
     if not washy and any(w in name for w in _PRESSY):
         return [OrderStatus.IN_IRON]
     if "wash" in name and "fold" in name and not any(w in name for w in _PRESSY):
-        return [OrderStatus.IN_WASH, OrderStatus.IN_DRY]
+        return [OrderStatus.IN_WASH]
     return list(FULL)
 
 
@@ -90,9 +96,9 @@ def next_after(status: OrderStatus, stages: list[OrderStatus]) -> OrderStatus | 
     """Is status ke baad agla kadam. Dhulai ki kataar se bahar ho to None."""
     if status in BEFORE:
         return stages[0] if stages else OrderStatus.READY
-    if status not in STAGES:
+    if status not in _SEQ:
         return None
-    later = [s for s in stages if STAGES.index(s) > STAGES.index(status)]
+    later = [s for s in stages if _SEQ.index(s) > _SEQ.index(status)]
     return later[0] if later else OrderStatus.READY
 
 

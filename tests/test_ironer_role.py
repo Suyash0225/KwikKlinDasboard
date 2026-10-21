@@ -49,8 +49,10 @@ async def test_other_washer_and_ironer_move_an_order_assigned_to_someone_else(cl
     r = await client.post(f"/staff/api/orders/{num}/ready")
     assert r.status_code == 200 and r.json()["status"] == "READY", r.text
 
-    # Ready ke baad wo order delivery ka hai — press wale ke liye band
-    assert (await client.get(f"/staff/api/orders/{num}")).status_code == 403
+    # Ready ke baad wo order delivery ka hai — press wale ki kaam ki list se hat jaata hai.
+    # (Detail khulti rehti hai: iron ka kaam usi ke naam tha.)
+    todo = [x["number"] for x in (await client.get("/staff/api/route")).json()["stops"]]
+    assert num not in todo
 
 
 async def test_washer_can_send_to_iron_too(client, floor, sent) -> None:

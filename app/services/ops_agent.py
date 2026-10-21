@@ -44,6 +44,9 @@ log = structlog.get_logger()
 
 ROLES = {
     "WASHER": (StaffRole.WASHER, StaffRole.SUPERVISOR),
+    # Press ka kaam press wale ko — pehle "iron" task bhi washerman ke pool se
+    # chuna jaata tha (aur jis dukaan ka press wala WASHER bana tha, use dry ka)
+    "IRONER": (StaffRole.IRONER,),
     "DELIVERY": (StaffRole.DELIVERY,),
 }
 _DEFAULT_SETTING = {"WASHER": "default_washer_phone", "DELIVERY": "default_delivery_phone"}
@@ -116,8 +119,9 @@ async def pick_staff(db: AsyncSession, role: str, order: Order | None = None) ->
     switches = await app_settings.get(db, "staff_agent_switches")
     if not isinstance(switches, dict):
         switches = {}
-    if order is not None:
-        sid = getattr(order, _ORDER_FIELD[role])
+    field = _ORDER_FIELD.get(role)   # press wale ka order par alag column nahi
+    if order is not None and field:
+        sid = getattr(order, field)
         if sid is not None:
             st = await db.get(Staff, sid)
             if (
@@ -141,11 +145,21 @@ async def pick_staff(db: AsyncSession, role: str, order: Order | None = None) ->
     if not staff:
         return None
     try:
-        default_phone = (await app_settings.get(db, _DEFAULT_SETTING[role]) or "").strip()
+        default_phone = (await app_settings.get(db, _DEFAULT_SETTING[role]) or "").strip() if role in _DEFAULT_SETTING else ""
     except Exception:
         default_phone = ""
     load = await open_load(db)
     return min(staff, key=lambda s: (load.get(s.id, 0), s.phone != default_phone, s.name.casefold()))
+
+
+async def pick_worker(db: AsyncSession, kind: str, order: Order | None = None) -> Staff | None:
+    """Is kaam ke liye aadmi: iron -> press wala (na ho to washerman), baaki
+    dhulai -> washerman."""
+    if kind == "iron":
+        ironer = await pick_staff(db, "IRONER", order)
+        if ironer is not None:
+            return ironer
+    return await pick_staff(db, "WASHER", order)
 
 
 async def _open_tasks(db: AsyncSession, order_id, kinds) -> list[Task]:
@@ -196,14 +210,15 @@ async def on_order_created(db: AsyncSession, order: Order) -> dict:
                     )
                 ):
                     kind, label = await _first_task(db, order)
+                    worker = await pick_worker(db, kind, order) or washer
                     task = await task_service.create_task(
                         db,
                         title=f"{who} — {label}: {items_summary(order)[:160]}",
-                        staff=washer, order=order, urgent=order.priority == "urgent",
+                        staff=worker, order=order, urgent=order.priority == "urgent",
                         created_by="agent", kind=kind,
                         notify=True,
                     )
-                    out["wash"] = {"code": task.code, "staff": washer.name}
+                    out["wash"] = {"code": task.code, "staff": worker.name}
 
         if order.status is OrderStatus.PICKUP_ASSIGNED:
             boy = await pick_staff(db, "DELIVERY", order)
@@ -267,10 +282,11 @@ async def plan_due_wash_tasks(db: AsyncSession, *, today=None) -> int:
         customer = await db.get(Customer, order.customer_id)
         who = (customer.name or customer.phone) if customer else "Customer"
         kind, label = await _first_task(db, order)
+        worker = await pick_worker(db, kind, order) or washer
         task = await task_service.create_task(
             db,
             title=f"{who} — {label}: {items_summary(order)[:160]} | delivery {order.expected_delivery.strftime('%d %b')}",
-            staff=washer,
+            staff=worker,
             order=order,
             urgent=order.priority == "urgent" or order.expected_delivery <= today + timedelta(days=1),
             created_by="ops-agent",
@@ -282,7 +298,7 @@ async def plan_due_wash_tasks(db: AsyncSession, *, today=None) -> int:
             actor_role="system",
             actor="ops-agent",
             action="wash_task_planned",
-            args={"order": order.order_number, "staff": washer.name, "days_to_delivery": (order.expected_delivery - today).days},
+            args={"order": order.order_number, "staff": worker.name, "days_to_delivery": (order.expected_delivery - today).days},
             result=task.code,
         )
     return created
@@ -301,10 +317,11 @@ async def _ensure_stage_task(db: AsyncSession, order: Order, status: OrderStatus
     if await _open_tasks(db, order.id, (cfg["kind"],)):
         return None
 
-    washer = await pick_staff(db, "WASHER", order)
+    washer = await pick_worker(db, cfg["kind"], order)
     if washer is None:
         return None
-    if order.assigned_washer_id is None:
+    # Order ka "washer" column dhulai wale ka hai — press wale ko us par nahi likhte
+    if order.assigned_washer_id is None and washer.role is not StaffRole.IRONER:
         order.assigned_washer_id = washer.id
         db.add(order)
         await db.commit()
@@ -373,7 +390,7 @@ async def on_status_change(db: AsyncSession, order: Order, new_status: OrderStat
                     await task_service.create_task(
                         db,
                         title=f"{who} — {label}: {items_summary(order)[:160]}",
-                        staff=washer,
+                        staff=await pick_worker(db, kind, order) or washer,
                         order=order,
                         urgent=order.priority == "urgent",
                         created_by="ops-agent",
@@ -467,13 +484,13 @@ async def rebalance(db: AsyncSession) -> int:
             order = await db.get(Order, task.order_id) if task.order_id else None
             if order is not None and getattr(order, _ORDER_FIELD[role]) == old.id:
                 setattr(order, _ORDER_FIELD[role], None)
-            new = await pick_staff(db, role, order)
+            new = await (pick_worker(db, task.kind, order) if role == "WASHER" else pick_staff(db, role, order))
             if new is None or new.id == old.id:
                 continue
             task.assigned_staff_id = new.id
             task.ping_count = 0
             task.escalated_at = None
-            if order is not None:
+            if order is not None and new.role is not StaffRole.IRONER:
                 setattr(order, _ORDER_FIELD[role], new.id)
                 db.add(order)
             db.add(task)
