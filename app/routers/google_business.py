@@ -11,7 +11,8 @@ tenant ka hi hota hai (middleware session se context set karta hai).
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -96,12 +97,39 @@ async def status_for(db: AsyncSession) -> dict:
             post_locations, auto_post.get("history") or [], str(conn.get("location") or "")
         ),
         "auto_post_location_count": len(post_locations),
+        "review_source": conn.get("review_source") or "",
+        "review_locations": [
+            {"location": l["location"], "title": l.get("title", ""), "address": l.get("address", "")}
+            for l in gbp.review_locations(conn)
+        ],
     }
 
 
 @router.get("/status")
 async def status(db: AsyncSession = Depends(get_db)) -> dict:
     return await status_for(db)
+
+
+class ReviewSourceIn(BaseModel):
+    source: str = ""   # "" = main listing, a location name, or "all"
+
+
+@router.put("/review-source")
+async def set_review_source(body: ReviewSourceIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Owner picks which listing's reviews the website shows; re-syncs now."""
+    conn = await gbp.get_connection(db)
+    names = {l["location"] for l in gbp.review_locations(conn)}
+    if body.source not in ("", "all") and body.source not in names:
+        raise HTTPException(status_code=400, detail="That listing is not connected to this shop")
+    conn["review_source"] = body.source
+    await gbp.save_connection(db, conn)
+    synced = True
+    try:
+        await gbp.sync(db)
+    except gbp.GBPError:
+        synced = False   # the choice is saved; the 6-hourly sync will retry
+    gbp._home_cache.update(at=0.0, data=None)   # website shows it on the next load
+    return {"source": body.source, "synced": synced, **(await status_for(db))}
 
 
 

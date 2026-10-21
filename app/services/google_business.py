@@ -268,16 +268,60 @@ async def sync(db) -> dict:
         raise GBPError("Google is not connected yet.")
     old = dict(await app_settings.get(db, "gbp_reviews") or {})
     now = datetime.now(timezone.utc).isoformat()
+    targets, title = review_targets(conn)
     try:
-        data = await fetch_reviews(conn["refresh_token"], conn["account"], conn["location"])
+        parts = []
+        for t in targets:
+            got = await fetch_reviews(conn["refresh_token"], t["account"], t["location"])
+            for r in got["reviews"]:
+                r["location_title"] = t.get("title", "")
+            parts.append(got)
+        data = merge_reviews(parts)
     except GBPError as exc:
         old.update(error=str(exc), attempted_at=now)
         await app_settings.set_value(db, "gbp_reviews", old)
         raise
-    data.update(synced_at=now, error="", title=conn.get("title", ""))
+    data.update(synced_at=now, error="", title=title,
+                source=conn.get("review_source") or "", locations=len(targets))
     await app_settings.set_value(db, "gbp_reviews", data)
     log.info("gbp_reviews_synced", count=len(data["reviews"]), rating=data.get("rating"))
     return data
+
+
+def review_locations(conn: dict) -> list[dict]:
+    """Every listing this shop has connected (the posting set), main first."""
+    main = {"account": conn.get("account", ""), "location": conn.get("location", ""),
+            "title": conn.get("title", ""), "address": conn.get("address", "")}
+    out = [main] if main["location"] else []
+    for p in conn.get("post_locations") or []:
+        if p.get("location") and p.get("location") != main["location"]:
+            out.append({k: p.get(k, "") for k in ("account", "location", "title", "address")})
+    return out
+
+
+def review_targets(conn: dict) -> tuple[list[dict], str]:
+    """Which listings' reviews the website shows: the main one (default),
+    one chosen listing, or "all" of them combined."""
+    locs = review_locations(conn)
+    source = conn.get("review_source") or ""
+    if source == "all" and len(locs) > 1:
+        return locs, "All locations"
+    chosen = next((l for l in locs if l["location"] == source), None)
+    if chosen:
+        return [chosen], chosen.get("title", "")
+    return locs[:1], conn.get("title", "")
+
+
+def merge_reviews(parts: list[dict]) -> dict:
+    """Several listings → one: newest reviews first, rating weighted by how
+    many reviews each listing has (a 5.0 from 3 reviews must not outweigh a
+    4.6 from 200)."""
+    reviews = sorted((r for p in parts for r in p.get("reviews") or []),
+                     key=lambda r: r.get("time") or "", reverse=True)[:MAX_STORED]
+    weighted = [(float(p["rating"]), int(p.get("count") or 0)) for p in parts if p.get("rating")]
+    total = sum(c for _, c in weighted)
+    rating = round(sum(r * c for r, c in weighted) / total, 2) if total else (weighted[0][0] if weighted else None)
+    return {"rating": rating, "count": sum(int(p.get("count") or 0) for p in parts), "reviews": reviews}
 
 
 async def revoke(refresh_token: str) -> None:
@@ -379,7 +423,8 @@ def render_block(data: dict) -> tuple[str, str]:
             f'<article class="review"{" hidden data-more" if i >= VISIBLE else ""}>'
             f'<div class="stars" aria-label="{r["rating"]} out of 5 stars">{_stars(r["rating"])}</div>'
             f'<p>{esc(r["text"])}</p>{reply}'
-            f'<div class="who">{av}<div><b>{esc(r["name"])}</b><small>{esc(_ago(r["time"]))} · Google</small></div>{GOOGLE_G}</div>'
+            f'<div class="who">{av}<div><b>{esc(r["name"])}</b><small>{esc(_ago(r["time"]))} · Google'
+            f'{" · " + esc(r["location_title"]) if r.get("location_title") and data.get("locations", 1) > 1 else ""}</small></div>{GOOGLE_G}</div>'
             f'</article>'
         )
     more = (f'<div class="more-wrap"><button class="btn btn-ghost" type="button" id="rev-more">'
