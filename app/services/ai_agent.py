@@ -94,8 +94,14 @@ def _pending_intake(customer: Customer) -> dict | None:
 
 
 async def _last_outbound_is(db: AsyncSession, customer: Customer, text: str) -> bool:
-    """True only when `text` is the newest message we sent this customer."""
+    """True when the newest outbound is this message, optionally with the standard AI footer.
+
+    send_message formats the text and appends the AI signature before it is
+    logged. Compare against that same signed copy so a customer's "haan" can
+    confirm the exact pickup summary they saw.
+    """
     from app.models import Conversation, Direction
+    from app.services.whatsapp import _wa_format, sign_ai
 
     last_outbound = (
         await db.execute(
@@ -108,7 +114,15 @@ async def _last_outbound_is(db: AsyncSession, customer: Customer, text: str) -> 
             .limit(1)
         )
     ).scalar_one_or_none()
-    return last_outbound == text
+    if last_outbound == text:
+        return True
+    if not last_outbound or not text:
+        return False
+
+    # Build the footer with the same helper send_message uses, so this can
+    # never drift from what is stored. Exact match only — no fuzzy matching
+    # and no accepting an older prompt.
+    return last_outbound == sign_ai(_wa_format(text))
 
 
 async def _has_matching_pickup_confirmation_prompt(

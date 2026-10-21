@@ -1008,6 +1008,30 @@ async def test_price_grounding_follow_ups_quantities_and_totals(monkeypatch) -> 
     assert not await _price_reply_is_grounded(None, customer, "shirt rate", "Shirt ₹30, special ₹25")
 
 
+
+async def test_pickup_confirmation_matches_standard_ai_footer() -> None:
+    """The footer must not make a valid customer 'haan' look unprompted."""
+    from app.models import Conversation, Direction
+    from app.services.ai_agent import _last_outbound_is
+    from app.services.whatsapp import sign_ai
+
+    cust = await _seed_customer()
+    summary = (
+        "Order summary: Wash & Iron by weight, pickup 2026-10-21, "
+        "address Kaushlesh Nagar, Naria. Kya main ye pickup order confirm kar doon? "
+        "Reply 'haan' to confirm or 'nahi' to cancel. — Kwik Klin AI"
+    )
+    async with async_session_factory() as db:
+        db.add(Conversation(
+            customer_id=cust.id,
+            direction=Direction.OUTBOUND,
+            message_text=sign_ai(summary),
+        ))
+        await db.commit()
+        assert await _last_outbound_is(db, cust, summary)
+        assert not await _last_outbound_is(db, cust, summary + " altered")
+
+
 async def test_history_keeps_voice_transcripts_and_real_newlines() -> None:
     from app.models import Conversation, Direction
 
