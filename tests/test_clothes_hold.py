@@ -48,6 +48,8 @@ def test_apply_hold_and_release() -> None:
 
 
 async def test_washer_holds_then_delivery_waits_for_the_held_clothes(client, two_shops, sent) -> None:
+    from app.services import background
+
     num = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A)   # 2 Kurta
 
     await _login(client, A_PHONE)
@@ -57,6 +59,8 @@ async def test_washer_holds_then_delivery_waits_for_the_held_clothes(client, two
     })
     assert r.status_code == 200, r.text
     assert r.json()["clothes"]["held"] == 1
+    # Owner ko khabar background mein — test ka ek hi connection hai, pehle khatam ho
+    await background.drain()
     # Bina wajah ke nahi
     assert (await client.post(f"/staff/api/orders/{num}/hold", json={
         "picks": [{"line": 0, "qty": 1}], "reason": " ",
@@ -78,6 +82,7 @@ async def test_washer_holds_then_delivery_waits_for_the_held_clothes(client, two
     assert stop["kind"] == "Hold" and stop["clothes"]["held"] == 1
     r = await client.post(f"/staff/api/orders/{num}/release", json={})
     assert r.status_code == 200 and not r.json()["clothes"].get("held"), r.text
+    await background.drain()
 
     await _login(client, A_MGR_PHONE)
     r = await client.post(f"/staff/api/orders/{num}/deliver", json={"items": None})
