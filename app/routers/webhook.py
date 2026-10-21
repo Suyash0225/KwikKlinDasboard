@@ -633,6 +633,31 @@ async def _human_handoff_waiting(
         datetime.now(timezone.utc) - latest_human.created_at
     ) < timedelta(minutes=minutes)
 
+async def _staff_human_handoff_waiting(db: AsyncSession, staff: Staff) -> bool:
+    """Keep the staff command agent silent for 5 minutes after admin messages.
+
+    Staff may reply conversationally while the admin is coordinating work.
+    Do not interpret those replies as commands or send parser guidance into
+    the staff chat. Each new admin phone/dashboard message resets the window.
+    """
+    latest_human = (
+        await db.execute(
+            select(Conversation)
+            .where(
+                Conversation.staff_id == staff.id,
+                Conversation.direction == Direction.OUTBOUND,
+                Conversation.sent_by.in_(("human", "manager")),
+            )
+            .order_by(Conversation.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if latest_human is None:
+        return False
+    return (
+        datetime.now(timezone.utc) - latest_human.created_at
+    ) < timedelta(minutes=5)
+
 
 def _waha_to_meta_shape(payload: dict, *, resolved_from: str | None = None) -> dict:
     """Translate WAHA message payload to the existing inbound handler shape."""
@@ -1313,6 +1338,14 @@ async def _handle_inbound_message(
     # par sirf naye kaam milne band hote the, purani taakat bani rehti thi.
     # Unka message record hota hai, jawab koi nahi.
     if (staff is not None and staff.is_active) or is_manager:
+        # If the admin has recently messaged this staff member, treat their
+        # replies as part of the live human conversation. Do not run the
+        # staff-command LLM or send its generic "Samajh nahi aaya" guidance.
+        # The five-minute window is measured from the latest admin message.
+        if staff is not None and staff.is_active and not is_manager:
+            if await _staff_human_handoff_waiting(db, staff):
+                log.info("staff_human_handoff_waiting", phone=phone, staff_id=str(staff.id))
+                return
         # Voice note aayi par shabd nahi nikle (transcription down/unclear):
         # aage bhejne ka koi matlab nahi — "[audio:...]" par har handler
         # chup ho jata hai. Owner ne aaj voice se bill bolna chaha aur use

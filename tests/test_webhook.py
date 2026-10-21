@@ -1000,6 +1000,35 @@ async def test_phone_typed_reply_reaches_the_inbox_via_message_any(client, sent,
     assert row.message_text == "Kal tak ready ho jayega ji" and row.sent_by == "human"
 
 
+async def test_staff_ai_waits_five_minutes_after_admin_message(client, sent, monkeypatch, test_washer) -> None:
+    """Natural staff replies stay silent while the admin is actively chatting."""
+    import uuid
+
+    # Admin sends a manual WhatsApp message to the washer; WAHA records it
+    # as a human outbound message linked to that staff thread.
+    outbound_id = f"waha-admin-staff-{uuid.uuid4().hex}"
+    r = await _post_waha(client, monkeypatch, "message.any", {
+        "id": outbound_id,
+        "fromMe": True,
+        "source": "app",
+        "to": f"{TEST_WASHER_PHONE_RAW}@c.us",
+        "body": "Ravi bhai, black kapde thoda sukhwa dena",
+    })
+    assert r.status_code == 200
+
+    # Staff replies during the five-minute human handoff window. The command
+    # parser must not answer with generic "Samajh nahi aaya" instructions.
+    inbound_id = f"waha-staff-reply-{uuid.uuid4().hex}"
+    r = await _post_waha(client, monkeypatch, "message", {
+        "id": inbound_id,
+        "fromMe": False,
+        "from": f"{TEST_WASHER_PHONE_RAW}@c.us",
+        "body": "Aur uska bhi ready hai, naam black, bas thoda sukhwana hai",
+    })
+    assert r.status_code == 200
+    assert sent == [], "AI must stay silent during the admin's live staff conversation"
+
+
 async def test_message_any_inbound_is_left_to_the_message_event(client, sent, monkeypatch) -> None:
     import uuid
 
