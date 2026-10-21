@@ -4826,12 +4826,29 @@ async function gbpLoad() {
   box.innerHTML = `${err}<p style="color:var(--ink,#131820)">✅ Connected: <b>${esc(s.title || "Google listing")}</b></p>
     <p style="margin:4px 0">${stat}</p><small class="muted">Last sync: ${esc(when)} · refreshes every 6 hours</small>
     ${srcPicker}
+    <div class="rev-src">
+      <label for="gbp-review-stars">Which reviews to show on your website</label>
+      <select id="gbp-review-stars" onchange="gbpSetReviewStars(this)">
+        <option value="0" ${!s.review_min_stars ? "selected" : ""}>All reviews</option>
+        <option value="4" ${s.review_min_stars === 4 ? "selected" : ""}>Only 4★ and 5★</option>
+        <option value="5" ${s.review_min_stars === 5 ? "selected" : ""}>Only 5★</option>
+      </select>
+      <small class="muted">The overall rating and review count stay exactly as on Google; only the review cards are filtered.</small>
+    </div>
     ${postStatus}
     <div class="filters" style="margin-top:10px">
       <a class="btn ghost" href="/#reviews" target="_blank" rel="noopener">View on website</a>
     </div>`;
 }
 
+async function gbpSetReviewStars(sel) {
+  sel.disabled = true;
+  try {
+    await api("/admin/api/google-business/review-filter", { method: "PUT", body: { min_stars: parseInt(sel.value, 10) || 0 } });
+    toast("Website reviews updated");
+    gbpLoad();
+  } catch (e) { toast(e.message, true); sel.disabled = false; }
+}
 async function gbpSetReviewSource(sel) {
   sel.disabled = true;
   try {

@@ -282,7 +282,8 @@ async def sync(db) -> dict:
         await app_settings.set_value(db, "gbp_reviews", old)
         raise
     data.update(synced_at=now, error="", title=title,
-                source=conn.get("review_source") or "", locations=len(targets))
+                source=conn.get("review_source") or "", locations=len(targets),
+                min_stars=review_min_stars(conn))
     await app_settings.set_value(db, "gbp_reviews", data)
     log.info("gbp_reviews_synced", count=len(data["reviews"]), rating=data.get("rating"))
     return data
@@ -310,6 +311,17 @@ def review_targets(conn: dict) -> tuple[list[dict], str]:
     if chosen:
         return [chosen], chosen.get("title", "")
     return locs[:1], conn.get("title", "")
+
+
+# Website par kaun se review card dikhein: 0 = sab, 4 = 4★ aur upar, 5 = sirf 5★.
+# Upar ka kul rating/ginti hamesha Google ka poora sach rehta hai — chhaant
+# sirf cards ki hai, taaki "4.2 ★" ke neeche sirf 5★ dikhe to bhi rating jhooth na bole.
+REVIEW_MIN_STARS = (0, 4, 5)
+
+
+def review_min_stars(conn: dict) -> int:
+    v = int(conn.get("review_min_stars") or 0)
+    return v if v in REVIEW_MIN_STARS else 0
 
 
 def merge_reviews(parts: list[dict]) -> dict:
@@ -410,8 +422,9 @@ def render_block(data: dict) -> tuple[str, str]:
         f'<div class="bars">{bars}</div></div>'
     )
 
+    min_stars = int(data.get("min_stars") or 0)
     shown = sorted(
-        (r for r in reviews if r["text"]),
+        (r for r in reviews if r["text"] and r["rating"] >= min_stars),
         key=lambda r: r.get("time") or "", reverse=True,
     )
     cards = []
