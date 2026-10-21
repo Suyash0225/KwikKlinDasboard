@@ -918,19 +918,87 @@ async def order_not_home(
     return {"ok": True, "order": order.order_number, "what": what, "can_message": can_contact(p)}
 
 
+class WashCountIn(BaseModel):
+    line: int = Field(ge=0)
+    piece: int | None = Field(default=None, ge=0)   # KG bore ke andar ka kapda
+    got: int = Field(ge=0, le=9999)
+
+
+class WashStartIn(BaseModel):
+    # None = bina gine shuru (purana rasta). Warna bill ki har line par kitne mile.
+    counts: list[WashCountIn] | None = Field(default=None, max_length=300)
+
+
+def _wash_check(order: Order, counts: list[WashCountIn]) -> dict:
+    """Bill ki ginti vs washerman ki ginti. Bina ginti wala KG bora chhoot jaata hai."""
+    got = {(c.line, c.piece): c.got for c in counts}
+    diffs, expected, found = [], 0, 0
+    for ln in delivery.lines(order):
+        if ln.get("bag"):
+            continue
+        parts = (
+            [(p["piece"], p["type"], p["qty"]) for p in ln["pieces"]] if ln.get("pieces")
+            else [(None, ln["name"], ln["qty"])]
+        )
+        for piece, name, qty in parts:
+            n = got.get((ln["line"], piece), qty)   # jo line chhoot gayi wo bill jitni maani
+            expected += qty
+            found += n
+            if n != qty:
+                diffs.append({"name": name, "bill": qty, "got": n})
+    return {"ok": not diffs, "expected": expected, "got": found, "diffs": diffs}
+
+
 @router.post("/orders/{number}/washing")
 async def order_washing(
     number: str,
+    body: WashStartIn | None = None,
     p: StaffPrincipal = Depends(current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Washerman: dhulai shuru (grahak ka page bhi 'Cleaning' par aa jaata hai)."""
+    """Washerman: dhulai shuru (grahak ka page bhi 'Cleaning' par aa jaata hai).
+
+    Saath mein ginti ho to bill se milate hain: kam/zyada kapde ABHI pakde
+    jaate hain, delivery ke din nahi — tab tak grahak ka "ek kurta kam hai"
+    kisi ki galti sabit nahi kar sakta. Farak notes mein jaata hai aur owner
+    ko khabar.
+    """
     _role_or_403(p, _WASH_ROLES, "Washing")
     order = await _my_order(db, p, number)
     try:
-        return await delivery.washing(db, order, by=p.staff.name, notify=False)
+        out = await delivery.washing(db, order, by=p.staff.name, notify=False)
     except delivery.DeliveryError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    if body is None or body.counts is None:
+        return out
+    check = _wash_check(order, body.counts)
+    stamp = datetime.now(IST).strftime("%d %b %H:%M")
+    if check["ok"]:
+        line = f"[{stamp} {p.staff.name}] 🔢 Counted at wash: all {check['got']} match the bill"
+    else:
+        diff_txt = ", ".join(f"{d['name']} {d['got']} of {d['bill']}" for d in check["diffs"])
+        line = f"[{stamp} {p.staff.name}] 🔢 Count mismatch at wash: {diff_txt}"
+    order.notes = f"{order.notes}\n{line}" if order.notes else line
+    db.add(order)
+    await db.commit()
+    if not check["ok"]:
+        from app.services import background, team
+
+        msg = (
+            f"🔢 {p.staff.name}: {order.order_number} count does not match the bill"
+            f" — {check['got']} found, bill says {check['expected']} ({diff_txt})"
+        )
+        _from = p.staff.phone
+        background.run_after(
+            lambda bg: team.notify_admins(bg, msg, skip_phone=_from),
+            tenant_id=p.staff.tenant_id, label="wash_count_notify",
+        )
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="wash_count",
+        args={"order": order.order_number, "expected": check["expected"], "got": check["got"]},
+        result="ok" if check["ok"] else "mismatch", tenant_id=p.staff.tenant_id,
+    )
+    return {**out, "check": check}
 
 
 @router.post("/orders/{number}/ready")
@@ -2195,6 +2263,14 @@ async def today_summary(
     # se aati hai jo list banati hai (_route_query), isliye banner par tap
     # karke jo dikhe wo ginti se mel khaye.
     route_q, _ = await _route_query(db, p)
+    # Aaj kitna nikalna hai — washerman ke liye "aaj Ready karna", delivery ke liye "aaj pahunchana"
+    out["due_today"] = (
+        await db.execute(
+            select(func.count()).select_from(
+                route_q.where(Order.expected_delivery == date.today()).subquery()
+            )
+        )
+    ).scalar_one()
     out["late"] = (
         await db.execute(
             select(func.count()).select_from(

@@ -694,3 +694,5 @@ h3.mt-lg { margin-top: 20px; }
   display: flex; align-items: center; gap: 10px; margin: 12px 0 0; font-size: 14px; font-weight: 600; color: var(--ink-2);
 }
 .check-row input { width: 20px; height: 20px; min-height: 0; flex: none; }
+/* ginti bill se na mile to wo line laal */
+.dl-row.off .dl-name, .dl-row.off .dl-of { color: var(--late); font-weight: 700; }

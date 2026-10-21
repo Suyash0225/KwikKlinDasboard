@@ -166,3 +166,52 @@ async def test_washerman_has_no_cash_screen(client, two_shops) -> None:
     await _login(client, A_PHONE)
     assert (await client.get("/staff/api/cash")).status_code == 403
     assert (await client.post("/staff/api/cash/handover", json={"handed_cash": 1})).status_code == 403
+
+
+async def test_counting_at_wash_catches_a_missing_piece(client, two_shops, sent) -> None:
+    """Bill par 2 kurta, mile 1 — dhulai shuru hoti hai, par owner ko abhi pata chalta hai."""
+    number = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A)   # Kurta x2
+    await _login(client, A_PHONE)
+    lines = (await client.get(f"/staff/api/orders/{number}")).json()["lines"]
+    sent.clear()
+    r = await client.post(
+        f"/staff/api/orders/{number}/washing",
+        json={"counts": [{"line": lines[0]["line"], "got": 1}]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "IN_WASH"
+    chk = r.json()["check"]
+    assert chk["ok"] is False and chk["expected"] == 2 and chk["got"] == 1
+    assert "Count mismatch at wash: Kurta 1 of 2" in await _notes(two_shops["a"], number)
+
+    from app.services import background
+
+    await background.drain()
+    assert any("does not match the bill" in (m.get("text") or "") for m in sent)
+
+
+async def test_counting_at_wash_all_match_and_old_clients_still_work(client, two_shops, sent) -> None:
+    n1 = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A)
+    n2 = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A)
+    await _login(client, A_PHONE)
+    line = (await client.get(f"/staff/api/orders/{n1}")).json()["lines"][0]["line"]
+    ok = await client.post(f"/staff/api/orders/{n1}/washing", json={"counts": [{"line": line, "got": 2}]})
+    assert ok.status_code == 200 and ok.json()["check"]["ok"] is True
+    assert "all 2 match the bill" in await _notes(two_shops["a"], n1)
+    # bina ginti (purana app / bina body) — pehle jaisa
+    old = await client.post(f"/staff/api/orders/{n2}/washing")
+    assert old.status_code == 200 and "check" not in old.json()
+
+
+async def test_today_counts_work_due_today(client, two_shops) -> None:
+    from datetime import date
+
+    number = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_A)
+    async with async_session_factory() as db:
+        await db.execute(
+            sqltext("UPDATE orders SET expected_delivery = :d WHERE order_number = :n AND tenant_id = :t"),
+            {"d": date.today(), "n": number, "t": str(two_shops["a"])},
+        )
+        await db.commit()
+    await _login(client, A_PHONE)
+    assert (await client.get("/staff/api/today")).json()["due_today"] >= 1

@@ -307,6 +307,7 @@ async function loadToday() {
     $("today").innerHTML =
       cell("to do", t.pending, "left") +
       cell("done today", t.done_today) +
+      (t.due_today ? cell("due today", t.due_today) : "") +
       (t.can_collect ? cell("collected ›", money(t.collected_today), "cash", "cash") : "") +
       (t.cash_to_confirm ? cell("to count ›", `💵 ${t.cash_to_confirm}`, "cash alert", "count") : "") +
       (t.shop_pending !== undefined ? cell("shop total", t.shop_pending) : "");
@@ -747,7 +748,7 @@ function runAction(act, num, d = {}) {
   if (act === "deliver") return deliverModal(num);
   if (act === "pickup_bill") return openPickupBill(d.code);
   if (act === "pickup") return confirmStep(num, "picked-up", "Picked up the clothes?", "Yes, picked up");
-  if (act === "washing") return confirmStep(num, "washing", "Started washing these clothes?", "Yes, washing");
+  if (act === "washing") return washStartModal(num);
   if (act === "ready") return confirmStep(num, "ready", "Clothes washed and ready?", "Yes, ready");
 }
 
@@ -979,6 +980,71 @@ async function deliverModal(number) {
     // paisa baaki ho to seedha collect — darwaze par wahi agla kaam hai
     if (o.can_collect && o.due > 0) askCollect(number, o.due);
     else if ($("dl-proof") && $("dl-proof").checked) askPhoto(number, "proof");
+  });
+  paint();
+}
+
+/* Dhulai shuru karte waqt bill se ginti. Default = bill jitne (aam
+   haalat), farak ho tabhi aadmi kuch badalta hai. Kam/zyada kapde yahin
+   pakde jaate hain — delivery ke din grahak ka "ek kurta kam hai" tab
+   kisi ki galti sabit nahi kar sakta. KG bora bina ginti ho to chhoot. */
+async function washStartModal(number) {
+  let o;
+  try { o = await api(`/orders/${encodeURIComponent(number)}`); }
+  catch (e) { toast(e.message, true); return; }
+  const slots = [];
+  (o.lines || []).forEach((l) => {
+    if (l.bag) return;
+    if (l.pieces) l.pieces.forEach((p) => slots.push({ line: l.line, piece: p.piece, name: p.type, bill: p.qty, group: `${l.name} · ${l.weight} kg` }));
+    else slots.push({ line: l.line, name: l.name, sub: l.service !== l.name ? l.service : "", bill: l.qty });
+  });
+  if (!slots.length) return confirmStep(number, "washing", "Started washing these clothes?", "Yes, washing");
+  const got = slots.map((x) => x.bill);
+  let lastGroup = "";
+  openModal(`<h3>🧼 Count & start — ${esc(o.number)}</h3>
+    <p class="said">${esc(o.customer)} · count the clothes before they go in. Change a number only if it does not match.</p>
+    <div class="dl-list">${slots.map((x, i) => {
+      const head = x.group && x.group !== lastGroup ? `<div class="dl-group">${esc(x.group)}</div>` : "";
+      lastGroup = x.group || "";
+      return head + `<div class="dl-row" data-wrow="${i}"><span class="dl-name">${esc(x.name)}${x.sub ? ` <small>${esc(x.sub)}</small>` : ""}</span>
+        <div class="stepper sm">
+          <button type="button" class="step" data-wc="${i}" data-by="-1" aria-label="One less">−</button>
+          <input type="number" inputmode="numeric" min="0" value="${x.bill}" data-wcq="${i}" aria-label="How many you found">
+          <button type="button" class="step" data-wc="${i}" data-by="1" aria-label="One more">+</button>
+        </div>
+        <small class="dl-of">bill ${x.bill}</small></div>`;
+    }).join("")}</div>
+    <p class="dl-sum" id="wc-sum"></p>
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Not now</button>
+      <button class="btn go" id="wc-go">Start wash</button>
+    </div>`);
+  const body = $("modal-body");
+  const paint = () => {
+    const bill = slots.reduce((a, x) => a + x.bill, 0), n = got.reduce((a, v) => a + v, 0);
+    const off = slots.filter((x, i) => got[i] !== x.bill).length;
+    $("wc-sum").innerHTML = off
+      ? `<b class="late-t">${n} found, bill says ${bill}</b> — the owner will be told`
+      : `<b>All ${n}</b> match the bill ✓`;
+    slots.forEach((x, i) => {
+      body.querySelector(`[data-wrow="${i}"]`).classList.toggle("off", got[i] !== x.bill);
+      const q = body.querySelector(`[data-wcq="${i}"]`);
+      if (document.activeElement !== q) q.value = String(got[i]);
+    });
+  };
+  body.querySelectorAll("[data-wc]").forEach((b) => {
+    b.onclick = () => { const i = +b.dataset.wc; got[i] = Math.max(0, got[i] + parseInt(b.dataset.by, 10)); paint(); };
+  });
+  body.querySelectorAll("[data-wcq]").forEach((inp) => {
+    inp.oninput = () => { got[+inp.dataset.wcq] = Math.max(0, parseInt(inp.value, 10) || 0); paint(); };
+    inp.onblur = () => { inp.value = String(got[+inp.dataset.wcq]); };
+  });
+  $("wc-go").onclick = (e) => busy(e.currentTarget, async () => {
+    const counts = slots.map((x, i) => ({ line: x.line, ...(x.piece != null ? { piece: x.piece } : {}), got: got[i] }));
+    const r = await api(`/orders/${encodeURIComponent(number)}/washing`, { method: "POST", body: { counts } });
+    closeModal();
+    toast(r.check && !r.check.ok ? `${number} — washing. Count mismatch sent to the owner` : `${number} — washing ✅`, !!(r.check && !r.check.ok));
+    loadToday(); refreshCurrent({ quiet: true });
   });
   paint();
 }
