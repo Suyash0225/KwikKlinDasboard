@@ -228,7 +228,7 @@ function whenParts(iso) {
 }
 
 const ROLE = {
-  WASHER: "Washerman", DELIVERY: "Delivery",
+  WASHER: "Washerman", IRONER: "Ironing / Press", DELIVERY: "Delivery",
   // Senior aadmi — kaam bhi karta hai aur dekh-rekh bhi. Use sirf "Washerman"
   // likhna uske kaam ko chhota dikhata hai.
   SUPERVISOR: "Washerman / Manager", MANAGER: "Manager", ADMIN: "Owner",
@@ -754,7 +754,7 @@ function moreBar(shown, total, fn) {
    kisi par Done, kisi par sirf collect — delivery boy samajh nahi paata tha
    ki kis row par kya dabana hai. Ab kram hamesha: Call · kaam · ₹ · ⋯ */
 const DELIVERY_ROLES = ["DELIVERY", "MANAGER", "SUPERVISOR", "ADMIN"];
-const WASH_ROLES = ["WASHER", "MANAGER", "SUPERVISOR", "ADMIN"];
+const WASH_ROLES = ["WASHER", "IRONER", "MANAGER", "SUPERVISOR", "ADMIN"];
 function primaryAction(w) {
   const t = w.tasks && w.tasks[0];
   const s = w.status;
@@ -769,7 +769,11 @@ function primaryAction(w) {
   if (s && ["RECEIVED", "PICKED_UP"].includes(s) && WASH_ROLES.includes(ME.role)) {
     return { act: "washing", label: "Start wash" };
   }
-  if (s && ["IN_WASH", "IN_DRY", "IN_IRON"].includes(s) && WASH_ROLES.includes(ME.role)) {
+  // Dhulai ke baad kapde press wale ke paas jaate hain; Ready press ke baad
+  if (s && ["IN_WASH", "IN_DRY"].includes(s) && WASH_ROLES.includes(ME.role)) {
+    return { act: "ironing", label: "Send to iron" };
+  }
+  if (s === "IN_IRON" && WASH_ROLES.includes(ME.role)) {
     return { act: "ready", label: "Ready" };
   }
   if (t) return { act: "done", label: "Done", code: t.code };
@@ -826,7 +830,8 @@ function runAction(act, num, d = {}) {
   if (act === "pickup_bill") return openPickupBill(d.code);
   if (act === "pickup") return confirmStep(num, "picked-up", "Picked up the clothes?", "Yes, picked up");
   if (act === "washing") return washStartModal(num);
-  if (act === "ready") return confirmStep(num, "ready", "Clothes washed and ready?", "Yes, ready");
+  if (act === "ironing") return confirmStep(num, "ironing", "Washing done — send for ironing?", "Yes, send to iron");
+  if (act === "ready") return confirmStep(num, "ready", "Clothes ironed and ready?", "Yes, ready");
 }
 
 function wireRows() {

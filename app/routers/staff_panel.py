@@ -789,7 +789,15 @@ async def order_detail(
 # Kaun kya kar sakta hai — bill_agent ke "done" command wala hi niyam:
 # delivery wala pickup/delivery, washerman dhulai. Manager/owner sab.
 _DELIVERY_ROLES = (StaffRole.DELIVERY, StaffRole.MANAGER, StaffRole.SUPERVISOR, StaffRole.ADMIN)
-_WASH_ROLES = (StaffRole.WASHER, StaffRole.MANAGER, StaffRole.SUPERVISOR, StaffRole.ADMIN)
+_WASH_ROLES = (StaffRole.WASHER, StaffRole.IRONER, StaffRole.MANAGER, StaffRole.SUPERVISOR, StaffRole.ADMIN)
+# Dhulai ki kataar washerman aur press wale ki saanjhi hai. Task/assigned_washer
+# sirf ye batata hai ki pehle kise bheja gaya — status koi bhi badha sakta
+# hai. Pehle doosre washerman ko "This order is not yours" milta tha.
+_WASH_FLOOR_ROLES = (StaffRole.WASHER, StaffRole.IRONER)
+_WASH_STAGES = (
+    OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
+    OrderStatus.IN_DRY, OrderStatus.IN_IRON,
+)
 
 
 def _role_or_403(p: StaffPrincipal, roles, what: str) -> None:
@@ -999,6 +1007,21 @@ async def order_washing(
         result="ok" if check["ok"] else "mismatch", tenant_id=p.staff.tenant_id,
     )
     return {**out, "check": check}
+
+
+@router.post("/orders/{number}/ironing")
+async def order_ironing(
+    number: str,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Dhulai done — kapde press wale ke paas (IN_IRON)."""
+    _role_or_403(p, _WASH_ROLES, "Ironing")
+    order = await _my_order(db, p, number)
+    try:
+        return await delivery.ironing(db, order, by=p.staff.name)
+    except delivery.DeliveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.post("/orders/{number}/ready")
@@ -2027,6 +2050,9 @@ async def _my_order(db: AsyncSession, p: StaffPrincipal, number: str) -> Order:
         raise HTTPException(status_code=404, detail=f"{number} not found")
     if p.is_manager:
         return order
+    if p.staff.role in _WASH_FLOOR_ROLES and order.status in _WASH_STAGES:
+        # Wahi saanjhi kataar jo /route dikhata hai — dikhe to khule bhi
+        return order
     mine = (
         await db.execute(
             select(func.count()).select_from(Task).where(
@@ -2792,10 +2818,7 @@ async def _route_query(db: AsyncSession, p: StaffPrincipal, tab: str = "todo"):
     deta hai.
     """
     is_delivery = p.staff.role is StaffRole.DELIVERY
-    wash_stages = (
-        OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
-        OrderStatus.IN_DRY, OrderStatus.IN_IRON,
-    )
+    wash_stages = _WASH_STAGES
     road_stages = (OrderStatus.PICKUP_ASSIGNED, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)
     if p.is_manager:
         # Manager/owner/supervisor ko dukaan ka POORA chalta kaam — dhulai bhi,

@@ -127,7 +127,7 @@ async def task_status_menu(db: AsyncSession, code: str) -> list[ListRow]:
 
     staff = await db.get(Staff, task.assigned_staff_id) if task.assigned_staff_id else None
     role = staff.role.name if staff is not None else ""
-    if role in {"WASHER", "SUPERVISOR"} and task.kind in {"wash", "dry", "iron"}:
+    if role in {"WASHER", "IRONER", "SUPERVISOR"} and task.kind in {"wash", "dry", "iron"}:
         # Expose only the next legal stage. Stale/old WhatsApp cards are also
         # rejected by bill_agent, so a delayed tap cannot skip drying/ironing.
         order = await db.get(Order, task.order_id) if task.order_id else None

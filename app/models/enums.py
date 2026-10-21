@@ -28,6 +28,10 @@ class OrderStatus(enum.Enum):
 
 class StaffRole(enum.Enum):
     WASHER = "WASHER"
+    # Press/istri wala. Dhulai ke baad kapde iske paas aate hain; par
+    # dhulai ki kataar washerman ke saath saanjhi hai — dono mein se koi
+    # bhi status aage badha sakta hai, task chahe jiske naam ho.
+    IRONER = "IRONER"
     DELIVERY = "DELIVERY"
     # Poore business ka kaam dekhta hai — kis-kis ne kya kiya, kya pending
     # hai, cancel maang kaun raha hai. Settings aur billing usse door

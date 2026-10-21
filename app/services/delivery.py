@@ -227,6 +227,23 @@ async def washing(db: AsyncSession, order: Order, *, by: str, notify: bool = Fal
     return {"order_number": order.order_number, "status": order.status.name}
 
 
+IRON_STARTABLE = (OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH, OrderStatus.IN_DRY)
+
+
+async def ironing(db: AsyncSession, order: Order, *, by: str) -> dict:
+    """Dhulai ho gayi, kapde press wale ke paas — -> IN_IRON.
+
+    RECEIVED/PICKED_UP se bhi chalta hai: sirf-press wale order dhulai se
+    guzarte hi nahi.
+    """
+    from app.services.order_service import update_status
+
+    if order.status not in IRON_STARTABLE:
+        raise DeliveryError(f"{order.order_number} is {order.status.name} — ironing cannot start from here")
+    await update_status(db, order, OrderStatus.IN_IRON, changed_by=by)
+    return {"order_number": order.order_number, "status": order.status.name}
+
+
 async def ready(db: AsyncSession, order: Order, *, by: str) -> dict:
     from app.services.order_service import update_status
 

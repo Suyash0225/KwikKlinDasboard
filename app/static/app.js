@@ -5020,7 +5020,7 @@ function updRate(id, rate, active) {
   }, 500);
 }
 const ROLE_LABEL = {
-  WASHER: "Washer", DELIVERY: "Delivery",
+  WASHER: "Washer", IRONER: "Ironing / Press", DELIVERY: "Delivery",
   // Senior aadmi ko sirf "Washer" likhna uske kaam ko chhota dikhata hai
   SUPERVISOR: "Washerman / Manager", MANAGER: "Manager", ADMIN: "Owner",
 };
@@ -5086,6 +5086,7 @@ function panelAccess(id) {
     <label>What will they do</label>
     <select id="pa-role">
       <option value="WASHER"${s.role === "WASHER" ? " selected" : ""}>Washerman — washing/pressing</option>
+      <option value="IRONER"${s.role === "IRONER" ? " selected" : ""}>Ironing / Press — gets clothes after washing</option>
       <option value="DELIVERY"${s.role === "DELIVERY" ? " selected" : ""}>Delivery — pickup and delivery</option>
       <option value="SUPERVISOR"${s.role === "SUPERVISOR" ? " selected" : ""}>Washerman / Manager — works, and oversees everyone</option>
       <option value="MANAGER"${s.role === "MANAGER" ? " selected" : ""}>Manager — oversees only, does not work orders</option>
@@ -5202,6 +5203,7 @@ function editStaffModal(id) {
       <div class="setfield"><label for="es-role">Role</label>
         <select id="es-role">
           <option value="WASHER" ${s.role === "WASHER" ? "selected" : ""}>Washer (washing &amp; ironing)</option>
+          <option value="IRONER" ${s.role === "IRONER" ? "selected" : ""}>Ironing / Press</option>
           <option value="DELIVERY" ${s.role === "DELIVERY" ? "selected" : ""}>Delivery</option>
         </select></div>
     </div>

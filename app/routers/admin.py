@@ -1333,13 +1333,13 @@ async def rates_delete_group(
 class StaffIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     phone: str
-    role: str = Field(pattern="^(WASHER|DELIVERY|SUPERVISOR|MANAGER|ADMIN)$")
+    role: str = Field(pattern="^(WASHER|IRONER|DELIVERY|SUPERVISOR|MANAGER|ADMIN)$")
 
 
 class StaffUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=120)
     phone: str | None = Field(default=None, min_length=6, max_length=20)
-    role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY|SUPERVISOR|MANAGER|ADMIN)$")
+    role: str | None = Field(default=None, pattern="^(WASHER|IRONER|DELIVERY|SUPERVISOR|MANAGER|ADMIN)$")
     is_active: bool | None = None
     ai_agent_enabled: bool | None = None
     agent_enabled: bool | None = None
@@ -1392,7 +1392,7 @@ def _staff_ready_note(staff: Staff) -> str:
     ghante wali window ka farq batana zaroori hai.
     """
     role = {
-        "WASHER": "Washerman", "DELIVERY": "Delivery",
+        "WASHER": "Washerman", "IRONER": "Ironing / Press", "DELIVERY": "Delivery",
         "SUPERVISOR": "Washerman / Manager", "MANAGER": "Manager", "ADMIN": "Admin",
     }.get(staff.role.name, staff.role.name)
     if not staff.is_active:
@@ -1539,7 +1539,7 @@ async def staff_update(staff_id: str, body: StaffUpdateIn, db: AsyncSession = De
 
 
 class PanelAccessIn(BaseModel):
-    role: str | None = Field(default=None, pattern="^(WASHER|DELIVERY|SUPERVISOR|MANAGER)$")
+    role: str | None = Field(default=None, pattern="^(WASHER|IRONER|DELIVERY|SUPERVISOR|MANAGER)$")
 
 
 @router.post("/api/staff/{staff_id}/access", dependencies=[Depends(require_admin_owner)])
