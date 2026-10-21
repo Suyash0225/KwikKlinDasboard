@@ -100,12 +100,20 @@ document.addEventListener("click", (e) => {
  * banata hai — back se popup band, phir pichhli screen, aur sabse pehli
  * screen par "Exit?" Yes/No. */
 const modalOpen = () => $("modal-ov").classList.contains("open");
-function openModal(html) {
+// Popup band hone par chalne wala kaam (bag sheet ko cart dobara banana hai).
+// Har openModal ise saaf karta hai; jo popup chahe, khulne ke baad set kare.
+let MODAL_ONCLOSE = null;
+function openModal(html, cls = "") {
   if (!modalOpen() && !(history.state && history.state.kk === "modal")) history.pushState({ kk: "modal" }, "");
-  $("modal-body").innerHTML = html; $("modal-ov").classList.add("open");
+  MODAL_ONCLOSE = null;
+  $("modal-ov").className = `modal-ov open${cls ? " " + cls : ""}`;
+  $("modal-body").innerHTML = html;
 }
 function closeModal() {
   $("modal-ov").classList.remove("open");
+  const after = MODAL_ONCLOSE;
+  MODAL_ONCLOSE = null;
+  if (after) after();
   // Explicit close must consume the modal history state, not leave a stale
   // entry that causes the next mobile back gesture to leave the work screen.
   if (history.state && history.state.kk === "modal") {
@@ -1438,9 +1446,8 @@ async function showNewBill() {
     // Enter = pehla nateeja jod do (ya naya banao, agar kuch na mila)
     if (ev.key !== "Enter") return;
     ev.preventDefault();
-    // kg mein Enter = pehla kapda bore mein (weight wali line nahi)
-    const first = $("b-items").querySelector("[data-piece], [data-addpiece]")
-      || $("b-items").querySelector("[data-tile], [data-create]");
+    // kg mein search yahan nahi, bag sheet mein hai
+    const first = $("b-items").querySelector("[data-tile], [data-create]");
     if (first) first.click();
   };
   $("b-disc").onfocus = () => $("b-disc").select();
@@ -1522,16 +1529,21 @@ function renderPicker() {
       return `<button type="button" role="tab" aria-selected="${sv === PICK_SVC}" class="${sv === PICK_SVC ? "on" : ""}" data-svc="${esc(sv)}">${esc(sv)}${n ? `<i>${n}</i>` : ""}</button>`;
     }).join("");
     chipsBox.querySelectorAll("[data-svc]").forEach((b) => {
-      b.onclick = () => { PICK_SVC = b.dataset.svc; $("b-q").value = ""; renderPicker(); };
+      b.onclick = () => {
+        PICK_SVC = b.dataset.svc; $("b-q").value = ""; renderPicker();
+        // kg chuna = seedha bore wala popup; page par kuch upar-neeche nahi
+        if (isKgService(PICK_SVC)) bagSheet(PICK_SVC);
+      };
     });
   }
 
   const raw = ($("b-q").value || "").trim().replace(/\s+/g, " ");
   const q = raw.toLowerCase();
   const kgMode = isKgService(PICK_SVC);
-  $("b-q").placeholder = kgMode ? "Search clothes in the bag — e.g. shirt" : "Search item — e.g. shirt";
-  $("b-qlabel").textContent = kgMode ? "Clothes in the bag (count only, no rate)" : "Item";
-  if (kgMode) { renderKgPicker(box, raw, q); return; }
+  // kg mein page par search nahi — wo bag sheet ke andar hai
+  $("b-q").hidden = kgMode;
+  $("b-qlabel").hidden = kgMode;
+  if (kgMode) { renderKgPicker(box); return; }
   const hit = (r) => !q || (r.garment || "by weight").toLowerCase().includes(q);
   const here = RATES.filter((r) => r.service === PICK_SVC && hit(r));
   const elsewhere = q ? RATES.filter((r) => r.service !== PICK_SVC && hit(r)).slice(0, 8) : [];
@@ -1590,74 +1602,164 @@ function isKgService(svc) {
   const rows = (RATES || []).filter((r) => r.service === svc);
   return rows.length > 0 && rows.every((r) => r.unit === "kg");
 }
-function kgLineFor(svc) {
+function kgLineFor(svc, quiet) {
   let idx = CART.findIndex((x) => x.service === svc && x.unit === "kg");
   if (idx >= 0) return idx;
   const r = RATES.find((x) => x.service === svc && x.unit === "kg");
   if (!r) return -1;
   CART.push({ service: r.service, garment: r.garment, qty: 1, rate: r.rate, card: r.rate, unit: "kg", pieces: [] });
-  toast(`${r.service} added — enter the weight in kg below`, false, 2200);
+  if (!quiet) toast(`${r.service} added — enter the weight in kg below`, false, 2200);
   return CART.length - 1;
 }
-function renderKgPicker(box, raw, q) {
+/* Page par kg ki ek hi line: wazan + kitne kapde. Tap = bag sheet. */
+function renderKgPicker(box) {
   const rate = RATES.find((x) => x.service === PICK_SVC && x.unit === "kg");
   const line = CART.find((x) => x.service === PICK_SVC && x.unit === "kg");
-  const inBag = new Map((line ? line.pieces : []).map((p) => [p.type.toLowerCase(), p.qty]));
-  // bore mein pehle se pade kapde upar, phir rate card ke naam, phir aam kapde
+  const count = piecesCount(line && line.pieces);
+  box.innerHTML = `<button type="button" class="item-row kgrow${line ? " in" : ""}" data-bag="1">
+      <span class="ir-name">⚖️ ${line ? esc(`${line.qty} kg · ${count} clothes`) : "Weigh the bag &amp; add clothes"}
+        <small>${line && count ? esc(piecesLabel(line.pieces)) : "weight first, then the clothes inside"}</small></span>
+      <span class="ir-price">${rate ? money(rate.rate) + "/kg" : ""}</span>
+      <span class="ir-add${line ? " n" : ""}">${line ? "Edit" : "＋"}</span>
+    </button>`;
+  box.querySelector("[data-bag]").onclick = () => bagSheet(PICK_SVC);
+}
+
+/* ─── Bag sheet: kg ka wazan + bore ke kapde, ek popup mein ─────────────
+   Pehle ye sab bill ke page par tha: search par keyboard aate hi poora page
+   upar chadh jaata, kapda jodte hi cart neeche badhta aur list khisak jaati —
+   delivery wala phone par bill bana hi nahi pa raha tha. Ab popup ki
+   oonchai keyboard ke upar wali jagah ke barabar rehti hai (visualViewport);
+   upar wazan + search tike rehte hain, sirf list scroll hoti hai, aur
+   kapdon ka kram khulte waqt tay — tap karne par row ungli ke neeche se
+   nahi bhaagti. Badlaav seedha CART mein; band karna = save. */
+function bagSheet(svc) {
+  let idx = CART.findIndex((x) => x.service === svc && x.unit === "kg");
+  const fresh = idx < 0;
+  if (fresh) idx = kgLineFor(svc, true);
+  if (idx < 0) return;
+  const line = CART[idx];
+  let touched = false;
   const seen = new Set();
   const names = [];
-  [...(line ? line.pieces.map((p) => p.type) : []),
+  [...line.pieces.map((p) => p.type),
    ...RATES.map((r) => (r.garment || "").trim()),
    ...COMMON_CLOTHES].forEach((n) => {
     const k = n.toLowerCase();
     if (n && !seen.has(k)) { seen.add(k); names.push(n); }
   });
-  const matches = names.filter((n) => !q || n.toLowerCase().includes(q)).slice(0, q ? 12 : 40);
-  const count = line ? line.pieces.reduce((s, p) => s + p.qty, 0) : 0;
-  let html = `<button type="button" class="item-row kgrow${line ? " in" : ""}" data-weight="1">
-      <span class="ir-name">⚖️ By weight <small>${line ? `${count} clothes in the bag` : "tap, then enter the kg"}</small></span>
-      <span class="ir-price">${rate ? money(rate.rate) + "/kg" : ""}</span>
-      <span class="ir-add${line ? " n" : ""}">${line ? esc(`${line.qty} kg`) : "＋"}</span>
-    </button>
-    <div class="ir-head">Clothes in the bag — count only</div>`;
-  html += matches.map((n, i) => {
-    const c = inBag.get(n.toLowerCase());
-    return `<button type="button" class="item-row${c ? " in" : ""}" data-piece="${i}">
-      <span class="ir-name">${esc(n)}</span>
-      <span class="ir-add${c ? " n" : ""}">${c ? esc(`× ${c}`) : "＋"}</span>
-    </button>`;
-  }).join("");
-  // milte-julte naam mil gaye to "Add shi" sirf bheed — tabhi jab kuch na mile
-  if (q && !matches.length) {
-    html += `<button type="button" class="item-row create" data-addpiece="1">＋ Add “${esc(raw)}” to the bag</button>`;
-  }
-  box.innerHTML = html;
-  box.querySelector("[data-weight]").onclick = () => {
-    const idx = kgLineFor(PICK_SVC);
-    renderCart();
-    const inp = $("b-cart").querySelector(`[data-qty="${idx}"]`);
-    if (inp) { inp.focus(); inp.select(); }
+  openModal(`<div class="bag-head">
+      <h3>${esc(line.garment || line.service)}<small id="bg-sum"></small></h3>
+      <button type="button" class="btn go sm" id="bg-done">Done</button>
+    </div>
+    <div class="bag-weigh">
+      <label for="bg-kg">Weight</label>
+      <div class="stepper">
+        <button type="button" class="step" data-kg="-0.5" aria-label="Half kg less">−</button>
+        <input id="bg-kg" type="number" inputmode="decimal" min="0.1" step="0.1" value="${line.qty}" enterkeyhint="done" aria-label="Weight in kg">
+        <button type="button" class="step" data-kg="0.5" aria-label="Half kg more">+</button>
+      </div>
+      <span class="bag-unit">kg</span>
+    </div>
+    <input id="bg-q" type="search" placeholder="Search cloth — e.g. shirt" autocomplete="off" enterkeyhint="done" aria-label="Search cloth">
+    <div class="item-list bag-list" id="bg-list" aria-live="polite"></div>`, "bag");
+
+  const kgIn = $("bg-kg"), qIn = $("bg-q"), list = $("bg-list");
+  const paintSum = () => {
+    $("bg-sum").textContent = `${money(line.rate)}/kg · ${money(line.qty * line.rate)} · ${piecesCount(line.pieces)} clothes`;
   };
-  box.querySelectorAll("[data-piece]").forEach((b) => {
-    b.onclick = () => addPiece(matches[parseInt(b.dataset.piece, 10)]);
+  const bump = (type, by) => {
+    const p = line.pieces.find((x) => x.type.toLowerCase() === type.toLowerCase());
+    if (p) p.qty += by;
+    else if (by > 0) line.pieces.push({ type, qty: by });
+    line.pieces = line.pieces.filter((x) => x.qty > 0);
+    touched = true;
+    if (navigator.vibrate) navigator.vibrate(by > 0 ? 12 : 8);
+  };
+  let shown = [];
+  const paintList = () => {
+    const raw = qIn.value.trim().replace(/\s+/g, " ");
+    const q = raw.toLowerCase();
+    shown = names.filter((n) => !q || n.toLowerCase().includes(q));
+    const inBag = new Map(line.pieces.map((p) => [p.type.toLowerCase(), p.qty]));
+    let html = shown.map((n, i) => {
+      const c = inBag.get(n.toLowerCase());
+      return `<button type="button" class="item-row${c ? " in" : ""}" data-pc="${i}">
+        <span class="ir-name">${esc(n)}</span>
+        ${c ? `<span class="ir-step"><span class="ir-minus" data-minus="1" role="button" aria-label="One less">−</span><b>${c}</b><span class="ir-plus" aria-hidden="true">＋</span></span>`
+            : `<span class="ir-add">＋</span>`}
+      </button>`;
+    }).join("");
+    // milte-julte naam mil gaye to "Add shi" sirf bheed — tabhi jab kuch na mile
+    if (q && !shown.length) {
+      html += `<button type="button" class="item-row create" data-addpc="1">＋ Add “${esc(raw)}” to the bag</button>`;
+    }
+    list.innerHTML = html;
+    paintSum();
+  };
+  const add = (name) => {
+    let type = String(name || "").trim().replace(/\s+/g, " ").slice(0, 60);
+    if (!type) return;
+    type = type[0].toUpperCase() + type.slice(1);   // "pillow cover" -> "Pillow cover"
+    if (!names.some((n) => n.toLowerCase() === type.toLowerCase())) names.unshift(type);
+    bump(type, 1);
+    // search se joda: khaana saaf, keyboard khula rahe — agla kapda likho
+    if (qIn.value) { qIn.value = ""; qIn.focus(); }
+    paintList();
+  };
+  // Search khula ho aur row dabayi to input ka focus na chhoote — warna
+  // keyboard band hokar dobara khulta aur poori sheet uchhalti.
+  list.onmousedown = (ev) => { if (document.activeElement === qIn) ev.preventDefault(); };
+  list.onclick = (ev) => {
+    const row = ev.target.closest("[data-pc], [data-addpc]");
+    if (!row) return;
+    if (row.dataset.addpc) return add(qIn.value);
+    const name = shown[parseInt(row.dataset.pc, 10)];
+    if (ev.target.closest("[data-minus]")) { bump(name, -1); paintList(); return; }
+    add(name);
+  };
+  qIn.oninput = paintList;
+  qIn.onkeydown = (ev) => {
+    if (ev.key !== "Enter") return;
+    ev.preventDefault();
+    if (!qIn.value.trim()) { qIn.blur(); return; }
+    const first = list.querySelector("[data-pc], [data-addpc]");
+    if (first) first.click();
+  };
+  kgIn.onfocus = () => kgIn.select();
+  kgIn.oninput = () => {
+    const v = parseFloat(kgIn.value);
+    if (!(v > 0)) return;
+    line.qty = v; touched = true; paintSum();
+  };
+  kgIn.onchange = () => { if (!(line.qty > 0)) line.qty = 0.5; kgIn.value = line.qty; paintSum(); };
+  kgIn.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); kgIn.blur(); } };
+  $("modal-body").querySelectorAll("[data-kg]").forEach((b) => {
+    b.onclick = () => {
+      line.qty = Math.max(0.5, Math.round((line.qty + parseFloat(b.dataset.kg)) * 10) / 10);
+      kgIn.value = line.qty; touched = true; paintSum();
+    };
   });
-  const add = box.querySelector("[data-addpiece]");
-  if (add) add.onclick = () => addPiece(raw);
-}
-function addPiece(name) {
-  let type = String(name || "").trim().replace(/\s+/g, " ").slice(0, 60);
-  if (!type) return;
-  type = type[0].toUpperCase() + type.slice(1);   // "pillow cover" -> "Pillow cover"
-  const idx = kgLineFor(PICK_SVC);
-  if (idx < 0) return;
-  const line = CART[idx];
-  const p = line.pieces.find((x) => x.type.toLowerCase() === type.toLowerCase());
-  if (p) p.qty += 1; else line.pieces.push({ type, qty: 1 });
-  const searched = $("b-q").value.trim();
-  $("b-q").value = "";
-  renderCart();
-  if (navigator.vibrate) navigator.vibrate(12);
-  if (searched) $("b-q").focus();
+  $("bg-done").onclick = closeModal;
+
+  // Popup ko keyboard ke upar wali jagah mein bandh do
+  const ov = $("modal-ov");
+  const vv = window.visualViewport;
+  const fit = () => { ov.style.top = `${vv.offsetTop}px`; ov.style.height = `${vv.height}px`; ov.style.bottom = "auto"; };
+  if (vv) { fit(); vv.addEventListener("resize", fit); vv.addEventListener("scroll", fit); }
+  MODAL_ONCLOSE = () => {
+    if (vv) { vv.removeEventListener("resize", fit); vv.removeEventListener("scroll", fit); }
+    ov.style.top = ov.style.height = ov.style.bottom = "";
+    // khola, kuch nahi kiya = 1 kg ki khaali line cart mein na chhodo
+    if (fresh && !touched && !line.pieces.length) {
+      const at = CART.indexOf(line);
+      if (at >= 0) CART.splice(at, 1);
+    }
+    renderCart();
+  };
+  paintList();
+  // nayi line: pehle wazan (number keyboard), phir kapde
+  if (fresh) kgIn.focus();
 }
 
 function untapItem(r) {
@@ -1916,7 +2018,7 @@ function paintCart(box) {
     b.onclick = () => { CART.splice(parseInt(b.dataset.rm, 10), 1); EDIT_RATE = -1; renderCart(); };
   });
   box.querySelectorAll("[data-pieces]").forEach((b) => {
-    b.onclick = () => piecesModal(parseInt(b.dataset.pieces, 10));
+    b.onclick = () => bagSheet(CART[parseInt(b.dataset.pieces, 10)].service);
   });
   box.querySelectorAll("[data-q]").forEach((b) => {
     b.onclick = () => {
@@ -1964,82 +2066,6 @@ function paintCart(box) {
    hai" ka jawab yahi list hai. Daam kisi kapde ka nahi lagta. */
 const piecesCount = (p) => (p || []).reduce((s, x) => s + (parseInt(x.qty, 10) || 0), 0);
 const piecesLabel = (p) => (p || []).map((x) => `${x.type} ${x.qty}`).join(", ") + ` — ${piecesCount(p)} pcs`;
-
-function piecesModal(idx) {
-  const line = CART[idx];
-  if (!line) return;
-  let draft = (line.pieces || []).map((x) => ({ ...x }));
-  if (!draft.length) draft.push({ type: "", qty: 1 });
-  const names = [...new Set((RATES || []).map((r) => (r.garment || "").trim()).filter(Boolean))].sort();
-  openModal(`<h3>Clothes in ${esc(line.garment || line.service)}</h3>
-    <p class="said">Count only — the bill stays by weight.</p>
-    <datalist id="pc-names">${names.map((x) => `<option value="${esc(x)}">`).join("")}</datalist>
-    <div id="pc-rows"></div>
-    <button type="button" class="btn ghost wide" id="pc-add">+ Add another cloth</button>
-    <div class="s-row big"><span>Total pieces</span><span id="pc-total">0</span></div>
-    <div class="btnrow">
-      <button class="btn ghost" data-act="close">Cancel</button>
-      <button class="btn go" id="pc-save">Save clothes</button>
-    </div>`);
-  const total = () => {
-    $("pc-total").textContent = piecesCount(draft.filter((x) => (x.type || "").trim()));
-  };
-  const paint = (focusLast) => {
-    $("pc-rows").innerHTML = draft.map((x, n) => `
-      <div class="frow pc-row">
-        <input list="pc-names" data-pc-name="${n}" value="${esc(x.type)}" placeholder="Cloth, e.g. Shirt" maxlength="60" aria-label="Cloth name">
-        <div class="stepper sm">
-          <button type="button" class="step" data-pc-step="${n}" data-by="-1" aria-label="One less">−</button>
-          <input type="number" inputmode="numeric" data-pc-qty="${n}" value="${x.qty}" min="1" step="1" aria-label="How many">
-          <button type="button" class="step" data-pc-step="${n}" data-by="1" aria-label="One more">+</button>
-          <button type="button" class="rm" data-pc-rm="${n}" aria-label="Remove cloth">✕</button>
-        </div>
-      </div>`).join("");
-    const rows = $("pc-rows");
-    rows.querySelectorAll("[data-pc-name]").forEach((el) => {
-      el.oninput = () => { draft[+el.dataset.pcName].type = el.value; total(); };
-      el.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); $("pc-add").click(); } };
-    });
-    rows.querySelectorAll("[data-pc-qty]").forEach((el) => {
-      el.oninput = () => { draft[+el.dataset.pcQty].qty = parseInt(el.value, 10) || 0; total(); };
-    });
-    rows.querySelectorAll("[data-pc-step]").forEach((b) => {
-      b.onclick = () => {
-        const x = draft[+b.dataset.pcStep];
-        x.qty = Math.max(1, (parseInt(x.qty, 10) || 0) + parseInt(b.dataset.by, 10));
-        paint();
-      };
-    });
-    rows.querySelectorAll("[data-pc-rm]").forEach((b) => {
-      b.onclick = () => {
-        draft.splice(+b.dataset.pcRm, 1);
-        if (!draft.length) draft.push({ type: "", qty: 1 });
-        paint();
-      };
-    });
-    total();
-    if (focusLast) {
-      const names = rows.querySelectorAll("[data-pc-name]");
-      names[names.length - 1].focus();
-    }
-  };
-  paint(true);
-  $("pc-add").onclick = () => { draft.push({ type: "", qty: 1 }); paint(true); };
-  $("pc-save").onclick = () => {
-    // ek hi kapda do baar likha ho to jod do — "Shirt 2" + "shirt 3" = Shirt 5
-    const merged = [];
-    draft.forEach((x) => {
-      const type = (x.type || "").trim().replace(/\s+/g, " ");
-      const qty = parseInt(x.qty, 10) || 0;
-      if (!type || qty < 1) return;
-      const same = merged.find((m) => m.type.toLowerCase() === type.toLowerCase());
-      if (same) same.qty += qty; else merged.push({ type, qty });
-    });
-    line.pieces = merged;
-    closeModal();
-    renderCart();
-  };
-}
 
 /* Neeche chipki hui patti — kul rakam aur ek button. */
 function paintBar() {
