@@ -708,3 +708,15 @@ h3.mt-lg { margin-top: 20px; }
 }
 .job span { min-width: 0; overflow-wrap: anywhere; }
 .job .btn { flex: 0 0 auto; }
+
+/* Tasks tab — card mein "when" ka column nahi, kaam ka naam hi sabse upar */
+.row.tcard { grid-template-columns: 4px 1fr; }
+.row.tcard .line1 b { white-space: normal; overflow-wrap: anywhere; }
+.bottom button i { position: relative; }
+.nav-n {
+  position: absolute; top: -4px; right: -10px; min-width: 17px; height: 17px;
+  border-radius: 9px; background: var(--brand-strong); color: var(--on-brand);
+  font-size: 10.5px; font-weight: 700; line-height: 17px; padding: 0 4px; font-style: normal;
+}
+/* 7 tab tak (manager) bhi chhote phone par label na toote */
+.bottom button { min-width: 0; }

@@ -15,7 +15,7 @@
 
 const $ = (id) => document.getElementById(id);
 let ME = null;
-let NAV = "work";        // work | bills | new | exp | team | me
+let NAV = "work";        // work | tasks | bills | new | exp | team | me
 let FILTER = "all";      // chips ki chuni hui value (har screen ki apni)
 let WORK = [];           // kaam ki poori list (server se milaya hua)
 let UNREAD = 0;
@@ -288,6 +288,7 @@ async function start() {
   go("work");
   loadToday();
   loadBell();
+  countTasks();
   startLive();
   paintOutbox();
   flushOutbox();
@@ -306,7 +307,8 @@ async function start() {
 const canBill = () => ME.can_bill && ME.features.includes("billing");
 
 function navItems() {
-  const out = [["work", "i-basket", "Work"]];
+  // Tasks har kisi ke liye — owner ka diya kaam ek jagah, kaam ki list mein nahi dabta
+  const out = [["work", "i-basket", "Work"], ["tasks", "i-task", "Tasks"]];
   if (canBill()) {
     out.push(["bills", "i-receipt", "Bills"], ["new", "i-plus", "New"]);
   }
@@ -322,7 +324,7 @@ const icon = (id) => `<svg class="ic" aria-hidden="true"><use href="/admin/stati
 
 function renderNav() {
   $("nav").innerHTML = navItems().map(([k, ic, label]) =>
-    `<button data-nav="${k}" class="${NAV === k ? "on" : ""}${k === "new" ? " fab" : ""}"><i>${icon(ic)}</i>${label}</button>`).join("");
+    `<button data-nav="${k}" class="${NAV === k ? "on" : ""}${k === "new" ? " fab" : ""}"><i>${icon(ic)}${k === "tasks" ? `<span class="nav-n" id="tasksN" hidden>0</span>` : ""}</i>${label}</button>`).join("");
   $("nav").querySelectorAll("[data-nav]").forEach((b) => { b.onclick = () => go(b.dataset.nav); });
 }
 
@@ -348,6 +350,7 @@ function go(nav, push = true) {
   if ($("pushbar")) paintPushNudge();
   $("nav").querySelectorAll("[data-nav]").forEach((b) => b.classList.toggle("on", b.dataset.nav === nav));
   if (nav === "work") loadWork();
+  else if (nav === "tasks") showTasks();
   else if (nav === "bills") loadBills();
   else if (nav === "new") showNewBill();
   else if (nav === "exp") showExpenses();
@@ -359,13 +362,14 @@ $("btn-refresh").onclick = (e) => {
   const b = e.currentTarget;
   b.classList.add("turn"); setTimeout(() => b.classList.remove("turn"), 650);
   refreshCurrent({ quiet: false });
-  loadToday(); loadBell();
+  loadToday(); loadBell(); countTasks();
 };
 $("pw-open").onclick = changePw;
 $("btn-bell").onclick = showBell;
 
 function refreshCurrent(opts = {}) {
   if (NAV === "work") loadWork(opts);
+  else if (NAV === "tasks") showTasks(opts);
   else if (NAV === "bills") loadBills(opts);
   else if (NAV === "team") showTeam(opts);
 }
@@ -590,6 +594,72 @@ function workChips() {
 }
 
 let WORK_SEQ = 0, MORE_LEFT = false;
+/* ─── Tasks — har staff ka alag section ────────────────────────────────
+   Owner/agent ka diya har kaam yahan, ek card par: kya karna hai, kis order
+   ka, kab se pada hai, aur Done / owner se poochho. Work tab order ki
+   haalat dikhata hai; ye tab sirf "mujhe kya kaam diya gaya". */
+let TASK_TAB = "open";
+const TASK_KIND = {
+  wash: "Washing", dry: "Drying", iron: "Ironing", pickup: "Pickup", delivery: "Delivery",
+};
+function setTasksBadge(n) {
+  const b = $("tasksN");
+  if (!b) return;
+  b.textContent = n > 99 ? "99+" : String(n);
+  b.hidden = !n;
+}
+async function countTasks() {
+  try { setTasksBadge((await api("/tasks?tab=mine&limit=1")).total || 0); } catch (e) { /* badge hi hai */ }
+}
+async function showTasks(opts = {}) {
+  $("chips").innerHTML = [["open", "Open"], ["done", "Done"]].map(([v, label]) =>
+    `<button data-tchip="${v}" class="${TASK_TAB === v ? "on" : ""}">${label}</button>`).join("");
+  $("chips").querySelectorAll("[data-tchip]").forEach((b) => {
+    b.onclick = () => { TASK_TAB = b.dataset.tchip; showTasks(); };
+  });
+  if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
+  let r;
+  try { r = await api(`/tasks?tab=${TASK_TAB === "done" ? "done" : "mine"}&limit=100`); }
+  catch (e) { $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (NAV !== "tasks") return;
+  const open = TASK_TAB === "open";
+  if (open) setTasksBadge(r.total || 0);
+  const rows = (r.tasks || []).slice().sort((a, b) => open ? (b.urgent - a.urgent) || (b.age_hours - a.age_hours) : 0);
+  if (!rows.length) {
+    $("list").innerHTML = `<div class="empty"><b>${open ? "No tasks right now" : "Nothing done yet"}</b>${open ? "When the owner gives you a task, it shows up here." : "Tasks you close show up here."}</div>`;
+    return;
+  }
+  $("list").innerHTML = rows.map(taskCard).join("");
+  $("list").querySelectorAll("[data-tdo]").forEach((b) => {
+    b.onclick = () => {
+      const code = b.dataset.code;
+      if (b.dataset.tdo === "done") return askDone(code);
+      if (b.dataset.tdo === "ask") return openThread(code);
+      if (b.dataset.tdo === "order") return orderDetailModal(b.dataset.num);
+    };
+  });
+}
+function taskCard(t) {
+  const o = t.order;
+  const open = t.status === "OPEN";
+  const age = t.age_hours < 1 ? "just now" : t.age_hours < 24 ? `${t.age_hours}h ago` : `${Math.floor(t.age_hours / 24)}d ago`;
+  return `<article class="row tcard${t.urgent && open ? " urgent" : ""}">
+    <div class="spine ${t.urgent && open ? "late" : ""}"></div>
+    <div class="body">
+      <div class="line1"><b>${t.urgent && open ? "🔴 " : ""}${esc(t.title)}</b></div>
+      <div class="sub"><span class="tag task">${esc(TASK_KIND[t.kind] || "Job")}</span>${esc(t.code)} · ${esc(age)}${t.eta_text ? ` · ⏰ ${esc(t.eta_text)}` : ""}</div>
+      ${o ? `<div class="sub mt-xs">🧺 ${esc(o.number)} · ${esc(o.customer)}${o.items ? " · " + esc(o.items) : ""}</div>` : ""}
+      ${t.cancel_requested ? `<div class="sub mt-xs"><span class="tag late">Cancel requested</span>${esc(t.cancel_reason || "")}</div>` : ""}
+      ${t.reply && !open ? `<div class="sub note">✓ ${esc(t.reply)}</div>` : ""}
+      ${open ? `<div class="acts">
+        <button class="btn go sm" data-tdo="done" data-code="${esc(t.code)}">✓ Done</button>
+        ${ME.can_ask ? `<button class="btn ghost sm" data-tdo="ask" data-code="${esc(t.code)}">❓ Ask owner</button>` : ""}
+        ${o ? `<button class="btn ghost sm" data-tdo="order" data-num="${esc(o.number)}">👁 Order</button>` : ""}
+      </div>` : ""}
+    </div>
+  </article>`;
+}
+
 async function loadWork(opts = {}) {
   if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
   const mine = ++WORK_SEQ;
@@ -1236,7 +1306,7 @@ function askDone(code) {
     </div>`);
   $("m-ok").onclick = (e) => busy(e.currentTarget, async () => {
     await api(`/tasks/${encodeURIComponent(code)}/done`, { method: "POST", body: { note: $("m-note").value.trim() } });
-    closeModal(); toast(`${code} closed ✅`); loadWork(); loadToday();
+    closeModal(); toast(`${code} closed ✅`); refreshCurrent({ quiet: true }); loadToday(); countTasks();
   });
 }
 
@@ -2954,6 +3024,7 @@ function tick() {
   refreshCurrent({ quiet: true });
   loadToday();
   loadBell();
+  countTasks();
   if (!LIVE) startLive();     // stream toot gayi thi to dobara jodo
 }
 function soon() { clearTimeout(LIVE_TIMER); LIVE_TIMER = setTimeout(tick, 400); }
