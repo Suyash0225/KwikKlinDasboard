@@ -198,11 +198,28 @@ async def run_human_handoff() -> int:
         if grace_minutes <= 0:
             return 0
 
+        # Sirf wo grahak jinhe insaan ne haal mein (grace se pehle, 24 ghante
+        # ke andar) jawab diya — webhook grace ke andar aaya message rokta hai
+        # aur ye job grace ke baad use uthata hai. Pehle har minute HAR grahak
+        # load hota tha aur har ek par 3 query (2,000 grahak = ~6,000 query/min).
+        now = datetime.now(timezone.utc)
+        recent_human = (
+            select(Conversation.customer_id)
+            .where(
+                Conversation.direction == Direction.OUTBOUND,
+                Conversation.sent_by.in_(("human", "manager")),
+                Conversation.customer_id.isnot(None),
+                Conversation.created_at >= now - timedelta(minutes=grace_minutes, hours=24),
+                Conversation.created_at <= now - timedelta(minutes=grace_minutes),
+            )
+            .distinct()
+        )
         customers = (
             await db.execute(
                 select(Customer).where(
                     Customer.is_active.is_(True),
                     Customer.opted_out.is_(False),
+                    Customer.id.in_(recent_human),
                 )
             )
         ).scalars().all()

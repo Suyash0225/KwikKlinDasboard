@@ -1318,6 +1318,8 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
     except Exception:
         log.exception("pickup_order_fyi_failed", order=order.order_number)
     try:
+        from app.services import app_settings
+
         sla = await app_settings.get(db, "turnaround_days")
     except Exception:
         sla = 2

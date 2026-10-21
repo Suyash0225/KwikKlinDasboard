@@ -648,34 +648,6 @@ async def _staff_open_task_filter(db: AsyncSession, staff_id):
         return Task.id.is_not(None)
     return Task.assigned_staff_id == staff_id
 
-async def open_pickup_awaiting_eta(db: AsyncSession, staff_id) -> Task | None:
-    """Newest shared delivery-team pickup/delivery awaiting an ETA."""
-    cond = await _staff_open_task_filter(db, staff_id)
-    if cond is None:
-        return None
-    return (
-        await db.execute(
-            select(Task)
-            .where(cond, Task.status == TASK_OPEN, Task.kind.in_(JOB_KINDS), Task.eta_text.is_(None))
-            .order_by(Task.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
-
-async def open_pickup_awaiting_confirm(db: AsyncSession, staff_id) -> Task | None:
-    """Newest shared delivery-team pickup/delivery still open."""
-    cond = await _staff_open_task_filter(db, staff_id)
-    if cond is None:
-        return None
-    return (
-        await db.execute(
-            select(Task)
-            .where(cond, Task.status == TASK_OPEN, Task.kind.in_(JOB_KINDS))
-            .order_by(Task.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
 
 
 async def record_pickup_eta(db: AsyncSession, task: Task, eta_text: str) -> str:

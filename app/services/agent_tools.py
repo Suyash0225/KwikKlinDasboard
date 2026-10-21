@@ -793,8 +793,6 @@ async def _money_report(db: AsyncSession, args: str) -> str:
     )
 
 
-def _money_fmt(v) -> str:
-    return f"₹{Decimal(v or 0):.0f}"
 
 
 async def _cost_analysis(db: AsyncSession, args: str) -> str:
