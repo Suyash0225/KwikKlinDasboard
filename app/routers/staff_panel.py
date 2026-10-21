@@ -13,6 +13,7 @@ import asyncio
 import re
 import uuid as uuid_module
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 import structlog
 from fastapi import (
@@ -868,19 +869,136 @@ async def order_picked_up(
         raise HTTPException(status_code=409, detail=str(exc))
 
 
-@router.post("/orders/{number}/washing")
-async def order_washing(
+class NotHomeIn(BaseModel):
+    note: str = Field(default="", max_length=200)
+
+
+@router.post("/orders/{number}/not-home")
+async def order_not_home(
     number: str,
+    body: NotHomeIn,
     p: StaffPrincipal = Depends(current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Washerman: dhulai shuru (grahak ka page bhi 'Cleaning' par aa jaata hai)."""
+    """Darwaze par koi nahi mila — order wahi rehta hai, bas record aur khabar.
+
+    Status nahi badalta aur delivery ki date bhi nahi: wo grahak se kiya
+    gaya vaada hai, aur use sirf owner badalta hai. Owner ko khabar jaati
+    hai; grahak ko message delivery wala apne WhatsApp se bhejta hai
+    (kind=not_home), kyunki dukaan ka API har dukaan par juda nahi hota.
+    """
+    _role_or_403(p, _DELIVERY_ROLES, "Pickup and delivery")
+    order = await _my_order(db, p, number)
+    if order.status not in (
+        OrderStatus.PICKUP_ASSIGNED, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY
+    ):
+        raise HTTPException(status_code=409, detail="This order is not out for pickup or delivery")
+    what = "pickup" if order.status is OrderStatus.PICKUP_ASSIGNED else "delivery"
+    stamp = datetime.now(IST).strftime("%d %b %H:%M")
+    note = body.note.strip()
+    line = f"[{stamp} {p.staff.name}] 🚪 Customer not home ({what})" + (f" - {note}" if note else "")
+    order.notes = f"{order.notes}\n{line}" if order.notes else line
+    db.add(order)
+    await db.commit()
+
+    from app.services import background, team
+
+    msg = f"🚪 {p.staff.name}: {order.order_number} — customer not home ({what})" + (f": {note}" if note else "")
+    _from = p.staff.phone
+    background.run_after(
+        lambda bg: team.notify_admins(bg, msg, skip_phone=_from),
+        tenant_id=p.staff.tenant_id,
+        label="not_home_notify",
+    )
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="customer_not_home",
+        args={"order": order.order_number, "what": what}, result=note[:100] or "not home",
+        tenant_id=p.staff.tenant_id,
+    )
+    return {"ok": True, "order": order.order_number, "what": what, "can_message": can_contact(p)}
+
+
+class WashCountIn(BaseModel):
+    line: int = Field(ge=0)
+    piece: int | None = Field(default=None, ge=0)   # KG bore ke andar ka kapda
+    got: int = Field(ge=0, le=9999)
+
+
+class WashStartIn(BaseModel):
+    # None = bina gine shuru (purana rasta). Warna bill ki har line par kitne mile.
+    counts: list[WashCountIn] | None = Field(default=None, max_length=300)
+
+
+def _wash_check(order: Order, counts: list[WashCountIn]) -> dict:
+    """Bill ki ginti vs washerman ki ginti. Bina ginti wala KG bora chhoot jaata hai."""
+    got = {(c.line, c.piece): c.got for c in counts}
+    diffs, expected, found = [], 0, 0
+    for ln in delivery.lines(order):
+        if ln.get("bag"):
+            continue
+        parts = (
+            [(p["piece"], p["type"], p["qty"]) for p in ln["pieces"]] if ln.get("pieces")
+            else [(None, ln["name"], ln["qty"])]
+        )
+        for piece, name, qty in parts:
+            n = got.get((ln["line"], piece), qty)   # jo line chhoot gayi wo bill jitni maani
+            expected += qty
+            found += n
+            if n != qty:
+                diffs.append({"name": name, "bill": qty, "got": n})
+    return {"ok": not diffs, "expected": expected, "got": found, "diffs": diffs}
+
+
+@router.post("/orders/{number}/washing")
+async def order_washing(
+    number: str,
+    body: WashStartIn | None = None,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Washerman: dhulai shuru (grahak ka page bhi 'Cleaning' par aa jaata hai).
+
+    Saath mein ginti ho to bill se milate hain: kam/zyada kapde ABHI pakde
+    jaate hain, delivery ke din nahi — tab tak grahak ka "ek kurta kam hai"
+    kisi ki galti sabit nahi kar sakta. Farak notes mein jaata hai aur owner
+    ko khabar.
+    """
     _role_or_403(p, _WASH_ROLES, "Washing")
     order = await _my_order(db, p, number)
     try:
-        return await delivery.washing(db, order, by=p.staff.name, notify=False)
+        out = await delivery.washing(db, order, by=p.staff.name, notify=False)
     except delivery.DeliveryError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    if body is None or body.counts is None:
+        return out
+    check = _wash_check(order, body.counts)
+    stamp = datetime.now(IST).strftime("%d %b %H:%M")
+    if check["ok"]:
+        line = f"[{stamp} {p.staff.name}] 🔢 Counted at wash: all {check['got']} match the bill"
+    else:
+        diff_txt = ", ".join(f"{d['name']} {d['got']} of {d['bill']}" for d in check["diffs"])
+        line = f"[{stamp} {p.staff.name}] 🔢 Count mismatch at wash: {diff_txt}"
+    order.notes = f"{order.notes}\n{line}" if order.notes else line
+    db.add(order)
+    await db.commit()
+    if not check["ok"]:
+        from app.services import background, team
+
+        msg = (
+            f"🔢 {p.staff.name}: {order.order_number} count does not match the bill"
+            f" — {check['got']} found, bill says {check['expected']} ({diff_txt})"
+        )
+        _from = p.staff.phone
+        background.run_after(
+            lambda bg: team.notify_admins(bg, msg, skip_phone=_from),
+            tenant_id=p.staff.tenant_id, label="wash_count_notify",
+        )
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="wash_count",
+        args={"order": order.order_number, "expected": check["expected"], "got": check["got"]},
+        result="ok" if check["ok"] else "mismatch", tenant_id=p.staff.tenant_id,
+    )
+    return {**out, "check": check}
 
 
 @router.post("/orders/{number}/ready")
@@ -962,6 +1080,11 @@ async def collect_payment(
     method = PaymentMethod.CASH if body.method == "cash" else PaymentMethod.UPI
     left = Decimal(str(body.amount))
     settled = []
+    # Pehle hi utha lo: grahak ki raseed WhatsApp se na jaye to send_message
+    # session rollback karta hai aur staff/order dono expire ho jaate hain.
+    # Uske baad unhe padhna 500 deta tha — jabki paisa commit ho chuka hota,
+    # aur delivery wala "fail" dekh kar dobara collect dabata.
+    who, tenant_id, number = p.staff.name, p.staff.tenant_id, order.order_number
 
     # Sabse purana bill pehle. Ye grahak ka apna hisaab-kitaab hai: koi bhi
     # dukaandar naya bill chukta karke purana udhaar khula nahi chhodta.
@@ -986,28 +1109,29 @@ async def collect_payment(
             if o_due <= Decimal("0.009"):
                 continue
             take = min(left, o_due)
+            o_number = o.order_number
             # purane bill par alag-alag message nahi — ek hi paisa hai, ek hi raseed
             # (neeche is order par, ya aakhri purane bill par)
             left -= take
             await record_payment(
-                db, o, amount=take, method=method, recorded_by=p.staff.name,
+                db, o, amount=take, method=method, recorded_by=who,
                 notify_customer=left <= 0,
             )
-            settled.append({"order": o.order_number, "amount": float(take)})
+            settled.append({"order": o_number, "amount": float(take)})
 
     if left > 0:
-        await record_payment(db, order, amount=left, method=method, recorded_by=p.staff.name)
+        await record_payment(db, order, amount=left, method=method, recorded_by=who)
 
     await audit.record(
-        actor_role="staff", actor=p.staff.name, action="cod_collected",
+        actor_role="staff", actor=who, action="cod_collected",
         args={
-            "order": order.order_number, "amount": body.amount, "method": body.method,
+            "order": number, "amount": body.amount, "method": body.method,
             "settled_older": settled,
         },
-        result="ok", tenant_id=p.staff.tenant_id,
+        result="ok", tenant_id=tenant_id,
     )
     log.info(
-        "cod_collected", staff=p.staff.name, order=order.order_number,
+        "cod_collected", staff=who, order=number,
         amount=body.amount, older=len(settled),
     )
     await db.refresh(order)
@@ -1711,6 +1835,111 @@ async def my_bills(
 # --------------------------------------------------- manager ka hissa ----
 
 
+def _empty_day() -> dict:
+    return {"picked": 0, "washed": 0, "ready": 0, "delivered": 0, "cash": 0.0, "upi": 0.0}
+
+
+async def _staff_day(db: AsyncSession, names: list[str]) -> dict[str, dict]:
+    """Aaj (IST) har aadmi ne kya kiya — status history aur payment ledger se.
+
+    Dono jagah aadmi ka NAAM likha hota hai (changed_by / recorded_by), isliye
+    yahi joda jaata hai. Do query, poori team ke liye — har aadmi par alag nahi.
+    """
+    from app.models import OrderStatusHistory, Payment, PaymentMethod
+
+    if not names:
+        return {}
+    start = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    out = {n: _empty_day() for n in names}
+    key = {
+        OrderStatus.PICKED_UP: "picked", OrderStatus.IN_WASH: "washed",
+        OrderStatus.READY: "ready", OrderStatus.DELIVERED: "delivered",
+    }
+    hist = (
+        await db.execute(
+            select(OrderStatusHistory.changed_by, OrderStatusHistory.new_status, func.count())
+            .join(Order, Order.id == OrderStatusHistory.order_id)   # tenant filter Order se
+            .where(
+                OrderStatusHistory.changed_by.in_(names),
+                OrderStatusHistory.changed_at >= start,
+                OrderStatusHistory.new_status.in_(list(key)),
+            )
+            .group_by(OrderStatusHistory.changed_by, OrderStatusHistory.new_status)
+        )
+    ).all()
+    for who, status, n in hist:
+        out[who][key[status]] += n
+    pay = (
+        await db.execute(
+            select(Payment.recorded_by, Payment.method, func.sum(Payment.amount))
+            .where(Payment.recorded_by.in_(names), Payment.received_at >= start)
+            .group_by(Payment.recorded_by, Payment.method)
+        )
+    ).all()
+    for who, method, amt in pay:
+        out[who]["cash" if method is PaymentMethod.CASH else "upi"] += float(amt or 0)
+    return out
+
+
+# Itne ghante ek hi status par = atka hua. Dhulai/sukhai ke liye bhi do din bahut hai.
+STUCK_HOURS = 48
+
+
+@router.get("/stuck")
+async def stuck_orders(
+    p: StaffPrincipal = Depends(require_manager), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Jo order 2 din se ek hi jagah pada hai — chupchaap late hone se pehle."""
+    from app.models import OrderStatusHistory
+
+    last_move = (
+        select(OrderStatusHistory.order_id, func.max(OrderStatusHistory.changed_at).label("at"))
+        .group_by(OrderStatusHistory.order_id).subquery()
+    )
+    moved = func.coalesce(last_move.c.at, Order.created_at)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=STUCK_HOURS)
+    rows = (
+        await db.execute(
+            select(Order, moved.label("moved"))
+            .outerjoin(last_move, last_move.c.order_id == Order.id)
+            .where(
+                Order.status.notin_((OrderStatus.DELIVERED, OrderStatus.CANCELLED)),
+                moved < cutoff,
+            )
+            .order_by(moved).limit(50)
+        )
+    ).all()
+    cust_ids = {o.customer_id for o, _ in rows if o.customer_id}
+    customers = {
+        c.id: c for c in (
+            await db.execute(select(Customer).where(Customer.id.in_(cust_ids)))
+        ).scalars().all()
+    } if cust_ids else {}
+    staff_ids = {sid for o, _ in rows for sid in (o.assigned_washer_id, o.assigned_delivery_id) if sid}
+    staff = {
+        st.id: st.name for st in (
+            await db.execute(select(Staff).where(Staff.id.in_(staff_ids)))
+        ).scalars().all()
+    } if staff_ids else {}
+    now = datetime.now(timezone.utc)
+    out = []
+    for o, at in rows:
+        cust = customers.get(o.customer_id)
+        who = o.assigned_delivery_id if o.status in (
+            OrderStatus.PICKUP_ASSIGNED, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY
+        ) else o.assigned_washer_id
+        out.append({
+            "number": o.order_number,
+            "customer": (cust.name or "Customer") if cust else "?",
+            "status": o.status.name,
+            "hours": int((now - at).total_seconds() // 3600),
+            "staff": staff.get(who, ""),
+            "urgent": o.priority == "urgent",
+            "delivery": o.expected_delivery.isoformat() if o.expected_delivery else None,
+        })
+    return {"orders": out, "hours": STUCK_HOURS}
+
+
 @router.get("/team", dependencies=[Depends(require_staff_feature("staff_reports"))])
 async def team_view(
     p: StaffPrincipal = Depends(require_manager), db: AsyncSession = Depends(get_db)
@@ -1720,6 +1949,7 @@ async def team_view(
     rows = (
         await db.execute(select(Staff).where(Staff.is_active).order_by(Staff.name))
     ).scalars().all()
+    day = await _staff_day(db, [s.name for s in rows])
     out = []
     for s in rows:
         open_n = (
@@ -1744,6 +1974,7 @@ async def team_view(
                 "phone_masked": mask_phone(s.phone),
                 "open": open_n, "done_24h": done_n,
                 "has_login": bool(s.password_hash),
+                "today": day.get(s.name, _empty_day()),
             }
         )
     return out
@@ -1902,7 +2133,7 @@ async def order_receipt(
 @router.get("/orders/{number}/message")
 async def order_message(
     number: str,
-    kind: str = Query(pattern="^(payment_thanks|service_thanks|review_request|delivery_update)$"),
+    kind: str = Query(pattern="^(payment_thanks|service_thanks|review_request|delivery_update|not_home)$"),
     p: StaffPrincipal = Depends(require_biller()),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -2022,11 +2253,18 @@ async def send_payment_reminder(
     }
 
 
+# Notes mein photo ki line — "damage" alag dikhe, taaki "aisa to nahi tha"
+# wali baat par owner seedha wahi line dhoondh le.
+PHOTO_LABEL = {"general": "photo", "damage": "⚠️ damage photo", "proof": "📦 delivery photo"}
+
+
 @router.post("/orders/{number}/photo", status_code=201)
 async def attach_photo(
     number: str,
     photo: UploadFile = File(...),
     note: str = Form(default=""),
+    # general | damage (kapde pehle se kharab) | proof (grahak ko diye)
+    kind: str = Form(default="general", pattern="^(general|damage|proof)$"),
     p: StaffPrincipal = Depends(current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -2057,7 +2295,8 @@ async def attach_photo(
     await asyncio.to_thread((media_dir / name).write_bytes, blob)
 
     stamp = datetime.now(timezone.utc).strftime("%d %b %H:%M")
-    line = f"[{stamp} {p.staff.name}] photo /admin/media/{name}"
+    label = PHOTO_LABEL[kind]
+    line = f"[{stamp} {p.staff.name}] {label} /admin/media/{name}"
     if note.strip():
         line += f" - {note.strip()[:200]}"
     order.notes = f"{order.notes}\n{line}" if order.notes else line
@@ -2071,7 +2310,9 @@ async def attach_photo(
     from app.services import background, team
 
     msg = (
-        f"📷 {p.staff.name} added a photo on {order.order_number}"
+        (f"⚠️ {p.staff.name} marked damage on {order.order_number}" if kind == "damage"
+         else f"📷 {p.staff.name} added a delivery photo on {order.order_number}" if kind == "proof"
+         else f"📷 {p.staff.name} added a photo on {order.order_number}")
         + (f": {note.strip()[:150]}" if note.strip() else "")
         + "\nYou can see it on the dashboard."
     )
@@ -2083,10 +2324,10 @@ async def attach_photo(
     )
     await audit.record(
         actor_role="staff", actor=p.staff.name, action="job_photo_added",
-        args={"order": order.order_number, "file": name},
+        args={"order": order.order_number, "file": name, "kind": kind},
         result=note[:100] or "photo", tenant_id=p.staff.tenant_id,
     )
-    return {"ok": True, "file": name}
+    return {"ok": True, "file": name, "kind": kind}
 
 
 @router.get("/today")
@@ -2135,6 +2376,14 @@ async def today_summary(
     # se aati hai jo list banati hai (_route_query), isliye banner par tap
     # karke jo dikhe wo ginti se mel khaye.
     route_q, _ = await _route_query(db, p)
+    # Aaj kitna nikalna hai — washerman ke liye "aaj Ready karna", delivery ke liye "aaj pahunchana"
+    out["due_today"] = (
+        await db.execute(
+            select(func.count()).select_from(
+                route_q.where(Order.expected_delivery == date.today()).subquery()
+            )
+        )
+    ).scalar_one()
     out["late"] = (
         await db.execute(
             select(func.count()).select_from(
@@ -2143,11 +2392,336 @@ async def today_summary(
         )
     ).scalar_one()
     if p.is_manager:
+        from app.models import CashHandover, HANDOVER_PENDING
+
+        out["cash_to_confirm"] = (
+            await db.execute(
+                select(func.count()).select_from(CashHandover)
+                .where(CashHandover.status == HANDOVER_PENDING)
+            )
+        ).scalar_one()
         out["shop_pending"] = await _count(Task.status == TASK_OPEN)
         out["shop_done_today"] = await _count(
             Task.status == TASK_DONE, Task.completed_at >= start
         )
     return out
+
+
+# ------------------------------------------------- phone par notification ----
+
+
+@router.get("/push/key")
+async def push_key(
+    p: StaffPrincipal = Depends(current_staff), db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Browser ko subscribe karne ke liye dukaan ki public VAPID chaabi."""
+    from app.services import web_push
+
+    key = await web_push.public_key(db)
+    if not key:
+        raise HTTPException(status_code=503, detail="Phone notifications are not set up on this server")
+    return {"key": key}
+
+
+class PushKeysIn(BaseModel):
+    p256dh: str = Field(min_length=20, max_length=200)
+    auth: str = Field(min_length=8, max_length=100)
+
+
+class PushSubscribeIn(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=2000)
+    keys: PushKeysIn
+
+
+@router.post("/push/subscribe")
+async def push_subscribe(
+    body: PushSubscribeIn,
+    request: Request,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Is phone par notification chalu. Wahi phone dobara aaye to row wahi."""
+    from app.models import PushSubscription
+    from app.services import web_push
+
+    if not web_push.allowed_endpoint(body.endpoint):
+        raise HTTPException(status_code=400, detail="That is not a browser push address")
+    origin = f"{request.url.scheme}://{request.url.netloc}"[:200]
+    sub = (
+        await db.execute(select(PushSubscription).where(PushSubscription.endpoint == body.endpoint))
+    ).scalar_one_or_none()
+    if sub is None:
+        sub = PushSubscription(endpoint=body.endpoint, staff_id=p.staff.id,
+                               p256dh=body.keys.p256dh, auth=body.keys.auth, origin=origin)
+        db.add(sub)
+    else:
+        # phone kisi aur ke haath gaya (ek phone, do login) — khabar ab naye aadmi ki
+        sub.staff_id, sub.p256dh, sub.auth, sub.origin = p.staff.id, body.keys.p256dh, body.keys.auth, origin
+    await db.commit()
+    return {"ok": True}
+
+
+class PushUnsubscribeIn(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=2000)
+
+
+@router.post("/push/unsubscribe")
+async def push_unsubscribe(
+    body: PushUnsubscribeIn,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from sqlalchemy import delete
+
+    from app.models import PushSubscription
+
+    await db.execute(
+        delete(PushSubscription).where(
+            PushSubscription.endpoint == body.endpoint, PushSubscription.staff_id == p.staff.id
+        )
+    )
+    await db.commit()
+    return {"ok": True}
+
+
+# ------------------------------------------------- shaam ka cash hisaab ----
+
+# Pehli baar hisaab de raha ho to kitna peeche tak dekhein. Iske pehle ka
+# paisa purane tareeke se (bina is screen ke) dukaan tak pahunch chuka hai.
+CASH_FIRST_LOOKBACK = timedelta(days=30)
+
+
+async def _cash_since(db: AsyncSession, staff: Staff) -> datetime:
+    """Is aadmi ka pichhla hisaab jahan khatam hua — agla wahin se."""
+    from app.models import CashHandover
+
+    last = (
+        await db.execute(
+            select(func.max(CashHandover.period_end)).where(CashHandover.staff_id == staff.id)
+        )
+    ).scalar_one_or_none()
+    return last or (datetime.now(timezone.utc) - CASH_FIRST_LOOKBACK)
+
+
+async def _cash_in_hand(db: AsyncSession, staff: Staff, since: datetime, until: datetime) -> dict:
+    """`since` ke baad aur `until` tak is aadmi ke naam par jo paisa aaya."""
+    from app.models import Payment, PaymentMethod
+
+    rows = (
+        await db.execute(
+            select(Payment, Order.order_number)
+            .join(Order, Order.id == Payment.order_id)
+            .where(
+                Payment.recorded_by == staff.name,
+                Payment.received_at > since,
+                Payment.received_at <= until,
+            )
+            .order_by(Payment.received_at)
+        )
+    ).all()
+    cash = sum((pay.amount for pay, _ in rows if pay.method is PaymentMethod.CASH), Decimal("0"))
+    upi = sum((pay.amount for pay, _ in rows if pay.method is not PaymentMethod.CASH), Decimal("0"))
+    return {
+        "cash": cash, "upi": upi, "count": len(rows),
+        "payments": [
+            {
+                "order": number, "amount": float(pay.amount),
+                "method": pay.method.name.lower(),
+                "at": pay.received_at.astimezone(IST).strftime("%d %b, %I:%M %p"),
+            }
+            for pay, number in rows
+        ],
+    }
+
+
+def _handover_out(h) -> dict:
+    received = float(h.received_cash) if h.received_cash is not None else None
+    return {
+        "id": str(h.id),
+        "staff": h.staff_name,
+        "status": h.status,
+        "cash_collected": float(h.cash_collected),
+        "upi_collected": float(h.upi_collected),
+        "payments": h.payments_count,
+        "handed_cash": float(h.handed_cash),
+        "received_cash": received,
+        "short": round(float(h.handed_cash) - received, 2) if received is not None else None,
+        "note": h.note or "",
+        "from": h.period_start.astimezone(IST).strftime("%d %b, %I:%M %p"),
+        "to": h.period_end.astimezone(IST).strftime("%d %b, %I:%M %p"),
+        "confirmed_by": h.confirmed_by,
+    }
+
+
+@router.get("/cash")
+async def my_cash(
+    p: StaffPrincipal = Depends(require_biller("cod_collection")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Mere haath mein abhi kitna paisa hai — pichhle hisaab ke baad se."""
+    from app.models import CashHandover
+
+    since = await _cash_since(db, p.staff)
+    # database ki ghadi — payments.received_at bhi wahi likhti hai
+    now = (await db.execute(select(func.now()))).scalar_one()
+    hand = await _cash_in_hand(db, p.staff, since, now)
+    recent = (
+        await db.execute(
+            select(CashHandover).where(CashHandover.staff_id == p.staff.id)
+            .order_by(CashHandover.period_end.desc()).limit(5)
+        )
+    ).scalars().all()
+    return {
+        "since": since.astimezone(IST).strftime("%d %b, %I:%M %p"),
+        "cash": float(hand["cash"]), "upi": float(hand["upi"]), "count": hand["count"],
+        "payments": hand["payments"],
+        "recent": [_handover_out(h) for h in recent],
+    }
+
+
+class HandoverIn(BaseModel):
+    handed_cash: float = Field(ge=0)
+    note: str = Field(default="", max_length=200)
+
+
+@router.post("/cash/handover", status_code=201)
+async def hand_over_cash(
+    body: HandoverIn,
+    p: StaffPrincipal = Depends(require_biller("cod_collection")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """"Itna cash de raha hoon" — manager ke gin-ne tak PENDING.
+
+    Rakam ledger se nikalti hai, staff ke bolne se nahi. Staff sirf ye
+    likhta hai ki haath mein kitna de raha hai; kam ho to note mein wajah
+    (jaise petrol ka kharcha).
+    """
+    from app.models import CashHandover, HANDOVER_PENDING
+
+    since = await _cash_since(db, p.staff)
+    # database ki ghadi — payments.received_at bhi wahi likhti hai
+    now = (await db.execute(select(func.now()))).scalar_one()
+    hand = await _cash_in_hand(db, p.staff, since, now)
+    if hand["count"] == 0:
+        raise HTTPException(status_code=400, detail="Nothing collected since your last handover")
+    handed = Decimal(str(body.handed_cash)).quantize(Decimal("0.01"))
+    if handed > hand["cash"] + Decimal("0.01"):
+        raise HTTPException(status_code=400, detail=f"You collected only ₹{hand['cash']:.0f} in cash")
+    note = body.note.strip()
+    if handed < hand["cash"] - Decimal("0.01") and len(note) < 3:
+        raise HTTPException(status_code=400, detail="Handing over less cash — write the reason in the note")
+    h = CashHandover(
+        staff_id=p.staff.id, staff_name=p.staff.name,
+        period_start=since, period_end=now,
+        cash_collected=hand["cash"], upi_collected=hand["upi"], payments_count=hand["count"],
+        handed_cash=handed, note=note or None, status=HANDOVER_PENDING,
+    )
+    db.add(h)
+    await db.commit()
+    await db.refresh(h)
+
+    from app.services import background, team
+
+    msg = (
+        f"💵 {p.staff.name} is handing over ₹{handed:.0f} cash"
+        f" (collected ₹{hand['cash']:.0f} cash + ₹{hand['upi']:.0f} UPI, {hand['count']} payments)"
+        + (f" — {note}" if note else "")
+        + "\nCount it and confirm in the staff app."
+    )
+    _from = p.staff.phone
+    from app.services import web_push
+    from app.services.staff_auth import MANAGER_ROLES
+
+    await web_push.notify(
+        db, p.staff.tenant_id, roles=MANAGER_ROLES,
+        title="💵 Cash to count", body=f"{p.staff.name} handed over ₹{handed:.0f}", tag="cash",
+    )
+    background.run_after(
+        lambda bg: team.notify_admins(bg, msg, skip_phone=_from),
+        tenant_id=p.staff.tenant_id, label="cash_handover_notify",
+    )
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="cash_handover",
+        args={"handed": float(handed), "cash": float(hand["cash"]), "upi": float(hand["upi"])},
+        result="pending", tenant_id=p.staff.tenant_id,
+    )
+    return _handover_out(h)
+
+
+@router.get("/cash/handovers")
+async def cash_handovers(
+    p: StaffPrincipal = Depends(require_manager),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Manager: kiska paisa ginna baaki hai, aur haal ke pakke hisaab."""
+    from app.models import CashHandover, HANDOVER_PENDING
+
+    pending = (
+        await db.execute(
+            select(CashHandover).where(CashHandover.status == HANDOVER_PENDING)
+            .order_by(CashHandover.created_at)
+        )
+    ).scalars().all()
+    done = (
+        await db.execute(
+            select(CashHandover).where(CashHandover.status != HANDOVER_PENDING)
+            .order_by(CashHandover.confirmed_at.desc()).limit(20)
+        )
+    ).scalars().all()
+    return {"pending": [_handover_out(h) for h in pending], "recent": [_handover_out(h) for h in done]}
+
+
+class ConfirmHandoverIn(BaseModel):
+    received_cash: float = Field(ge=0)
+
+
+@router.post("/cash/handovers/{handover_id}/confirm")
+async def confirm_handover(
+    handover_id: uuid_module.UUID,
+    body: ConfirmHandoverIn,
+    p: StaffPrincipal = Depends(require_manager),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Manager ne gin liya. Jo mila wahi likhte hain — farak ho to dono
+    rakam rehti hain aur owner ko khabar jaati hai."""
+    from app.models import CashHandover, HANDOVER_CONFIRMED, HANDOVER_PENDING
+
+    h = await db.get(CashHandover, handover_id)
+    if h is None:
+        raise HTTPException(status_code=404, detail="Handover not found")
+    if h.status != HANDOVER_PENDING:
+        raise HTTPException(status_code=409, detail="This handover is already confirmed")
+    # apna hi paisa khud pakka nahi — owner (ADMIN) ka apwaad, wahi aakhri haath hai
+    if h.staff_id == p.staff.id and p.staff.role is not StaffRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Someone else has to count your cash")
+    received = Decimal(str(body.received_cash)).quantize(Decimal("0.01"))
+    h.received_cash = received
+    h.status = HANDOVER_CONFIRMED
+    h.confirmed_by = p.staff.name
+    h.confirmed_at = datetime.now(timezone.utc)
+    db.add(h)
+    await db.commit()
+
+    gap = h.handed_cash - received
+    if abs(gap) > Decimal("0.009"):
+        from app.services import background, team
+
+        msg = (
+            f"⚠️ Cash mismatch: {h.staff_name} said ₹{h.handed_cash:.0f},"
+            f" {p.staff.name} counted ₹{received:.0f} ({'short' if gap > 0 else 'extra'} ₹{abs(gap):.0f})."
+        )
+        _from = p.staff.phone
+        background.run_after(
+            lambda bg: team.notify_admins(bg, msg, skip_phone=_from),
+            tenant_id=p.staff.tenant_id, label="cash_mismatch_notify",
+        )
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="cash_handover_confirmed",
+        args={"handover": str(h.id), "staff": h.staff_name, "handed": float(h.handed_cash),
+              "received": float(received)},
+        result="mismatch" if abs(gap) > Decimal("0.009") else "ok", tenant_id=p.staff.tenant_id,
+    )
+    return _handover_out(h)
 
 
 async def _route_query(db: AsyncSession, p: StaffPrincipal, tab: str = "todo"):

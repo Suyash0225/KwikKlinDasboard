@@ -334,6 +334,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste {name} 🙏\nOrder {order_number} ke {given} kapde aaj de diye gaye ✅\n{pending} kapde abhi hamare paas hain — jald hi pahuncha denge.{bill_line}\n— {shop}",
         "en": "Hello {name} 🙏\nWe delivered {given} clothes from order {order_number} today ✅\n{pending} clothes are still with us — we will bring them to you soon.{bill_line}\n— {shop}",
     },
+    # Delivery wala darwaze par gaya, koi nahi mila — staff app ka "Not home"
+    "not_home": {
+        "hi": "Namaste {name} 🙏\n{shop} se aaj aapke ghar aaye the (order {order_number}), par aap nahi mile.\nKripya bata dijiye kab aayein — hum usi samay pahunch jayenge.\n— {shop}",
+        "en": "Hello {name} 🙏\nWe came to your home today for order {order_number} but could not find you.\nPlease tell us a good time and we will come back then.\n— {shop}",
+    },
     "service_thanks": {
         "hi": "Namaste {name} 🙏\n{shop} ko apne kapde saunpne ke liye dil se dhanyawad! Ummeed hai order {order_number} aapko pasand aaya ✨\nAgli baar bas WhatsApp kar dijiye — pickup ghar se ho jayega 🧺\n— {shop}",
         "en": "Hello {name} 🙏\nThank you for trusting {shop} with your clothes! We hope you loved order {order_number} ✨\nNext time just WhatsApp us — we will pick up from your home 🧺\n— {shop}",
@@ -537,7 +542,7 @@ CUSTOMER_KEYS = frozenset({
     "order_not_found", "complaint_ack", "escalated_ack",
     "payment_reminder", "payment_reminder_firm",
     "payment_thanks", "service_thanks", "review_request", "review_invitation_line", "partial_delivery",
-    "delivery_update_full", "reward_earned",
+    "delivery_update_full", "reward_earned", "not_home",
     "start_confirmed", "stop_confirmed", "relay_message_customer",
 })
 

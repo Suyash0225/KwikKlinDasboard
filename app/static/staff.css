@@ -681,3 +681,21 @@ h3.mt-lg { margin-top: 20px; }
 
 /* Long customer bill URLs must wrap without inline styles (strict CSP). */
 .break-all { overflow-wrap: anywhere; word-break: break-all; }
+
+/* Aaj ke saare stop ek route mein (delivery) */
+.routebar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 12px;
+  background: var(--sheet); font-size: 14px;
+}
+.routebar .btn { flex: none; }
+/* chhota checkbox + likha, ek line mein (deliver ke baad photo) */
+.check-row {
+  display: flex; align-items: center; gap: 10px; margin: 12px 0 0; font-size: 14px; font-weight: 600; color: var(--ink-2);
+}
+.check-row input { width: 20px; height: 20px; min-height: 0; flex: none; }
+/* ginti bill se na mile to wo line laal */
+.dl-row.off .dl-name, .dl-row.off .dl-of { color: var(--late); font-weight: 700; }
+/* Team tab ke hisse: atke order, team */
+.sechead { margin: 14px 2px 8px; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); }
+.sechead:first-child { margin-top: 0; }

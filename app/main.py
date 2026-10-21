@@ -1563,7 +1563,7 @@ async def staff_sw():
     from fastapi.responses import Response as _Resp
 
     js = (
-        "const SHELL='kkstaff-v2';\n"
+        "const SHELL='kkstaff-v3';\n"
         "self.addEventListener('install',e=>{e.waitUntil(caches.open(SHELL)"
         ".then(c=>c.addAll(['/staff','/admin/static/staff.css','/admin/static/staff.js'])))});\n"
         "self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(k=>"
@@ -1574,6 +1574,20 @@ async def staff_sw():
         "  e.respondWith(fetch(e.request).then(r=>{\n"
         "    const copy=r.clone(); caches.open(SHELL).then(c=>c.put(e.request,copy)); return r;\n"
         "  }).catch(()=>caches.match(e.request)));\n"
+        "});\n"
+        # Web Push (services/web_push.py): app band ho tab bhi notification.
+        # Tap = khula hua staff app aage lao, warna naya kholo.
+        "self.addEventListener('push',e=>{\n"
+        "  let d={}; try{d=e.data?e.data.json():{}}catch(x){d={body:e.data&&e.data.text()}}\n"
+        "  e.waitUntil(self.registration.showNotification(d.title||'Kwik Klin',{body:d.body||'',"
+        "tag:d.tag||undefined,renotify:!!d.tag,icon:'/staff/icon.svg',badge:'/staff/icon.svg',data:{url:d.url||'/staff'}}));\n"
+        "});\n"
+        "self.addEventListener('notificationclick',e=>{\n"
+        "  e.notification.close(); const url=(e.notification.data&&e.notification.data.url)||'/staff';\n"
+        "  e.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(ws=>{\n"
+        "    for(const w of ws){ if(new URL(w.url).pathname.startsWith('/staff')) return w.focus(); }\n"
+        "    return clients.openWindow(url);\n"
+        "  }));\n"
         "});\n"
     )
     return _Resp(content=js, media_type="application/javascript",

@@ -42,6 +42,76 @@ async function api(path, opts = {}) {
   return data;
 }
 
+/* ─── bina signal ke kaam (outbox) ──────────────────────────────────── */
+/* Gali mein signal nahi to "Delivered" dabana bekaar jaata tha — aadmi
+   bhool jaata ki kaunsa dabaya tha. Ab sirf STATUS wale kaam (picked up,
+   wash, ready, deliver, ghar par nahi) phone mein ruk jaate hain aur
+   signal aate hi apne aap chale jaate hain. Do baar pahunche to server
+   409 deta hai (order aage badh chuka) — wo bhi "ho gaya" hai.
+   Paisa (collect) yahan JAAN-BOOJH KAR nahi: jawab kho jaye aur dobara
+   bheja jaye to ek hi paisa do baar likh jaata. */
+const OUTBOX_KEY = "kk_staff_outbox";
+// Ek phone par do log login kar sakte hain — har aadmi ke kaam sirf usi ke
+// naam se jaayein, isliye har item par uska number.
+function allOutbox() {
+  try { return JSON.parse(localStorage.getItem(OUTBOX_KEY) || "[]"); } catch (e) { return []; }
+}
+const outbox = () => (ME ? allOutbox().filter((x) => x.owner === ME.phone) : []);
+function saveOutbox(mine) {
+  const others = allOutbox().filter((x) => !ME || x.owner !== ME.phone);
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(others.concat(mine))); } catch (e) { /* private mode */ }
+  paintOutbox();
+}
+const isOffline = (e) => !navigator.onLine || (e instanceof TypeError);   // fetch network par TypeError deta hai
+/* Status ka kaam: signal ho to seedha, na ho to outbox. {queued:true} lautata hai. */
+async function sendOrQueue(path, body, label, number) {
+  if (navigator.onLine) {
+    try { return await api(path, { method: "POST", body }); }
+    catch (e) { if (!isOffline(e)) throw e; }
+  }
+  const list = outbox();
+  list.push({ id: Date.now() + "-" + Math.random().toString(36).slice(2, 7), owner: ME.phone, path, body: body || null, label, number, at: Date.now() });
+  saveOutbox(list);
+  toast(`No signal — "${label}" saved on the phone, it will go when the signal is back`, false, 4500);
+  return { queued: true };
+}
+let FLUSHING = false;
+async function flushOutbox() {
+  if (FLUSHING || !navigator.onLine || !outbox().length) return;
+  FLUSHING = true;
+  let sent = 0;
+  try {
+    for (const item of outbox()) {
+      try {
+        await api(item.path, { method: "POST", body: item.body || undefined });
+        sent++;
+      } catch (e) {
+        if (isOffline(e)) break;                   // signal phir gaya — baaki baad mein
+        // 409 = pehle hi ho chuka; baaki 4xx = server ne mana kiya — dono mein dobara bhejna bekaar
+        if (e.status !== 409) toast(`${item.number}: "${item.label}" could not be saved — ${e.message}`, true, 6000);
+        else sent++;
+      }
+      saveOutbox(outbox().filter((x) => x.id !== item.id));
+    }
+  } finally { FLUSHING = false; }
+  if (sent) { toast(`${sent} saved action${sent > 1 ? "s" : ""} sent ✅`); loadToday(); refreshCurrent({ quiet: true }); }
+}
+function paintOutbox() {
+  let bar = $("outbar");
+  const n = outbox().length;
+  if (!bar) {
+    if (!n) return;
+    bar = document.createElement("button");
+    bar.id = "outbar"; bar.type = "button"; bar.className = "latebar outbar";
+    $("latebar").insertAdjacentElement("afterend", bar);
+    bar.onclick = () => (navigator.onLine ? flushOutbox() : toast("Still no signal — it will send by itself", true));
+  }
+  bar.hidden = !n;
+  bar.innerHTML = `<span>⏳ ${n} action${n > 1 ? "s" : ""} waiting for signal</span><b>Send now</b>`;
+}
+window.addEventListener("online", flushOutbox);
+setInterval(flushOutbox, 30000);
+
 function toast(msg, err = false, ms = 3200) {
   const t = document.createElement("div");
   t.className = "toast" + (err ? " err" : "");
@@ -83,6 +153,8 @@ const ACTIONS = {
   jobdone: (c) => { closeModal(); askDone(c); },
   decide: (c) => { closeModal(); decideCancel(c); },
   photo: (n) => { closeModal(); askPhoto(n); },
+  damage: (n) => { closeModal(); askPhoto(n, "damage"); },
+  nothome: (n) => { closeModal(); askNotHome(n); },
   message: (n) => { closeModal(); const w = WORK.find((x) => x.number === n); messageMenu(n, Number((w && w.due) || 0)); },
   cancel: (c) => { closeModal(); askCancel(c); },
   more: (fn) => (fn === "loadWork" ? loadWork({ more: true }) : loadBills({ more: true })),
@@ -217,6 +289,10 @@ async function start() {
   loadToday();
   loadBell();
   startLive();
+  paintOutbox();
+  flushOutbox();
+  pushSync();
+  paintPushNudge();
 }
 
 /* ─── role ke hisaab se nav ─────────────────────────────────────────── */
@@ -269,6 +345,7 @@ function go(nav, push = true) {
   // Hisaab kaam ke baare mein hai — form aur profile par sirf jagah khata hai
   $("today").hidden = !(nav === "work" || nav === "bills");
   $("latebar").hidden = true;        // paintLate() isse wapas laayega
+  if ($("pushbar")) paintPushNudge();
   $("nav").querySelectorAll("[data-nav]").forEach((b) => b.classList.toggle("on", b.dataset.nav === nav));
   if (nav === "work") loadWork();
   else if (nav === "bills") loadBills();
@@ -299,11 +376,15 @@ async function loadToday() {
   try {
     const t = (BOOT && BOOT.today) || await api("/today");
     if (BOOT) BOOT.today = null;
-    const cell = (label, value, cls = "") => `<div class="${cls}"><b>${value}</b>${label}</div>`;
+    const cell = (label, value, cls = "", tap = "") => tap
+      ? `<button type="button" class="${cls} tap" data-today="${tap}"><b>${value}</b>${label}</button>`
+      : `<div class="${cls}"><b>${value}</b>${label}</div>`;
     $("today").innerHTML =
       cell("to do", t.pending, "left") +
       cell("done today", t.done_today) +
-      (t.can_collect ? cell("collected", money(t.collected_today), "cash") : "") +
+      (t.due_today ? cell("due today", t.due_today) : "") +
+      (t.can_collect ? cell("collected ›", money(t.collected_today), "cash", "cash") : "") +
+      (t.cash_to_confirm ? cell("to count ›", `💵 ${t.cash_to_confirm}`, "cash alert", "count") : "") +
       (t.shop_pending !== undefined ? cell("shop total", t.shop_pending) : "");
     $("today").hidden = !(NAV === "work" || NAV === "bills");
     LATE_N = t.late || 0;
@@ -312,6 +393,96 @@ async function loadToday() {
     $("today").hidden = true;   // hisaab na mile to chup — kaam chalta rahe
     $("latebar").hidden = true;
   }
+}
+
+$("today").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-today]");
+  if (!b) return;
+  if (b.dataset.today === "cash") cashSheet();
+  else if (b.dataset.today === "count") countCash();
+});
+
+/* ─── shaam ka cash hisaab ──────────────────────────────────────────── */
+/* Delivery wala din bhar paisa leta hai; shaam ko "itna cash de raha
+   hoon". Rakam server ledger se ginta hai — aadmi sirf ye likhta hai ki
+   haath mein kitna de raha hai (kam ho to wajah). Manager gin kar pakka
+   karta hai; farak ho to dono rakam rehti hain aur owner ko khabar. */
+const HO_STATUS = (h) => h.status === "PENDING" ? `<span class="tag late">waiting for count</span>`
+  : h.short ? `<span class="tag late">${h.short > 0 ? "short" : "extra"} ${money(Math.abs(h.short))}</span>`
+  : `<span class="tag ready">✓ counted</span>`;
+async function cashSheet() {
+  let c;
+  try { c = await api("/cash"); } catch (e) { toast(e.message, true); return; }
+  const list = c.payments.map((p) => `<div class="od-sub"><span>${esc(p.order)} · ${esc(p.at)}</span>
+    <span>${p.method === "cash" ? "💵" : "📱"} ${money(p.amount)}</span></div>`).join("");
+  const recent = c.recent.map((h) => `<div class="od-sub"><span>${esc(h.to)} · ${money(h.handed_cash)}</span>${HO_STATUS(h)}</div>`).join("");
+  openModal(`<h3>💵 My cash</h3>
+    <p class="said">Since ${esc(c.since)} · ${c.count} payment${c.count === 1 ? "" : "s"}</p>
+    <div class="od-block">
+      <div class="kv"><span>Cash in hand</span><b>${money(c.cash)}</b></div>
+      <div class="kv"><span>UPI (already with the shop)</span><b>${money(c.upi)}</b></div>
+    </div>
+    ${list ? `<details class="od-block"><summary><b>Payments</b></summary>${list}</details>` : ""}
+    ${c.count ? `<label for="ho-amt">Cash you are handing over</label>
+    <input id="ho-amt" type="number" inputmode="decimal" min="0" step="1" value="${c.cash}">
+    <label for="ho-note">Note — needed if you give less</label>
+    <input id="ho-note" type="text" maxlength="150" placeholder="e.g. ₹50 petrol">
+    <div class="err" id="ho-err"></div>` : `<p class="said">Nothing collected since your last handover.</p>`}
+    ${recent ? `<div class="od-block"><div class="od-head"><b>Recent handovers</b></div>${recent}</div>` : ""}
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Close</button>
+      ${c.count ? `<button class="btn go" id="ho-go">Hand over</button>` : ""}
+    </div>`);
+  if (!c.count) return;
+  const paint = () => {
+    const v = parseFloat($("ho-amt").value);
+    $("ho-go").textContent = v >= 0 ? `Hand over ${money(v)}` : "Hand over";
+  };
+  $("ho-amt").oninput = paint; paint();
+  $("ho-go").onclick = (e) => {
+    const handed = parseFloat($("ho-amt").value);
+    const note = $("ho-note").value.trim();
+    if (!(handed >= 0)) { $("ho-err").textContent = "Enter the cash amount."; return; }
+    if (handed > c.cash + 0.01) { $("ho-err").textContent = `You collected only ${money(c.cash)} in cash.`; return; }
+    if (handed < c.cash - 0.01 && note.length < 3) { $("ho-err").textContent = "Giving less — write the reason in the note."; return; }
+    return busy(e.currentTarget, async () => {
+      await api("/cash/handover", { method: "POST", body: { handed_cash: handed, note } });
+      closeModal();
+      toast("Handed over — your manager will count it");
+      loadToday();
+    });
+  };
+}
+
+/* Manager: kiska paisa ginna baaki hai. Jo gina wahi likho. */
+async function countCash() {
+  let d;
+  try { d = await api("/cash/handovers"); } catch (e) { toast(e.message, true); return; }
+  const rows = d.pending.map((h) => `<div class="od-block" data-ho="${esc(h.id)}">
+      <div class="od-head"><b>${esc(h.staff)}</b><span>${esc(h.to)}</span></div>
+      <div class="kv"><span>Says cash</span><b>${money(h.handed_cash)}</b></div>
+      <div class="kv"><span>Collected (ledger)</span><b>${money(h.cash_collected)} cash · ${money(h.upi_collected)} UPI</b></div>
+      ${h.note ? `<p class="note">${esc(h.note)}</p>` : ""}
+      <label for="cc-${esc(h.id)}">You counted</label>
+      <input id="cc-${esc(h.id)}" type="number" inputmode="decimal" min="0" step="1" value="${h.handed_cash}">
+      <button class="btn go wide" data-confirm="${esc(h.id)}">Confirm count</button>
+    </div>`).join("");
+  openModal(`<h3>💵 Cash to count</h3>
+    ${rows || `<p class="said">Nothing waiting — all handovers are counted.</p>`}
+    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
+  $("modal-body").querySelectorAll("[data-confirm]").forEach((b) => {
+    b.onclick = () => {
+      const id = b.dataset.confirm;
+      const v = parseFloat($(`cc-${id}`).value);
+      if (!(v >= 0)) { toast("Enter what you counted", true); return; }
+      return busy(b, async () => {
+        const r = await api(`/cash/handovers/${encodeURIComponent(id)}/confirm`, { method: "POST", body: { received_cash: v } });
+        toast(r.short ? `Counted — ${r.short > 0 ? "short" : "extra"} ${money(Math.abs(r.short))}, owner told` : "Counted ✅");
+        closeModal(); loadToday();
+        if (NAV === "team") showTeam({ quiet: true });
+      });
+    };
+  });
 }
 
 /* Beeta hua kaam khud bolna chahiye.
@@ -521,6 +692,28 @@ $("chips").addEventListener("click", (e) => {
   renderWork();
 });
 
+/* Aaj ke saare stop ek Google Maps route mein — har row ka alag "Route"
+   kholna aur wapas aana sadak par mushkil tha. Maps ek link mein 9 beech
+   ke padav leta hai, isliye pehle 10 (list pehle se urgent/late ke kram mein). */
+const ROUTE_MAX = 10;
+function routeBar(rows) {
+  if (!ME.show_route || inDone() || !DELIVERY_ROLES.includes(ME.role)) return "";
+  const seen = new Set();
+  const addrs = rows.filter((w) => ["pickup", "deliver"].includes(w.chip) && w.address)
+    .map((w) => w.address.trim())
+    .filter((a) => (seen.has(a.toLowerCase()) ? false : seen.add(a.toLowerCase())));
+  if (!addrs.length) return "";
+  const stops = addrs.slice(0, ROUTE_MAX);
+  const dest = stops[stops.length - 1];
+  const mid = stops.slice(0, -1);
+  const url = "https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=" + encodeURIComponent(dest)
+    + (mid.length ? "&waypoints=" + encodeURIComponent(mid.join("|")) : "");
+  return `<div class="routebar">
+    <span>🗺 <b>${stops.length} stop${stops.length > 1 ? "s" : ""}</b>${addrs.length > ROUTE_MAX ? ` (first ${ROUTE_MAX} of ${addrs.length})` : ""} in one route</span>
+    <a class="btn go sm" href="${esc(url)}" target="_blank" rel="noopener">Open route</a>
+  </div>`;
+}
+
 function renderWork() {
   const rows = WORK.filter((w) =>
     FILTER === "all" || inDone() ? true : FILTER === "late" ? w.late : w.chip === FILTER);
@@ -534,7 +727,7 @@ function renderWork() {
   }
   // "Show more" sirf tab jab chhaant lagi hi na ho — chip ke andar aadhi
   // list dikhana aur "aur hai" kehna jhooth hai.
-  $("list").innerHTML = `<div class="reg">${rows.map(workRow).join("")}</div>`
+  $("list").innerHTML = routeBar(rows) + `<div class="reg">${rows.map(workRow).join("")}</div>`
     + ((FILTER === "all" || inDone()) && MORE_LEFT
         ? `<div class="morebar"><span>${WORK.length} shown</span>
              <button class="btn ghost sm" data-act="more" data-arg="loadWork">Show more</button></div>`
@@ -592,6 +785,7 @@ function workRow(w) {
     : `<span class="amt paid-tick">✓</span>`;
   const main = primaryAction(w);
   const partial = w.clothes && w.clothes.delivered > 0 && w.clothes.pending > 0;
+  const queued = outbox().filter((x) => x.number === w.number).map((x) => x.label);
   return `<article class="row tappable" data-num="${esc(w.number)}" data-open="1">
     <div class="spine ${w.spine}"></div>
     <div class="when ${w.late ? "late" : ""}">
@@ -602,6 +796,7 @@ function workRow(w) {
       <div class="sub">
         <span class="tag ${w.chip === "task" ? "task" : w.spine || "wash"}">${esc(w.kindLabel)}</span>${esc(w.number)}${w.items ? " · " + esc(w.items) : ""}
       </div>
+      ${queued.length ? `<div class="sub mt-xs"><span class="tag deliver">⏳ ${esc(queued.join(", "))} — waiting for signal</span></div>` : ""}
       ${partial ? `<div class="sub mt-xs"><span class="tag late">${w.clothes.pending} pending</span>${w.clothes.delivered} of ${w.clothes.total} delivered</div>` : ""}
       ${w.title && w.type === "task" ? `<div class="sub note">${esc(w.title)}</div>` : ""}
       ${asked ? `<div class="sub mt-xs"><span class="tag late">Cancel maanga</span>${esc(t.cancel_reason || "")}</div>` : ""}
@@ -630,7 +825,7 @@ function runAction(act, num, d = {}) {
   if (act === "deliver") return deliverModal(num);
   if (act === "pickup_bill") return openPickupBill(d.code);
   if (act === "pickup") return confirmStep(num, "picked-up", "Picked up the clothes?", "Yes, picked up");
-  if (act === "washing") return confirmStep(num, "washing", "Started washing these clothes?", "Yes, washing");
+  if (act === "washing") return washStartModal(num);
   if (act === "ready") return confirmStep(num, "ready", "Clothes washed and ready?", "Yes, ready");
 }
 
@@ -774,7 +969,11 @@ async function statusMenu(number) {
 async function deliverModal(number) {
   let o;
   try { o = await api(`/orders/${encodeURIComponent(number)}`); }
-  catch (e) { toast(e.message, true); return; }
+  catch (e) {
+    // Bina signal ke kapde chun-ne ki list nahi aati — par "sab de diye" phone mein ruk sakta hai
+    if (isOffline(e)) return confirmStep(number, "deliver", "No signal — deliver all the clothes?", "Yes, delivered all", { items: null });
+    toast(e.message, true); return;
+  }
   // har chunne layak cheez ek "slot": {line, piece?, max, name, bag?}
   const slots = [];
   (o.lines || []).forEach((l) => {
@@ -809,6 +1008,7 @@ async function deliverModal(number) {
              <small class="dl-of">of ${s.max}</small></div>`);
     }).join("")}</div>
     <p class="dl-sum" id="dl-sum"></p>
+    <label class="check-row"><input type="checkbox" id="dl-proof"> 📷 Take a delivery photo after this</label>
     <div class="btnrow">
       <button class="btn ghost" data-act="close">Cancel</button>
       <button class="btn go" id="dl-go">Deliver</button>
@@ -854,17 +1054,89 @@ async function deliverModal(number) {
     const all = n === totalPending;
     const items = all ? null : slots.map((s, i) => ({ line: s.line, ...(s.piece != null ? { piece: s.piece } : {}), qty: pick[i] }))
       .filter((x) => x.qty > 0);
-    const r = await api(`/orders/${encodeURIComponent(number)}/deliver`, { method: "POST", body: { items } });
+    const r = await sendOrQueue(`/orders/${encodeURIComponent(number)}/deliver`, { items }, all ? "Deliver" : `Deliver ${n}`, number);
     closeModal();
+    // signal nahi — paisa bhi baad mein (collect bina signal ke nahi hota)
+    if (r.queued) { if (o.can_collect && o.due > 0) toast(`Collect ${money(o.due)} and record it when the signal is back`, true, 6000); return; }
     toast(r.pending ? `${r.delivered_now} delivered — ${r.pending} still pending` : `${number} delivered ✅`, false, 3500);
     loadToday(); refreshCurrent({ quiet: true });
     // paisa baaki ho to seedha collect — darwaze par wahi agla kaam hai
     if (o.can_collect && o.due > 0) askCollect(number, o.due);
+    else if ($("dl-proof") && $("dl-proof").checked) askPhoto(number, "proof");
   });
   paint();
 }
 
-function confirmStep(number, path, question, yes) {
+/* Dhulai shuru karte waqt bill se ginti. Default = bill jitne (aam
+   haalat), farak ho tabhi aadmi kuch badalta hai. Kam/zyada kapde yahin
+   pakde jaate hain — delivery ke din grahak ka "ek kurta kam hai" tab
+   kisi ki galti sabit nahi kar sakta. KG bora bina ginti ho to chhoot. */
+async function washStartModal(number) {
+  let o;
+  try { o = await api(`/orders/${encodeURIComponent(number)}`); }
+  catch (e) {
+    if (isOffline(e)) return confirmStep(number, "washing", "No signal — start washing without the count?", "Yes, washing");
+    toast(e.message, true); return;
+  }
+  const slots = [];
+  (o.lines || []).forEach((l) => {
+    if (l.bag) return;
+    if (l.pieces) l.pieces.forEach((p) => slots.push({ line: l.line, piece: p.piece, name: p.type, bill: p.qty, group: `${l.name} · ${l.weight} kg` }));
+    else slots.push({ line: l.line, name: l.name, sub: l.service !== l.name ? l.service : "", bill: l.qty });
+  });
+  if (!slots.length) return confirmStep(number, "washing", "Started washing these clothes?", "Yes, washing");
+  const got = slots.map((x) => x.bill);
+  let lastGroup = "";
+  openModal(`<h3>🧼 Count & start — ${esc(o.number)}</h3>
+    <p class="said">${esc(o.customer)} · count the clothes before they go in. Change a number only if it does not match.</p>
+    <div class="dl-list">${slots.map((x, i) => {
+      const head = x.group && x.group !== lastGroup ? `<div class="dl-group">${esc(x.group)}</div>` : "";
+      lastGroup = x.group || "";
+      return head + `<div class="dl-row" data-wrow="${i}"><span class="dl-name">${esc(x.name)}${x.sub ? ` <small>${esc(x.sub)}</small>` : ""}</span>
+        <div class="stepper sm">
+          <button type="button" class="step" data-wc="${i}" data-by="-1" aria-label="One less">−</button>
+          <input type="number" inputmode="numeric" min="0" value="${x.bill}" data-wcq="${i}" aria-label="How many you found">
+          <button type="button" class="step" data-wc="${i}" data-by="1" aria-label="One more">+</button>
+        </div>
+        <small class="dl-of">bill ${x.bill}</small></div>`;
+    }).join("")}</div>
+    <p class="dl-sum" id="wc-sum"></p>
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Not now</button>
+      <button class="btn go" id="wc-go">Start wash</button>
+    </div>`);
+  const body = $("modal-body");
+  const paint = () => {
+    const bill = slots.reduce((a, x) => a + x.bill, 0), n = got.reduce((a, v) => a + v, 0);
+    const off = slots.filter((x, i) => got[i] !== x.bill).length;
+    $("wc-sum").innerHTML = off
+      ? `<b class="late-t">${n} found, bill says ${bill}</b> — the owner will be told`
+      : `<b>All ${n}</b> match the bill ✓`;
+    slots.forEach((x, i) => {
+      body.querySelector(`[data-wrow="${i}"]`).classList.toggle("off", got[i] !== x.bill);
+      const q = body.querySelector(`[data-wcq="${i}"]`);
+      if (document.activeElement !== q) q.value = String(got[i]);
+    });
+  };
+  body.querySelectorAll("[data-wc]").forEach((b) => {
+    b.onclick = () => { const i = +b.dataset.wc; got[i] = Math.max(0, got[i] + parseInt(b.dataset.by, 10)); paint(); };
+  });
+  body.querySelectorAll("[data-wcq]").forEach((inp) => {
+    inp.oninput = () => { got[+inp.dataset.wcq] = Math.max(0, parseInt(inp.value, 10) || 0); paint(); };
+    inp.onblur = () => { inp.value = String(got[+inp.dataset.wcq]); };
+  });
+  $("wc-go").onclick = (e) => busy(e.currentTarget, async () => {
+    const counts = slots.map((x, i) => ({ line: x.line, ...(x.piece != null ? { piece: x.piece } : {}), got: got[i] }));
+    const r = await sendOrQueue(`/orders/${encodeURIComponent(number)}/washing`, { counts }, "Start wash", number);
+    closeModal();
+    if (r.queued) return;
+    toast(r.check && !r.check.ok ? `${number} — washing. Count mismatch sent to the owner` : `${number} — washing ✅`, !!(r.check && !r.check.ok));
+    loadToday(); refreshCurrent({ quiet: true });
+  });
+  paint();
+}
+
+function confirmStep(number, path, question, yes, body = null) {
   const w = WORK.find((x) => x.number === number) || {};
   openModal(`<h3>${esc(question)}</h3>
     <p class="said">${esc(w.who || "")} · ${esc(number)}${w.items ? ` · ${esc(w.items)}` : ""}</p>
@@ -873,10 +1145,34 @@ function confirmStep(number, path, question, yes) {
       <button class="btn go" id="m-step">${esc(yes)}</button>
     </div>`);
   $("m-step").onclick = (e) => busy(e.currentTarget, async () => {
-    await api(`/orders/${encodeURIComponent(number)}/${path}`, { method: "POST" });
+    const what = yes.replace(/^Yes, /, "");
+    const r = await sendOrQueue(`/orders/${encodeURIComponent(number)}/${path}`, body, what, number);
     closeModal();
-    toast(`${number} — ${yes.replace(/^Yes, /, "")} ✅`);
+    if (r.queued) return;
+    toast(`${number} — ${what} ✅`);
     loadToday(); refreshCurrent({ quiet: true });
+  });
+}
+
+/* Darwaze par koi nahi — owner ko khabar, order wahi rehta hai. Phir
+   grahak ko apne WhatsApp se "kab aayein?" (text server banata hai). */
+function askNotHome(number) {
+  const w = WORK.find((x) => x.number === number) || {};
+  openModal(`<h3>🚪 Customer not home?</h3>
+    <p class="said">${esc(w.who || "")} · ${esc(number)}. The order stays on your list and the owner is told.</p>
+    <label for="nh-note">Note (optional)</label>
+    <input id="nh-note" type="text" maxlength="150" placeholder="e.g. door locked, phone not answered">
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Not now</button>
+      <button class="btn go" id="nh-ok">Yes, not home</button>
+    </div>`);
+  $("nh-ok").onclick = (e) => busy(e.currentTarget, async () => {
+    const r = await sendOrQueue(`/orders/${encodeURIComponent(number)}/not-home`, { note: $("nh-note").value.trim() }, "Customer not home", number);
+    closeModal();
+    if (r.queued) return;
+    toast("Noted — the owner has been told");
+    refreshCurrent({ quiet: true });
+    if (r.can_message) composeMessage(number, "not_home");
   });
 }
 
@@ -892,6 +1188,9 @@ function moreMenu(number) {
       ${ME.can_money ? `<button class="btn ghost" data-act="share" data-arg="${esc(number)}">🧾 Send bill on WhatsApp</button>` : ""}
       ${ME.can_money && w.hasOrder ? `<button class="btn ghost" data-act="message" data-arg="${esc(number)}">💬 Send a message</button>` : ""}
       <button class="btn ghost" data-act="photo" data-arg="${esc(number)}">📷 Add a photo</button>
+      ${w.hasOrder ? `<button class="btn ghost" data-act="damage" data-arg="${esc(number)}">⚠️ Mark damage / stain</button>` : ""}
+      ${w.hasOrder && DELIVERY_ROLES.includes(ME.role) && ["PICKUP_ASSIGNED", "READY", "OUT_FOR_DELIVERY"].includes(w.status)
+        ? `<button class="btn ghost" data-act="nothome" data-arg="${esc(number)}">🚪 Customer not home</button>` : ""}
       ${t && ME.features.includes("cancel_approval") && !t.cancel_requested
         ? `<button class="btn ghost" data-act="cancel" data-arg="${esc(t.code)}">🛑 Request cancel</button>` : ""}
       ${t && ME.is_manager && t.cancel_requested
@@ -1252,6 +1551,34 @@ function messageMenu(number, due) {
     };
   });
 }
+/* Message ka text server banata hai; staff padh kar apne WhatsApp se bhejta
+   hai. Pehle ye function sirf dashboard (app.js) mein tha — staff app mein
+   "Send a message" aur payment ke baad wala thank-you chupchaap toot jaate the. */
+const MSG_TITLE = {
+  payment_thanks: "Payment received — thank you",
+  service_thanks: "Thank you",
+  delivery_update: "Delivery update",
+  review_request: "Feedback request",
+};
+async function composeMessage(number, kind) {
+  let r;
+  try { r = await api(`/orders/${encodeURIComponent(number)}/message?kind=${encodeURIComponent(kind)}`); }
+  catch (e) { toast(e.message, true); return; }
+  SHARE_TEXT = r.text;
+  openModal(`<h3>${esc(MSG_TITLE[kind] || "Message")}</h3>
+    <p class="said">WhatsApp opens with the message written — just press send. To ${esc(r.name)}.</p>
+    <pre class="sharetext">${esc(r.text)}</pre>
+    <div class="btnrow">
+      <a class="btn go" href="${esc(waUrl(r.phone, r.text))}" target="_blank" rel="noopener" data-act="close">📲 Open WhatsApp</a>
+      <button class="btn ghost" id="m-copy">Copy</button>
+    </div>
+    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
+  $("m-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied"); }
+    catch (e) { toast("Copy nahi hua — upar se select kar lijiye", true); }
+  };
+}
+
 /* ─── paise ki yaad ─────────────────────────────────────────────────── */
 /* Scheduler khud 3 din / 15 din par yaad dilata hai, par wo maanta hai ki
    order deliver ho chuka hai AUR dukaan ka WhatsApp API juda hai. Counter
@@ -2226,20 +2553,138 @@ async function saveBill(btn) {
 async function showTeam(opts = {}) {
   $("chips").innerHTML = "";
   if (!opts.quiet) $("list").innerHTML = `<div class="empty">Loading…</div>`;
-  let rows;
-  try { rows = await api("/team"); }
-  catch (e) { $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  let rows, stuck = { orders: [] }, cash = { pending: [] };
+  try {
+    [rows, stuck, cash] = await Promise.all([
+      api("/team"),
+      api("/stuck").catch(() => ({ orders: [] })),
+      api("/cash/handovers").catch(() => ({ pending: [] })),
+    ]);
+  } catch (e) { $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   if (NAV !== "team") return;
-  if (!rows.length) { $("list").innerHTML = `<div class="empty"><b>No staff yet</b>The owner adds them from the dashboard.</div>`; return; }
-  $("list").innerHTML = `<div class="reg">${rows.map((s) => `
+  // Aaj kisne kya kiya — sirf jo hua wahi likho, khaali "0 picked" shor hai
+  const dayLine = (d) => {
+    if (!d) return "";
+    const bits = [
+      d.picked && `${d.picked} picked`, d.washed && `${d.washed} washing`, d.ready && `${d.ready} ready`,
+      d.delivered && `${d.delivered} delivered`, d.cash && `${money(d.cash)} cash`, d.upi && `${money(d.upi)} UPI`,
+    ].filter(Boolean);
+    return `<div class="sub mt-xs">Today: ${bits.length ? esc(bits.join(" · ")) : "nothing yet"}</div>`;
+  };
+  const cashBar = cash.pending.length
+    ? `<div class="routebar"><span>💵 <b>${cash.pending.length}</b> cash handover${cash.pending.length > 1 ? "s" : ""} to count</span>
+         <button class="btn go sm" id="t-count">Count</button></div>` : "";
+  // Atka hua kaam: do din se ek hi status par — tap = poori detail
+  const stuckHtml = stuck.orders.length ? `<div class="sechead">⏳ Stuck for ${stuck.hours}h+ (${stuck.orders.length})</div>
+    <div class="reg">${stuck.orders.map((o) => `
+      <article class="row tappable" data-stuck="${esc(o.number)}">
+        <div class="spine late"></div>
+        <div class="when late"><b>${o.hours >= 48 ? Math.round(o.hours / 24) + "d" : o.hours + "h"}</b><span>same</span></div>
+        <div class="body">
+          <div class="line1"><b>${o.urgent ? "🔴 " : ""}${esc(o.customer)}</b></div>
+          <div class="sub"><span class="tag late">${esc(STATUS_WORD[o.status] || o.status)}</span>${esc(o.number)}${o.staff ? " · " + esc(o.staff) : ""}</div>
+        </div>
+      </article>`).join("")}</div>` : "";
+  const team = rows.length ? `<div class="sechead">Team</div><div class="reg">${rows.map((s) => `
     <article class="row">
       <div class="spine ${s.open ? "deliver" : "ready"}"></div>
       <div class="when"><b>${s.open}</b><span>open</span></div>
       <div class="body">
         <div class="line1"><b>${esc(s.name)}</b><span class="amt">${s.done_24h} done</span></div>
         <div class="sub">${esc(roleLabel(s.role))} · ${esc(s.phone_masked)}${s.has_login ? "" : " · no panel login"}</div>
+        ${dayLine(s.today)}
       </div>
-    </article>`).join("")}</div>`;
+    </article>`).join("")}</div>`
+    : `<div class="empty"><b>No staff yet</b>The owner adds them from the dashboard.</div>`;
+  $("list").innerHTML = cashBar + stuckHtml + team;
+  if ($("t-count")) $("t-count").onclick = countCash;
+  $("list").querySelectorAll("[data-stuck]").forEach((r) => { r.onclick = () => orderDetailModal(r.dataset.stuck); });
+}
+
+/* ─── phone par notification (Web Push) ─────────────────────────────── */
+/* Live updates (SSE) sirf khule app tak pahunchte hain. Phone jeb mein ho
+   to naya kaam, owner ka jawab ya ginne wala cash notification se aata
+   hai — service worker dikhata hai, tap = app khulta hai. */
+const PUSH_OK = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const PUSH_NUDGE_KEY = "kk_push_nudge_off";
+function b64ToBytes(s) {
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const raw = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+async function pushState() {
+  if (!PUSH_OK) return "unsupported";
+  if (Notification.permission === "denied") return "blocked";
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    return (await reg.pushManager.getSubscription()) ? "on" : "off";
+  } catch (e) { return "off"; }
+}
+async function pushOn() {
+  const { key } = await api("/push/key");
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") throw new Error("Notifications were not allowed — allow them in the browser settings");
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  const opts = { userVisibleOnly: true, applicationServerKey: b64ToBytes(key) };
+  try { sub = sub || await reg.pushManager.subscribe(opts); }
+  catch (e) {
+    // purani chaabi wala subscription atka ho to hata kar dobara
+    if (sub) await sub.unsubscribe();
+    sub = await reg.pushManager.subscribe(opts);
+  }
+  await api("/push/subscribe", { method: "POST", body: sub.toJSON() });
+}
+async function pushOff() {
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (!sub) return;
+  await api("/push/unsubscribe", { method: "POST", body: { endpoint: sub.endpoint } }).catch(() => {});
+  await sub.unsubscribe();
+}
+/* Login par: is phone ka subscription is aadmi ke naam (ek phone, do log) */
+async function pushSync() {
+  if ((await pushState()) !== "on" || Notification.permission !== "granted") return;
+  try {
+    const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+    if (sub) await api("/push/subscribe", { method: "POST", body: sub.toJSON() });
+  } catch (e) { /* agli baar */ }
+}
+const PUSH_WORD = {
+  on: ["On", "New jobs, owner replies and cash to count come to this phone."],
+  off: ["Off", "Turn on to get new jobs on this phone even when the app is closed."],
+  blocked: ["Blocked", "Notifications are blocked for this site — allow them in the browser settings."],
+  unsupported: ["Not available", "This browser cannot show notifications. Install the app from Chrome."],
+};
+async function paintPushCard() {
+  const box = $("p-push");
+  if (!box) return;
+  const st = await pushState();
+  const [word, hint] = PUSH_WORD[st];
+  box.innerHTML = `<div class="kv"><span>🔔 Phone notifications</span><b>${word}</b></div>
+    <p class="hint">${esc(hint)}</p>
+    ${st === "off" ? `<button class="btn go wide" id="p-push-on">Turn on</button>`
+      : st === "on" ? `<button class="btn ghost wide" id="p-push-off">Turn off</button>` : ""}`;
+  if ($("p-push-on")) $("p-push-on").onclick = (e) => busy(e.currentTarget, async () => { await pushOn(); toast("Notifications on 🔔"); paintPushCard(); paintPushNudge(); });
+  if ($("p-push-off")) $("p-push-off").onclick = (e) => busy(e.currentTarget, async () => { await pushOff(); toast("Notifications off"); paintPushCard(); });
+}
+/* Kaam ki screen par ek baar ki yaad — "na" bolo to phir nahi */
+async function paintPushNudge() {
+  let bar = $("pushbar");
+  let off = false;
+  try { off = localStorage.getItem(PUSH_NUDGE_KEY) === "1"; } catch (e) { /* private mode */ }
+  const show = !off && NAV === "work" && (await pushState()) === "off";
+  if (!bar) {
+    if (!show) return;
+    bar = document.createElement("div");
+    bar.id = "pushbar"; bar.className = "routebar pushbar";
+    bar.innerHTML = `<span>🔔 Get new jobs on your phone, even when the app is closed</span>
+      <span class="pushbar-acts"><button class="btn ghost sm" id="pb-no">Later</button><button class="btn go sm" id="pb-yes">Turn on</button></span>`;
+    $("latebar").insertAdjacentElement("beforebegin", bar);
+    $("pb-yes").onclick = (e) => busy(e.currentTarget, async () => { await pushOn(); toast("Notifications on 🔔"); bar.hidden = true; });
+    $("pb-no").onclick = () => { try { localStorage.setItem(PUSH_NUDGE_KEY, "1"); } catch (e) { /* */ } bar.hidden = true; };
+  }
+  bar.hidden = !show;
 }
 
 /* ─── main (profile) ────────────────────────────────────────────────── */
@@ -2255,10 +2700,12 @@ function showMe() {
       <div class="kv"><span>Plan</span><b>${esc(ME.plan)}</b></div>
       <p class="hint">Your role and access are set by the owner.</p>
     </div>
+    <div class="card" id="p-push"></div>
     <div class="card">
       <button class="btn ghost wide mt0" id="p-pw">Change password</button>
       <button class="btn danger wide" id="p-out">Logout</button>
     </div>`;
+  paintPushCard();
   $("p-pw").onclick = changePw;
   $("p-out").onclick = async () => {
     try { await api("/logout", { method: "POST" }); } catch (e) { /* cookie waise bhi jayegi */ }
@@ -2367,14 +2814,21 @@ function uploadWithProgress(url, form, onProgress) {
 
 const kb = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB");
 
-function askPhoto(number) {
-  openModal(`<h3>${esc(number)} — add a photo</h3>
-    <p class="said">Proof of the item\u2019s condition — a stain, a tear, or how many pieces.
-      If anyone later says it was not like that, this is the answer.</p>
+/* kind: general | damage (kapda pehle se kharab — owner ko alag khabar) |
+   proof (grahak ko diye, deliver ke baad) */
+const PHOTO_COPY = {
+  general: ["add a photo", "Proof of the item\u2019s condition — a stain, a tear, or how many pieces. If anyone later says it was not like that, this is the answer.", "e.g. 12 pieces in the bag"],
+  damage: ["mark damage", "Found a stain, tear, missing button or faded colour? Take a photo now — before washing — so nobody blames the shop later.", "e.g. stain on the collar, button missing"],
+  proof: ["delivery photo", "A photo of the clothes handed over at the door. If the customer later says they did not get them, this is the answer.", "e.g. handed to the guard"],
+};
+function askPhoto(number, kind = "general") {
+  const [title, said, hint] = PHOTO_COPY[kind] || PHOTO_COPY.general;
+  openModal(`<h3>${esc(number)} — ${title}</h3>
+    <p class="said">${esc(said)}</p>
     <input id="ph-file" type="file" accept="image/*" capture="environment">
     <div id="ph-prev" hidden></div>
     <label for="ph-note">Note (optional)</label>
-    <input id="ph-note" type="text" maxlength="150" placeholder="e.g. stain on the collar">
+    <input id="ph-note" type="text" maxlength="150" placeholder="${esc(hint)}">
     <div id="ph-bar" class="bar" hidden><i></i></div>
     <div class="err" id="ph-err"></div>
     <div class="btnrow">
@@ -2416,12 +2870,13 @@ function askPhoto(number) {
       const fd = new FormData();
       fd.append("photo", file);
       fd.append("note", $("ph-note").value.trim());
+      fd.append("kind", kind);
       await uploadWithProgress(
         `/staff/api/orders/${encodeURIComponent(number)}/photo`, fd,
         (p) => { fill.style.width = Math.max(2, Math.round(p * 100)) + "%"; },
       );
       closeModal();
-      toast("Photo added — the owner has been told");
+      toast(kind === "damage" ? "Damage noted — the owner has been told" : "Photo added — the owner has been told");
     } catch (err) {
       // Fail hone par kaam khatam nahi: wahi photo, ek tap par dobara.
       bar.hidden = true;

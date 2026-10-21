@@ -774,6 +774,7 @@ async def record_payment(
     )
 
     # Paisa aaya — owner ko turant pata chale (jab tak usne khud na likha ho).
+    number = order.order_number
     due = (order.total_amount or Decimal("0")) - (order.amount_paid or Decimal("0"))
     try:
         await _notify_admins_fyi(
@@ -784,7 +785,9 @@ async def record_payment(
             f"({order.payment_status.name}) · likha: {recorded_by}",
         )
     except Exception:
-        log.exception("payment_admin_fyi_failed", order_number=order.order_number)
+        log.exception("payment_admin_fyi_failed", order_number=number)
+    # owner ki khabar fail hui ho to session rollback ho chuka — taaza karo
+    await _rehydrate(db)
     # Grahak ko bhi — "₹300 mil gaya, baaki ₹200". Dashboard, staff collect,
     # WhatsApp bot: paisa jahan se bhi likha jaye, grahak ko pakki raseed.
     if notify_customer:
@@ -861,6 +864,28 @@ def _fmt_date(d: date) -> str:
     return d.strftime("%d %b %Y")
 
 
+async def _rehydrate(db: AsyncSession) -> None:
+    """Fail hue send ke baad session ke expire hue objects dobara padh lo.
+
+    send_message fail par session rollback karta hai, jo session ki HAR
+    cheez expire kar deta hai — order, staff, sab. Caller ka business change
+    commit ho chuka hota hai, par uske baad wo kuch bhi padhe (order.id,
+    staff.name) to async mein lazy-load MissingGreenlet uthata aur request
+    500 deti. Deliver/collect par iska matlab: kaam ho gaya, staff ko "fail"
+    dikha, aur wo dobara dabata. "NEVER raises" ka vaada tabhi sach hai jab
+    caller ke objects bhi waise hi chhootein jaise mile the.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    for obj in list(db.identity_map.values()):
+        try:
+            if sa_inspect(obj).expired_attributes:
+                await db.refresh(obj)
+        except Exception:
+            # row hat chuki ho ya padh na paaye — baaki ko to taaza karo
+            log.info("rehydrate_skipped", model=type(obj).__name__)
+
+
 async def _notify_customer(
     db: AsyncSession,
     order: Order,
@@ -877,6 +902,12 @@ async def _notify_customer(
     Called AFTER the business change is committed, so a send failure can
     never lose an order update.
     """
+    # Number pehle hi utha lo. Send fail hone par send_message session ko
+    # rollback karta hai, jo `order` ko expire kar deta hai — phir neeche
+    # log line mein order.order_number padhna async mein lazy-load karta
+    # aur MissingGreenlet uthata. "NEVER raises" toot jaata aur COD collect
+    # 500 deta, jabki paisa commit ho chuka hota (staff dobara dabata).
+    number = order.order_number
     try:
         customer = await db.get(Customer, order.customer_id)
         if customer is None or customer.opted_out or not customer.is_active:
@@ -952,16 +983,19 @@ async def _notify_customer(
         # Template not approved yet / Meta down — logged, business goes on.
         log.warning(
             "notification_failed",
-            order_number=order.order_number,
+            order_number=number,
             message_key=message_key,
             error=str(exc),
         )
     except Exception:
         log.exception(
             "notification_unexpected_error",
-            order_number=order.order_number,
+            order_number=number,
             message_key=message_key,
         )
+    else:
+        return
+    await _rehydrate(db)
 
 
 async def _next_order_number(db: AsyncSession) -> str:

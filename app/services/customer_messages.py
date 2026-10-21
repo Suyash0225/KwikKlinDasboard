@@ -21,7 +21,7 @@ from app.services import app_settings
 from app.services.messages import get_message
 from app.services.whatsapp import Button
 
-KINDS = ("payment_thanks", "service_thanks", "review_request", "delivery_update")
+KINDS = ("payment_thanks", "service_thanks", "review_request", "delivery_update", "not_home")
 
 
 class MessageError(ValueError):

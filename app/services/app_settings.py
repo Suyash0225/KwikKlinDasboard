@@ -20,10 +20,13 @@ log = structlog.get_logger()
 
 # Secret scalar settings are encrypted at rest. Structured OAuth connections (GBP/GA4)
 # encrypt their refresh_token field in their owning service instead.
-_SECRET_SETTINGS = {"ig_access_token"}
+_SECRET_SETTINGS = {"ig_access_token", "webpush_vapid_private"}
 
 # Single source of defaults — also drives the Settings UI.
 DEFAULTS: dict[str, Any] = {
+    # Staff app Web Push ki VAPID private key (PEM), har dukaan ki apni.
+    # Pehle subscribe par apne aap banti hai (services/web_push.py).
+    "webpush_vapid_private": "",
     # --- AI cost tracking ---
     # Rate card in USD per MILLION tokens, per model. These are standard
     # paid-tier list rates used for an estimated cost; a free-tier project
