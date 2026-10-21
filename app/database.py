@@ -82,17 +82,14 @@ def _set_rls_context(conn) -> None:
     tid = tenant_context.current_tenant_id.get()
     # A selected tenant always takes precedence over a system grant.
     system_access = tenant_context.current_system_context.get() and tid is None
+    # One round trip instead of two: set_config(..., true) is SET LOCAL.
+    # tid is a uuid.UUID (never raw user input) — safe to inline. An
+    # unset/empty tenant without explicit system access must see no rows.
     conn.exec_driver_sql(
-        "SET LOCAL app.system_context = 'on'"
-        if system_access
-        else "SET LOCAL app.system_context = 'off'"
+        "SELECT set_config('app.system_context', '{}', true), set_config('app.tenant_id', '{}', true)".format(
+            "on" if system_access else "off", tid if tid is not None else ""
+        )
     )
-    if tid is not None:
-        # tid is a uuid.UUID (never raw user input) — safe to inline.
-        conn.exec_driver_sql(f"SET LOCAL app.tenant_id = '{tid}'")
-    else:
-        # An unset/empty tenant without explicit system access must see no rows.
-        conn.exec_driver_sql("SET LOCAL app.tenant_id = ''")
 
 
 @event.listens_for(engine.sync_engine, "begin")

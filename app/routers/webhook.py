@@ -1439,7 +1439,15 @@ async def _handle_inbound_message(
             looks_like_automated_agent,
         )
 
-        if looks_like_automated_agent(spoken or text or ""):
+        if (text or "").lstrip().startswith("[button:"):
+            # Hamare hi menu ka button (Haan/Nahi, rating…) — spam/vendor ho hi
+            # nahi sakta; LLM classifier se poochhna sirf deri aur risk hai
+            inbound_classification = {
+                "classification": "CUSTOMER_SERVICE",
+                "confidence": 0.99,
+                "reason": "reply button from our own menu",
+            }
+        elif looks_like_automated_agent(spoken or text or ""):
             inbound_classification = {
                 "classification": "GENERAL_MESSAGE",
                 "confidence": 0.99,
@@ -1706,10 +1714,18 @@ async def _send_customer_agent_reply(
         # template repeatedly on every customer message.
         reply = await _avoid_repeated_welcome(db, customer, reply)
 
+        # Pickup summary: Haan/Nahi buttons — customer ko "haan" likhna na pade
+        buttons = None
+        pending = getattr(customer, "ai_pending_intake", None)
+        if isinstance(pending, dict) and pending.get("summary") == reply:
+            from app.services.ai_agent import pickup_buttons
+
+            buttons = pickup_buttons(reply)
         try:
             await send_message(
                 db, to_phone=phone, text=reply, sent_by="ai",
                 intent=intent, outbound_kind=outbound_kind,
+                **({"buttons": buttons, "list_button": "Haan / Nahi"} if buttons else {}),
             )
             return True
         except SendError:

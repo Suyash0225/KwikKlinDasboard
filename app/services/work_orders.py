@@ -144,6 +144,9 @@ async def task_status_menu(db: AsyncSession, code: str) -> list[ListRow]:
         if next_step:
             action, title, description = next_step
             rows.append(ListRow(f"task:{code}:{action}", title, description))
+        elif order is None:
+            # Dukaan ka apna kaam (bina order) — koi stage nahi, seedha Done
+            rows.append(ListRow(f"task:{code}:done", "✅ Done", "Task complete"))
         rows.append(ListRow(f"task:{code}:pending", "⏳ Pending", "Still in progress"))
         return rows
     if role == "DELIVERY" and task.kind in {"pickup", "delivery"}:

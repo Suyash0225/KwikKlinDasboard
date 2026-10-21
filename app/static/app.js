@@ -1267,15 +1267,19 @@ async function dashDeliverModal(number) {
   let d;
   try { d = await api(`/orders/${encodeURIComponent(number)}`); } catch (e) { toast(e.message, true); return; }
   const slots = [];
+  // Washerman ke roke hue kapde ("abhi nahi hue") dene ki list mein nahi
+  const can = (x) => (x.deliverable !== undefined ? x.deliverable : x.pending);
   (d.lines || []).forEach((l) => {
-    if (l.pieces) l.pieces.forEach((p) => { if (p.pending > 0) slots.push({ line: l.line, piece: p.piece, max: p.pending, name: p.type, group: `${l.name} · ${l.weight} kg` }); });
-    else if (l.pending > 0) slots.push({ line: l.line, max: l.pending, name: l.name, sub: l.service !== l.name ? l.service : "", bag: !!l.bag, weight: l.weight });
+    if (l.pieces) l.pieces.forEach((p) => { if (can(p) > 0) slots.push({ line: l.line, piece: p.piece, max: can(p), name: p.type, group: `${l.name} · ${l.weight} kg` }); });
+    else if (can(l) > 0) slots.push({ line: l.line, max: can(l), name: l.name, sub: l.service !== l.name ? l.service : "", bag: !!l.bag, weight: l.weight });
   });
-  if (!slots.length) { toast("Nothing left to deliver on this bill", true); return; }
+  const heldN = (d.clothes && d.clothes.held) || 0;
+  if (!slots.length) { toast(heldN ? `Everything left (${heldN}) is on hold with the washerman` : "Nothing left to deliver on this bill", true); return; }
   DL = { number, slots, pick: slots.map((s) => s.max), total: slots.reduce((a, s) => a + s.max, 0) };
   let lastGroup = "";
   openModal(`<h3>Deliver — ${esc(number)}</h3>
     <p class="muted">${esc(displayName(d.order.customer_name, d.order.customer_phone))} · ${DL.total} to deliver${d.clothes.delivered ? ` (${d.clothes.delivered} already delivered)` : ""}</p>
+    ${heldN ? `<p class="muted" style="color:#92400e">⏸ ${heldN} on hold with the washerman — they stay pending</p>` : ""}
     <div class="btnrow" style="margin-top:8px">
       <button class="btn ghost sm" onclick="dlSet('all')">Select all</button>
       <button class="btn ghost sm" onclick="dlSet('none')">Clear</button>
@@ -3396,7 +3400,7 @@ function newTaskModal() {
           <option value="delivery">🚚 Delivery</option><option value="packing">📦 Packing</option>
           <option value="custom">🛠️ Custom</option><option value="general">📋 General</option>
         </select></div>
-      <div class="setfield"><label>Customer <span class="muted">(optional for general tasks)</span></label>
+      <div class="setfield"><label>Customer <span class="muted">(needed for Pickup / Delivery)</span></label>
         <input id="nt-customer" placeholder="Search existing customer by name or WhatsApp…" autocomplete="off">
         <input id="nt-customer-id" type="hidden">
         <div id="nt-cust-results" class="acp"></div>
@@ -3431,10 +3435,11 @@ function newTaskModal() {
     const kind = $("nt-kind").value;
     const customerId = $("nt-customer-id").value || null;
     const orderNumber = $("nt-order").value.trim() || null;
-    const needsCustomer = ["pickup", "wash", "dry", "iron", "delivery"].includes(kind);
+    // Sirf ghar jaane wale kaam ko grahak chahiye — dhulai/press dukaan ka kaam bhi hota hai
+    const needsCustomer = ["pickup", "delivery"].includes(kind);
     if (title.length < 2) { $("nt-err").textContent = "Instructions/task detail likhiye."; return; }
     if (needsCustomer && !customerId && !orderNumber) {
-      $("nt-err").textContent = "Pickup/Washing/Ironing/Delivery task ke liye customer select kijiye.";
+      $("nt-err").textContent = "Pickup/Delivery task ke liye customer select kijiye.";
       return;
     }
     const due = $("nt-due").value ? taskDueISO($("nt-due").value) : null;
@@ -3447,7 +3452,11 @@ function newTaskModal() {
       due_at: due,
       urgent: $("nt-urgent").value === "true",
     }});
-    closeModal(); toast(`${r.code} created and assigned`); loadTasks();
+    closeModal();
+    toast(r.updated_existing
+      ? `${r.code} — this order already had an open ${kind} task; it is updated with your instructions`
+      : `${r.code} created and assigned`, false, r.updated_existing ? 7000 : 3000);
+    loadTasks();
   });
 }
 

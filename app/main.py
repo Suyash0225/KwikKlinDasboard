@@ -1507,11 +1507,14 @@ async def staff_page():
     v = int(max(
         (static_dir / "staff.js").stat().st_mtime,
         (static_dir / "staff.css").stat().st_mtime,
+        (static_dir / "staff-ui2.css").stat().st_mtime,
         (static_dir / "tokens.css").stat().st_mtime,
     ))
     import re as _re
 
-    html = _re.sub(r"((?:staff|tokens)\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
+    # staff-ui2.css bhi — pehle chhoot jaata tha, aur 1 saal ke immutable cache
+    # ki wajah se uski nayi CSS deploy ke baad phone tak pahunchti hi nahi thi
+    html = _re.sub(r"((?:staff|staff-ui2|tokens)\.(?:js|css))\?v=[\w]+", rf"\1?v={v}", html)
     return _Resp(
         content=html,
         media_type="text/html",
@@ -1573,7 +1576,9 @@ async def staff_sw():
         "  if(e.request.method!=='GET'||u.pathname.startsWith('/staff/api')) return;\n"
         "  e.respondWith(fetch(e.request).then(r=>{\n"
         "    const copy=r.clone(); caches.open(SHELL).then(c=>c.put(e.request,copy)); return r;\n"
-        "  }).catch(()=>caches.match(e.request)));\n"
+        # ignoreSearch: shell bina ?v= ke cache hota hai, page ?v= ke saath
+        # maangta hai — bina iske offline par kuch nahi milta tha
+        "  }).catch(()=>caches.match(e.request,{ignoreSearch:true})));\n"
         "});\n"
         # Web Push (services/web_push.py): app band ho tab bhi notification.
         # Tap = khula hua staff app aage lao, warna naya kholo.

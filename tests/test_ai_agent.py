@@ -1019,7 +1019,7 @@ async def test_pickup_confirmation_matches_standard_ai_footer() -> None:
     summary = (
         "Order summary: Wash & Iron by weight, pickup 2026-10-21, "
         "address Kaushlesh Nagar, Naria. Kya main ye pickup order confirm kar doon? "
-        "Reply 'haan' to confirm or 'nahi' to cancel. — Kwik Klin AI"
+        "Neeche button dabaiye ya 'haan' / 'nahi' likhiye. — Kwik Klin AI"
     )
     async with async_session_factory() as db:
         db.add(Conversation(
@@ -1069,3 +1069,77 @@ async def test_rate_card_facts_list_other_names(monkeypatch) -> None:
         cust = await _seed_customer()
         facts = await agent_module._build_facts(db, cust, tool_names={})
     assert "Bedsheet: ₹60/pc (also: chadar" in facts
+
+
+async def _summary_pending(monkeypatch):
+    """Customer ke paas ek pickup summary pending — (cust, summary, booked)."""
+    async def fake_ask_json(**kw):
+        return _reply_with_intake(_READY_INTAKE)
+
+    booked: list[dict] = []
+
+    async def fake_create(db, customer, intake):
+        booked.append(intake)
+        return "✅ Pickup booked"
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    monkeypatch.setattr(agent_module, "_create_pickup_order", fake_create)
+    _patch_simple_context(monkeypatch)
+    cust = await _seed_customer()
+    async with async_session_factory() as db:
+        cust = await _reload(db)
+        summary = await build_ai_reply(db, cust, "5 shirt 2 pant kal le jao")
+    assert summary.startswith("Order summary:")
+
+    async def must_not_be_called(**kw):
+        raise AssertionError("a button answer needs no model call")
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", must_not_be_called)
+    return cust, summary, booked
+
+
+async def test_pickup_yes_button_books_without_text_matching(monkeypatch) -> None:
+    """Customer ne 'Haan, book karo' button dabaya — seedha book, chahe log
+    mein text kaisa bhi ho (footer, [list: …])."""
+    cust, summary, booked = await _summary_pending(monkeypatch)
+    yes, no = agent_module.pickup_buttons(summary)
+    assert yes.id.startswith("pickup:yes:") and no.id.startswith("pickup:no:")
+    assert len(yes.title) <= 24 and len(no.title) <= 24
+    async with async_session_factory() as db:
+        cust = await _reload(db)
+        reply = await build_ai_reply(db, cust, f"[button:{yes.id}] {yes.title}")
+    assert reply == "✅ Pickup booked" and len(booked) == 1
+    assert (await _reload()).ai_pending_intake is None
+
+
+async def test_pickup_button_from_an_old_summary_does_not_book(monkeypatch) -> None:
+    cust, summary, booked = await _summary_pending(monkeypatch)
+    old = agent_module.pickup_buttons(summary + " (purana)")[0]
+    async with async_session_factory() as db:
+        cust = await _reload(db)
+        reply = await build_ai_reply(db, cust, f"[button:{old.id}] {old.title}")
+    assert booked == [] and "purane" in reply
+    assert (await _reload()).ai_pending_intake is not None
+
+
+async def test_pickup_no_button_cancels(monkeypatch) -> None:
+    cust, summary, booked = await _summary_pending(monkeypatch)
+    no = agent_module.pickup_buttons(summary)[1]
+    async with async_session_factory() as db:
+        cust = await _reload(db)
+        reply = await build_ai_reply(db, cust, f"[button:{no.id}] {no.title}")
+    assert booked == [] and "cancel" in reply.lower()
+    assert (await _reload()).ai_pending_intake is None
+
+
+async def test_typed_haan_still_books_after_the_button_menu(monkeypatch) -> None:
+    """Menu wala message log mein ' [list: …]' ke saath judta hai — typed
+    'haan' phir bhi summary pehchane (pehle yahi loop tha)."""
+    from app.services.whatsapp import sign_ai
+
+    cust, summary, booked = await _summary_pending(monkeypatch)
+    await _record_outbound(cust.id, f"{sign_ai(summary)} [list: ✅ Haan, book karo, ❌ Nahi]")
+    async with async_session_factory() as db:
+        cust = await _reload(db)
+        reply = await build_ai_reply(db, cust, "haan")
+    assert reply == "✅ Pickup booked" and len(booked) == 1
