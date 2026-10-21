@@ -911,14 +911,17 @@ function workRow(w) {
       </div>`).join("")}
       ${asked ? `<div class="sub mt-xs"><span class="tag late">Cancel maanga</span>${esc(t.cancel_reason || "")}</div>` : ""}
       ${ME.show_route && w.address ? `<div class="sub mt-xs">📍 ${esc(w.address)}</div>` : ""}
-      <div class="acts">
+      ${isDeliveryBoy() ? `<div class="acts compact">
+        ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}${main.to ? ` data-to="${esc(main.to)}"` : ""}>${esc(main.label)}</button>` : ""}
+        <button class="btn ghost sm more" data-do="more" aria-label="More options">⋯</button>
+      </div>` : `<div class="acts">
         ${w.hasOrder && ME.can_contact ? `<button class="btn ghost sm" data-do="call">Call</button>` : ""}
         ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}${main.to ? ` data-to="${esc(main.to)}"` : ""}>${esc(main.label)}</button>` : ""}
         ${ME.show_route && w.address ? `<button class="btn ghost sm" data-do="map" data-addr="${esc(w.address)}">Route</button>` : ""}
         ${ME.can_money && ME.features.includes("cod_collection") && w.due > 0
           ? `<button class="btn money sm" data-do="pay" data-due="${w.due}">${money(w.due)} collect</button>` : ""}
         <button class="btn ghost sm" data-do="more" aria-label="More">⋯</button>
-      </div>
+      </div>`}
     </div>
   </article>`;
 }
@@ -1287,7 +1290,42 @@ function askNotHome(number) {
   });
 }
 
+/* Delivery boy ki row saaf: ek kaam ka button (Deliver / Pickup) + ⋯.
+   Pehle Call · Deliver · Route · ₹ collect · ⋯ ek line mein the aur bada
+   Deliver button baaki sabko daba deta tha. Call/Route "Full details" mein. */
+const isDeliveryBoy = () => ME.role === "DELIVERY";
+
+/* Delivery ka ⋯: sirf Full details, Payment (kitna mila / kitna baaki), Close */
+async function deliveryMenu(number) {
+  const w = WORK.find((x) => x.number === number) || {};
+  if (!w.hasOrder) return moreMenuFull(number);
+  openModal(`<h3>${esc(number)}</h3><p class="said">${esc(w.who || "")}</p>
+    <div class="paysum" id="dm-pay"><span class="muted">Loading payment…</span></div>
+    <div class="btnrow stack">
+      <button class="btn ghost" data-act="detail" data-arg="${esc(number)}">👁 Full details</button>
+      <span id="dm-collect"></span>
+    </div>
+    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
+  let o;
+  try { o = await api(`/orders/${encodeURIComponent(number)}`); }
+  catch (e) { if ($("dm-pay")) $("dm-pay").innerHTML = `<span class="muted">${esc(e.message)}</span>`; return; }
+  if (!$("dm-pay")) return;   // menu band ho chuka
+  const total = Number(o.total || 0), paid = Number(o.paid || 0), due = Math.max(0, Number(o.due || 0));
+  $("dm-pay").innerHTML = `
+    <div><span>Bill</span><b>${money(total)}</b></div>
+    <div><span>Collected</span><b class="ok">${money(paid)}</b></div>
+    <div><span>Still to collect</span><b class="${due > 0 ? "due" : "ok"}">${due > 0 ? money(due) : "Fully paid ✓"}</b></div>`;
+  if (o.can_collect && due > 0) {
+    $("dm-collect").outerHTML = `<button class="btn money" id="dm-go">💵 Collect payment · ${money(due)}</button>`;
+    $("dm-go").onclick = () => { closeModal(); askCollect(number, due); };
+  }
+}
+
 function moreMenu(number) {
+  if (isDeliveryBoy()) return deliveryMenu(number);
+  return moreMenuFull(number);
+}
+function moreMenuFull(number) {
   const w = WORK.find((x) => x.number === number) || {};
   const t = (w.tasks || [])[0];
   openModal(`<h3>${esc(number)}</h3>
@@ -2142,9 +2180,11 @@ function bagSheet(svc) {
     type = type[0].toUpperCase() + type.slice(1);   // "pillow cover" -> "Pillow cover"
     if (!names.some((n) => n.toLowerCase() === type.toLowerCase())) names.unshift(type);
     bump(type, 1);
-    // search se joda: khaana saaf, keyboard khula rahe — agla kapda likho
-    if (qIn.value) { qIn.value = ""; qIn.focus(); }
+    // Search waisa hi rahe — chuna hua kapda ungli ke neeche − n + ke saath
+    // tika rahe (pehle khaana saaf hote hi poori list aa jaati aur kapda
+    // "gayab" ho jaata). Text select: agla naam likhte hi purana hat jaata hai.
     paintList();
+    if (qIn.value) { qIn.focus(); qIn.select(); }
   };
   // Search khula ho aur row dabayi to input ka focus na chhoote — warna
   // keyboard band hokar dobara khulta aur poori sheet uchhalti.
@@ -2222,10 +2262,10 @@ function tapItem(r) {
     CART.push({ service: r.service, garment: r.garment, qty: 1, rate: r.rate, card: r.rate, unit: r.unit || "pc", pieces: [] });
     idx = CART.length - 1;
   }
-  // search se joda tha to khaana saaf karke wahin focus — agla kapda seedha
-  // likho. Bina search ke tap kiya ho to keyboard zabardasti nahi kholte.
+  // Search waisa hi rahe — kapda list mein − n + ke saath tika rahe, jab tak
+  // aadmi ginti badha/ghata le. Text select: agla naam likhte hi hat jaata hai.
+  // Bina search ke tap kiya ho to keyboard zabardasti nahi kholte.
   const searched = $("b-q") && $("b-q").value.trim();
-  if (searched) $("b-q").value = "";
   renderCart();
   if (navigator.vibrate) navigator.vibrate(12);   // haath ko pata chale ki juda
   if (r.unit === "kg") {
@@ -2233,6 +2273,7 @@ function tapItem(r) {
     if (inp) { inp.focus(); inp.select(); }
   } else if (searched) {
     $("b-q").focus();
+    $("b-q").select();
   }
   // No toast: the row itself now shows − n +, and a stack of "added" toasts
   // covered the very list being tapped on a small phone.

@@ -720,3 +720,17 @@ h3.mt-lg { margin-top: 20px; }
 }
 /* 7 tab tak (manager) bhi chhote phone par label na toote */
 .bottom button { min-width: 0; }
+
+/* Delivery row: ek saaf kaam ka button + gol ⋯ (stretch nahi) */
+.acts.compact { align-items: center; flex-wrap: nowrap; }
+.acts.compact .btn.go { flex: 0 1 auto; min-width: 148px; max-width: 70%; }
+.acts.compact .btn.more {
+  flex: 0 0 42px; width: 42px; padding: 0; border-radius: 50%;
+  font-size: 18px; line-height: 1; display: grid; place-items: center;
+}
+/* Delivery ⋯ ka payment hisaab */
+.paysum { display: grid; gap: 6px; margin: 6px 0 14px; padding: 12px 14px; border-radius: 14px; background: var(--rule-2); }
+.paysum > div { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; color: var(--ink-2); }
+.paysum b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.paysum b.ok { color: #047857; }
+.paysum b.due { color: var(--late); }
