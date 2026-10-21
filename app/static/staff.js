@@ -83,6 +83,8 @@ const ACTIONS = {
   jobdone: (c) => { closeModal(); askDone(c); },
   decide: (c) => { closeModal(); decideCancel(c); },
   photo: (n) => { closeModal(); askPhoto(n); },
+  damage: (n) => { closeModal(); askPhoto(n, "damage"); },
+  nothome: (n) => { closeModal(); askNotHome(n); },
   message: (n) => { closeModal(); const w = WORK.find((x) => x.number === n); messageMenu(n, Number((w && w.due) || 0)); },
   cancel: (c) => { closeModal(); askCancel(c); },
   more: (fn) => (fn === "loadWork" ? loadWork({ more: true }) : loadBills({ more: true })),
@@ -521,6 +523,28 @@ $("chips").addEventListener("click", (e) => {
   renderWork();
 });
 
+/* Aaj ke saare stop ek Google Maps route mein — har row ka alag "Route"
+   kholna aur wapas aana sadak par mushkil tha. Maps ek link mein 9 beech
+   ke padav leta hai, isliye pehle 10 (list pehle se urgent/late ke kram mein). */
+const ROUTE_MAX = 10;
+function routeBar(rows) {
+  if (!ME.show_route || inDone() || !DELIVERY_ROLES.includes(ME.role)) return "";
+  const seen = new Set();
+  const addrs = rows.filter((w) => ["pickup", "deliver"].includes(w.chip) && w.address)
+    .map((w) => w.address.trim())
+    .filter((a) => (seen.has(a.toLowerCase()) ? false : seen.add(a.toLowerCase())));
+  if (!addrs.length) return "";
+  const stops = addrs.slice(0, ROUTE_MAX);
+  const dest = stops[stops.length - 1];
+  const mid = stops.slice(0, -1);
+  const url = "https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=" + encodeURIComponent(dest)
+    + (mid.length ? "&waypoints=" + encodeURIComponent(mid.join("|")) : "");
+  return `<div class="routebar">
+    <span>🗺 <b>${stops.length} stop${stops.length > 1 ? "s" : ""}</b>${addrs.length > ROUTE_MAX ? ` (first ${ROUTE_MAX} of ${addrs.length})` : ""} in one route</span>
+    <a class="btn go sm" href="${esc(url)}" target="_blank" rel="noopener">Open route</a>
+  </div>`;
+}
+
 function renderWork() {
   const rows = WORK.filter((w) =>
     FILTER === "all" || inDone() ? true : FILTER === "late" ? w.late : w.chip === FILTER);
@@ -534,7 +558,7 @@ function renderWork() {
   }
   // "Show more" sirf tab jab chhaant lagi hi na ho — chip ke andar aadhi
   // list dikhana aur "aur hai" kehna jhooth hai.
-  $("list").innerHTML = `<div class="reg">${rows.map(workRow).join("")}</div>`
+  $("list").innerHTML = routeBar(rows) + `<div class="reg">${rows.map(workRow).join("")}</div>`
     + ((FILTER === "all" || inDone()) && MORE_LEFT
         ? `<div class="morebar"><span>${WORK.length} shown</span>
              <button class="btn ghost sm" data-act="more" data-arg="loadWork">Show more</button></div>`
@@ -809,6 +833,7 @@ async function deliverModal(number) {
              <small class="dl-of">of ${s.max}</small></div>`);
     }).join("")}</div>
     <p class="dl-sum" id="dl-sum"></p>
+    <label class="check-row"><input type="checkbox" id="dl-proof"> 📷 Take a delivery photo after this</label>
     <div class="btnrow">
       <button class="btn ghost" data-act="close">Cancel</button>
       <button class="btn go" id="dl-go">Deliver</button>
@@ -860,6 +885,7 @@ async function deliverModal(number) {
     loadToday(); refreshCurrent({ quiet: true });
     // paisa baaki ho to seedha collect — darwaze par wahi agla kaam hai
     if (o.can_collect && o.due > 0) askCollect(number, o.due);
+    else if ($("dl-proof") && $("dl-proof").checked) askPhoto(number, "proof");
   });
   paint();
 }
@@ -880,6 +906,29 @@ function confirmStep(number, path, question, yes) {
   });
 }
 
+/* Darwaze par koi nahi — owner ko khabar, order wahi rehta hai. Phir
+   grahak ko apne WhatsApp se "kab aayein?" (text server banata hai). */
+function askNotHome(number) {
+  const w = WORK.find((x) => x.number === number) || {};
+  openModal(`<h3>🚪 Customer not home?</h3>
+    <p class="said">${esc(w.who || "")} · ${esc(number)}. The order stays on your list and the owner is told.</p>
+    <label for="nh-note">Note (optional)</label>
+    <input id="nh-note" type="text" maxlength="150" placeholder="e.g. door locked, phone not answered">
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Not now</button>
+      <button class="btn go" id="nh-ok">Yes, not home</button>
+    </div>`);
+  $("nh-ok").onclick = (e) => busy(e.currentTarget, async () => {
+    const r = await api(`/orders/${encodeURIComponent(number)}/not-home`, {
+      method: "POST", body: { note: $("nh-note").value.trim() },
+    });
+    closeModal();
+    toast("Noted — the owner has been told");
+    refreshCurrent({ quiet: true });
+    if (r.can_message) composeMessage(number, "not_home");
+  });
+}
+
 function moreMenu(number) {
   const w = WORK.find((x) => x.number === number) || {};
   const t = (w.tasks || [])[0];
@@ -892,6 +941,9 @@ function moreMenu(number) {
       ${ME.can_money ? `<button class="btn ghost" data-act="share" data-arg="${esc(number)}">🧾 Send bill on WhatsApp</button>` : ""}
       ${ME.can_money && w.hasOrder ? `<button class="btn ghost" data-act="message" data-arg="${esc(number)}">💬 Send a message</button>` : ""}
       <button class="btn ghost" data-act="photo" data-arg="${esc(number)}">📷 Add a photo</button>
+      ${w.hasOrder ? `<button class="btn ghost" data-act="damage" data-arg="${esc(number)}">⚠️ Mark damage / stain</button>` : ""}
+      ${w.hasOrder && DELIVERY_ROLES.includes(ME.role) && ["PICKUP_ASSIGNED", "READY", "OUT_FOR_DELIVERY"].includes(w.status)
+        ? `<button class="btn ghost" data-act="nothome" data-arg="${esc(number)}">🚪 Customer not home</button>` : ""}
       ${t && ME.features.includes("cancel_approval") && !t.cancel_requested
         ? `<button class="btn ghost" data-act="cancel" data-arg="${esc(t.code)}">🛑 Request cancel</button>` : ""}
       ${t && ME.is_manager && t.cancel_requested
@@ -1252,6 +1304,34 @@ function messageMenu(number, due) {
     };
   });
 }
+/* Message ka text server banata hai; staff padh kar apne WhatsApp se bhejta
+   hai. Pehle ye function sirf dashboard (app.js) mein tha — staff app mein
+   "Send a message" aur payment ke baad wala thank-you chupchaap toot jaate the. */
+const MSG_TITLE = {
+  payment_thanks: "Payment received — thank you",
+  service_thanks: "Thank you",
+  delivery_update: "Delivery update",
+  review_request: "Feedback request",
+};
+async function composeMessage(number, kind) {
+  let r;
+  try { r = await api(`/orders/${encodeURIComponent(number)}/message?kind=${encodeURIComponent(kind)}`); }
+  catch (e) { toast(e.message, true); return; }
+  SHARE_TEXT = r.text;
+  openModal(`<h3>${esc(MSG_TITLE[kind] || "Message")}</h3>
+    <p class="said">WhatsApp opens with the message written — just press send. To ${esc(r.name)}.</p>
+    <pre class="sharetext">${esc(r.text)}</pre>
+    <div class="btnrow">
+      <a class="btn go" href="${esc(waUrl(r.phone, r.text))}" target="_blank" rel="noopener" data-act="close">📲 Open WhatsApp</a>
+      <button class="btn ghost" id="m-copy">Copy</button>
+    </div>
+    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
+  $("m-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(SHARE_TEXT); toast("Copied"); }
+    catch (e) { toast("Copy nahi hua — upar se select kar lijiye", true); }
+  };
+}
+
 /* ─── paise ki yaad ─────────────────────────────────────────────────── */
 /* Scheduler khud 3 din / 15 din par yaad dilata hai, par wo maanta hai ki
    order deliver ho chuka hai AUR dukaan ka WhatsApp API juda hai. Counter
@@ -2367,14 +2447,21 @@ function uploadWithProgress(url, form, onProgress) {
 
 const kb = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB");
 
-function askPhoto(number) {
-  openModal(`<h3>${esc(number)} — add a photo</h3>
-    <p class="said">Proof of the item\u2019s condition — a stain, a tear, or how many pieces.
-      If anyone later says it was not like that, this is the answer.</p>
+/* kind: general | damage (kapda pehle se kharab — owner ko alag khabar) |
+   proof (grahak ko diye, deliver ke baad) */
+const PHOTO_COPY = {
+  general: ["add a photo", "Proof of the item\u2019s condition — a stain, a tear, or how many pieces. If anyone later says it was not like that, this is the answer.", "e.g. 12 pieces in the bag"],
+  damage: ["mark damage", "Found a stain, tear, missing button or faded colour? Take a photo now — before washing — so nobody blames the shop later.", "e.g. stain on the collar, button missing"],
+  proof: ["delivery photo", "A photo of the clothes handed over at the door. If the customer later says they did not get them, this is the answer.", "e.g. handed to the guard"],
+};
+function askPhoto(number, kind = "general") {
+  const [title, said, hint] = PHOTO_COPY[kind] || PHOTO_COPY.general;
+  openModal(`<h3>${esc(number)} — ${title}</h3>
+    <p class="said">${esc(said)}</p>
     <input id="ph-file" type="file" accept="image/*" capture="environment">
     <div id="ph-prev" hidden></div>
     <label for="ph-note">Note (optional)</label>
-    <input id="ph-note" type="text" maxlength="150" placeholder="e.g. stain on the collar">
+    <input id="ph-note" type="text" maxlength="150" placeholder="${esc(hint)}">
     <div id="ph-bar" class="bar" hidden><i></i></div>
     <div class="err" id="ph-err"></div>
     <div class="btnrow">
@@ -2416,12 +2503,13 @@ function askPhoto(number) {
       const fd = new FormData();
       fd.append("photo", file);
       fd.append("note", $("ph-note").value.trim());
+      fd.append("kind", kind);
       await uploadWithProgress(
         `/staff/api/orders/${encodeURIComponent(number)}/photo`, fd,
         (p) => { fill.style.width = Math.max(2, Math.round(p * 100)) + "%"; },
       );
       closeModal();
-      toast("Photo added — the owner has been told");
+      toast(kind === "damage" ? "Damage noted — the owner has been told" : "Photo added — the owner has been told");
     } catch (err) {
       // Fail hone par kaam khatam nahi: wahi photo, ek tap par dobara.
       bar.hidden = true;

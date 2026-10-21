@@ -868,6 +868,55 @@ async def order_picked_up(
         raise HTTPException(status_code=409, detail=str(exc))
 
 
+class NotHomeIn(BaseModel):
+    note: str = Field(default="", max_length=200)
+
+
+@router.post("/orders/{number}/not-home")
+async def order_not_home(
+    number: str,
+    body: NotHomeIn,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Darwaze par koi nahi mila — order wahi rehta hai, bas record aur khabar.
+
+    Status nahi badalta aur delivery ki date bhi nahi: wo grahak se kiya
+    gaya vaada hai, aur use sirf owner badalta hai. Owner ko khabar jaati
+    hai; grahak ko message delivery wala apne WhatsApp se bhejta hai
+    (kind=not_home), kyunki dukaan ka API har dukaan par juda nahi hota.
+    """
+    _role_or_403(p, _DELIVERY_ROLES, "Pickup and delivery")
+    order = await _my_order(db, p, number)
+    if order.status not in (
+        OrderStatus.PICKUP_ASSIGNED, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY
+    ):
+        raise HTTPException(status_code=409, detail="This order is not out for pickup or delivery")
+    what = "pickup" if order.status is OrderStatus.PICKUP_ASSIGNED else "delivery"
+    stamp = datetime.now(IST).strftime("%d %b %H:%M")
+    note = body.note.strip()
+    line = f"[{stamp} {p.staff.name}] 🚪 Customer not home ({what})" + (f" - {note}" if note else "")
+    order.notes = f"{order.notes}\n{line}" if order.notes else line
+    db.add(order)
+    await db.commit()
+
+    from app.services import background, team
+
+    msg = f"🚪 {p.staff.name}: {order.order_number} — customer not home ({what})" + (f": {note}" if note else "")
+    _from = p.staff.phone
+    background.run_after(
+        lambda bg: team.notify_admins(bg, msg, skip_phone=_from),
+        tenant_id=p.staff.tenant_id,
+        label="not_home_notify",
+    )
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="customer_not_home",
+        args={"order": order.order_number, "what": what}, result=note[:100] or "not home",
+        tenant_id=p.staff.tenant_id,
+    )
+    return {"ok": True, "order": order.order_number, "what": what, "can_message": can_contact(p)}
+
+
 @router.post("/orders/{number}/washing")
 async def order_washing(
     number: str,
@@ -1902,7 +1951,7 @@ async def order_receipt(
 @router.get("/orders/{number}/message")
 async def order_message(
     number: str,
-    kind: str = Query(pattern="^(payment_thanks|service_thanks|review_request|delivery_update)$"),
+    kind: str = Query(pattern="^(payment_thanks|service_thanks|review_request|delivery_update|not_home)$"),
     p: StaffPrincipal = Depends(require_biller()),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -2022,11 +2071,18 @@ async def send_payment_reminder(
     }
 
 
+# Notes mein photo ki line — "damage" alag dikhe, taaki "aisa to nahi tha"
+# wali baat par owner seedha wahi line dhoondh le.
+PHOTO_LABEL = {"general": "photo", "damage": "⚠️ damage photo", "proof": "📦 delivery photo"}
+
+
 @router.post("/orders/{number}/photo", status_code=201)
 async def attach_photo(
     number: str,
     photo: UploadFile = File(...),
     note: str = Form(default=""),
+    # general | damage (kapde pehle se kharab) | proof (grahak ko diye)
+    kind: str = Form(default="general", pattern="^(general|damage|proof)$"),
     p: StaffPrincipal = Depends(current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -2057,7 +2113,8 @@ async def attach_photo(
     await asyncio.to_thread((media_dir / name).write_bytes, blob)
 
     stamp = datetime.now(timezone.utc).strftime("%d %b %H:%M")
-    line = f"[{stamp} {p.staff.name}] photo /admin/media/{name}"
+    label = PHOTO_LABEL[kind]
+    line = f"[{stamp} {p.staff.name}] {label} /admin/media/{name}"
     if note.strip():
         line += f" - {note.strip()[:200]}"
     order.notes = f"{order.notes}\n{line}" if order.notes else line
@@ -2071,7 +2128,9 @@ async def attach_photo(
     from app.services import background, team
 
     msg = (
-        f"📷 {p.staff.name} added a photo on {order.order_number}"
+        (f"⚠️ {p.staff.name} marked damage on {order.order_number}" if kind == "damage"
+         else f"📷 {p.staff.name} added a delivery photo on {order.order_number}" if kind == "proof"
+         else f"📷 {p.staff.name} added a photo on {order.order_number}")
         + (f": {note.strip()[:150]}" if note.strip() else "")
         + "\nYou can see it on the dashboard."
     )
@@ -2083,10 +2142,10 @@ async def attach_photo(
     )
     await audit.record(
         actor_role="staff", actor=p.staff.name, action="job_photo_added",
-        args={"order": order.order_number, "file": name},
+        args={"order": order.order_number, "file": name, "kind": kind},
         result=note[:100] or "photo", tenant_id=p.staff.tenant_id,
     )
-    return {"ok": True, "file": name}
+    return {"ok": True, "file": name, "kind": kind}
 
 
 @router.get("/today")
