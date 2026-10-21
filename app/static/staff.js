@@ -786,6 +786,16 @@ function primaryAction(w) {
   return null;
 }
 
+/* Owner ka diya alag kaam jo kisi order par hai. Order ki row ka bada
+   button status ka hota hai ("Start wash"), isliye ye kaam pehle row mein
+   chhup jaata tha — sirf ⋯ menu mein milta tha. Dhulai/pickup ke apne kaam
+   status hi hain, unhe dobara nahi dikhate. */
+const STAGE_TASK_KINDS = ["wash", "dry", "iron", "pickup", "delivery"];
+function ownerJobs(w) {
+  if (w.type !== "stop") return [];
+  return (w.tasks || []).filter((t) => t.status === "OPEN" && !STAGE_TASK_KINDS.includes(t.kind));
+}
+
 function workRow(w) {
   const t = w.tasks[0];
   const asked = t && t.cancel_requested;
@@ -809,6 +819,10 @@ function workRow(w) {
       ${queued.length ? `<div class="sub mt-xs"><span class="tag deliver">⏳ ${esc(queued.join(", "))} — waiting for signal</span></div>` : ""}
       ${partial ? `<div class="sub mt-xs"><span class="tag late">${w.clothes.pending} pending</span>${w.clothes.delivered} of ${w.clothes.total} delivered</div>` : ""}
       ${w.title && w.type === "task" ? `<div class="sub note">${esc(w.title)}</div>` : ""}
+      ${ownerJobs(w).map((j) => `<div class="job">
+        <span>📌 ${esc(j.title)}</span>
+        <button class="btn ghost sm" data-do="done" data-code="${esc(j.code)}">✓ Done</button>
+      </div>`).join("")}
       ${asked ? `<div class="sub mt-xs"><span class="tag late">Cancel maanga</span>${esc(t.cancel_reason || "")}</div>` : ""}
       ${ME.show_route && w.address ? `<div class="sub mt-xs">📍 ${esc(w.address)}</div>` : ""}
       <div class="acts">

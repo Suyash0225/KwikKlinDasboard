@@ -8,7 +8,7 @@ import pytest
 
 from app.models import StaffRole
 from tests.test_staff_panel import (  # noqa: F401 (two_shops fixture yahin se aata hai)
-    A_PHONE, CUST_A, _login, _order_for, _purge_staff, _staff, two_shops,
+    A_PHONE, CUST_A, _login, _order_for, _purge_staff, _staff, _task_for, two_shops,
 )
 
 A_WASH2_PHONE = "+919999900211"  # dukaan A ka doosra washerman
@@ -59,3 +59,13 @@ async def test_washer_can_send_to_iron_too(client, floor, sent) -> None:
     assert (await client.post(f"/staff/api/orders/{num}/washing")).status_code == 200
     r = await client.post(f"/staff/api/orders/{num}/ironing")
     assert r.status_code == 200 and r.json()["status"] == "IN_IRON", r.text
+
+
+async def test_owner_task_for_ironer_reaches_their_panel(client, floor, sent) -> None:
+    """Owner ka diya alag kaam press wale ke panel par aata hai, kind ke saath
+    — panel isi se use order ki row mein alag dikhata hai."""
+    code = await _task_for(floor["a"], floor["a_iron"], CUST_A, "Saree par extra starch")
+    await _login(client, A_IRON_PHONE)
+    tasks = (await client.get("/staff/api/tasks?tab=mine")).json()["tasks"]
+    mine = next(t for t in tasks if t["code"] == code)
+    assert mine["title"] == "Saree par extra starch" and mine["kind"] == "general"

@@ -387,6 +387,9 @@ def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
     card: dict = {
         "code": t.code,
         "title": t.title,
+        # Panel isi se tay karta hai ki row par kaunsa kaam dikhe (pickup ka
+        # "Create bill" bhi) — pehle bheja hi nahi jaata tha
+        "kind": t.kind,
         "status": t.status,
         "urgent": t.urgent,
         "age_hours": int((datetime.now(timezone.utc) - t.created_at).total_seconds() // 3600),
