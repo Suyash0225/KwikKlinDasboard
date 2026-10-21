@@ -862,7 +862,9 @@ async def build_ai_reply(
     if not text:
         return None
 
-    if text.startswith("["):
+    # Pickup ka Haan/Nahi button customer ka jawab hai, media nahi — neeche
+    # pending summary wala hissa use sambhalta hai
+    if text.startswith("[") and not _PICKUP_BUTTON_RE.match(text):
         # A transcribed voice note IS the customer's message — answer it
         # like typed text instead of just confirming the file arrived.
         said = _voice_transcript(text)
