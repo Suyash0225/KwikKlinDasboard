@@ -7,9 +7,10 @@ Teen hisse:
    Wo na mile to order ka assigned_washer / assigned_delivery. History mein
    naam kabhi "Ravi" aur kabhi "staff:Ravi" likha hota hai — dono maane.
 
-2. **Rating -> points** (`record_rating`). Rating sirf washing ki hai:
-   delivery ke message mein grahak ko bataate hain kisne kapde taiyaar
-   kiye. Wo "Bahut achha" dabaye to us washerman ko points, staff ko turant shabashi, aur mahine ke points ek padav (50, 100…)
+2. **Rating -> points** (`record_rating`). Har order par sawaal ek cheez
+   ka — washing, delivery ya poori service — baari-baari (`subject_for`),
+   aur grahak ko bataate hain wo kaam kisne kiya. Wo "Bahut achha" dabaye
+   to usi kaam wale ko points (poori service par dono ko), staff ko turant shabashi, aur mahine ke points ek padav (50, 100…)
    paar karein to owner ko bhi. "Sudhar chahiye" par points nahi, staff ko
    seedhi par izzat wali baat. Ek order + ek aadmi = ek hi baar (unique).
 
@@ -102,28 +103,70 @@ async def _setting(db: AsyncSession, key: str):
     return await app_settings.get(db, key)
 
 
-async def staff_line(db: AsyncSession, order: Order, lang: str) -> str:
-    """Delivery message ki line: "Aapke kapde Ravi ne taiyaar kiye hain."
+# Rating kis cheez ki — baari-baari, taaki har staff ki rating aaye
+SUBJECTS = ("wash", "delivery", "overall")
+_SUBJECT_ROLES = {"wash": ("washer",), "delivery": ("delivery",), "overall": ("washer", "delivery")}
+_SUBJECT_WORD = {
+    "hi": {"wash": "washing", "delivery": "delivery", "overall": "poori service"},
+    "en": {"wash": "washing", "delivery": "delivery", "overall": "overall service"},
+}
 
-    Rating sirf washing ki hoti hai, isliye naam sirf washerman ka —
-    delivery wale ka naam grahak ko ajeeb lagta tha ("kisne pahunchaya").
+
+def subject_for(order: Order, w: dict[str, Staff]) -> str:
+    """Is order par sawaal washing, delivery ya poori service ka.
+
+    Order number se tay hota hai (crc32) — teeno barabar aate hain, aur rating
+    aane par wahi jawab dobara nikal aata hai, kahin likhna nahi padta. Jis
+    kaam ka aadmi pata hi nahi (dukaan se khud le gaya — delivery wala nahi),
+    uska sawaal nahi; washing par aa jaate hain.
+    """
+    import zlib
+
+    want = SUBJECTS[zlib.crc32(order.order_number.encode()) % len(SUBJECTS)]
+    for subject in (want, "wash", "overall", "delivery"):
+        if all(r in w for r in _SUBJECT_ROLES[subject]):
+            return subject
+    return want
+
+
+def _rated(w: dict[str, Staff], subject: str) -> list[tuple[Staff, str]]:
+    """[(staff, role)] jinke kaam ki rating hai — ek aadmi ek hi baar."""
+    out, seen = [], set()
+    for role in _SUBJECT_ROLES[subject]:
+        s = w.get(role)
+        if s is not None and s.id not in seen:
+            seen.add(s.id)
+            out.append((s, role))
+    return out
+
+
+async def rating_prompt(db: AsyncSession, order: Order, lang: str) -> tuple[str, str]:
+    """(staff ki line, sawaal) delivery ke message ke liye.
+
+    "Aapke kapde Ravi ne taiyaar kiye hain." + "Aapko hamari washing service
+    kaisi lagi?" — ya delivery / poori service, order ke hisaab se.
     """
     from app.services.messages import get_message
 
+    lang = "hi" if lang == "hi" else "en"
+    question = get_message("rating_question_overall", lang=lang)
     try:
-        if not await _setting(db, "rating_show_staff_names"):
-            return ""
-        washer = (await workers(db, order)).get("washer")
-        if washer is None:
-            return ""
+        w = await workers(db, order)
+        subject = subject_for(order, w)
+        question = get_message(f"rating_question_{subject}", lang=lang)
+        rated = _rated(w, subject)
+        if not rated or not await _setting(db, "rating_show_staff_names"):
+            return "", question
         note = get_message(
             "rating_reward_note" if await _setting(db, "staff_reward_enabled") else "rating_points_note",
             lang=lang,
         )
-        return get_message("rating_staff_line", lang=lang, name=first_name(washer.name), points_note=note)
+        joiner = " aur " if lang == "hi" else " and "
+        names = joiner.join(first_name(st.name) for st, _ in rated)
+        return get_message(f"rating_line_{subject}", lang=lang, names=names, points_note=note), question
     except Exception:
-        log.exception("rating_staff_line_failed")
-    return ""
+        log.exception("rating_prompt_failed")
+    return "", question
 
 
 async def month_points(db: AsyncSession, staff_id) -> int:
@@ -167,14 +210,18 @@ async def record_rating(db: AsyncSession, customer: Customer, kind: str) -> dict
     ).scalar_one()
     if already:
         return None
-    # rating washing ki hai — points us washerman ke jisne ye kapde taiyaar kiye
-    washer = (await workers(db, order)).get("washer")
-    if washer is None:
+    # Sawaal jis cheez ka gaya tha (subject_for — wahi order, wahi jawab),
+    # points usi kaam wale ko: washing -> washerman, delivery -> delivery
+    # wala, poori service -> dono.
+    w = await workers(db, order)
+    subject = subject_for(order, w)
+    awarded = _rated(w, subject)
+    if not awarded:
         return None
     pts = {"good": int(await _setting(db, "staff_points_good") or 0),
            "mid": int(await _setting(db, "staff_points_mid") or 0), "bad": 0}[kind]
-    db.add(StaffPoint(staff_id=washer.id, order_id=order.id, rating=kind, role="washer", points=pts))
-    awarded: list[tuple[Staff, str]] = [(washer, "washer")]
+    for st, role in awarded:
+        db.add(StaffPoint(staff_id=st.id, order_id=order.id, rating=kind, role=role, points=pts))
     from sqlalchemy.exc import IntegrityError
 
     try:
@@ -187,6 +234,7 @@ async def record_rating(db: AsyncSession, customer: Customer, kind: str) -> dict
         "order_id": order.id,
         "points": pts,
         "kind": kind,
+        "subject": subject,
         "names": [first_name(s.name) for s, _ in awarded],
         "awarded": [(s.id, s.name, s.phone) for s, _ in awarded],
         "customer": first_name(customer.name) or "Customer",
@@ -231,9 +279,12 @@ async def thank_staff(db: AsyncSession, result: dict) -> None:
     for staff_id, name, phone in result["awarded"]:
         total = await month_points(db, staff_id)
         key = {"good": "staff_rating_good", "mid": "staff_rating_mid", "bad": "staff_rating_bad"}[kind]
+        from app.services.messages import DEFAULT_LANG
+
         text = get_message(
             key, name=first_name(name), customer=result["customer"], order_number=result["order"],
             points=str(result["points"]), month_points=str(total), reward_line=reward,
+            subject=_SUBJECT_WORD.get(DEFAULT_LANG, _SUBJECT_WORD["en"])[result.get("subject", "overall")],
         )
         title = {"good": "🌟 Customer loved your work", "mid": "🙂 New rating", "bad": "⚠️ Customer feedback"}[kind]
         await _tell_staff(db, staff_id, phone, text, title=title, tag=f"rating-{result['order']}")

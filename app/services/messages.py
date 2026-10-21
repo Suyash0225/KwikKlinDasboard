@@ -89,16 +89,36 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Hello {name}! Your order {order_number} is confirmed 🧺 Pickup: {pickup}. Delivery within {sla} days of pickup. — {shop}",
     },
     "thankyou_rating": {
-        "hi": "Aapka order {order_number} deliver ho gaya ✅ Dhanyawad, {shop} ko mauka dene ke liye! 🙏{staff_line}\nAapko hamari washing service kaisi lagi?",
-        "en": "Your order {order_number} has been delivered ✅ Thank you for choosing {shop}! 🙏{staff_line}\nHow did you like our washing service?",
+        "hi": "Aapka order {order_number} deliver ho gaya ✅ Dhanyawad, {shop} ko mauka dene ke liye! 🙏{staff_line}\n{rating_question}",
+        "en": "Your order {order_number} has been delivered ✅ Thank you for choosing {shop}! 🙏{staff_line}\n{rating_question}",
     },
     # --- rating -> staff points (services/staff_scores.py) ---
-    # Rating sirf washing ki — grahak ko bas itna ki kapde kisne taiyaar
-    # kiye. Inaam wali line sirf tab jab owner ne Settings mein inaam chalu
-    # kiya ho — jhootha vaada nahi.
-    "rating_staff_line": {
-        "hi": "\nAapke kapde {name} ne taiyaar kiye hain. {points_note}",
-        "en": "\nYour clothes were prepared by {name}. {points_note}",
+    # Har order par sawaal ek cheez ka — washing, delivery ya poori service —
+    # baari-baari, taaki har staff ko rating mile. Inaam wali line sirf tab
+    # jab owner ne Settings mein inaam chalu kiya ho — jhootha vaada nahi.
+    "rating_line_wash": {
+        "hi": "\nAapke kapde {names} ne taiyaar kiye hain. {points_note}",
+        "en": "\nYour clothes were prepared by {names}. {points_note}",
+    },
+    "rating_line_delivery": {
+        "hi": "\nAapka order {names} ne aap tak pahunchaya. {points_note}",
+        "en": "\nYour order was brought to you by {names}. {points_note}",
+    },
+    "rating_line_overall": {
+        "hi": "\nAapka order {names} ne sambhala. {points_note}",
+        "en": "\nYour order was looked after by {names}. {points_note}",
+    },
+    "rating_question_wash": {
+        "hi": "Aapko hamari washing service kaisi lagi?",
+        "en": "How did you like our washing service?",
+    },
+    "rating_question_delivery": {
+        "hi": "Aapko hamari pickup aur delivery service kaisi lagi?",
+        "en": "How did you like our pickup and delivery service?",
+    },
+    "rating_question_overall": {
+        "hi": "Aapko hamari poori service kaisi lagi?",
+        "en": "How did you like our service overall?",
     },
     "rating_points_note": {
         "hi": "Aapki rating seedhe unke points mein judti hai.",
@@ -356,16 +376,16 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     # --- staff ko: rating, shabashi, kaam ki yaad (services/staff_scores.py) ---
     "staff_rating_good": {
-        "hi": "🌟 Shabash {name} ji! {customer} ne order {order_number} ko 'Bahut achha' kaha.\n+{points} points · Is mahine: {month_points} points{reward_line}\nAapki mehnat se {shop} ka naam banta hai — dhanyawad! 🙏",
-        "en": "🌟 Well done {name}! {customer} rated order {order_number} 'Excellent'.\n+{points} points · This month: {month_points} points{reward_line}\nYour effort builds {shop}'s name — thank you! 🙏",
+        "hi": "🌟 Shabash {name} ji! {customer} ne order {order_number} ki {subject} ko 'Bahut achha' kaha.\n+{points} points · Is mahine: {month_points} points{reward_line}\nAapki mehnat se {shop} ka naam banta hai — dhanyawad! 🙏",
+        "en": "🌟 Well done {name}! {customer} rated the {subject} on order {order_number} 'Excellent'.\n+{points} points · This month: {month_points} points{reward_line}\nYour effort builds {shop}'s name — thank you! 🙏",
     },
     "staff_rating_mid": {
-        "hi": "🙂 {name} ji, {customer} ne order {order_number} ko 'Theek tha' kaha. +{points} points.\nThoda aur dhyan — samay par kaam, saaf press aur achhi packing — aur agli baar 'Bahut achha' milega 💪",
-        "en": "🙂 {name}, {customer} rated order {order_number} 'It was okay'. +{points} points.\nA little more care — on time, crisp pressing, neat packing — and next time it will be 'Excellent' 💪",
+        "hi": "🙂 {name} ji, {customer} ne order {order_number} ki {subject} ko 'Theek tha' kaha. +{points} points.\nThoda aur dhyan — samay par kaam, saaf press aur achhi packing — aur agli baar 'Bahut achha' milega 💪",
+        "en": "🙂 {name}, {customer} rated the {subject} on order {order_number} 'It was okay'. +{points} points.\nA little more care — on time, crisp pressing, neat packing — and next time it will be 'Excellent' 💪",
     },
     "staff_rating_bad": {
-        "hi": "⚠️ {name} ji, {customer} ne order {order_number} par 'Sudhar chahiye' kaha.\nManager customer se baat kar rahe hain. Kripya dekhiye kahan kami rahi — deri, daag, packing ya baat-cheet — taaki agli baar aisa na ho. Kuch kehna ho to app mein manager ko batayein 🙏",
-        "en": "⚠️ {name}, {customer} said order {order_number} 'Needs work'.\nThe manager is talking to the customer. Please look at what went wrong — delay, stains, packing or how we spoke — so it does not happen again. Tell your manager in the app if you want to explain 🙏",
+        "hi": "⚠️ {name} ji, {customer} ne order {order_number} ki {subject} par 'Sudhar chahiye' kaha.\nManager customer se baat kar rahe hain. Kripya dekhiye kahan kami rahi — deri, daag, packing ya baat-cheet — taaki agli baar aisa na ho. Kuch kehna ho to app mein manager ko batayein 🙏",
+        "en": "⚠️ {name}, {customer} said the {subject} on order {order_number} 'Needs work'.\nThe manager is talking to the customer. Please look at what went wrong — delay, stains, packing or how we spoke — so it does not happen again. Tell your manager in the app if you want to explain 🙏",
     },
     "staff_points_milestone": {
         "hi": "🏆 Badhai ho {name} ji! Is mahine aapke {month_points} points ho gaye.{reward_line}\nAise hi customers ko khush rakhiye 🙌",
@@ -600,7 +620,8 @@ CUSTOMER_KEYS = frozenset({
     "payment_reminder", "payment_reminder_firm",
     "payment_thanks", "service_thanks", "review_request", "review_invitation_line", "partial_delivery",
     "delivery_update_full", "reward_earned", "not_home",
-    "rating_staff_line", "rating_points_note", "rating_reward_note", "rating_points_thanks",
+    "rating_line_wash", "rating_line_delivery", "rating_line_overall",
+    "rating_question_wash", "rating_question_delivery", "rating_question_overall", "rating_points_note", "rating_reward_note", "rating_points_thanks",
     "start_confirmed", "stop_confirmed", "relay_message_customer",
 })
 
@@ -628,6 +649,7 @@ def get_message(key: str, lang: str | None = None, **fmt: str) -> str:
     # Bill links are optional; older callers may not provide one.
     fmt.setdefault("bill_line", "")
     fmt.setdefault("staff_line", "")
+    fmt.setdefault("rating_question", "")
     return text.format(**fmt)
 
 

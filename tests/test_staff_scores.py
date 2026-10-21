@@ -64,14 +64,22 @@ async def _points(tenant_id) -> dict:
     return {name: (pts, rating, role) for name, pts, rating, role in rows}
 
 
-async def test_customer_is_told_who_did_the_work_and_rating_gives_them_points(client, two_shops, sent) -> None:
+def _ask_about(monkeypatch, subject: str) -> None:
+    """Sawaal kis cheez ka — asal mein order number se baari-baari, yahan tay."""
+    from app.services import staff_scores
+
+    real = staff_scores.subject_for
+    monkeypatch.setattr(staff_scores, "subject_for", lambda order, w: subject if subject in ("wash", "overall") or "delivery" in w else real(order, w))
+
+
+async def test_washing_rating_names_and_rewards_only_the_washer(client, two_shops, sent, monkeypatch) -> None:
+    _ask_about(monkeypatch, "wash")
     number = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_B)
     sent.clear()
     await _move(client, number)
     delivered = [m for m in sent if m["to"] == CUST_B and number in (m.get("text") or "")]
     assert delivered, "grahak ko delivery ka message"
     txt = delivered[-1]["text"]
-    # rating sirf washing ki — naam sirf washerman ka
     assert "Awash" in txt and "Adel" not in txt and "washing" in txt.lower()
     assert "reward" not in txt.lower() and "inaam" not in txt.lower(), "inaam band hai to vaada nahi"
 
@@ -84,7 +92,7 @@ async def test_customer_is_told_who_did_the_work_and_rating_gives_them_points(cl
 
     await background.drain()
     to_staff = {m["to"]: m["text"] for m in sent if m["to"] in (A_PHONE, A_DEL_PHONE)}
-    assert "Shabash" in to_staff[A_PHONE] or "Well done" in to_staff[A_PHONE]
+    assert ("Shabash" in to_staff[A_PHONE] or "Well done" in to_staff[A_PHONE]) and "washing" in to_staff[A_PHONE]
     assert A_DEL_PHONE not in to_staff
 
     # dobara dabaya — points dobara nahi
@@ -100,7 +108,45 @@ async def test_customer_is_told_who_did_the_work_and_rating_gives_them_points(cl
     assert team["Awash"]["month_points"] == 5 and team["Adel"]["month_points"] == 0
 
 
-async def test_bad_rating_gives_no_points_but_a_respectful_note(client, two_shops, sent) -> None:
+async def test_delivery_rating_goes_to_the_delivery_person(client, two_shops, sent, monkeypatch) -> None:
+    _ask_about(monkeypatch, "delivery")
+    number = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_B)
+    sent.clear()
+    await _move(client, number)
+    txt = [m["text"] for m in sent if m["to"] == CUST_B and number in (m.get("text") or "")][-1]
+    assert "Adel" in txt and "Awash" not in txt and "delivery" in txt.lower()
+    await _rate(two_shops["a"], "good")
+    assert await _points(two_shops["a"]) == {"Adel": (5, "good", "delivery")}
+
+
+async def test_overall_rating_rewards_everyone_who_worked_on_it(client, two_shops, sent, monkeypatch) -> None:
+    _ask_about(monkeypatch, "overall")
+    number = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_B)
+    sent.clear()
+    await _move(client, number)
+    txt = [m["text"] for m in sent if m["to"] == CUST_B and number in (m.get("text") or "")][-1]
+    assert "Awash" in txt and "Adel" in txt
+    await _rate(two_shops["a"], "mid")
+    assert await _points(two_shops["a"]) == {"Awash": (2, "mid", "washer"), "Adel": (2, "mid", "delivery")}
+
+
+def test_subjects_take_turns_and_skip_work_nobody_did() -> None:
+    from types import SimpleNamespace
+
+    from app.services.staff_scores import subject_for
+
+    both = {"washer": SimpleNamespace(id=1), "delivery": SimpleNamespace(id=2)}
+    seen = [subject_for(SimpleNamespace(order_number=f"KK-20261021-{i:02d}"), both) for i in range(1, 91)]
+    counts = {k: seen.count(k) for k in ("wash", "delivery", "overall")}
+    assert all(n >= 15 for n in counts.values()), counts    # teeno baari-baari aate hain
+    # dukaan se khud le gaya — delivery wala hai hi nahi: delivery ka sawaal nahi
+    only_washer = {"washer": SimpleNamespace(id=1)}
+    assert {subject_for(SimpleNamespace(order_number=f"KK-20261021-{i:02d}"), only_washer)
+            for i in range(1, 91)} == {"wash"}
+
+
+async def test_bad_rating_gives_no_points_but_a_respectful_note(client, two_shops, sent, monkeypatch) -> None:
+    _ask_about(monkeypatch, "wash")
     number = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_B)
     await _move(client, number)
     sent.clear()
@@ -111,7 +157,8 @@ async def test_bad_rating_gives_no_points_but_a_respectful_note(client, two_shop
     assert "tankhwah" not in note.lower() and "salary" not in note.lower()
 
 
-async def test_reward_promise_only_when_the_owner_turned_it_on(client, two_shops, sent) -> None:
+async def test_reward_promise_only_when_the_owner_turned_it_on(client, two_shops, sent, monkeypatch) -> None:
+    _ask_about(monkeypatch, "wash")
     await _set(two_shops["a"], "staff_reward_enabled", True)
     await _set(two_shops["a"], "staff_reward_note", "Har 50 points par ₹200 bonus")
     number = await _order_for(two_shops["a"], two_shops["a_wash"], CUST_B)
