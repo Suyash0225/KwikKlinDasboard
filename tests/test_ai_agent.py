@@ -1013,6 +1013,7 @@ async def test_pickup_confirmation_matches_standard_ai_footer() -> None:
     """The footer must not make a valid customer 'haan' look unprompted."""
     from app.models import Conversation, Direction
     from app.services.ai_agent import _last_outbound_is
+    from app.services.whatsapp import sign_ai
 
     cust = await _seed_customer()
     summary = (
@@ -1020,12 +1021,11 @@ async def test_pickup_confirmation_matches_standard_ai_footer() -> None:
         "address Kaushlesh Nagar, Naria. Kya main ye pickup order confirm kar doon? "
         "Reply 'haan' to confirm or 'nahi' to cancel. — Kwik Klin AI"
     )
-    footer = "\n\nThank you – Kwik Klin AI\nAI hai — chhoti-moti galti mumkin hai"
     async with async_session_factory() as db:
         db.add(Conversation(
             customer_id=cust.id,
             direction=Direction.OUTBOUND,
-            message_text=summary + footer,
+            message_text=sign_ai(summary),
         ))
         await db.commit()
         assert await _last_outbound_is(db, cust, summary)
