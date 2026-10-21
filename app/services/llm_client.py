@@ -449,7 +449,9 @@ _TRANSCRIBE_SYSTEM = (
 )
 
 
-async def transcribe_audio(audio_bytes: bytes, mime_type: str) -> str | None:
+async def transcribe_audio(
+    audio_bytes: bytes, mime_type: str, *, purpose: str = "voice"
+) -> str | None:
     """Turn a voice note into text, or None if it can't be understood.
 
     None means "we genuinely don't know what they said" — the caller must
@@ -458,7 +460,7 @@ async def transcribe_audio(audio_bytes: bytes, mime_type: str) -> str | None:
     if not SUPPORTS_AUDIO:
         return None
     try:
-        with track("voice"):
+        with track(purpose):
             # Baaki har jagah ki tarah yahan bhi fallback chahiye. Free tier
             # SMART model ko pehle throttle karta hai (429); ye seedha
             # _generate par tha, isliye us waqt transcript None aa jaata —
