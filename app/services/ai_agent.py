@@ -121,7 +121,7 @@ async def _last_outbound_is(db: AsyncSession, customer: Customer, text: str) -> 
     # Footer is appended by the outbound policy, not part of the confirmation
     # prompt itself. Only strip this exact known footer; do not fuzzy-match
     # customer-visible content or accept an older prompt.
-    footer = "\\nThank you – Kwik Klin AI\\nAI hai — chhoti-moti galti mumkin hai"
+    footer = "\nThank you – Kwik Klin AI\nAI hai — chhoti-moti galti mumkin hai"
     return last_outbound == text + footer
 
 
