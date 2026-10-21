@@ -84,6 +84,11 @@ _RATING_MAP = {
     "⭐ excellent": "good", "excellent": "good",
     "🙂 it was okay": "mid", "it was okay": "mid",
     "😞 needs work": "bad", "needs work": "bad",
+    # Aaj ke Hinglish buttons (order_service DELIVERED) — kuch WhatsApp
+    # client id ki jagah text bhejte hain; ye na ho to rating (aur staff ke
+    # points) chupchaap chhoot jaate.
+    "⭐ bahut achha": "good", "bahut achha": "good",
+    "🙂 theek tha": "mid", "theek tha": "mid",
 }
 
 

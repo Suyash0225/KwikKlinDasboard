@@ -172,3 +172,13 @@ def test_names_in_history_with_or_without_the_staff_prefix() -> None:
     assert _clean_actor("staff:Ravi Kumar") == "Ravi Kumar"
     assert _clean_actor("Ravi") == "Ravi"
     assert first_name("Ravi Kumar") == "Ravi" and first_name(None) == ""
+
+
+def test_every_rating_button_label_we_send_is_understood() -> None:
+    """DELIVERED par jo button bhejte hain, unka text bhi pehchana jaye."""
+    from app.routers.webhook import _match_rating
+
+    for label, kind in (("⭐ Bahut achha", "good"), ("🙂 Theek tha", "mid"), ("😞 Sudhar chahiye", "bad"),
+                        ("⭐ Excellent", "good"), ("🙂 It was okay", "mid"), ("😞 Needs work", "bad"),
+                        ("rate_good", "good")):
+        assert _match_rating(f"[button:{label}]") == kind, label
