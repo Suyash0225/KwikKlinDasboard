@@ -2065,6 +2065,9 @@ async def _price_draft(db: AsyncSession, extracted: dict) -> dict:
                 "service": service,
                 "garment": garment,
                 "qty": float(qty),
+                # kg ya piece — bina iske 2.5 kg ka bora staff ko "× 2 kapde"
+                # dikhta tha aur dhulai ki ginti par jhootha "kam hai" alert
+                "unit": (rate_row.unit if rate_row else None) or "pc",
                 "rate": float(rate) if rate is not None else None,
                 "amount": float(amount) if amount is not None else None,
                 # review-only fields, stripped before the order is written
@@ -2085,7 +2088,7 @@ async def _price_draft(db: AsyncSession, extracted: dict) -> dict:
 
 
 # Only these reach create_order — read_as/unsure/options are review aids.
-_ORDER_ITEM_KEYS = ("type", "service", "garment", "qty", "rate", "amount")
+_ORDER_ITEM_KEYS = ("type", "service", "garment", "qty", "unit", "rate", "amount")
 
 
 def _draft_blockers(draft: dict) -> bool:

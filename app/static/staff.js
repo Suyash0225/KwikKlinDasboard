@@ -64,9 +64,12 @@ function saveOutbox(mine) {
 }
 const isOffline = (e) => !navigator.onLine || (e instanceof TypeError);   // fetch network par TypeError deta hai
 /* Status ka kaam: signal ho to seedha, na ho to outbox. {queued:true} lautata hai. */
+// Aadmi ne khud kuch kiya aur screen taaza ki — iske turant baad aane wali
+// SSE goonj (wahi badlaav) par poora refresh dobara nahi
+let LOCAL_REFRESH = 0;
 async function sendOrQueue(path, body, label, number) {
   if (navigator.onLine) {
-    try { return await api(path, { method: "POST", body }); }
+    try { const r = await api(path, { method: "POST", body }); LOCAL_REFRESH = Date.now(); return r; }
     catch (e) { if (!isOffline(e)) throw e; }
   }
   const list = outbox();
@@ -150,6 +153,7 @@ const ACTIONS = {
   share: (n) => { closeModal(); shareBill(n); },
   thread: (c) => { closeModal(); openThread(c); },
   detail: (n) => { closeModal(); orderDetailModal(n); },
+  hold: (n) => { closeModal(); holdModal(n); },
   jobdone: (c) => { closeModal(); askDone(c); },
   decide: (c) => { closeModal(); decideCancel(c); },
   photo: (n) => { closeModal(); askPhoto(n); },
@@ -285,10 +289,10 @@ async function start() {
   $("whoRole").textContent = `${roleLabel(ME.role)} · ${ME.shop || ""}`;
   $("pwbanner").hidden = !ME.must_change_password;
   renderNav();
+  setTasksBadge((BOOT.tasks && BOOT.tasks.total) || 0);   // /boot mein pehle se — alag request nahi
   go("work");
   loadToday();
   loadBell();
-  countTasks();
   startLive();
   paintOutbox();
   flushOutbox();
@@ -362,7 +366,8 @@ $("btn-refresh").onclick = (e) => {
   const b = e.currentTarget;
   b.classList.add("turn"); setTimeout(() => b.classList.remove("turn"), 650);
   refreshCurrent({ quiet: false });
-  loadToday(); loadBell(); countTasks();
+  loadToday(); loadBell();
+  if (NAV !== "work" && NAV !== "tasks") countTasks();   // in dono par list khud badge bharti hai
 };
 $("pw-open").onclick = changePw;
 $("btn-bell").onclick = showBell;
@@ -571,6 +576,7 @@ const KIND = {
   Pickup:   { chip: "pickup",  spine: "pickup",  label: "Collect" },
   Delivery: { chip: "deliver", spine: "deliver", label: "Deliver" },
   Dhulai:   { chip: "wash",    spine: "wash",    label: "Washing" },
+  Hold:     { chip: "wash",    spine: "late",    label: "On hold" },
   Done:     { chip: "done",    spine: "",        label: "Done" },
 };
 const inDone = () => FILTER === "done";
@@ -690,6 +696,8 @@ async function loadWork(opts = {}) {
     return;
   }
   if (mine !== WORK_SEQ || NAV !== "work") return;
+  // /tasks?tab=mine ka total hi Tasks tab ka badge hai — alag request kyon
+  if (!inDone() && !opts.more) setTasksBadge(tasks.total || 0);
 
   // Ek order do jagah se aa sakta hai (uska stop bhi hai, uspar task bhi).
   // Stop zyada kaam ka hai (usme address, due, phone sab hai), isliye task
@@ -850,6 +858,11 @@ function primaryAction(w) {
   const t = w.tasks && w.tasks[0];
   const s = w.status;
   const pend = w.clothes && w.clothes.delivered > 0 ? w.clothes.pending : 0;
+  // Washerman ki list mein Ready order sirf roke hue kapdon ke liye aata hai
+  if (s && ["READY", "OUT_FOR_DELIVERY"].includes(s) && ["WASHER", "IRONER"].includes(ME.role)
+      && w.clothes && w.clothes.held) {
+    return { act: "release", label: `▶ Hold done (${w.clothes.held})` };
+  }
   if (s && ["READY", "OUT_FOR_DELIVERY"].includes(s) && DELIVERY_ROLES.includes(ME.role)) {
     return { act: "deliver", label: pend ? `Deliver rest (${pend})` : "Deliver" };
   }
@@ -904,6 +917,7 @@ function workRow(w) {
       </div>
       ${queued.length ? `<div class="sub mt-xs"><span class="tag deliver">⏳ ${esc(queued.join(", "))} — waiting for signal</span></div>` : ""}
       ${partial ? `<div class="sub mt-xs"><span class="tag late">${w.clothes.pending} pending</span>${w.clothes.delivered} of ${w.clothes.total} delivered</div>` : ""}
+      ${w.clothes && w.clothes.held ? `<div class="sub mt-xs"><span class="tag hold">⏸ ${w.clothes.held} on hold</span></div>` : ""}
       ${w.title && w.type === "task" ? `<div class="sub note">${esc(w.title)}</div>` : ""}
       ${ownerJobs(w).map((j) => `<div class="job">
         <span>📌 ${esc(j.title)}</span>
@@ -941,6 +955,8 @@ function runAction(act, num, d = {}) {
   if (act === "washing") return washStartModal(num);
   if (act === "advance" && STEP_ASK[d.to]) return confirmStep(num, "advance", STEP_ASK[d.to][0], STEP_ASK[d.to][1], { to: d.to });
   if (act === "ready") return confirmStep(num, "ready", "Clothes done and ready?", "Yes, ready");
+  if (act === "hold") return holdModal(num);
+  if (act === "release") return releaseModal(num);
 }
 
 function wireRows() {
@@ -980,29 +996,155 @@ function stageLine(t) {
   return head + (ms ? `<div class="od-block"><div class="od-head"><b>Progress</b></div>${ms}</div>` : "");
 }
 
+/* Notes ek ke neeche ek — pehle sab ek paragraph mein bah jaate the aur
+   photo ka rasta (/admin/media/…) text ki tarah dikhta tha. */
+function notesHtml(notes) {
+  return `<div class="od-notes">${String(notes).split("\n").filter((x) => x.trim()).map((ln) => {
+    const m = ln.match(/(\/admin\/media\/[\w.\-]+)/);
+    const text = esc(m ? ln.replace(m[1], "").replace(/\s{2,}/g, " ") : ln);
+    const cls = /damage|⚠️|mismatch|on hold|⏸/i.test(ln) ? " warn" : "";
+    return `<div class="od-note${cls}">${text}${m ? ` <a href="${esc(m[1])}" target="_blank" rel="noopener">📷 photo</a>` : ""}</div>`;
+  }).join("")}</div>`;
+}
+
+/* ─── kapda rokna: "ye abhi nahi hua" ─────────────────────────────────
+   Delivery ke partial jaisa — washerman kuch kapde rok kar baaki order
+   aage badhata hai. Roke hue delivery mein nahi jaate, owner ko khabar. */
+const HOLD_STAGES = ["RECEIVED", "PICKED_UP", "IN_WASH", "IN_DRY", "IN_IRON", "READY", "OUT_FOR_DELIVERY"];
+const HOLD_REASONS = ["Stain not gone", "Not dry yet", "Needs repair", "Ironing left", "Colour issue"];
+async function holdModal(number, o) {
+  if (!o) {
+    try { o = await api(`/orders/${encodeURIComponent(number)}`); }
+    catch (e) { toast(e.message, true); return; }
+  }
+  const slots = [];
+  (o.lines || []).forEach((l) => {
+    if (l.pieces) {
+      l.pieces.forEach((p) => { if (p.deliverable > 0) slots.push({ line: l.line, piece: p.piece, max: p.deliverable, name: p.type, group: `${l.name} · ${l.weight} kg` }); });
+    } else if (l.deliverable > 0) {
+      slots.push({ line: l.line, max: l.deliverable, name: l.name, sub: l.service !== l.name ? l.service : "", bag: !!l.bag, weight: l.weight });
+    }
+  });
+  if (!slots.length) { toast("No clothes left to hold on this bill", true); return; }
+  const pick = slots.map(() => 0);   // default: kuch nahi — jo roka wahi chuno
+  let lastGroup = "";
+  openModal(`<h3>⏸ Hold clothes — ${esc(o.number)}</h3>
+    <p class="said">Pick the clothes that are <b>not done</b>. The rest of the order can move on; these stay at the shop.</p>
+    <div class="dl-list">${slots.map((s, i) => {
+      const head = s.group && s.group !== lastGroup ? `<div class="dl-group">${esc(s.group)}</div>` : "";
+      lastGroup = s.group || "";
+      return head + (s.bag
+        ? `<label class="dl-row"><span class="dl-name">${esc(s.name)} <small>${esc(String(s.weight))} kg bag</small></span>
+             <input type="checkbox" data-hbag="${i}" aria-label="Hold the whole bag"></label>`
+        : `<div class="dl-row"><span class="dl-name">${esc(s.name)}${s.sub ? ` <small>${esc(s.sub)}</small>` : ""}</span>
+             <div class="stepper sm">
+               <button type="button" class="step" data-hl="${i}" data-by="-1" aria-label="One less">−</button>
+               <input type="number" inputmode="numeric" min="0" max="${s.max}" value="0" data-hlq="${i}" aria-label="How many">
+               <button type="button" class="step" data-hl="${i}" data-by="1" aria-label="One more">+</button>
+             </div>
+             <small class="dl-of">of ${s.max}</small></div>`);
+    }).join("")}</div>
+    <label for="h-why">Why?</label>
+    <div class="why-chips">${HOLD_REASONS.map((r) => `<button type="button" class="chip" data-why="${esc(r)}">${esc(r)}</button>`).join("")}</div>
+    <input id="h-why" type="text" maxlength="120" placeholder="e.g. stain not gone, button broken">
+    <p class="dl-sum" id="h-sum"></p>
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Cancel</button>
+      <button class="btn go" id="h-go" disabled>⏸ Hold</button>
+    </div>`);
+  const body = $("modal-body");
+  const paint = () => {
+    const n = pick.reduce((a, v) => a + v, 0);
+    const why = $("h-why").value.trim();
+    $("h-sum").innerHTML = n === 0 ? "Pick at least one cloth." : why.length < 2 ? "Write why (or tap a reason)." : `<b>${n}</b> will stay at the shop.`;
+    $("h-go").textContent = n ? `⏸ Hold ${n}` : "⏸ Hold";
+    $("h-go").disabled = n === 0 || why.length < 2;
+    slots.forEach((s, i) => {
+      const q = body.querySelector(`[data-hlq="${i}"]`);
+      if (q && document.activeElement !== q) q.value = String(pick[i]);
+    });
+  };
+  body.querySelectorAll("[data-hl]").forEach((b) => {
+    b.onclick = () => { const i = +b.dataset.hl; pick[i] = Math.max(0, Math.min(slots[i].max, pick[i] + parseInt(b.dataset.by, 10))); paint(); };
+  });
+  body.querySelectorAll("[data-hlq]").forEach((inp) => {
+    inp.oninput = () => { const i = +inp.dataset.hlq; pick[i] = Math.max(0, Math.min(slots[i].max, parseInt(inp.value, 10) || 0)); paint(); };
+  });
+  body.querySelectorAll("[data-hbag]").forEach((cb) => { cb.onchange = () => { pick[+cb.dataset.hbag] = cb.checked ? 1 : 0; paint(); }; });
+  body.querySelectorAll("[data-why]").forEach((b) => { b.onclick = () => { $("h-why").value = b.dataset.why; paint(); }; });
+  $("h-why").oninput = paint;
+  $("h-go").onclick = (e) => busy(e.currentTarget, async () => {
+    const picks = slots.map((s, i) => pick[i] > 0 ? { line: s.line, ...(s.piece !== undefined ? { piece: s.piece } : {}), qty: pick[i] } : null).filter(Boolean);
+    try {
+      await api(`/orders/${encodeURIComponent(o.number)}/hold`, { method: "POST", body: { picks, reason: $("h-why").value.trim() } });
+    } catch (err) { toast(err.message, true); return; }
+    LOCAL_REFRESH = Date.now();
+    closeModal();
+    toast(`${o.number} — ${picks.reduce((a, p) => a + p.qty, 0)} on hold. Owner told ⏸`);
+    refreshCurrent({ quiet: true }); loadToday();
+  });
+  paint();
+}
+async function releaseModal(number, o) {
+  if (!o) {
+    try { o = await api(`/orders/${encodeURIComponent(number)}`); }
+    catch (e) { toast(e.message, true); return; }
+  }
+  const held = (o.lines || []).flatMap((l) => l.pieces
+    ? l.pieces.filter((p) => p.held).map((p) => `${p.type} ×${p.held}`)
+    : l.held ? [`${l.name}${l.bag ? " (bag)" : ` ×${l.held}`}`] : []);
+  if (!held.length) { toast("Nothing is on hold", true); return; }
+  openModal(`<h3>▶ Hold done — ${esc(o.number)}</h3>
+    <p class="said">These clothes are finished now and go back for delivery:</p>
+    <div class="od-block">${held.map((h) => `<div class="od-sub"><span>${esc(h)}</span></div>`).join("")}</div>
+    <div class="btnrow">
+      <button class="btn ghost" data-act="close">Not now</button>
+      <button class="btn go" id="r-go">✅ Yes, done</button>
+    </div>`);
+  $("r-go").onclick = (e) => busy(e.currentTarget, async () => {
+    try { await api(`/orders/${encodeURIComponent(o.number)}/release`, { method: "POST", body: {} }); }
+    catch (err) { toast(err.message, true); return; }
+    LOCAL_REFRESH = Date.now();
+    closeModal(); toast(`${o.number} — held clothes done ✅`);
+    refreshCurrent({ quiet: true }); loadToday();
+  });
+}
+
 async function orderDetailModal(number) {
   let o;
   try { o = await api(`/orders/${encodeURIComponent(number)}`); }
   catch (e) { toast(e.message, true); return; }
   const w = WORK.find((x) => x.number === number) || { tasks: [], hasOrder: true };
   const main = primaryAction({ ...w, status: o.status, next: o.next, clothes: o.clothes });
-  const c = o.clothes || { total: 0, delivered: 0, pending: 0 };
-  const lineHtml = (o.lines || []).map((l) => {
-    const tag = (d, q) => d >= q ? `<span class="dl-tag ok">✓ delivered</span>`
-      : d > 0 ? `<span class="dl-tag part">${q - d} pending</span>` : "";
+  const c = o.clothes || { total: 0, delivered: 0, pending: 0, held: 0 };
+  const lines = o.lines || [];
+  const tag = (d, q, h) => (h ? `<span class="dl-tag hold">⏸ ${h} on hold</span>` : "")
+    + (d >= q ? `<span class="dl-tag ok">✓ delivered</span>`
+      : d > 0 ? `<span class="dl-tag part">${q - d} pending</span>` : "");
+  const svc = (l) => l.service && l.service !== l.name ? ` <small>${esc(l.service)}</small>` : "";
+  const why = (l) => l.held && l.hold_reason ? `<div class="od-why">⏸ ${esc(l.hold_reason)}</div>` : "";
+  const lineHtml = lines.map((l) => {
     if (l.pieces) {
-      return `<div class="od-line"><div class="od-top"><b>${esc(l.name)}</b><span>${esc(String(l.weight))} kg</span></div>
-        ${l.pieces.map((p) => `<div class="od-sub"><span>${esc(p.type)}</span><span>× ${p.qty} ${tag(p.delivered, p.qty)}</span></div>`).join("")}
+      // KG bora: service ka naam aur andar ke kapdon ki ginti bhi
+      return `<div class="od-line"><div class="od-top"><b>${esc(l.name)}${svc(l)}</b><span>${esc(String(l.weight))} kg · ${l.qty} pcs</span></div>
+        ${l.pieces.map((p) => `<div class="od-sub"><span>${esc(p.type)}</span><span>× ${p.qty} ${tag(p.delivered, p.qty, p.held)}</span></div>`).join("")}
+        ${why(l)}
       </div>`;
     }
-    return `<div class="od-line"><div class="od-top"><b>${esc(l.name)}${l.service && l.service !== l.name ? ` <small>${esc(l.service)}</small>` : ""}</b>
-      <span>${l.bag ? `${esc(String(l.weight))} kg` : `× ${l.qty}`} ${tag(l.delivered, l.qty)}</span></div></div>`;
+    return `<div class="od-line"><div class="od-top"><b>${esc(l.name)}${svc(l)}</b>
+      <span>${l.bag ? `${esc(String(l.weight))} kg bag` : `× ${l.qty}`} ${tag(l.delivered, l.qty, l.held)}</span></div>${why(l)}</div>`;
   }).join("") || `<p class="said">No items on this bill.</p>`;
+  // "5 total" jab 4 shirt + 1 bora ho — galat; kapde aur bore alag gino
+  const pcs = lines.filter((l) => !l.bag).reduce((a, l) => a + l.qty, 0);
+  const bags = lines.filter((l) => l.bag).length;
+  const totalTxt = [pcs ? `${pcs} pcs` : "", bags ? `${bags} bag${bags > 1 ? "s" : ""}` : ""].filter(Boolean).join(" + ") || "0";
+  const washer = WASH_ROLES.includes(ME.role);
+  const canHold = washer && HOLD_STAGES.includes(o.status) && lines.some((l) => l.deliverable > 0);
   openModal(`<h3>${o.urgent ? "🔴 " : ""}${esc(o.customer)}</h3>
     <p class="said">${esc(o.number)} · ${esc(STATUS_WORD[o.status] || o.status)}${o.delivery ? ` · delivery ${esc(whenParts(o.delivery).top)}` : ""}${o.urgent ? " · ⚡ URGENT" : ""}</p>
     ${stageLine(o.tracking)}
     <div class="od-block">
-      <div class="od-head"><b>Clothes</b><span>${c.total} total${c.delivered ? ` · ${c.delivered} delivered · <b class="late-t">${c.pending} pending</b>` : ""}</span></div>
+      <div class="od-head"><b>Clothes</b><span>${totalTxt}${c.delivered ? ` · ${c.delivered} delivered · <b class="late-t">${c.pending} pending</b>` : ""}${c.held ? ` · <b class="hold-t">${c.held} on hold</b>` : ""}</span></div>
       ${lineHtml}
     </div>
     ${ME.can_money && o.total !== undefined ? `<div class="od-block">
@@ -1011,7 +1153,11 @@ async function orderDetailModal(number) {
       <div class="kv"><span>Paid</span><b>${money(o.paid)}</b></div>
       <div class="kv"><span>Due</span><b class="${o.due > 0 ? "late-t" : ""}">${money(Math.max(0, o.due))}</b></div>
     </div>` : ""}
-    ${o.notes ? `<div class="od-block"><b>Notes</b><p class="note">${esc(o.notes)}</p></div>` : ""}
+    ${o.notes ? `<div class="od-block"><b>Notes</b>${notesHtml(o.notes)}</div>` : ""}
+    ${washer && (canHold || c.held) ? `<div class="btnrow">
+      ${canHold ? `<button class="btn ghost" data-od="hold">⏸ Hold clothes (not done)</button>` : ""}
+      ${c.held ? `<button class="btn ghost" data-od="release">▶ Hold done (${c.held})</button>` : ""}
+    </div>` : ""}
     <div class="btnrow">
       ${ME.can_contact ? `<button class="btn ghost" data-od="call">📞 Call</button>` : ""}
       ${main ? `<button class="btn go" data-od="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}${main.to ? ` data-to="${esc(main.to)}"` : ""}>${esc(main.label)}</button>` : ""}
@@ -1027,6 +1173,8 @@ async function orderDetailModal(number) {
       closeModal();
       if (b.dataset.od === "share") return shareBill(number);
       if (b.dataset.od === "message") return messageMenu(number, Number(o.due || 0));
+      if (b.dataset.od === "hold") return holdModal(number, o);
+      if (b.dataset.od === "release") return releaseModal(number, o);
       return runAction(b.dataset.od, number, b.dataset);
     };
   });
@@ -1092,17 +1240,22 @@ async function deliverModal(number) {
   const slots = [];
   (o.lines || []).forEach((l) => {
     if (l.pieces) {
-      l.pieces.forEach((p) => { if (p.pending > 0) slots.push({ line: l.line, piece: p.piece, max: p.pending, name: p.type, group: `${l.name} · ${l.weight} kg` }); });
-    } else if (l.pending > 0) {
-      slots.push({ line: l.line, max: l.pending, name: l.name, sub: l.service !== l.name ? l.service : "", bag: !!l.bag, weight: l.weight });
+      // Roke hue kapde (washerman ne "abhi nahi hua" kiya) dene ki list mein nahi
+      const max = (p) => (p.deliverable !== undefined ? p.deliverable : p.pending);
+      l.pieces.forEach((p) => { if (max(p) > 0) slots.push({ line: l.line, piece: p.piece, max: max(p), name: p.type, group: `${l.name} · ${l.weight} kg` }); });
+    } else if ((l.deliverable !== undefined ? l.deliverable : l.pending) > 0) {
+      const max = l.deliverable !== undefined ? l.deliverable : l.pending;
+      slots.push({ line: l.line, max, name: l.name, sub: l.service !== l.name ? l.service : "", bag: !!l.bag, weight: l.weight });
     }
   });
-  if (!slots.length) { toast("Nothing left to deliver on this bill", true); return; }
+  const heldN = (o.clothes && o.clothes.held) || 0;
+  if (!slots.length) { toast(heldN ? `Everything left (${heldN}) is on hold at the shop` : "Nothing left to deliver on this bill", true); return; }
   const pick = slots.map((s) => s.max);   // default: sab
   const totalPending = slots.reduce((a, s) => a + s.max, 0);
   let lastGroup = "";
   openModal(`<h3>Deliver — ${esc(o.number)}</h3>
     <p class="said">${esc(o.customer)} · ${totalPending} to deliver${o.clothes.delivered ? ` (${o.clothes.delivered} already delivered)` : ""}</p>
+    ${heldN ? `<p class="hold-note">⏸ ${heldN} on hold at the shop — they stay pending</p>` : ""}
     <div class="btnrow mt0">
       <button type="button" class="btn ghost sm" id="dl-all">Select all</button>
       <button type="button" class="btn ghost sm" id="dl-none">Clear</button>
@@ -1336,6 +1489,8 @@ function moreMenuFull(number) {
       ${t && ME.can_ask ? `<button class="btn ghost" data-act="thread" data-arg="${esc(t.code)}">❓ Ask the owner</button>` : ""}
       ${ME.can_money ? `<button class="btn ghost" data-act="share" data-arg="${esc(number)}">🧾 Send bill on WhatsApp</button>` : ""}
       ${ME.can_money && w.hasOrder ? `<button class="btn ghost" data-act="message" data-arg="${esc(number)}">💬 Send a message</button>` : ""}
+      ${w.hasOrder && WASH_ROLES.includes(ME.role) && HOLD_STAGES.includes(w.status)
+        ? `<button class="btn ghost" data-act="hold" data-arg="${esc(number)}">⏸ Hold clothes (not done)</button>` : ""}
       <button class="btn ghost" data-act="photo" data-arg="${esc(number)}">📷 Add a photo</button>
       ${w.hasOrder ? `<button class="btn ghost" data-act="damage" data-arg="${esc(number)}">⚠️ Mark damage / stain</button>` : ""}
       ${w.hasOrder && DELIVERY_ROLES.includes(ME.role) && ["PICKUP_ASSIGNED", "READY", "OUT_FOR_DELIVERY"].includes(w.status)
@@ -1360,7 +1515,9 @@ function askDone(code) {
     </div>`);
   $("m-ok").onclick = (e) => busy(e.currentTarget, async () => {
     await api(`/tasks/${encodeURIComponent(code)}/done`, { method: "POST", body: { note: $("m-note").value.trim() } });
-    closeModal(); toast(`${code} closed ✅`); refreshCurrent({ quiet: true }); loadToday(); countTasks();
+    LOCAL_REFRESH = Date.now();
+    closeModal(); toast(`${code} closed ✅`); refreshCurrent({ quiet: true }); loadToday();
+    if (NAV !== "work" && NAV !== "tasks") countTasks();
   });
 }
 
@@ -3075,17 +3232,34 @@ const SILENCE_MS = 60000;   // server har 20s par dhadkan bhejta hai
 const liveProven = () => LIVE_SEEN > 0 && Date.now() - LIVE_SEEN < SILENCE_MS;
 const liveSeen = () => { LIVE_SEEN = Date.now(); };
 
-function tick() {
+/* Pehle har tick 5 request bhejta tha (/route, /tasks, /today,
+   /notifications, /tasks?limit=1) — dukaan mein kahin bhi kuch hua to har
+   phone par. Ab ek /boot, wahi jo app khulte waqt aata hai, aur usi ke
+   tukde BOOT raste se list/hisaab/ghanti mein jaate hain. */
+let LAST_TICK = 0;
+const TICK_GAP_MS = 4000;
+async function tick() {
   if (document.hidden) return;
+  // Apne hi kaam ke baad screen abhi taaza hui hai — SSE ki goonj par dobara nahi
+  if (Date.now() - LOCAL_REFRESH < 3000) return;
+  LAST_TICK = Date.now();
+  try { BOOT = await api("/boot"); ME = BOOT.me; }
+  catch (e) { BOOT = null; }
+  if (BOOT && BOOT.tasks) setTasksBadge(BOOT.tasks.total || 0);
   // Pichhe se aaya refresh list ko "Loading…" se NAHI badalta —
   // jo card aadmi padh raha hai wo uske haath se nikal jaata tha.
   refreshCurrent({ quiet: true });
   loadToday();
   loadBell();
-  countTasks();
+  if (BOOT) BOOT.route = BOOT.tasks = null;   // dusre tab par bacha hissa purana na pade
   if (!LIVE) startLive();     // stream toot gayi thi to dobara jodo
 }
-function soon() { clearTimeout(LIVE_TIMER); LIVE_TIMER = setTimeout(tick, 400); }
+function soon() {
+  clearTimeout(LIVE_TIMER);
+  // 400ms ka jod (ek saath aaye events ek baar) + do tick ke beech kam se kam 4s
+  const wait = Math.max(400, TICK_GAP_MS - (Date.now() - LAST_TICK));
+  LIVE_TIMER = setTimeout(tick, wait);
+}
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden) soon(); });
 
