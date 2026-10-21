@@ -32,6 +32,16 @@ class ShopIdentity:
         return f" in {self.city}" if self.city else ""
 
 
+# tenant_id -> dukaan ka naam, jo current() ne pichhli baar DB se padha.
+# get_message (sync) isi se {shop} bharta hai — warna har dukaan ke grahak
+# ko settings.SHOP_NAME (ek hi platform naam) jaata tha.
+_NAMES: dict = {}
+
+
+def cached_name(tenant_id) -> str | None:
+    return _NAMES.get(tenant_id) if tenant_id is not None else None
+
+
 def _fallback() -> ShopIdentity:
     return ShopIdentity(name=(settings.SHOP_NAME or "").strip() or "Laundry", city="")
 
@@ -51,6 +61,7 @@ async def current(db: AsyncSession, tenant_id=None) -> ShopIdentity:
         return _fallback()
     if tenant is None or not (tenant.shop_name or "").strip():
         return _fallback()
+    _NAMES[tid] = tenant.shop_name.strip()
     return ShopIdentity(
         name=tenant.shop_name.strip(), city=(tenant.city or "").strip()
     )

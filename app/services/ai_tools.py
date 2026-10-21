@@ -47,15 +47,29 @@ async def get_customer_orders(
     """Return this customer's orders from the last 3 months with canonical facts."""
     limit = max(1, min(int(limit), 20))
     cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    from sqlalchemy import and_ as _and, or_ as _or
+
+    from app.services.order_service import ACTIVE_STATUSES
+
     rows = list(
         (
             await db.execute(
                 select(Order)
                 .where(
                     Order.customer_id == customer.id,
-                    Order.created_at >= cutoff,
+                    # 90 din se purana chalta order ya bakaaya bill bhi — warna
+                    # AI "koi order nahi" / "koi baaki nahi" kehta tha
+                    _or(
+                        Order.created_at >= cutoff,
+                        Order.status.in_(ACTIVE_STATUSES),
+                        _and(
+                            Order.status != OrderStatus.CANCELLED,
+                            Order.total_amount.isnot(None),
+                            Order.total_amount > Order.amount_paid,
+                        ),
+                    ),
                 )
-                .order_by(Order.created_at.desc())
+                .order_by(Order.status.in_(ACTIVE_STATUSES).desc(), Order.created_at.desc())
                 .limit(limit)
             )
         ).scalars().all()

@@ -326,9 +326,10 @@ async def _thread_turns(
     for direction, raw_text in ordered:
         txt = (raw_text or "").strip()
         if txt.startswith("["):
-            # A voice note's transcript is what the customer said; other
-            # markers (photos, button taps) carry no words.
-            txt = _voice_transcript(txt) or ""
+            # A voice note's transcript is what the customer said; a photo's
+            # description / shared location is what they showed. Button taps
+            # carry no words.
+            txt = _voice_transcript(txt) or _media_text(txt) or ""
         if not txt:
             continue
         role = "model" if direction == Direction.OUTBOUND else "user"
@@ -772,7 +773,7 @@ _COMPOSE_SYSTEM = (
     "customer: order kab milega   [FACTS: <order no.> In Iron, expected <date>]\n"
     "reply: Aapka order <order no.> iron par hai, <date> tak mil jayega 👍 <<SIGNOFF>>\n"
     "customer: 5 shirt 2 pant kal utha lo   [name+address saved]\n"
-    "reply: Done! 5 shirt, 2 pant — kal uthwa lenge. Confirm kar dein? <<SIGNOFF>>\n"
+    "reply: 5 shirt, 2 pant, kal pickup — main summary bhej raha hoon, confirm kar dijiye. <<SIGNOFF>>\n"
     "   (intake: ready=true, pickup_date=<kal ki ISO date>)\n"
     "customer: मेरे कपड़े कब आएंगे\n"
     "reply: आपका ऑर्डर <order no.> प्रेस हो रहा है, <date> तक मिल जाएगा 👍 <<SIGNOFF>>\n"
@@ -786,6 +787,37 @@ def _voice_transcript(text: str) -> str | None:
     """The words out of a voice note, if we managed to hear them."""
     m = _VOICE_RE.match(text or "")
     return m.group(1).strip() if m else None
+
+
+_MEDIA_RE = re.compile(r"^\[(image|location|contact)(?::([^\]]*))?\]\s*(.*)$", re.S)
+
+
+def _media_text(text: str) -> str | None:
+    """Photo/location/contact mein jo padha gaya, wo AI ko baat ki tarah.
+
+    Pehle photo ka vision description (ek paid call) aur caption ("iska
+    rate?") phenk kar sirf "Got your photo" jaata tha, aur location ka pata
+    history se bhi gayab — AI phir se address poochta tha.
+    """
+    m = _MEDIA_RE.match(text or "")
+    if not m:
+        return None
+    kind, ref, rest = m.group(1), (m.group(2) or "").strip(), m.group(3).strip()
+    if kind == "image":
+        return f"(Customer sent a photo) {rest}" if rest else None
+    if kind == "location":
+        pin = f" https://maps.google.com/?q={ref}" if ref and "," in ref else ""
+        return f"(Customer shared their location) {rest}{pin}".strip()
+    return f"(Customer shared a contact) {rest}" if rest else None
+
+
+def _location_address(text: str) -> str | None:
+    m = _MEDIA_RE.match(text or "")
+    if not m or m.group(1) != "location":
+        return None
+    ref, rest = (m.group(2) or "").strip(), m.group(3).strip()
+    pin = f" (pin {ref})" if ref and "," in ref else ""
+    return (f"{rest}{pin}".strip() or None) if (rest or pin) else None
 
 
 def _media_ack(marker: str) -> str | None:
@@ -832,7 +864,7 @@ def _needs_new_customer_onboarding(
 
 async def build_ai_reply(
     db: AsyncSession, customer: Customer, text: str, *, sandbox: bool = False,
-    conversation_id=None,
+    conversation_id=None, preclassified: bool = False,
 ) -> str | None:
     """Return a reply for a customer message, or None to use rule-based flow.
 
@@ -868,8 +900,15 @@ async def build_ai_reply(
     # pending summary wala hissa use sambhalta hai
     if text.startswith("[") and not _PICKUP_BUTTON_RE.match(text):
         # A transcribed voice note IS the customer's message — answer it
-        # like typed text instead of just confirming the file arrived.
-        said = _voice_transcript(text)
+        # like typed text instead of just confirming the file arrived. Same
+        # for what we read from a photo, a shared location or contact.
+        loc = _location_address(text)
+        if loc and not (customer.address or "").strip():
+            # Pickup ke liye pata — agla sawaal "address kya hai?" na ho
+            customer.address = loc[:500]
+            db.add(customer)
+            await db.commit()
+        said = _voice_transcript(text) or _media_text(text)
         if said:
             text = said
         else:
@@ -902,7 +941,19 @@ async def build_ai_reply(
 
         # Greetings cannot be business/vendor spam. Skipping the classifier
         # saves one LLM round-trip and makes WhatsApp greetings responsive.
-        if not _is_simple_greeting(text) and await should_suppress_inbound(text):
+        # preclassified: webhook ne isi message ko abhi classify kiya hai —
+        # dobara wahi LLM call faltu thi. Pending pickup ka Haan/Nahi bhi
+        # spam nahi ho sakta.
+        if (
+            not preclassified
+            and not _is_simple_greeting(text)
+            and not (_pending_intake(customer) and (
+                _PICKUP_BUTTON_RE.match(text or "")
+                or _is_explicit_order_confirmation(text)
+                or _is_explicit_order_cancellation(text)
+            ))
+            and await should_suppress_inbound(text)
+        ):
             return None
 
     # Plain greetings are deterministic: do not spend a model call merely to
@@ -1030,7 +1081,10 @@ async def build_ai_reply(
         try:
             grounded = await _price_reply_is_grounded(
                 db, customer, f"{recent_user} {text}", out.get("reply") or "",
-                facts=ctx[0] if isinstance(ctx[0], str) else "",
+                # Owner ke knowledge notes (VERBATIM jawab bhi) ke rate bhi sahi
+                # source hain — pehle unhe "verify nahi" maan kar badal diya
+                # jaata tha aur owner ko faltu escalation jaata
+                facts=" ".join(x for x in ctx[:2] if isinstance(x, str)),
             )
         except Exception:
             log.exception("ai_price_grounding_failed")
@@ -1141,6 +1195,16 @@ async def build_ai_reply(
             args={"reason": reason, "text": text[:200]}, result="open question created",
         )
         return out.get("reply") or get_message("escalated_ack", lang)
+
+    # Naam/pata profile mein pehle se ho to wahi — prompt model ko dobara
+    # na poochhne ko kehta hai, phir wo intake mein khaali chhod deta tha aur
+    # booking "ready" hi nahi hoti thi (model ka apna "Done!" chala jaata)
+    if intake.get("ready"):
+        intake = {
+            **intake,
+            "name": (intake.get("name") or "").strip() or (customer.name or "").strip(),
+            "address": (intake.get("address") or "").strip() or (customer.address or "").strip(),
+        }
 
     # Validate dates, but keep the customer's original date wording in the
     # confirmation summary so an existing prompt can be matched exactly.
@@ -1318,6 +1382,8 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
     except Exception:
         log.exception("pickup_order_fyi_failed", order=order.order_number)
     try:
+        from app.services import app_settings
+
         sla = await app_settings.get(db, "turnaround_days")
     except Exception:
         sla = 2
@@ -1456,7 +1522,9 @@ async def _build_facts(
     lines: list[str] = []
     # Baseline grounding on every turn: rate card + recent orders. Other
     # customer-safe reads are selected by the router as needed.
-    selected: dict[str, int] = {"get_shop_rate_card": 20, "get_customer_orders": 3}
+    # Orders 6 tak (chalte order pehle aate hain — ai_tools) — 3 par kisi
+    # grahak ka purana chalta order kat jaata tha
+    selected: dict[str, int] = {"get_shop_rate_card": 20, "get_customer_orders": 6}
     extra = (
         {name: 20 for name in CUSTOMER_READ_TOOLS} if tool_names is None else tool_names
     )

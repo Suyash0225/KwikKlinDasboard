@@ -479,7 +479,7 @@ async def update_status(
     _announce(order, "status", by=changed_by)
     from app.services import ops_agent
 
-    await ops_agent.on_status_change(db, order, new_status, changed_by)
+    await ops_agent.on_status_change(db, order, new_status, changed_by, old_status=old_status)
 
     # Referral conversion rewards are triggered only by a completed delivery.
     # This hook is best-effort and never rolls back the committed order status.
@@ -660,7 +660,7 @@ async def add_billing_adjustment(
             await db.execute(
                 select(Order)
                 .where(Order.order_number == order_number.upper())
-                .with_for_update()
+                .with_for_update().execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if order is None:
@@ -699,7 +699,7 @@ async def remove_billing_adjustment(
             await db.execute(
                 select(Order)
                 .where(Order.order_number == order_number.upper())
-                .with_for_update()
+                .with_for_update().execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if order is None:
@@ -753,6 +753,14 @@ async def record_payment(
     """
     if amount <= 0:
         raise OrderError("payment amount must be positive")
+    # Row lock + taaza padhai: do saath aaye payment (staff collect + online
+    # webhook, ya dohra tap) dono purana amount_paid padh kar ek-doosre ko
+    # mita dete the. populate_existing zaroori — session mein pehle se load
+    # order ka purana value warna lock ke baad bhi wahi rehta.
+    await db.execute(
+        select(Order).where(Order.id == order.id).with_for_update()
+        .execution_options(populate_existing=True)
+    )
     # Overpayment is ALLOWED — customers round up or pay advance for the next
     # order (owner's rule, 04 Aug). Log it so a genuine typo is still visible.
     if order.total_amount is not None:
@@ -934,6 +942,10 @@ async def _notify_customer(
     # 500 deta, jabki paisa commit ho chuka hota (staff dobara dabata).
     number = order.order_number
     try:
+        # {shop} mein is dukaan ka naam aaye (shop_identity cache garam karo)
+        from app.services import shop_identity
+
+        await shop_identity.current(db, getattr(order, "tenant_id", None))
         customer = await db.get(Customer, order.customer_id)
         if customer is None or customer.opted_out or not customer.is_active:
             log.info(

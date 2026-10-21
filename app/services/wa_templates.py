@@ -199,48 +199,4 @@ def _status_vs_spec(remote_t: dict | None, spec: dict, state: str) -> str:
     return remote_t.get("status") or "UNKNOWN"
 
 
-async def standard_status(creds: Creds | None) -> dict:
-    """App ke apne templates (STANDARD_SPECS) + is dukaan ke WABA par unka haal."""
-    from app.services.templates import STANDARD_SPECS
 
-    remote: dict[str, dict] = {}
-    state = "not_connected"
-    if creds is not None:
-        try:
-            remote = {t["name"]: t for t in await list_remote(creds)}
-            state = "ok"
-        except (TemplateError, httpx.HTTPError):
-            state = "error"
-    return {
-        "state": state,
-        "templates": [
-            {
-                "name": name, "purpose": spec["purpose"], "body": spec["body"],
-                "buttons": [b["text"] for b in spec.get("buttons", [])],
-                "status": _status_vs_spec(remote.get(name), spec, state),
-                "rejected_reason": (remote.get(name) or {}).get("rejected_reason"),
-            }
-            for name, spec in STANDARD_SPECS.items()
-        ],
-    }
-
-
-async def submit_standard(creds: Creds | None) -> list[dict]:
-    """Jo standard template is dukaan ke WABA par nahi hai, sab approval ko bhejo."""
-    from app.services.templates import STANDARD_SPECS
-
-    existing = {t["name"] for t in await list_remote(creds)}
-    results = []
-    for name, spec in STANDARD_SPECS.items():
-        if name in existing:
-            results.append({"name": name, "status": "ALREADY_ON_META"})
-            continue
-        try:
-            out = await create(
-                creds, name=name, category="UTILITY", body=spec["body"],
-                samples=spec["samples"], buttons=spec.get("buttons"),
-            )
-            results.append(out)
-        except TemplateError as exc:
-            results.append({"name": name, "status": "FAILED", "error": exc.detail})
-    return results

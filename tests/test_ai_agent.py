@@ -573,7 +573,7 @@ async def test_webhook_prefers_ai_reply(client, sent, monkeypatch) -> None:
     import app.routers.webhook as webhook_module
     from tests.conftest import meta_payload, sign_body
 
-    async def fake_ai(db, customer, text, *, conversation_id=None):
+    async def fake_ai(db, customer, text, *, conversation_id=None, **_kw):
         return "AI ka jawaab 🤖"
 
     monkeypatch.setattr(webhook_module, "build_ai_reply", fake_ai)
@@ -594,7 +594,7 @@ async def test_webhook_prefers_ai_reply(client, sent, monkeypatch) -> None:
     assert sent and sent[-1]["text"] == "AI ka jawaab 🤖"
 
     # AI unavailable -> old rule-based ack, never silence
-    async def fake_ai_none(db, customer, text, *, conversation_id=None):
+    async def fake_ai_none(db, customer, text, *, conversation_id=None, **_kw):
         return None
 
     monkeypatch.setattr(webhook_module, "build_ai_reply", fake_ai_none)

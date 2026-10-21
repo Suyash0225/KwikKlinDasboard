@@ -122,7 +122,7 @@ async def handle_payment_link_paid(event: dict) -> dict:
             # balance mismatch after the first one commits.
             order = (
                 await db.execute(
-                    select(Order).where(Order.id == order_id, Order.tenant_id == tenant_id).with_for_update()
+                    select(Order).where(Order.id == order_id, Order.tenant_id == tenant_id).with_for_update().execution_options(populate_existing=True)
                 )
             ).scalar_one_or_none()
             if order is None:

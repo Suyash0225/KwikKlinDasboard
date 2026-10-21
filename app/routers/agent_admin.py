@@ -10,12 +10,14 @@ import time as _time
 import uuid as uuid_module
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import structlog
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -39,7 +41,7 @@ from app.models import (
 from app.routers.orders import require_admin_owner, require_feature
 from app.services import app_settings, audit, wa_templates
 from app.services.marketing import (
-    _campaign_eligibility,
+    _campaign_verdicts,
     campaign_stats,
     compute_segments,
     queue_campaign,
@@ -465,8 +467,10 @@ async def preview_campaign(body: CampaignIn, db: AsyncSession = Depends(get_db))
         segs=await compute_segments(db); targets=segs.get(segment,[])
     allow_active=segment in ("selected","all_active") or body.campaign_type=="wish"
     recipients=[]; skipped={}; skipped_recipients=[]
+    # Ek baar sabke liye (pehle har grahak par ~5 query — 1,000 grahak = 5,000)
+    verdicts=await _campaign_verdicts(db,[row["id"] for row in targets],temp,allow_active_orders=allow_active)
     for row in targets:
-        ok,reason=await _campaign_eligibility(db,row["id"],temp,allow_active_orders=allow_active)
+        ok,reason=verdicts.get(row["id"],(False,"not_eligible"))
         item={"customer_id":str(row["id"]),"name":row.get("name") or "Customer","phone":row.get("phone") or "","last_order_date":row.get("last_order_at").isoformat() if row.get("last_order_at") else None,"reason":reason}
         if ok: recipients.append(item)
         else:
@@ -1844,6 +1848,25 @@ async def list_tasks(
         for m in msgs:
             threads.setdefault(m.task_id, []).append(m)
 
+    # Staff/order/customer teen bulk query mein session mein — neeche ke
+    # db.get() phir identity map se aate hain (pehle 200 task = ~600 query).
+    # Identity map weak hai — list mein pakad kar rakho, warna phir query.
+    _keep: list = []
+    if rows:
+        sids = {t.assigned_staff_id for t in rows if t.assigned_staff_id}
+        oids = {t.order_id for t in rows if t.order_id}
+        if sids:
+            _keep += (await db.execute(select(_S).where(_S.id.in_(sids)))).scalars().all()
+        orders_loaded = (
+            (await db.execute(select(_O).where(_O.id.in_(oids)))).scalars().all() if oids else []
+        )
+        _keep += orders_loaded
+        cids = {t.customer_id for t in rows if t.customer_id} | {
+            o.customer_id for o in orders_loaded if o.customer_id
+        }
+        if cids:
+            _keep += (await db.execute(select(Customer).where(Customer.id.in_(cids)))).scalars().all()
+
     now = datetime.now(timezone.utc)
     out = []
     for t in rows:
@@ -1939,8 +1962,8 @@ async def create_task_api(body: TaskIn, db: AsyncSession = Depends(get_db)) -> d
     if existing is not None:
         previous_staff_id = existing.assigned_staff_id
         existing.title = body.title.strip()
-        if staff is not None:
-            existing.assigned_staff_id = staff.id
+        if staff is not None and staff.id != previous_staff_id:
+            await task_service.apply_reassignment(db, existing, staff)
         if body.due_at is not None:
             existing.due_at = body.due_at
         existing.urgent = existing.urgent or body.urgent
@@ -2033,12 +2056,24 @@ async def edit_task_api(code: str, body: TaskEditIn, db: AsyncSession = Depends(
             customer.phone = phone
 
     task.title = body.title.strip()
-    task.assigned_staff_id = staff.id if staff else None
+    # Staff na chuna ho to purana assignment rehne do — inactive assignee
+    # dropdown mein dikhta hi nahi, aur save karte hi kaam chupchaap
+    # kisi ke naam nahi rehta tha
+    if staff is not None and staff.id != previous_staff_id:
+        await task_service.apply_reassignment(db, task, staff)
     task.kind = body.kind
     task.due_at = body.due_at
     task.urgent = body.priority == "urgent"
     db.add(task)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Us order par is kind ka khula kaam pehle se hai (ek hi ho sakta hai)
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"This order already has an open {body.kind} task — edit that one instead",
+        )
     await db.refresh(task)
 
     if previous_staff_id != task.assigned_staff_id:
@@ -2818,8 +2853,7 @@ async def assign_task_api(
     if previous_staff_id == staff.id:
         return {"ok": True, "code": task.code, "assigned_staff_id": str(staff.id), "unchanged": True}
 
-    task.assigned_staff_id = staff.id
-    db.add(task)
+    await task_service.apply_reassignment(db, task, staff)
     await db.commit()
     await db.refresh(task)
 

@@ -264,6 +264,32 @@ async def create_task(
     return task
 
 
+async def apply_reassignment(db: AsyncSession, task: Task, staff: Staff) -> None:
+    """Kaam naye aadmi ko — purane reminder hisaab ke saath nahi.
+
+    Pehle ping_count/escalated_at wahi rehte the (naye aadmi ko us din
+    reminder hi nahi jaata), aur order ka assigned_* purane aadmi par rehta
+    — agla stage (jaise READY par delivery) phir usi ke paas chala jaata.
+    Commit caller karta hai.
+    """
+    task.assigned_staff_id = staff.id
+    task.ping_count = 0
+    task.escalated_at = None
+    db.add(task)
+    if task.order_id is None:
+        return
+    order = await db.get(Order, task.order_id)
+    if order is None:
+        return
+    from app.models import StaffRole
+
+    if task.kind in ("pickup", "delivery") and staff.role is StaffRole.DELIVERY:
+        order.assigned_delivery_id = staff.id
+    elif task.kind in ("wash", "dry") and staff.role is not StaffRole.IRONER:
+        order.assigned_washer_id = staff.id
+    db.add(order)
+
+
 async def send_task_to(db: AsyncSession, task: Task, staff: Staff) -> bool:
     """Naye aadmi ko kaam bhejo (reassign ke baad)."""
     sent = await _send_to_assignee(db, task, staff, first=True)
@@ -622,34 +648,6 @@ async def _staff_open_task_filter(db: AsyncSession, staff_id):
         return Task.id.is_not(None)
     return Task.assigned_staff_id == staff_id
 
-async def open_pickup_awaiting_eta(db: AsyncSession, staff_id) -> Task | None:
-    """Newest shared delivery-team pickup/delivery awaiting an ETA."""
-    cond = await _staff_open_task_filter(db, staff_id)
-    if cond is None:
-        return None
-    return (
-        await db.execute(
-            select(Task)
-            .where(cond, Task.status == TASK_OPEN, Task.kind.in_(JOB_KINDS), Task.eta_text.is_(None))
-            .order_by(Task.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
-
-async def open_pickup_awaiting_confirm(db: AsyncSession, staff_id) -> Task | None:
-    """Newest shared delivery-team pickup/delivery still open."""
-    cond = await _staff_open_task_filter(db, staff_id)
-    if cond is None:
-        return None
-    return (
-        await db.execute(
-            select(Task)
-            .where(cond, Task.status == TASK_OPEN, Task.kind.in_(JOB_KINDS))
-            .order_by(Task.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
 
 
 async def record_pickup_eta(db: AsyncSession, task: Task, eta_text: str) -> str:
@@ -857,7 +855,7 @@ async def complete_task(
     """Complete once, with a row lock so simultaneous taps have one winner."""
     locked = (
         await db.execute(
-            select(Task).where(Task.id == task.id).with_for_update()
+            select(Task).where(Task.id == task.id).with_for_update().execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if locked is None:

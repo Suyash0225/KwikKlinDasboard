@@ -58,7 +58,7 @@ async def _reserve_promotional_slot(db: AsyncSession, tenant_id, now: datetime) 
         await db.execute(
             select(OutboundThrottle)
             .where(OutboundThrottle.tenant_id == tenant_id)
-            .with_for_update()
+            .with_for_update().execution_options(populate_existing=True)
         )
     ).scalar_one()
     if row.daily_date != today:
