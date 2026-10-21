@@ -925,6 +925,29 @@ async def test_non_lead_inbound_does_not_create_sales_lead(client, sent, monkeyp
 
 
 
+
+async def test_customer_voice_transcription_accepts_customer_purpose(tmp_path, monkeypatch) -> None:
+    """Customer voice notes must reach the transcriber, not fail on a bad kwarg."""
+    from app.routers import webhook
+    from app.services import llm_client
+
+    audio = tmp_path / "customer.ogg"
+    audio.write_bytes(b"fake-audio")
+    calls = []
+
+    async def fake_transcribe(audio_bytes, mime_type, *, purpose="voice"):
+        calls.append((audio_bytes, mime_type, purpose))
+        return "black kapde kal ready honge"
+
+    monkeypatch.setattr(llm_client, "transcribe_audio", fake_transcribe)
+    result = await webhook._transcribe(
+        audio, {"mime_type": "audio/ogg"}, purpose="customer_voice"
+    )
+
+    assert result == "black kapde kal ready honge"
+    assert calls == [(b"fake-audio", "audio/ogg", "customer_voice")]
+
+
 async def test_waha_webhook_fails_closed_when_home_tenant_is_unavailable(
     client, monkeypatch
 ) -> None:
