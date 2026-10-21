@@ -1020,7 +1020,7 @@ async def test_pickup_confirmation_matches_standard_ai_footer() -> None:
         "address Kaushlesh Nagar, Naria. Kya main ye pickup order confirm kar doon? "
         "Reply 'haan' to confirm or 'nahi' to cancel. — Kwik Klin AI"
     )
-    footer = "\\n\\nThank you – Kwik Klin AI\\nAI hai — chhoti-moti galti mumkin hai"
+    footer = "\n\nThank you – Kwik Klin AI\nAI hai — chhoti-moti galti mumkin hai"
     async with async_session_factory() as db:
         db.add(Conversation(
             customer_id=cust.id,
