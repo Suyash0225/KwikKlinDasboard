@@ -21,7 +21,8 @@ from fastapi import (
     UploadFile,
 )
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy import text as sqltext
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -210,7 +211,8 @@ async def me(
         "show_route": bool(await app_settings.get(db, "staff_show_route")),
         # ⚡ Urgent ka default charge/din — panel preview dikhaye, server phir
         # bhi khud hisaab lagata hai
-        "urgent": await urgent_svc.config(db),
+        # (sirf bill banane walon ko — washerman ke liye teen faltu query thi)
+        "urgent": await urgent_svc.config(db) if can_bill(p) else None,
         # "Ask" sawaal owner ke WhatsApp par bhejta hai — API juda na ho to
         # sawaal kahin nahi pahunchta, isliye button hi nahi
         "can_ask": shop_can_send(p.tenant),
@@ -458,7 +460,8 @@ async def my_tasks(
     pre = await _prefetch(db, rows, p)
     cards = [_task_card(t, p, pre) for t in rows]
     counts = {
-        "mine": (
+        # tab=mine par wahi query upar `total` ban chuki hai — dobara mat chalao
+        "mine": total if tab == "mine" else (
             await db.execute(
                 select(func.count()).select_from(_tasks_query(p, "mine").subquery())
             )
@@ -1034,6 +1037,77 @@ async def order_ironing(
         return await delivery.ironing(db, order, by=p.staff.name)
     except delivery.DeliveryError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+class HoldPick(BaseModel):
+    line: int = Field(ge=0)
+    piece: int | None = Field(default=None, ge=0)
+    qty: int = Field(ge=1, le=10000)
+
+
+class HoldIn(BaseModel):
+    picks: list[HoldPick] = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=2, max_length=120)
+
+
+class ReleaseIn(BaseModel):
+    # None = saare roke hue kapde
+    picks: list[HoldPick] | None = None
+
+
+def _notify_hold(p: StaffPrincipal, msg: str) -> None:
+    from app.services import background, team
+
+    _from = p.staff.phone
+    background.run_after(
+        lambda bg: team.notify_admins(bg, msg, skip_phone=_from),
+        tenant_id=p.staff.tenant_id, label="clothes_hold_notify",
+    )
+
+
+@router.post("/orders/{number}/hold")
+async def order_hold(
+    number: str,
+    body: HoldIn,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Washerman: "ye kapde abhi nahi hue" — baaki order aage badh sakta hai.
+
+    Roke hue kapde delivery mein nahi jaate; order tab tak DELIVERED nahi
+    hota jab tak wo bhi na pahunchein (partial delivery jaisa). Owner ko
+    turant khabar.
+    """
+    _role_or_403(p, _WASH_ROLES, "Holding clothes")
+    order = await _my_order(db, p, number)
+    try:
+        out = await delivery.hold(
+            db, order, [x.model_dump() for x in body.picks], reason=body.reason, by=p.staff.name,
+        )
+    except delivery.DeliveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    _notify_hold(p, f"⏸ {p.staff.name}: {order.order_number} — on hold: {', '.join(out['held'])} ({body.reason.strip()})")
+    return out
+
+
+@router.post("/orders/{number}/release")
+async def order_release(
+    number: str,
+    body: ReleaseIn | None = None,
+    p: StaffPrincipal = Depends(current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Roka hua kaam ho gaya — kapde delivery ke liye taiyaar."""
+    _role_or_403(p, _WASH_ROLES, "Holding clothes")
+    order = await _my_order(db, p, number)
+    picks = [x.model_dump() for x in body.picks] if body and body.picks else None
+    try:
+        out = await delivery.release(db, order, picks, by=p.staff.name)
+    except delivery.DeliveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if order.status in (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY):
+        _notify_hold(p, f"▶ {p.staff.name}: {order.order_number} — held clothes done, ready to deliver: {', '.join(out['released'])}")
+    return out
 
 
 class AdvanceIn(BaseModel):
@@ -2134,7 +2208,11 @@ async def _my_order(db: AsyncSession, p: StaffPrincipal, number: str) -> Order:
         raise HTTPException(status_code=404, detail=f"{number} not found")
     if p.is_manager:
         return order
-    if p.staff.role in _WASH_FLOOR_ROLES and order.status in _WASH_STAGES:
+    if p.staff.role in _WASH_FLOOR_ROLES and (
+        order.status in _WASH_STAGES
+        # Ready ho chuka par kuch kapde roke hue — unka kaam abhi dhulai ka hai
+        or (order.status in (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY) and delivery.has_held(order))
+    ):
         # Wahi saanjhi kataar jo /route dikhata hai — dikhe to khule bhi
         return order
     mine = (
@@ -2935,8 +3013,19 @@ async def _route_query(db: AsyncSession, p: StaffPrincipal, tab: str = "todo"):
         if is_delivery:
             q = q.where(Order.status.in_(road_stages))
         else:
-            q = q.where(Order.status.in_(wash_stages))
+            # Ready ho chuke order jinke kuch kapde washerman ne roke hain —
+            # unka bacha kaam abhi dhulai wale ka hai, list se gayab na ho
+            q = q.where(or_(
+                Order.status.in_(wash_stages),
+                and_(Order.status.in_((OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)), _HELD_SQL),
+            ))
     return q, is_delivery
+
+
+# items JSONB mein koi roka hua kapda (line, KG bora, ya bore ke andar)
+_HELD_SQL = sqltext(
+    "orders.items @? '$[*] ? (@.held > 0 || @.held_all == true || exists(@.pieces[*] ? (@.held > 0)))'"
+)
 
 
 @router.get("/route")
@@ -2986,6 +3075,11 @@ async def my_route(
         kind = (
             "Done" if tab == "done"
             else "Pickup" if o.status is OrderStatus.PICKUP_ASSIGNED
+            # Washerman ki list mein Ready order sirf roke hue kapdon ki wajah se
+            else "Hold" if (
+                o.status in (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)
+                and p.staff.role in _WASH_FLOOR_ROLES
+            )
             else "Delivery" if o.status in (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)
             else "Dhulai"
         )

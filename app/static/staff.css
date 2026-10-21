@@ -734,3 +734,24 @@ h3.mt-lg { margin-top: 20px; }
 .paysum b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .paysum b.ok { color: #047857; }
 .paysum b.due { color: var(--late); }
+
+/* ─── Full details: saaf kapde, notes, hold ─────────────────────────── */
+/* Pehli line par border — .od-head ke baad wali line hi pehli hai */
+.od-head + .od-line { border-top: 0; }
+/* Lamba naam "× 12 ✓ delivered" ko dabaye nahi, lipat jaaye */
+.od-top b, .od-sub > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.od-top > span:last-child, .od-sub > span:last-child { flex: 0 0 auto; text-align: right; }
+.od-why { margin-top: 4px; font-size: 13px; color: #92400e; }
+.dl-tag.hold, .tag.hold { background: #fffbeb; color: #92400e; }
+.hold-t { color: #92400e; }
+.hold-note { margin: 0 0 8px; font-size: 13.5px; color: #92400e; background: #fffbeb; border-radius: 10px; padding: 8px 10px; }
+.od-notes { display: grid; gap: 6px; margin-top: 6px; }
+.od-note { font-size: 13.5px; color: var(--ink-2); line-height: 1.4; overflow-wrap: anywhere; }
+.od-note.warn { color: #92400e; background: #fffbeb; border-radius: 8px; padding: 6px 8px; }
+.od-note a { font-weight: 600; white-space: nowrap; }
+/* Hold ki wajah — ek tap wale chips */
+.why-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.why-chips .chip {
+  border: 1px solid var(--rule); background: var(--sheet); color: var(--ink-2);
+  border-radius: 999px; padding: 7px 12px; font-size: 13px; font-weight: 600; cursor: pointer; min-height: 36px;
+}

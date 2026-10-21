@@ -1260,15 +1260,19 @@ async function dashDeliverModal(number) {
   let d;
   try { d = await api(`/orders/${encodeURIComponent(number)}`); } catch (e) { toast(e.message, true); return; }
   const slots = [];
+  // Washerman ke roke hue kapde ("abhi nahi hue") dene ki list mein nahi
+  const can = (x) => (x.deliverable !== undefined ? x.deliverable : x.pending);
   (d.lines || []).forEach((l) => {
-    if (l.pieces) l.pieces.forEach((p) => { if (p.pending > 0) slots.push({ line: l.line, piece: p.piece, max: p.pending, name: p.type, group: `${l.name} · ${l.weight} kg` }); });
-    else if (l.pending > 0) slots.push({ line: l.line, max: l.pending, name: l.name, sub: l.service !== l.name ? l.service : "", bag: !!l.bag, weight: l.weight });
+    if (l.pieces) l.pieces.forEach((p) => { if (can(p) > 0) slots.push({ line: l.line, piece: p.piece, max: can(p), name: p.type, group: `${l.name} · ${l.weight} kg` }); });
+    else if (can(l) > 0) slots.push({ line: l.line, max: can(l), name: l.name, sub: l.service !== l.name ? l.service : "", bag: !!l.bag, weight: l.weight });
   });
-  if (!slots.length) { toast("Nothing left to deliver on this bill", true); return; }
+  const heldN = (d.clothes && d.clothes.held) || 0;
+  if (!slots.length) { toast(heldN ? `Everything left (${heldN}) is on hold with the washerman` : "Nothing left to deliver on this bill", true); return; }
   DL = { number, slots, pick: slots.map((s) => s.max), total: slots.reduce((a, s) => a + s.max, 0) };
   let lastGroup = "";
   openModal(`<h3>Deliver — ${esc(number)}</h3>
     <p class="muted">${esc(displayName(d.order.customer_name, d.order.customer_phone))} · ${DL.total} to deliver${d.clothes.delivered ? ` (${d.clothes.delivered} already delivered)` : ""}</p>
+    ${heldN ? `<p class="muted" style="color:#92400e">⏸ ${heldN} on hold with the washerman — they stay pending</p>` : ""}
     <div class="btnrow" style="margin-top:8px">
       <button class="btn ghost sm" onclick="dlSet('all')">Select all</button>
       <button class="btn ghost sm" onclick="dlSet('none')">Clear</button>
