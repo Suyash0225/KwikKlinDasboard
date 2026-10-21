@@ -518,9 +518,9 @@ async def create_order(body: OrderCreateIn, db: AsyncSession = Depends(get_db)) 
     except (OrderError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     # instant work order to staff — UI-created bills behave like chat bills
-    from app.services.work_orders import send_work_order
+    from app.services.work_orders import announce_new_order
 
-    await send_work_order(db, order, headline="Naya order aaya")
+    await announce_new_order(db, order)
     return await _order_out(db, order, include_notes=True)
 
 

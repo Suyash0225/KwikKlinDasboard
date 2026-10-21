@@ -351,7 +351,7 @@ _EXTRACT_SYSTEM = (
 # hone par bhi kaunsa kaam hai ye kabhi galat nahi hota. Jise likhna hai wo
 # likh sakta hai; ye sirf sabse aam jawab ka shortcut hai.
 _TASK_BTN_RE = re.compile(
-    r"^\s*\[button:task:(T-?\d+):(done|later|problem|wash|dry|iron|ready|pending|save_eta|cancel_eta)\]",
+    r"^\s*\[button:task:(T-?\d+):(done|ofd|delivered|later|problem|wash|dry|iron|ready|pending|save_eta|cancel_eta)\]",
     re.I,
 )
 # WAHA list menus use row IDs rather than Meta button IDs.
@@ -435,6 +435,21 @@ async def _handle_task_button(
     # Explicit Done is role-scoped by task type: pickup/delivery work belongs
     # to delivery staff, while washing/custom operational tasks can be closed
     # by the active washer/supervisor team that shares that queue.
+    if action in {"ofd", "delivered"}:
+        # Delivery ke do alag button — purane card ka (ya dohra) tap order ko
+        # READY se seedha DELIVERED na kar de jab parcel abhi raaste mein ho
+        if task.kind != "delivery" or role not in {"DELIVERY", "ADMIN", "MANAGER"}:
+            return "This task is assigned to a different role."
+        order = await db.get(Order, task.order_id) if task.order_id else None
+        expected = OrderStatus.READY if action == "ofd" else OrderStatus.OUT_FOR_DELIVERY
+        if order is None or order.status is not expected:
+            now = status_label(order.status) if order is not None else "unknown"
+            return (
+                f"⚠️ Ye purana button hai — order abhi {now} hai. "
+                "Task ka naya menu kholkar sahi step chunein."
+            )
+        action = "done"
+
     if action == "done":
         if task.kind in {"pickup", "delivery"}:
             if role not in {"DELIVERY", "ADMIN", "MANAGER"}:
@@ -2225,9 +2240,9 @@ async def _finalize_bill(
         )
 
     # instant work order to the responsible staff member (spec 7.5a)
-    from app.services.work_orders import send_work_order
+    from app.services.work_orders import announce_new_order
 
-    outcome = await send_work_order(db, order, headline="Naya order aaya")
+    outcome = await announce_new_order(db, order)
     await audit.record(
         actor_role="admin" if sender_label == "manager" else "staff",
         actor=sender_label,
@@ -2241,6 +2256,8 @@ async def _finalize_bill(
         "sent_template": "Staff ko work order (template se) bhej diya.",
         "no_staff": "⚠️ Koi staff assigned nahi — Settings mein default washer set karein.",
         "failed": "⚠️ Staff ko message nahi ja paya.",
+        "agent": "Agent ne washerman ko kaam de diya.",
+        "later": "Washerman ko kaam pickup/planning ke baad apne aap jayega.",
     }[outcome]
     return (
         get_message(
@@ -3543,9 +3560,9 @@ async def _apply_relay(
 
 # Role scoping (owner's spec): washerman delivery ka status nahi badal
 # sakta, delivery boy dhulai ka nahi. Manager sab kuch.
+# Drying alag stage nahi (Wash -> Iron -> Ready) — staff "dry" likhe to bhi nahi
 _WASH_FLOOR_STATUSES = {
-    OrderStatus.IN_WASH, OrderStatus.IN_DRY, OrderStatus.IN_IRON,
-    OrderStatus.READY,
+    OrderStatus.IN_WASH, OrderStatus.IN_IRON, OrderStatus.READY,
 }
 _ROLE_STATUSES = {
     # Washerman aur press wala ek hi kataar par — dono saare dhulai stage
@@ -3575,13 +3592,33 @@ async def _apply_done(
         return get_message("order_not_found_staff", order_number=number)
     role = await _sender_role(db, sender_phone)
     if role == "DELIVERY":
-        target = (
-            OrderStatus.DELIVERED
-            if order.status is OrderStatus.OUT_FOR_DELIVERY
-            else OrderStatus.PICKED_UP
-        )
+        if order.status in (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY):
+            # Asli delivery ka raasta: roke/baaki kapde hon to DELIVERED nahi
+            from app.services import delivery as delivery_svc
+
+            try:
+                out = await delivery_svc.deliver(db, order, None, by=sender_label)
+            except delivery_svc.DeliveryError as exc:
+                return f"⚠️ {number}: {exc}"
+            await audit.record(
+                actor_role="staff", actor=sender_label, action="done_command",
+                args={"order": number, "delivered": out["delivered_now"]}, result=out["status"],
+            )
+            if out["pending"]:
+                return f"🚚 {number}: {out['delivered_now']} kapde diye, {out['pending']} abhi dukaan par."
+            return get_message("status_done", order_number=number, status_name=out["status"])
+        target = OrderStatus.PICKED_UP
     elif role in ("WASHER", "IRONER"):
-        target = OrderStatus.READY
+        # "Done" = is order ka agla kadam (Wash -> Iron -> Ready), seedha
+        # READY nahi — warna iron chhoot jaata aur grahak ko "ready" chala jaata
+        from app.services import service_stages
+
+        target = await service_stages.next_stage(db, order)
+        if target is None:
+            return (
+                f"⚠️ {number} abhi {status_label(order.status)} hai — "
+                "ye dhulai/press ka kaam nahi raha."
+            )
     else:
         return get_message("staff_cmd_unknown")
     try:

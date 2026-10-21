@@ -1208,11 +1208,11 @@ async def collect_payment(
     from app.models import PaymentMethod
     from app.services.order_service import record_payment
 
-    order = (
-        await db.execute(select(Order).where(Order.order_number == number.strip().upper()))
-    ).scalar_one_or_none()
-    if order is None:
-        raise HTTPException(status_code=404, detail=f"{number} not found")
+    # Wahi pehra jo baaki order endpoints par hai — pehle koi bhi delivery
+    # wala kisi bhi order (cancelled bhi) par paisa jama kar sakta tha
+    order = await _my_order(db, p, number)
+    if order.status in DEAD_FOR_MONEY:
+        raise HTTPException(status_code=409, detail=f"{order.order_number} is cancelled — no payment")
     from decimal import Decimal
 
     due = float((order.total_amount or 0) - (order.amount_paid or 0))
@@ -1860,9 +1860,9 @@ async def create_bill(
     # bhejta hai. Best-effort: khabar na ja paye to bhi bill ban chuka hai.
     if pickup_task is None:
         try:
-            from app.services.work_orders import send_work_order
+            from app.services.work_orders import announce_new_order
 
-            sent_status = await send_work_order(db, order, headline="Naya order aaya")
+            sent_status = await announce_new_order(db, order)
             if sent_status == "no_staff":
                 log.info("panel_bill_no_washer", order=order.order_number)
         except Exception:

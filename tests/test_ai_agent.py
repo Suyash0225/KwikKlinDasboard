@@ -1143,3 +1143,31 @@ async def test_typed_haan_still_books_after_the_button_menu(monkeypatch) -> None
         cust = await _reload(db)
         reply = await build_ai_reply(db, cust, "haan")
     assert reply == "✅ Pickup booked" and len(booked) == 1
+
+
+async def test_ai_pickup_order_waits_for_pickup_before_washing() -> None:
+    """AI ka booking seedha PICKUP_ASSIGNED — kapde aane se pehle washerman
+    ko "wash" ka kaam nahi jaata, aur grahak ko ek hi confirmation."""
+    from datetime import date, timedelta
+    from sqlalchemy import select
+    from app.models import Order, OrderStatus, Task
+    from app.services.ai_agent import _create_pickup_order
+
+    cust = await _seed_customer()
+    intake = {
+        "name": "AI Grahak", "address": "Test Address, Varanasi", "items_text": "2 shirts",
+        "pickup_date": (date.today() + timedelta(days=1)).isoformat(), "ready": True,
+    }
+    async with async_session_factory() as db:
+        cust = await _reload(db)
+        reply = await _create_pickup_order(db, cust, intake)
+        assert reply
+        order = (await db.execute(
+            select(Order).where(Order.customer_id == cust.id).order_by(Order.created_at.desc())
+        )).scalars().first()
+        assert order.status is OrderStatus.PICKUP_ASSIGNED
+        assert order.pickup_date == date.today() + timedelta(days=1)
+        wash = (await db.execute(
+            select(Task).where(Task.order_id == order.id, Task.kind == "wash")
+        )).scalars().first()
+        assert wash is None, "no wash task before the clothes are picked up"

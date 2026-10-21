@@ -47,7 +47,9 @@ def _is_simple_greeting(text: str) -> bool:
     """Cheap deterministic check for greetings; avoid wasting LLM calls."""
     return bool(_SIMPLE_GREETING_RE.fullmatch(text or ""))
 
-_ORDER_CONFIRMATION_RE = re.compile(r"^\s*(?:haan(?:\s+ji)?|han(?:\s+ji)?|ji\s+haan|yes|y|okay|ok|theek(?:\s+hai)?|confirm|confirmed|kar do|bana do|pickup\s+confirm)\s*[!.🙏👍✅]*\s*$", re.I)
+# "✅ Haan, book karo" bhi — kuch WhatsApp client button ka id nahi, sirf
+# uska text bhejte hain; tab bhi booking ho, loop nahi
+_ORDER_CONFIRMATION_RE = re.compile(r"^\s*✅?\s*(?:haan(?:\s+ji)?(?:,?\s*book\s+karo)?|han(?:\s+ji)?|ji\s+haan|yes|y|okay|ok|theek(?:\s+hai)?|confirm|confirmed|kar do|bana do|book\s+karo|pickup\s+confirm)\s*[!.🙏👍✅]*\s*$", re.I)
 
 
 def _is_explicit_order_confirmation(text: str) -> bool:
@@ -56,7 +58,7 @@ def _is_explicit_order_confirmation(text: str) -> bool:
 
 
 _ORDER_CANCELLATION_RE = re.compile(
-    r"^\s*(?:nahi(?:\s+ji)?|nahin(?:\s+ji)?|no|cancel|cancel karo|cancel kar do|mat karo|rehne do|chhodo|chod do)\s*[!.🙏👍✅]*\s*$",
+    r"^\s*❌?\s*(?:nahi(?:\s+ji)?|nahin(?:\s+ji)?|no|cancel|cancel karo|cancel kar do|mat karo|rehne do|chhodo|chod do)\s*[!.🙏👍✅]*\s*$",
     re.I,
 )
 
@@ -1280,6 +1282,14 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
 
         if not customer.address:
             customer.address = intake["address"][:500]
+        try:
+            pickup_day = _date.fromisoformat(str(intake.get("pickup_date") or "")[:10])
+        except ValueError:
+            pickup_day = None
+        # Seedha PICKUP_ASSIGNED: ops agent delivery boy chunta hai aur pickup
+        # task (wahi "kab tak?") banata hai. Pehle order RECEIVED bana kar
+        # baad mein pickup kiya jaata tha — beech mein washerman ko kapde aane
+        # se pehle hi "wash" ka kaam chala jaata tha.
         order = await create_order(
             db,
             customer_phone=customer.phone,
@@ -1287,40 +1297,37 @@ async def _create_pickup_order(db: AsyncSession, customer: Customer, intake: dic
             items=[{"type": intake["items_text"][:100], "qty": 1}],
             notes=f"Pickup: {intake['pickup_date']} | Address: {intake['address'][:300]}",
             created_by="agent",
+            needs_pickup=True,
+            pickup_date=pickup_day,
+            # neeche wala pickup confirmation hi jaata hai — do "order mila" nahi
+            notify_customer=False,
         )
-        # assign the default delivery boy and mark pickup assigned
-        dphone = await app_settings.get(db, "default_delivery_phone")
-        if dphone:
-            dstaff = (
-                await db.execute(_sel(Staff).where(Staff.phone == dphone))
-            ).scalar_one_or_none()
-            if dstaff:
-                order.assigned_delivery_id = dstaff.id
-                await db.commit()
-        await update_status(db, order, OrderStatus.PICKUP_ASSIGNED, changed_by="agent")
-        # Hand it to the pickup tracker: it asks the boy "kab tak?", turns
-        # his answer into the time we promise the customer (with his number),
-        # and then asks him to confirm the pickup with Yes/No.
-        from app.services.tasks import create_pickup_task
+    except Exception:
+        log.exception("pickup_order_create_failed")
+        return None
 
-        await create_pickup_task(db, order)
+    # Order ban chuka — ab koi bhi chhoti galti grahak ko "booked na
+    # samjhein" nahi bolwa sakti (jhooth hota)
+    try:
         await _notify_admin_fyi(
             db, customer,
             f"Naya pickup order {order.order_number}: {intake['name']}, "
             f"{intake['items_text'][:60]}, pickup {intake['pickup_date']}, "
             f"address: {intake['address'][:80]}",
         )
-        sla = await app_settings.get(db, "sla_normal_days")
-        return get_message(
-            "pickup_confirmed_customer",
-            name=intake["name"].split()[0] if intake["name"].split() else "ji",
-            order_number=order.order_number,
-            pickup=intake.get("pickup_label") or intake["pickup_date"],
-            sla=str(sla),
-        )
     except Exception:
-        log.exception("pickup_order_create_failed")
-        return None
+        log.exception("pickup_order_fyi_failed", order=order.order_number)
+    try:
+        sla = await app_settings.get(db, "turnaround_days")
+    except Exception:
+        sla = 2
+    return get_message(
+        "pickup_confirmed_customer",
+        name=intake["name"].split()[0] if intake["name"].split() else "ji",
+        order_number=order.order_number,
+        pickup=intake.get("pickup_label") or intake["pickup_date"],
+        sla=str(sla),
+    )
 
 
 async def _notify_admin_fyi(db: AsyncSession, customer: Customer, note: str) -> None:

@@ -27,6 +27,14 @@ from app.models.task import TASK_OPEN
 from app.services import audit
 from app.services.urgent import is_charge_line
 
+# Bill par hisaab ki lines (urgent / extra / purana due) kapde nahi hain —
+# pehle extra/due wali line delivery mein "1 kapda baaki" ban jaati thi
+_NON_CLOTH_KINDS = {"extra_charge", "due_charge"}
+
+
+def _not_cloth(it: dict) -> bool:
+    return is_charge_line(it) or it.get("kind") in _NON_CLOTH_KINDS
+
 DELIVERABLE = (OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY)
 PICKABLE = (OrderStatus.RECEIVED, OrderStatus.PICKUP_ASSIGNED)
 WASHABLE = (OrderStatus.RECEIVED, OrderStatus.PICKED_UP, OrderStatus.IN_WASH,
@@ -63,7 +71,7 @@ def lines(order: Order) -> list[dict]:
     """UI ke liye: har kapde ki line — kitne, kitne diye, kitne baaki."""
     out = []
     for idx, it in enumerate(order.items or []):
-        if not isinstance(it, dict) or is_charge_line(it):
+        if not isinstance(it, dict) or _not_cloth(it):
             continue
         kg = is_kg(it)
         name = it.get("type") or it.get("garment") or it.get("service") or "?"
@@ -136,7 +144,7 @@ async def deliver(db: AsyncSession, order: Order, picks: list[dict] | None, *, b
 
     def give_all(it: dict) -> int:
         n = 0
-        if is_charge_line(it):
+        if _not_cloth(it):
             return 0
         kg = is_kg(it)
         pieces = [p for p in (it.get("pieces") or []) if isinstance(p, dict) and p.get("type")]
@@ -169,7 +177,7 @@ async def deliver(db: AsyncSession, order: Order, picks: list[dict] | None, *, b
                 raise DeliveryError("Bad delivery line")
             if qty <= 0:
                 continue
-            if idx < 0 or idx >= len(items) or not isinstance(items[idx], dict) or is_charge_line(items[idx]):
+            if idx < 0 or idx >= len(items) or not isinstance(items[idx], dict) or _not_cloth(items[idx]):
                 raise DeliveryError("That item is not on this bill")
             it = items[idx]
             kg = is_kg(it)
@@ -238,6 +246,27 @@ async def deliver(db: AsyncSession, order: Order, picks: list[dict] | None, *, b
             "status": order.status.name}
 
 
+def mark_all_delivered(order: Order) -> None:
+    """Seedha DELIVERED (dashboard/WhatsApp) — bache kapde bhi diye hue likho.
+    Roke hue kapde yahan nahi aate: caller pehle hi mana kar chuka hota hai."""
+    if not counts(order)["pending"]:
+        return
+    items = deepcopy(order.items or [])
+    for it in items:
+        if not isinstance(it, dict) or _not_cloth(it):
+            continue
+        pieces = [p for p in (it.get("pieces") or []) if isinstance(p, dict) and p.get("type")]
+        if is_kg(it) and pieces:
+            for p in pieces:
+                p["delivered"] = _int(p.get("qty"))
+        elif is_kg(it):
+            it["delivered_all"] = True
+        else:
+            it["delivered"] = _int(it.get("qty") or 1)
+    order.items = items
+    flag_modified(order, "items")
+
+
 def _left_msg(pending: int, name, held: int) -> str:
     msg = f"Only {max(0, pending)} {name} left to deliver"
     return f"{msg} ({held} on hold at the shop)" if held else msg
@@ -292,7 +321,7 @@ def _apply(items: list, picks: list[dict] | None, *, hold: bool) -> list[str]:
 
     if picks is None:          # sirf release: sab chhodo
         for it in items:
-            if not isinstance(it, dict) or is_charge_line(it):
+            if not isinstance(it, dict) or _not_cloth(it):
                 continue
             pieces = [p for p in (it.get("pieces") or []) if isinstance(p, dict) and p.get("type")]
             for p in pieces:
@@ -308,7 +337,7 @@ def _apply(items: list, picks: list[dict] | None, *, hold: bool) -> list[str]:
             raise DeliveryError("Bad cloth line")
         if qty <= 0:
             continue
-        if idx < 0 or idx >= len(items) or not isinstance(items[idx], dict) or is_charge_line(items[idx]):
+        if idx < 0 or idx >= len(items) or not isinstance(items[idx], dict) or _not_cloth(items[idx]):
             raise DeliveryError("That item is not on this bill")
         it = items[idx]
         if pk.get("piece") is not None:

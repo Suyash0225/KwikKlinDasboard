@@ -1216,10 +1216,17 @@ async def run_delivery_nudges() -> int:
         for o in rows:
             if not await _claim(f"duenudge:{today_key}:{o.order_number}"):
                 continue
+            # Press par khada order press wale ka kaam hai — washerman ko nahi
+            role = "IRONER" if o.status is OrderStatus.IN_IRON else "WASHER"
             outcome = await send_work_order(
                 db, o, headline="⏰ Aaj delivery hai, abhi ready nahi",
-                extra="Pehle ise nipta dein.",
+                extra="Pehle ise nipta dein.", role=role,
             )
+            if outcome == "no_staff" and role == "IRONER":
+                outcome = await send_work_order(
+                    db, o, headline="⏰ Aaj delivery hai, abhi ready nahi",
+                    extra="Pehle ise nipta dein.",
+                )
             if outcome in ("sent", "sent_template"):
                 sends += 1
         if rows:
