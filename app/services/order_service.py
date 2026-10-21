@@ -786,10 +786,8 @@ async def record_payment(
         )
     except Exception:
         log.exception("payment_admin_fyi_failed", order_number=number)
-    # WhatsApp fail hone par send_message session rollback karta hai aur
-    # `order` expire ho jaata hai; aage padhne se pehle taaza (paisa commit
-    # ho chuka hai — bas object purana hai).
-    await db.refresh(order)
+    # owner ki khabar fail hui ho to session rollback ho chuka — taaza karo
+    await _rehydrate(db)
     # Grahak ko bhi — "₹300 mil gaya, baaki ₹200". Dashboard, staff collect,
     # WhatsApp bot: paisa jahan se bhi likha jaye, grahak ko pakki raseed.
     if notify_customer:
@@ -804,7 +802,6 @@ async def record_payment(
             amount=amount_s,
             balance_line=balance,
         )
-        await db.refresh(order)
     _announce(order, "payment", by=recorded_by)
     return order
 
@@ -865,6 +862,28 @@ _STATUS_NOTIFICATIONS: dict[OrderStatus, tuple[str, str]] = {
 
 def _fmt_date(d: date) -> str:
     return d.strftime("%d %b %Y")
+
+
+async def _rehydrate(db: AsyncSession) -> None:
+    """Fail hue send ke baad session ke expire hue objects dobara padh lo.
+
+    send_message fail par session rollback karta hai, jo session ki HAR
+    cheez expire kar deta hai — order, staff, sab. Caller ka business change
+    commit ho chuka hota hai, par uske baad wo kuch bhi padhe (order.id,
+    staff.name) to async mein lazy-load MissingGreenlet uthata aur request
+    500 deti. Deliver/collect par iska matlab: kaam ho gaya, staff ko "fail"
+    dikha, aur wo dobara dabata. "NEVER raises" ka vaada tabhi sach hai jab
+    caller ke objects bhi waise hi chhootein jaise mile the.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    for obj in list(db.identity_map.values()):
+        try:
+            if sa_inspect(obj).expired_attributes:
+                await db.refresh(obj)
+        except Exception:
+            # row hat chuki ho ya padh na paaye — baaki ko to taaza karo
+            log.info("rehydrate_skipped", model=type(obj).__name__)
 
 
 async def _notify_customer(
@@ -974,6 +993,9 @@ async def _notify_customer(
             order_number=number,
             message_key=message_key,
         )
+    else:
+        return
+    await _rehydrate(db)
 
 
 async def _next_order_number(db: AsyncSession) -> str:

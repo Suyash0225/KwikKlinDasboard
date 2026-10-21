@@ -266,3 +266,22 @@ async def test_collect_survives_whatsapp_being_down(client, two_shops, sent, mon
     r = await client.post(f"/staff/api/orders/{number}/collect", json={"amount": 120, "method": "cash"})
     assert r.status_code == 200, r.text
     assert r.json()["due"] == 0
+
+
+async def test_deliver_survives_whatsapp_being_down(client, two_shops, sent, monkeypatch) -> None:
+    """Delivered commit ho gaya, grahak ka message nahi gaya — tab bhi 200,
+    aur delivery ka kaam (task) bhi band hota hai."""
+    from app.services import order_service
+    from app.services.whatsapp import SendError
+
+    async def down(db, **kwargs):
+        db.expire_all()
+        raise SendError("WAHA network error", transient=True)
+
+    number = await _order_for(two_shops["a"], two_shops["a_del"], CUST_A, delivery=True)
+    await _set_status(two_shops["a"], number, "READY")
+    monkeypatch.setattr(order_service, "send_message", down)
+    await _login(client, A_DEL_PHONE)
+    r = await client.post(f"/staff/api/orders/{number}/deliver", json={"items": None})
+    assert r.status_code == 200, r.text
+    assert (await client.get(f"/staff/api/orders/{number}")).json()["status"] == "DELIVERED"
