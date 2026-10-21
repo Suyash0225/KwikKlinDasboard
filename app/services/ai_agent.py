@@ -71,8 +71,33 @@ def _pickup_confirmation_summary(intake: dict, signoff: str | None = None) -> st
     return (
         f"Order summary: {intake['items_text'][:100]}, pickup {intake['pickup_date']}, "
         f"address {intake['address'][:120]}. Kya main ye pickup order confirm kar doon? "
-        f"Reply 'haan' to confirm or 'nahi' to cancel. {signoff}"
+        f"Neeche button dabaiye ya 'haan' / 'nahi' likhiye. {signoff}"
     )
+
+
+# Pickup summary ke saath Haan/Nahi buttons. "haan" likhne par bhi chalta
+# hai, par button sabse pakka hai: id mein us summary ki chhoti pehchan hai,
+# isliye text milane ki zaroorat nahi, aur purane message ka button kabhi
+# naya (badla hua) order book nahi karta.
+_PICKUP_BUTTON_RE = re.compile(r"^\s*\[button:pickup:(yes|no):([0-9a-f]{8})\]")
+
+
+def _summary_key(summary: str) -> str:
+    import hashlib
+
+    return hashlib.sha1((summary or "").encode()).hexdigest()[:8]
+
+
+def pickup_buttons(summary: str) -> list:
+    from app.services.whatsapp import Button
+
+    key = _summary_key(summary)
+    return [Button(f"pickup:yes:{key}", "✅ Haan, book karo"), Button(f"pickup:no:{key}", "❌ Nahi")]
+
+
+# Button wale message ke log ke peeche " [list: …]" judta hai — text milate
+# waqt use hatao, warna typed "haan" phir se "summary nahi bheji" lagta
+_MENU_SUFFIX_RE = re.compile(r" \[(?:list|buttons): [^\]]*\]$")
 
 
 # A summary the customer has not answered within this window is stale; a
@@ -114,6 +139,8 @@ async def _last_outbound_is(db: AsyncSession, customer: Customer, text: str) -> 
             .limit(1)
         )
     ).scalar_one_or_none()
+    if last_outbound:
+        last_outbound = _MENU_SUFFIX_RE.sub("", last_outbound)
     if last_outbound == text:
         return True
     if not last_outbound or not text:
@@ -887,9 +914,23 @@ async def build_ai_reply(
     # to it is decided here from the saved copy — no model call, so a model
     # rewording the details can never make the customer confirm in a loop.
     pending = _pending_intake(customer)
+    button = _PICKUP_BUTTON_RE.match(text or "")
+    if button and pending is None and not sandbox:
+        return (
+            "Ye pickup request purani ho chuki hai. Naya pickup chahiye to "
+            f"kapde, din aur pata bata dijiye. {sign}"
+        )
+    if button and pending is not None and not sandbox and button.group(2) != _summary_key(pending["summary"]):
+        # Purane summary ka button — naye (badle hue) order ko book mat karo
+        return (
+            "Ye button purane summary ka tha. Upar wale naye summary par "
+            f"✅ Haan dabaiye. {sign}"
+        )
     if pending is not None and not sandbox:
-        if _is_explicit_order_confirmation(text) and await _last_outbound_is(
-            db, customer, pending["summary"]
+        if (button and button.group(1) == "yes") or (
+            not button
+            and _is_explicit_order_confirmation(text)
+            and await _last_outbound_is(db, customer, pending["summary"])
         ):
             customer.ai_pending_intake = None
             await db.commit()
@@ -900,7 +941,7 @@ async def build_ai_reply(
                 "Maaf kijiye, abhi pickup order confirm nahi ho paya. "
                 f"Main team se verify karwaunga; please ise booked na samjhein. {sign}"
             )
-        if _is_explicit_order_cancellation(text):
+        if (button and button.group(1) == "no") or (not button and _is_explicit_order_cancellation(text)):
             customer.ai_pending_intake = None
             await db.commit()
             return (

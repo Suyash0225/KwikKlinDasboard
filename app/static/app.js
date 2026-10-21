@@ -3389,7 +3389,7 @@ function newTaskModal() {
           <option value="delivery">🚚 Delivery</option><option value="packing">📦 Packing</option>
           <option value="custom">🛠️ Custom</option><option value="general">📋 General</option>
         </select></div>
-      <div class="setfield"><label>Customer <span class="muted">(optional for general tasks)</span></label>
+      <div class="setfield"><label>Customer <span class="muted">(needed for Pickup / Delivery)</span></label>
         <input id="nt-customer" placeholder="Search existing customer by name or WhatsApp…" autocomplete="off">
         <input id="nt-customer-id" type="hidden">
         <div id="nt-cust-results" class="acp"></div>
@@ -3424,10 +3424,11 @@ function newTaskModal() {
     const kind = $("nt-kind").value;
     const customerId = $("nt-customer-id").value || null;
     const orderNumber = $("nt-order").value.trim() || null;
-    const needsCustomer = ["pickup", "wash", "dry", "iron", "delivery"].includes(kind);
+    // Sirf ghar jaane wale kaam ko grahak chahiye — dhulai/press dukaan ka kaam bhi hota hai
+    const needsCustomer = ["pickup", "delivery"].includes(kind);
     if (title.length < 2) { $("nt-err").textContent = "Instructions/task detail likhiye."; return; }
     if (needsCustomer && !customerId && !orderNumber) {
-      $("nt-err").textContent = "Pickup/Washing/Ironing/Delivery task ke liye customer select kijiye.";
+      $("nt-err").textContent = "Pickup/Delivery task ke liye customer select kijiye.";
       return;
     }
     const due = $("nt-due").value ? taskDueISO($("nt-due").value) : null;
@@ -3440,7 +3441,11 @@ function newTaskModal() {
       due_at: due,
       urgent: $("nt-urgent").value === "true",
     }});
-    closeModal(); toast(`${r.code} created and assigned`); loadTasks();
+    closeModal();
+    toast(r.updated_existing
+      ? `${r.code} — this order already had an open ${kind} task; it is updated with your instructions`
+      : `${r.code} created and assigned`, false, r.updated_existing ? 7000 : 3000);
+    loadTasks();
   });
 }
 

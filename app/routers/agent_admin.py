@@ -1922,11 +1922,54 @@ async def create_task_api(body: TaskIn, db: AsyncSession = Depends(get_db)) -> d
     if order is not None and customer is not None and order.customer_id != customer.id:
         raise HTTPException(status_code=400, detail="Selected customer does not match this order")
 
-    task = await task_service.create_task(
-        db, title=body.title, staff=staff, order=order,
-        urgent=body.urgent, created_by="dashboard", kind=body.kind,
-        due_at=body.due_at, customer=customer,
-    )
+    # Ek order par ek kind ka ek hi khula kaam ho sakta hai (DB index), aur
+    # agent har order par "wash" pehle se bana deta hai. Pehle owner ka naya
+    # Washing task chupchaap purana lauta deta tha — na naya instruction, na
+    # chuna hua staff. Ab wahi khula kaam owner ki baat se update hota hai.
+    from app.models import Task as _T
+    from app.models.task import TASK_OPEN as _OPEN
+
+    existing = None
+    if order is not None or customer is not None:
+        q = select(_T).where(_T.status == _OPEN, _T.kind == body.kind)
+        q = q.where(_T.order_id == order.id) if order is not None else q.where(
+            _T.customer_id == customer.id, _T.order_id.is_(None)
+        )
+        existing = (await db.execute(q.order_by(_T.created_at.desc()).limit(1))).scalar_one_or_none()
+    if existing is not None:
+        previous_staff_id = existing.assigned_staff_id
+        existing.title = body.title.strip()
+        if staff is not None:
+            existing.assigned_staff_id = staff.id
+        if body.due_at is not None:
+            existing.due_at = body.due_at
+        existing.urgent = existing.urgent or body.urgent
+        db.add(existing)
+        await db.commit()
+        notified = False
+        if staff is not None and staff.id != previous_staff_id:
+            notified = await task_service.send_task_to(db, existing, staff)
+        await audit.record(
+            actor_role="admin", actor="dashboard", action="task_updated_from_new",
+            args={"code": existing.code, "kind": body.kind, "staff": staff.name if staff else None},
+            result="notification sent" if notified else "updated",
+        )
+        return {
+            "code": existing.code, "id": str(existing.id), "kind": existing.kind,
+            "customer_id": str(existing.customer_id) if existing.customer_id else None,
+            "due_at": existing.due_at.isoformat() if existing.due_at else None,
+            "updated_existing": True,
+        }
+
+    try:
+        task = await task_service.create_task(
+            db, title=body.title, staff=staff, order=order,
+            urgent=body.urgent, created_by="dashboard", kind=body.kind,
+            due_at=body.due_at, customer=customer,
+        )
+    except ValueError as exc:
+        # Pehle ye 500 "Internal Server Error" ban jaata tha — owner ko kuch samajh nahi aata
+        raise HTTPException(status_code=400, detail=str(exc))
     return {
         "code": task.code, "id": str(task.id), "kind": task.kind,
         "customer_id": str(customer.id) if customer else None,
