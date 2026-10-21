@@ -24,6 +24,20 @@ _SECRET_SETTINGS = {"ig_access_token", "webpush_vapid_private"}
 
 # Single source of defaults — also drives the Settings UI.
 DEFAULTS: dict[str, Any] = {
+    # --- staff points & accountability (services/staff_scores.py) ---
+    # Delivery ke baad grahak ki rating par washer + delivery wale ko points
+    "staff_points_good": 5,
+    "staff_points_mid": 2,
+    # Owner sach mein points par inaam deta hai? Tabhi grahak ko "inaam milta
+    # hai" likha jaata hai, aur staff ko ye note dikhta hai.
+    "staff_reward_enabled": False,
+    "staff_reward_note": "",
+    # Delivery message mein grahak ko staff ka naam (pehla naam) bataein
+    "rating_show_staff_names": True,
+    # Late/aaj ke kaam ki yaad staff ko (IST ghante), aur shaam ki shabashi
+    "staff_nudges_enabled": True,
+    "staff_nudge_hours": [11, 15, 18],
+    "staff_day_thanks_hour": 20,
     # Staff app Web Push ki VAPID private key (PEM), har dukaan ki apni.
     # Pehle subscribe par apne aap banti hai (services/web_push.py).
     "webpush_vapid_private": "",

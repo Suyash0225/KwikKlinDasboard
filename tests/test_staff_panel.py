@@ -179,7 +179,7 @@ async def two_shops():
             " (SELECT id FROM tenants WHERE slug IN ('panel-a','panel-b'))"
         ))
         await db.execute(sqltext(
-            "DELETE FROM settings_kv WHERE key = 'webpush_vapid_private' AND tenant_id IN"
+            "DELETE FROM settings_kv WHERE tenant_id IN"
             " (SELECT id FROM tenants WHERE slug IN ('panel-a','panel-b'))"
         ))
         await db.execute(sqltext(

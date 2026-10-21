@@ -4732,6 +4732,13 @@ async function loadSettings() {
     $("set-standup").value = s.standup_hour;
     $("set-route").value = String(!!s.staff_show_route);
     $("set-autoassign").value = String(s.agent_auto_assign !== false);
+    $("set-pts-good").value = s.staff_points_good ?? 5;
+    $("set-pts-mid").value = s.staff_points_mid ?? 2;
+    $("set-reward").value = String(!!s.staff_reward_enabled);
+    $("set-reward-note").value = s.staff_reward_note || "";
+    $("set-staffnames").value = String(s.rating_show_staff_names !== false);
+    $("set-nudges").value = String(s.staff_nudges_enabled !== false);
+    $("set-nudge-hours").value = (s.staff_nudge_hours || []).join(", ");
     const lim = s.stage_limit_hours || {};
     $("set-stagelimits").innerHTML = STAGE_LIMIT_KEYS.map(([k, label]) => `
       <div class="setfield"><label for="sl-${k}">${label}</label>
@@ -5294,6 +5301,14 @@ async function saveOps(btn) {
       ["default_washer_phone", $("set-washer").value],
       ["staff_show_route", $("set-route").value === "true"],
       ["agent_auto_assign", $("set-autoassign").value === "true"],
+      ["staff_points_good", Math.max(0, Math.min(100, parseInt($("set-pts-good").value, 10) || 0))],
+      ["staff_points_mid", Math.max(0, Math.min(100, parseInt($("set-pts-mid").value, 10) || 0))],
+      ["staff_reward_enabled", $("set-reward").value === "true"],
+      ["staff_reward_note", $("set-reward-note").value.trim().slice(0, 150)],
+      ["rating_show_staff_names", $("set-staffnames").value === "true"],
+      ["staff_nudges_enabled", $("set-nudges").value === "true"],
+      ["staff_nudge_hours", [...new Set($("set-nudge-hours").value.split(/[,\s]+/)
+        .map((h) => parseInt(h, 10)).filter((h) => h >= 0 && h <= 23))].sort((a, b) => a - b)],
       ["stage_limit_hours", Object.fromEntries(STAGE_LIMIT_KEYS.map(([k]) =>
         [k, Math.max(1, Math.min(720, parseInt($(`sl-${k}`).value, 10) || 24))]))],
       ["urgent_charge_type", $("set-urg-type").value],

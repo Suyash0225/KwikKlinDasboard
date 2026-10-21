@@ -515,12 +515,17 @@ async def update_status(
                 Button("rate_bad", "😞 Sudhar chahiye"),
             ]
         )
+        # Kisne dhoya, kisne pahunchaya — grahak ki rating unke points banti hai
+        from app.services import staff_scores
+
+        staff_line = await staff_scores.staff_line(db, order, "hi" if language == "hi" else "en")
         await _notify_customer(
             db, order,
             message_key="thankyou_rating",
             template_name="kk_thankyou_rating",
             template_params=[order.order_number],
             buttons=rating_buttons,
+            staff_line=staff_line,
         )
         return order
     notification = _STATUS_NOTIFICATIONS.get(new_status)
