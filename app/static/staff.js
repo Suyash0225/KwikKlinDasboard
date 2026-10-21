@@ -966,7 +966,11 @@ async function statusMenu(number) {
 async function deliverModal(number) {
   let o;
   try { o = await api(`/orders/${encodeURIComponent(number)}`); }
-  catch (e) { toast(e.message, true); return; }
+  catch (e) {
+    // Bina signal ke kapde chun-ne ki list nahi aati — par "sab de diye" phone mein ruk sakta hai
+    if (isOffline(e)) return confirmStep(number, "deliver", "No signal — deliver all the clothes?", "Yes, delivered all", { items: null });
+    toast(e.message, true); return;
+  }
   // har chunne layak cheez ek "slot": {line, piece?, max, name, bag?}
   const slots = [];
   (o.lines || []).forEach((l) => {
@@ -1067,7 +1071,10 @@ async function deliverModal(number) {
 async function washStartModal(number) {
   let o;
   try { o = await api(`/orders/${encodeURIComponent(number)}`); }
-  catch (e) { toast(e.message, true); return; }
+  catch (e) {
+    if (isOffline(e)) return confirmStep(number, "washing", "No signal — start washing without the count?", "Yes, washing");
+    toast(e.message, true); return;
+  }
   const slots = [];
   (o.lines || []).forEach((l) => {
     if (l.bag) return;
@@ -1126,7 +1133,7 @@ async function washStartModal(number) {
   paint();
 }
 
-function confirmStep(number, path, question, yes) {
+function confirmStep(number, path, question, yes, body = null) {
   const w = WORK.find((x) => x.number === number) || {};
   openModal(`<h3>${esc(question)}</h3>
     <p class="said">${esc(w.who || "")} · ${esc(number)}${w.items ? ` · ${esc(w.items)}` : ""}</p>
@@ -1136,7 +1143,7 @@ function confirmStep(number, path, question, yes) {
     </div>`);
   $("m-step").onclick = (e) => busy(e.currentTarget, async () => {
     const what = yes.replace(/^Yes, /, "");
-    const r = await sendOrQueue(`/orders/${encodeURIComponent(number)}/${path}`, null, what, number);
+    const r = await sendOrQueue(`/orders/${encodeURIComponent(number)}/${path}`, body, what, number);
     closeModal();
     if (r.queued) return;
     toast(`${number} — ${what} ✅`);
