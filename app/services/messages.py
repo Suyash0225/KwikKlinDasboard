@@ -88,6 +88,21 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste {name} ji! Aapka order {order_number} confirm ho gaya 🧺 Pickup: {pickup}. Delivery pickup ke baad {sla} din mein. — {shop}",
         "en": "Hello {name}! Your order {order_number} is confirmed 🧺 Pickup: {pickup}. Delivery within {sla} days of pickup. — {shop}",
     },
+    # /billcreation — grahak ne page par khud kapde chune. Rakam andaaza hai:
+    # asli bill pickup par kapde gin kar banta hai.
+    "self_order_confirmed": {
+        "hi": "Namaste {name} ji! Aapka order {order_number} ban gaya 🧺\nKapde: {items}\nAndaazan bill: ₹{estimate} (pickup par kapde gin kar final bill aayega)\nPickup: {pickup}\n— {shop}",
+        "en": "Hello {name}! Your order {order_number} is placed 🧺\nItems: {items}\nEstimated bill: ₹{estimate} (final bill after we count the clothes at pickup)\nPickup: {pickup}\n— {shop}",
+    },
+    # AI ka offer (app/services/ai_offers.py) — jawab ke neeche judta hai
+    "ai_offer_line": {
+        "hi": "🎁 Aapke liye khaas offer: {percent}% off (₹{min_order}+ ke order par)\nCode: {code} · {valid_to} tak{link_line}",
+        "en": "🎁 A special offer for you: {percent}% off (on orders of ₹{min_order}+)\nCode: {code} · valid till {valid_to}{link_line}",
+    },
+    "self_order_code_missing": {
+        "hi": "Ye order code purana ho gaya hai 🙏 Link dobara kholkar order bana lijiye: {link} — {shop}",
+        "en": "This order code has expired 🙏 Please open the link again and place the order: {link} — {shop}",
+    },
     "thankyou_rating": {
         "hi": "Aapka order {order_number} deliver ho gaya ✅ Dhanyawad, {shop} ko mauka dene ke liye! 🙏{staff_line}\n{rating_question}",
         "en": "Your order {order_number} has been delivered ✅ Thank you for choosing {shop}! 🙏{staff_line}\n{rating_question}",
@@ -623,6 +638,7 @@ CUSTOMER_KEYS = frozenset({
     "rating_line_wash", "rating_line_delivery", "rating_line_overall",
     "rating_question_wash", "rating_question_delivery", "rating_question_overall", "rating_points_note", "rating_reward_note", "rating_points_thanks",
     "start_confirmed", "stop_confirmed", "relay_message_customer",
+    "self_order_confirmed", "self_order_code_missing", "ai_offer_line",
 })
 
 

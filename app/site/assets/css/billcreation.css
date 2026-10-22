@@ -1,0 +1,26 @@
+/* /billcreation — staff "New bill" ka hi UI, grahak ke liye. Sirf wo jo
+   staff panel se alag hai: neeche nav nahi, desktop par beech mein patla. */
+.bc-wrap { max-width: 560px; margin: 0 auto; padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+.paybar { bottom: calc(14px + env(safe-area-inset-bottom)); }
+.toasts { bottom: calc(96px + env(safe-area-inset-bottom)); max-width: 560px; margin: 0 auto; }
+
+.bc-hint { color: var(--ink-3); font-size: 13px; margin: 6px 0 0; }
+.bc-gap { margin-top: 16px; }
+.bc-note { padding: 0 4px; }
+.bc-lock {
+  display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-radius: 12px;
+  background: var(--rule-2); color: var(--ink-2); font-weight: 600;
+}
+.bc-lock small { color: var(--ink-3); font-weight: 500; margin-left: auto; }
+.bc-days { display: flex; gap: 8px; flex-wrap: wrap; }
+.bc-days .pickbtn { flex: 1 1 90px; }
+.bc-days input { flex: 1 1 150px; width: auto; }
+.bc-err { color: var(--late); font-size: 13px; min-height: 1em; margin-top: 6px; }
+
+.bc-done { text-align: center; padding: 26px 18px; }
+.bc-done .big { font-size: 42px; line-height: 1; }
+.bc-done h2 { margin: 12px 0 6px; font-size: 20px; letter-spacing: -.01em; }
+.bc-done p { color: var(--ink-3); margin: 6px 0; }
+.bc-done .btn { margin-top: 16px; }
+.bc-done .num { font-size: 22px; font-weight: 800; color: var(--ink); }
+.btn.wa { background: #1f9d55; color: #fff; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }

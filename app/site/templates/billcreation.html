@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#131820">
+<meta name="robots" content="noindex">
+<title>Place your laundry order</title>
+<link rel="icon" href="/site/assets/img/logo-180.png">
+<!-- Wahi UI jo staff panel ka "New bill" hai (app/static/staff.css) — ek hi
+     dikhawat, do jagah alag-alag nahi. Upar se sirf grahak wale badlaav. -->
+<link rel="stylesheet" href="/admin/static/tokens.css?v=s8">
+<link rel="stylesheet" href="/admin/static/staff.css?v=s20">
+<link rel="stylesheet" href="/admin/static/staff-ui2.css?v=5">
+<link rel="stylesheet" href="/site/assets/css/billcreation.css?v=1">
+</head>
+<body>
+<header class="top">
+  <div class="who"><b id="shop">Laundry</b><span>Place your order</span></div>
+</header>
+
+<main id="list" class="list bc-wrap">
+  <div class="empty">Loading the rate list…</div>
+</main>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<script src="/site/assets/js/billcreation.js?v=1" defer></script>
+</body>
+</html>

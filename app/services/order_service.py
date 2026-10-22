@@ -318,6 +318,10 @@ async def create_order(
         )
     except Exception:
         log.exception("order_admin_fyi_failed", order_number=order_number)
+    # Owner/grahak ki khabar fail hui (WAHA down) to send_message ne session
+    # rollback kiya — order expire. Neeche ops agent order padhta hai; bina
+    # taaza kiye MissingGreenlet aur order bana hua par request 500.
+    await _rehydrate(db)
     # Kapde grahak ke ghar hain — delivery wale ko lene jaana hai.
     #
     # Pehle har bill RECEIVED banta tha, yaani "kapde dukaan mein hain".

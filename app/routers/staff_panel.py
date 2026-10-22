@@ -1652,7 +1652,28 @@ async def pickup_bill_context(
         "customer_ref": str(customer.id),
         "customer_name": customer.name or "",
         "customer_phone": normalize_phone(customer.phone),
+        # Grahak ne /billcreation par jo kapde chune — bill mein pehle se
+        # bhare aate hain, boy sirf gin kar theek karta hai. AI wale pickup
+        # ki line ("5 shirt 2 pant") mein service nahi hoti, wo yahan nahi aati.
+        "items": [
+            {
+                "service": it["service"], "garment": it.get("garment") or "",
+                "qty": it.get("qty") or 1,
+                **({"pieces": it["pieces"]} if it.get("pieces") else {}),
+            }
+            for it in (order.items or [])
+            if isinstance(it, dict) and it.get("service") and it.get("kind") != "urgent_charge"
+        ],
+        # Grahak ne page par jo coupon lagaya — bill par wahi, redeem yahin
+        "coupon_code": _self_order_coupon(order.notes),
     }
+
+
+def _self_order_coupon(notes: str | None) -> str:
+    from app.services.self_order import COUPON_NOTE_RE
+
+    m = COUPON_NOTE_RE.search(notes or "")
+    return m.group(1) if m else ""
 
 
 # Bina order wale pickup par bill ban raha hai — dohra Save rokne ka nishaan
@@ -1873,6 +1894,22 @@ async def create_bill(
         existing_customer = await db.get(Customer, existing.customer_id)
         if existing_customer is None or normalize_phone(phone) != normalize_phone(existing_customer.phone):
             raise HTTPException(status_code=409, detail="Customer does not match this pickup")
+        # Coupon — create_order wale raaste jaisa hi (wahan create_order khud
+        # lagata hai). Pehle is raaste par coupon_code chupchaap chhoot jaata
+        # tha: grahak ne /billcreation par coupon lagaya, bill poore daam ka.
+        pickup_coupon, coupon_cut = None, Decimal("0")
+        if body.coupon_code.strip():
+            from app.services.marketing_agent import validate_coupon
+
+            pickup_coupon, coupon_cut, err = await validate_coupon(
+                db, body.coupon_code.strip(), existing_customer.id, total
+            )
+            if err:
+                raise HTTPException(status_code=400, detail=f"coupon: {err}")
+            total -= coupon_cut
+            discount += coupon_cut
+            if body.advance > float(total):
+                raise HTTPException(status_code=400, detail="Advance cannot be more than the bill")
         order = existing
         order.items = items
         order.total_amount = total
@@ -1886,6 +1923,13 @@ async def create_bill(
         db.add(order)
         await db.commit()
         await db.refresh(order)
+        if pickup_coupon is not None:
+            from app.services.marketing_agent import redeem_coupon
+
+            await redeem_coupon(db, pickup_coupon, order, coupon_cut)
+            from app.services import rewards as _rewards
+
+            await _rewards.mark_used(db, pickup_coupon.code, order)   # 🎁 reward coupon ho to "used"
     else:
         try:
             order = await create_order(

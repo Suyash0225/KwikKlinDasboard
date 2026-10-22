@@ -332,6 +332,11 @@ from app.routers.staff_panel import router as staff_panel_router
 
 app.include_router(staff_panel_router)
 
+# Grahak ka apna order page — kwikklin.online/billcreation (app/routers/self_order.py)
+from app.routers.self_order import router as self_order_router
+
+app.include_router(self_order_router)
+
 # Google Business Profile: saare Google reviews website par (Settings se connect)
 from app.routers.google_business import router as google_business_router
 from app.routers.gbp_poster_admin import router as gbp_poster_admin_router

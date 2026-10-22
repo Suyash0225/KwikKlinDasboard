@@ -54,6 +54,7 @@ jobs:
       - name: Check website and admin JavaScript syntax
         run: |
           node --check app/site/assets/js/site.js
+          node --check app/site/assets/js/billcreation.js
           node --check app/static/app.js
 
       - name: Set up Python

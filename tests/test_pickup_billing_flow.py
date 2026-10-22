@@ -221,3 +221,62 @@ async def test_dashboard_pickup_task_without_order_opens_prefilled_bill(
                 {"t": str(two_shops["a"])},
             )
             await db.commit()
+
+
+async def test_self_order_pickup_bill_prefills_items_and_applies_coupon(client, two_shops, sent):
+    """/billcreation ka order: boy ke bill mein grahak ke kapde + coupon pehle
+    se, aur coupon asli bill par lagta hai (pehle is raaste par chhoot jaata tha)."""
+    from decimal import Decimal
+
+    from app.models import Coupon
+    from app.services import self_order
+
+    await _panel_rate(two_shops["a"], service="SelfOrderPickupSvc", garment="Shirt", rate="50")
+    token = tenant_context.current_tenant_id.set(two_shops["a"])
+    try:
+        async with async_session_factory() as db:
+            db.add(Coupon(code="ZZPICK10", discount_type="percent", value=Decimal("10")))
+            await db.commit()
+            items, est = await self_order.price_items(db, [{"service": "SelfOrderPickupSvc", "garment": "Shirt", "qty": 2}])
+            order, _ = await self_order.place_order(
+                db, customer_phone=CUST_A, name="Self Order", address="1 Test Road", items=items,
+                estimate=est, pickup_day=self_order._today(), via="test", coupon="ZZPICK10", discount=Decimal("10"),
+            )
+            delivery = (await db.execute(select(Staff).where(
+                Staff.phone == A_DEL_PHONE, Staff.tenant_id == two_shops["a"]))).scalar_one()
+            task = (await db.execute(select(Task).where(
+                Task.order_id == order.id, Task.kind == "pickup", Task.status == "OPEN"))).scalar_one_or_none()
+            if task is None:
+                task = await task_service.create_task(
+                    db, title="Pickup: Self Order", staff=delivery, order=order, notify=False, kind="pickup")
+            else:
+                task.assigned_staff_id = delivery.id
+            await db.commit()
+            code, order_id = task.code, order.id
+    finally:
+        tenant_context.current_tenant_id.reset(token)
+    try:
+        await _login(client, A_DEL_PHONE)
+        ctx = (await client.get(f"/staff/api/tasks/{code}/bill-context")).json()
+        assert ctx["items"] == [{"service": "SelfOrderPickupSvc", "garment": "Shirt", "qty": 2.0}]
+        assert ctx["coupon_code"] == "ZZPICK10"
+
+        r = await client.post("/staff/api/bills", json={
+            "pickup_task_code": code, "customer_ref": ctx["customer_ref"], "customer_phone": "",
+            "customer_name": ctx["customer_name"], "coupon_code": ctx["coupon_code"],
+            "items": [{"service": "SelfOrderPickupSvc", "garment": "Shirt", "qty": 3}],
+        })
+        assert r.status_code == 201, r.text
+        assert r.json()["total"] == 135.0                         # 150 − 10%
+        async with async_session_factory() as db:
+            used = (await db.execute(sqltext(
+                "SELECT count(*) FROM coupon_redemptions WHERE order_id = :o"), {"o": str(order_id)})).scalar_one()
+        assert used == 1
+    finally:
+        async with async_session_factory() as db:
+            await db.execute(sqltext("DELETE FROM coupon_redemptions WHERE coupon_code = 'ZZPICK10'"))
+            await db.execute(sqltext("DELETE FROM coupons WHERE code = 'ZZPICK10'"))
+            await db.execute(sqltext(
+                "DELETE FROM rate_card WHERE tenant_id = :t AND service = 'SelfOrderPickupSvc'"),
+                {"t": str(two_shops["a"])})
+            await db.commit()

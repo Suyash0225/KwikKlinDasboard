@@ -1480,6 +1480,27 @@ async def _handle_inbound_message(
             # "naya message" ban kar AI ka bana hua asli jawab rok deta tha
             log.info("customer_reaction_no_reply", phone=phone)
             return
+        # /billcreation ke saade link se aaya "Order code: XXXXXX" — grahak ne
+        # page par khud kapde chune, ye message usi ke number se aaya hai.
+        # Classifier/AI se pehle: ye spam nahi ho sakta, aur order AI ke
+        # band/paused hone par bhi banna chahiye (grahak ne khud banaya hai).
+        from app.services import self_order
+
+        if self_order.find_code(text):
+            try:
+                code_reply = await self_order.handle_whatsapp_code(db, customer, text)
+            except Exception:
+                log.exception("self_order_code_failed", phone=phone)
+                code_reply = None
+            if code_reply:
+                try:
+                    await send_message(
+                        db, to_phone=phone, text=code_reply,
+                        intent="transactional", outbound_kind="service_reply", urgent=True,
+                    )
+                except SendError:
+                    log.exception("self_order_reply_send_failed", phone=phone)
+                return
         if (text or "").lstrip().startswith("[button:"):
             # Hamare hi menu ka button (Haan/Nahi, rating…) — spam/vendor ho hi
             # nahi sakta; LLM classifier se poochhna sirf deri aur risk hai

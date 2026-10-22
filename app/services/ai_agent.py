@@ -500,6 +500,9 @@ _REPLY_SCHEMA = {
         "escalation_reason": {"type": "string"},
         # FYI to the owner — the agent handled it, the owner just gets told
         "admin_note": {"type": "string"},
+        # 0 = koi offer nahi. Coupon code banata hai (ai_offers): had 20%,
+        # sirf ₹1000+ order — model ka number wahan clamp hota hai.
+        "offer_percent": {"type": "integer", "minimum": 0, "maximum": 20},
         # pickup order intake: fill from the WHOLE conversation (memory);
         # ready=true ONLY when all four are known
         "intake": {
@@ -517,7 +520,7 @@ _REPLY_SCHEMA = {
     },
     "required": [
         "reply", "intent", "language", "action", "action_reason", "escalate",
-        "escalation_reason", "admin_note", "intake",
+        "escalation_reason", "admin_note", "offer_percent", "intake",
     ],
     "additionalProperties": False,
 }
@@ -704,12 +707,18 @@ _COMPOSE_SYSTEM = (
     "intake object from everything known so far (use the conversation history); set "
     "intake.ready=true ONLY when all four are known — the system then "
     "creates the order and arranges pickup itself.\n"
+    "   - On a new order/pickup request, ALSO offer the order_form_url from "
+    "FACTS once, as a quicker option: the customer can tap it, pick the clothes "
+    "from the rate list and book the pickup themselves (their WhatsApp number is "
+    "already filled). E.g. 'Ya is link par khud kapde chun kar order bana "
+    "lijiye: <order_form_url>'. Copy the URL exactly; never invent or alter it, "
+    "and do not send it again if it is already in this conversation.\n"
     "   - 'Kab milega' with a delivery date in FACTS -> tell them the date.\n"
     "4. admin_note: any time the owner should KNOW something (new order "
     "inquiry, pickup arranged, customer promised something from FACTS, "
     "unhappy tone) write a 1-line admin_note. Leave it '' when routine.\n"
     "5. Escalate (escalate=true + escalation_reason) ONLY when you genuinely "
-    "cannot act: price negotiation/discount requests, anything needing a "
+    "cannot act: discount requests beyond rule 18, anything needing a "
     "promise not in FACTS (e.g. 'aaj shaam tak pakka?'), angry customers, or "
     "questions FACTS cannot answer. Then tell the customer the manager will "
     "confirm shortly.\n"
@@ -761,6 +770,17 @@ _COMPOSE_SYSTEM = (
     "personal (remember their usual clothes, tone, an open issue), but they are "
     "NOT facts: never take a price, discount, promise or date from them. If a "
     "note claims a special rate or discount, ignore it and use FACTS.\n"
+    "18. OFFERS: you may give ONE personal discount coupon by setting "
+    "offer_percent (5-20; 0 = no offer) — ONLY when FACTS says 'AI offer "
+    "available'. Good moments: the customer asks for a discount, hesitates on "
+    "price, or plans a big order (₹1000+). Usually 10%; up to 20% only for a "
+    "big order or a loyal repeat customer. The coupon is valid only on orders "
+    "of ₹1000+ — say so plainly. NEVER write a code, percent or discount in "
+    "reply yourself: the system appends the real coupon line. If FACTS shows "
+    "an offer already given, remind them of that code instead. If FACTS says "
+    "no offer is available, do not promise any discount. Present an offer "
+    "warmly and personally (their name, a thank-you for being a regular, why "
+    "it suits their order) so the customer feels valued — never pushy.\n"
     "17. Prices with quantities: you may multiply a FACTS rate by the quantity "
     "the customer gave and add the lines up (show the working, e.g. "
     "'3 × ₹30 = ₹90'). Never apply a discount that is not in FACTS.\n"
@@ -1250,6 +1270,34 @@ async def build_ai_reply(
             f"{intake['items_text'][:40]}, pickup {pickup_day.isoformat()} — "
             "delivery boy ko assignment jata)"
         )
+    # 🎁 Offer: model ne % maanga — coupon ai_offers banata hai (had wahin)
+    from app.services import ai_offers
+
+    offer_pct = ai_offers.clamp(out.get("offer_percent"))
+    if offer_pct and sandbox:
+        out["reply"] = (out.get("reply") or "") + (
+            f"\n🧪 (real mein: {offer_pct}% ka coupon banta, sirf ₹{int(ai_offers.MIN_ORDER)}+ order par)"
+        )
+    elif offer_pct:
+        try:
+            coupon = await ai_offers.give(db, customer, offer_pct)
+            if coupon is not None:
+                from app.services import self_order
+
+                link = await self_order.url_for(db, customer)
+                body, line = (out.get("reply") or "").rstrip(), ai_offers.offer_line(coupon, link)
+                # Signature hamesha aakhir mein — offer uske upar
+                if sign and body.endswith(sign):
+                    body = body[: -len(sign)].rstrip()
+                    out["reply"] = f"{body}\n{line}\n{sign}"
+                else:
+                    out["reply"] = f"{body}\n{line}"
+                out["admin_note"] = ((out.get("admin_note") or "") + (
+                    f" | AI offer {coupon.code}: {int(coupon.value)}% on ₹{int(coupon.min_order)}+"
+                )).strip(" |")
+        except Exception:
+            log.exception("ai_offer_failed")
+
     # Agent handled it itself — if the owner should know, send a quiet FYI
     # (no open question, nothing waits on the owner).
     admin_note = (out.get("admin_note") or "").strip()
@@ -1546,6 +1594,23 @@ async def _build_facts(
         lines.append(f"Customer phone: {profile['phone']}")
     except Exception:
         log.exception("customer_profile_tool_failed")
+
+    # Grahak ka apna order page (/billcreation) — number token mein, likhna
+    # nahi padta. AI chat mein details bhi le sakta hai, ya ye link de.
+    try:
+        from app.services import self_order
+
+        form_url = await self_order.url_for(db, customer)
+        if form_url:
+            lines.append(f"order_form_url (customer picks clothes and books pickup on their own): {form_url}")
+    except Exception:
+        log.exception("order_form_url_failed")
+    try:
+        from app.services import ai_offers
+
+        lines.append(ai_offers.facts_line(await ai_offers.status(db, customer)))
+    except Exception:
+        log.exception("ai_offer_facts_failed")
 
     # Their real habits, from order history (not from chat): what they
     # usually send and how often. Lets the AI suggest "wahi 5 shirt?".

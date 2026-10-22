@@ -8,6 +8,8 @@ two can change and cache independently.
 app/site/
 ├── templates/
 │   ├── index.html        HTML shell, rendered by GET /laundry (app/main.py)
+│   ├── billcreation.html customer's own order page, GET /billcreation
+│   │                     (app/routers/self_order.py; staff "New bill" UI)
 │   ├── legal.html        shared shell for company/legal pages
 │   └── legal/            page bodies: about, contact, privacy, terms,
 │                         refund-policy, shipping-policy → GET /<name>
@@ -40,4 +42,8 @@ never inside `site.js`, so the JS file stays static and cacheable.
 - New legal page: add `templates/legal/<name>.html` and one entry in
   `_LEGAL_PAGES` (app/main.py) — route, sitemap and robots follow automatically.
   Also link it in the footers of `index.html`, `legal.html` and `app/static/join.html`.
-- Tests: `tests/test_site.py`, `tests/test_google_business.py`, `tests/test_legal_pages.py`.
+- `/billcreation`: plain link = home shop (`?s=<slug>` for another shop);
+  the AI sends `?t=<token>` so the customer's number comes from the token.
+  On the plain link the order is confirmed by a WhatsApp message with an
+  order code from the customer's own number (`app/services/self_order.py`).
+- Tests: `tests/test_self_order.py`, `tests/test_site.py`, `tests/test_google_business.py`, `tests/test_legal_pages.py`.
