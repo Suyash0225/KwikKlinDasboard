@@ -2140,6 +2140,22 @@ async function showNewBill() {
     $("b-pickup-banner").hidden = false;
     $("b-pickup-banner").innerHTML = `<b>🛵 ${esc(pk)}</b><span>${esc(ctx.customer_name || "Customer")} · add the clothes you collected, then create the bill</span>`;
     $("b-save").textContent = "Create bill & finish pickup";
+    // Grahak ne page par coupon lagaya tha — bill par wahi jaata hai
+    if (ctx.coupon_code) {
+      REWARD_CODE = ctx.coupon_code;
+      $("b-pickup-banner").innerHTML += `<span>🎟 Coupon ${esc(ctx.coupon_code)} — applied on this bill</span>`;
+    }
+    // Grahak ne khud kapde chune the (/billcreation) — wahi cart mein, daam
+    // aaj ke rate card se. Boy gin kar sirf ginti theek karta hai.
+    if (!CART.length && Array.isArray(ctx.items)) {
+      const low = (v) => String(v || "").trim().toLowerCase();
+      ctx.items.forEach((it) => {
+        const r = RATES.find((x) => low(x.service) === low(it.service) && low(x.garment) === low(it.garment));
+        if (!r) return;
+        CART.push({ service: r.service, garment: r.garment, qty: Number(it.qty) || 1, rate: r.rate, card: r.rate,
+          unit: r.unit || "pc", pieces: Array.isArray(it.pieces) ? it.pieces.map((p) => ({ type: p.type, qty: p.qty })) : [] });
+      });
+    }
   }
   renderCart();
 }
