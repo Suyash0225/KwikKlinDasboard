@@ -2622,6 +2622,18 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> dict:
     return _redact_settings(await app_settings.all_settings(db))
 
 
+@router.get("/order-link")
+async def order_link(db: AsyncSession = Depends(get_db)) -> dict:
+    """Grahak ka apna order page (/billcreation) — owner copy karke kahin bhi
+    share kare. Home dukaan ka saada link, baaki ka ?s=<slug>."""
+    from app.models.tenant import Tenant
+    from app.services import self_order, tenant_context
+
+    tid = tenant_context.effective_tenant_id()
+    tenant = await db.get(Tenant, tid) if tid else None
+    return {"url": await self_order.plain_url(db, tenant) if tenant else ""}
+
+
 class SettingIn(BaseModel):
     key: str
     value: object

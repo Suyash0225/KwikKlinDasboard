@@ -4802,6 +4802,7 @@ async function loadSettings() {
     $("bp-review-short").innerHTML = s.public_base_url && slug
       ? `Customers get the short link: <b>${esc(s.public_base_url.replace(/\/$/, ""))}/r/${esc(slug)}</b>`
       : "Customers get this link in the “Please review us” message.";
+    orderLinkLoad();
     $("bp-footer").value = s.invoice_footer || "";
     $("bp-terms").value = s.invoice_terms || "";
     $("bp-paper").value = String(s.receipt_paper_mm || 58);
@@ -4810,6 +4811,22 @@ async function loadSettings() {
     gbpLoad();
     loadWahaConnection();
   } catch (e) { toast(e.message, true); }
+}
+
+/* Grahak ka apna order page (/billcreation) — owner copy karke share kare */
+async function orderLinkLoad() {
+  const box = $("bp-orderlink");
+  if (!box) return;
+  let url = "";
+  try { url = (await api("/admin/api/order-link")).url || ""; } catch (e) { url = ""; }
+  box.value = url || "Set the public website address first (Settings)";
+  $("bp-orderlink-open").href = url || "#";
+  $("bp-orderlink-open").hidden = !url;
+  $("bp-orderlink-copy").disabled = !url;
+  $("bp-orderlink-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(url); toast("Order link copied — paste it in WhatsApp"); }
+    catch (e) { box.select(); toast("Copy did not work — select the link and copy it", true); }
+  };
 }
 
 /* Google Business Profile — saare Google reviews website par */
