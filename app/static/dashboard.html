@@ -23,7 +23,7 @@
      it wins ties; app.css keeps layout and behaviour. -->
 <link rel="stylesheet" href="/admin/static/ui-v2.css?v=2">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
-<script src="/admin/static/app.js?v=ui2-12" defer></script>
+<script src="/admin/static/app.js?v=ui2-13" defer></script>
 <script src="/admin/static/gbp-poster.js?v=3" defer></script>
 </head>
 <body>
@@ -711,6 +711,14 @@
               <input id="bp-review2" type="url" placeholder="https://g.page/r/…/review"></div>
           </div>
           <small class="muted" id="bp-review-short"></small>
+          <div style="margin-top:10px"><label>Customer order link</label>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input id="bp-orderlink" readonly style="flex:1 1 260px" placeholder="Loading…">
+              <button type="button" class="btn sm" id="bp-orderlink-copy">Copy</button>
+              <a class="btn sm ghost" id="bp-orderlink-open" href="#" target="_blank" rel="noopener">Open</a>
+            </div>
+            <small class="muted">Share this anywhere — customers pick clothes from your rate list, add a coupon and book a pickup. The order is confirmed from their own WhatsApp number.</small>
+          </div>
           <div style="margin-top:10px"><label>Invoice footer banner message</label>
             <input id="bp-footer" placeholder="Thank you for choosing Kwik Klin!"></div>
           <div style="margin-top:10px"><label>Terms &amp; conditions on bills <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">(one per line · leave empty for none)</span></label>

@@ -11,6 +11,7 @@ from app.database import async_session_factory
 from app.models import Customer, Order, OrderStatus, Rate
 from app.services import self_order, tenant_context
 from tests.conftest import TEST_CUSTOMER_PHONE, TEST_CUSTOMER_PHONE_RAW
+from tests.test_staff_panel import two_shops  # noqa: F401  (fixture)
 from tests.test_webhook import _post_waha
 
 SERVICE = "Zzselforder Wash"
@@ -265,3 +266,22 @@ async def test_order_is_placed_even_when_whatsapp_is_down(client, rates, custome
     assert r.status_code == 200, r.text
     async with async_session_factory() as db:
         assert (await db.execute(select(Order).where(Order.order_number == r.json()["order_number"]))).scalar_one()
+
+
+async def test_dashboard_order_link_is_plain_for_home_and_slug_for_others(client, monkeypatch, two_shops) -> None:  # noqa: F811
+    from app.models.tenant import Tenant
+    from app.routers import agent_admin
+    from app.services import google_auth
+
+    async def base(db):
+        return "https://kwikklin.online"
+
+    monkeypatch.setattr(google_auth, "public_base", base)
+    home = await tenant_context.get_home_tenant_id()
+    async with tenant_context.as_tenant(home):
+        async with async_session_factory() as db:
+            assert (await agent_admin.order_link(db))["url"] == "https://kwikklin.online/billcreation"
+    async with tenant_context.as_tenant(two_shops["b"]):
+        async with async_session_factory() as db:
+            slug = (await db.get(Tenant, two_shops["b"])).slug
+            assert (await agent_admin.order_link(db))["url"] == f"https://kwikklin.online/billcreation?s={slug}"
