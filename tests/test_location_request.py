@@ -68,7 +68,7 @@ async def test_pickup_order_asks_for_location_exactly_once(sent, monkeypatch) ->
                 await create_order(db, customer_phone=TEST_CUSTOMER_PHONE, customer_name="Pin Poochho",
                                    items=[{"type": "Shirt", "qty": 2}], created_by="test", needs_pickup=True)
                 assert len(asked) == 1 and asked[0]["to"] == TEST_CUSTOMER_PHONE
-                assert "Location" in asked[0]["text"] and asked[0]["intent"] == "transactional"
+                assert "location" in asked[0]["text"].lower() and asked[0]["intent"] == "transactional"
 
                 # doosra pickup: dobara nahi — ek request kaafi hai
                 await create_order(db, customer_phone=TEST_CUSTOMER_PHONE, items=[{"type": "Pant", "qty": 1}],

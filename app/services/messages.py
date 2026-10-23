@@ -61,8 +61,8 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     # 📍 Ek baar: WhatsApp location bhejne ki request (pin = delivery boy seedha ghar)
     "location_request": {
-        "hi": "📍 Ek chhoti si madad: apni location ek baar bhej dein — WhatsApp mein 📎 (Attach) → Location → \"Send your current location\". Isse hamara delivery boy seedha aapke ghar pahunchega. — {shop}",
-        "en": "📍 One small favour: please share your location once — in WhatsApp tap 📎 (Attach) → Location → \"Send your current location\". Our delivery person will then reach your door directly. — {shop}",
+        "hi": "🙏 Namaste! Ek chhoti si request: please apni location share kar dein — WhatsApp mein 📎 (Attach) → Location → \"Send your current location\". Isse humein aapka ghar khojne mein suvidha hogi, aur pickup/delivery samay par aapke darwaze tak pahunchegi. — {shop}",
+        "en": "🙏 Hello! A small request: please share your location once — in WhatsApp tap 📎 (Attach) → Location → \"Send your current location\". It helps us find your home easily, so pickups and deliveries reach your door on time. — {shop}",
     },
     "location_saved": {
         "hi": "📍 Location mil gayi, save kar li 🙏 Ab pickup/delivery wala seedha aapke ghar pahunchega. — {shop}",
