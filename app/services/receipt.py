@@ -16,7 +16,7 @@ import textwrap
 import unicodedata
 from datetime import timedelta, timezone
 
-from app.services import urgent
+from app.services import item_savings, urgent
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -101,6 +101,9 @@ def build(
             "kg": kg,
             "rate": None if rate is None else _num(rate),
             "amount": None if amount is None else _num(amount),
+            # rate card ka daam aur usse kitna kam liya (item_savings.py)
+            "list_rate": _num(it["list_rate"]) if item_savings.line_saving(it) else None,
+            "saved": item_savings.line_saving(it),
             "pieces": pieces,
             # delivery ki ginti (partial delivery ke bill ke liye)
             "count": int(dl.get("qty") or 0),
@@ -120,6 +123,7 @@ def build(
 
     total = _num(order.total_amount)
     disc = _num(order.discount_amount)
+    line_saved = round(sum(it["saved"] for it in items), 2)
     gst = _num(order.gst_amount)
     paid = _num(order.amount_paid)
     terms = terms_list(settings.get("invoice_terms"))
@@ -144,6 +148,8 @@ def build(
         "has_total": order.total_amount is not None,
         "subtotal": total + disc - gst - urgent_charge,
         "discount": disc,
+        # kul bachat: kam rate wali lines + poore bill ka discount
+        "saved": round(line_saved + disc, 2) if line_saved else 0.0,
         "gst": gst,
         "total": total,
         "paid": paid,
@@ -242,6 +248,8 @@ def render(r: dict, width: int | None = None, *, terms: bool = True) -> str:
             row(detail, amount, indent=1)
         else:
             out.append(f"  {detail}" + (f" = {amount}" if amount else ""))
+        if it.get("saved"):
+            text(f"(Rate {money(it['list_rate'])}, you saved {money(it['saved'])})", indent=2)
         if it["pieces"]:
             count = sum(n for _, n in it["pieces"])
             if printing:
@@ -278,6 +286,8 @@ def render(r: dict, width: int | None = None, *, terms: bool = True) -> str:
             if r["gst"]:
                 row("GST", "+" + money(r["gst"]))
         row("Total", money(r["total"]))
+        if r.get("saved"):
+            row("You saved", money(r["saved"]))
         row("Paid", money(r["paid"]))
         # Chukta bill par "Due: ₹0" aur UPI ID grahak ko phir se paisa maangne
         # jaisa lagta hai — isliye saaf "Paid in full", aur UPI line hi nahi.

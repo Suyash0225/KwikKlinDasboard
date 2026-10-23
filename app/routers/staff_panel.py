@@ -1911,6 +1911,9 @@ async def create_bill(
             if body.advance > float(total):
                 raise HTTPException(status_code=400, detail="Advance cannot be more than the bill")
         order = existing
+        from app.services.item_savings import stamp_list_rates
+
+        await stamp_list_rates(db, items, previous=existing.items)
         order.items = items
         order.total_amount = total
         order.discount_amount = discount or None

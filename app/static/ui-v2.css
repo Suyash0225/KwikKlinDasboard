@@ -136,6 +136,9 @@ label { color: var(--ink-2); font-weight: 600; letter-spacing: 0; }
 .rowcard .kv { color: var(--ink-2); }
 .rowcard .act { gap: 6px; }
 .rowcard .act .btn { flex: 1 1 calc(33% - 6px); min-width: 0; }
+/* "↕ Change status" ek-tihai jagah mein kat jaata tha (white-space: nowrap) —
+   counter ka sabse zaroori button, to apni poori line */
+.rowcard .act .status-change-btn { flex-basis: 100%; }
 /* folded secondary actions (foldCardActions in app.js) */
 .rowcard .act .act-extra { display: none; }
 .rowcard .act.act-open .act-extra { display: inline-flex; }
