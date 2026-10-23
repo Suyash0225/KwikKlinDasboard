@@ -1173,7 +1173,7 @@ async function orderDetailModal(number) {
   openModal(`<h3>${o.urgent ? "🔴 " : ""}${esc(o.customer)}</h3>
     <p class="said">${esc(o.number)} · ${esc(STATUS_WORD[o.status] || o.status)}${o.delivery ? ` · delivery ${esc(whenParts(o.delivery).top)}` : ""}${o.urgent ? " · ⚡ URGENT" : ""}</p>
     ${stageLine(o.tracking)}
-    ${o.nav_url ? `<a class="btn ghost" href="${esc(o.nav_url)}" target="_blank" rel="noopener" style="margin-top:8px">🧭 Navigate to customer</a>` : ""}
+    ${o.nav_url ? `<a class="btn ghost mt-s" href="${esc(o.nav_url)}" target="_blank" rel="noopener">🧭 Navigate to customer</a>` : ""}
     <div class="od-block">
       <div class="od-head"><b>Clothes</b><span>${totalTxt}${c.delivered ? ` · ${c.delivered} delivered · <b class="late-t">${c.pending} pending</b>` : ""}${c.held ? ` · <b class="hold-t">${c.held} on hold</b>` : ""}</span></div>
       ${lineHtml}
@@ -1583,7 +1583,7 @@ function findCustomerModal() {
       catch (e) { res.innerHTML = `<p class="said">${esc(e.message)}</p>`; return; }
       if (mine !== seq) return;
       res.innerHTML = hits.length ? hits.map((c) => `<div class="od-block">
-          <b>${esc(c.name)}</b> <span class="said" style="display:inline;margin:0">${esc(c.phone_masked)}</span>
+          <b>${esc(c.name)}</b> <span class="said inl">${esc(c.phone_masked)}</span>
           ${c.address ? `<div class="sub mt-xs">📍 ${esc(c.address)}</div>` : ""}
           <div class="acts">
             ${c.nav_url ? `<a class="btn go sm" href="${esc(c.nav_url)}" target="_blank" rel="noopener">🧭 Navigate</a>`

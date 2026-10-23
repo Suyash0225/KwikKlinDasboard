@@ -2769,6 +2769,14 @@ async def attach_photo(
         tenant_id=p.staff.tenant_id,
         label="photo_notify",
     )
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="job_photo_added",
+        args={"order": order.order_number, "file": name, "kind": kind},
+        result=note[:100] or "photo", tenant_id=p.staff.tenant_id,
+    )
+    # Grahak ko photo SABSE AAKHIR mein, audit ke baad: request ka DB kaam
+    # poora ho chuka ho, tabhi ye apne session par chale (ek hi connection
+    # par do session ke savepoint ulajh jaate the).
     if kind == "damage" and customer_phone:
         from app.services import bill_link, whatsapp
 
@@ -2793,15 +2801,10 @@ async def attach_photo(
                     caption=caption, local_url=f"/admin/media/{name}", sent_by="bot",
                     intent="transactional", outbound_kind="order_status",
                 )
-            except whatsapp.SendError as exc:
+            except (whatsapp.SendError, whatsapp.WindowClosedError) as exc:
                 log.info("damage_photo_customer_not_sent", order=order_number, error=str(exc)[:120])
 
         background.run_after(_tell_customer, tenant_id=p.staff.tenant_id, label="damage_photo_customer")
-    await audit.record(
-        actor_role="staff", actor=p.staff.name, action="job_photo_added",
-        args={"order": order.order_number, "file": name, "kind": kind},
-        result=note[:100] or "photo", tenant_id=p.staff.tenant_id,
-    )
     return {"ok": True, "file": name, "kind": kind, "sent_to_customer": bool(kind == "damage" and customer_phone)}
 
 
