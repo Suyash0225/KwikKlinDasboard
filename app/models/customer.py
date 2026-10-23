@@ -30,6 +30,8 @@ class Customer(Base, TenantScoped):
     map_url: Mapped[str | None] = mapped_column(String(500))
     location_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     location_by: Mapped[str | None] = mapped_column(String(120))
+    # Grahak se "apni location bhej dein" sirf EK baar (services/location_request.py)
+    location_asked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
