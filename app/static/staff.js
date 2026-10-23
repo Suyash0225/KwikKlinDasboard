@@ -162,6 +162,8 @@ const ACTIONS = {
   message: (n) => { closeModal(); const w = WORK.find((x) => x.number === n); messageMenu(n, Number((w && w.due) || 0)); },
   cancel: (c) => { closeModal(); askCancel(c); },
   more: (fn) => (fn === "loadWork" ? loadWork({ more: true }) : loadBills({ more: true })),
+  findloc: () => { closeModal(); findCustomerModal(); },
+  saveloc: (n) => { const w = WORK.find((x) => x.number === n) || {}; closeModal(); askSaveLocation(w.customer_ref, w.who); },
 };
 document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-act]");
@@ -682,6 +684,8 @@ function taskCard(t) {
           : `<button class="btn go sm" data-tdo="done" data-code="${esc(t.code)}">✓ Done</button>`}
         ${ME.can_ask ? `<button class="btn ghost sm" data-tdo="ask" data-code="${esc(t.code)}">❓ Ask owner</button>` : ""}
         ${o ? `<button class="btn ghost sm" data-tdo="order" data-num="${esc(o.number)}">👁 Order</button>` : ""}
+        ${(o && o.nav_url) || (t.customer && t.customer.nav_url)
+          ? `<a class="btn ghost sm" href="${esc((o && o.nav_url) || t.customer.nav_url)}" target="_blank" rel="noopener">🧭 Navigate</a>` : ""}
       </div>` : ""}
     </div>
   </article>`;
@@ -727,6 +731,8 @@ async function loadWork(opts = {}) {
       number: s.number, who: s.customer, items: s.items, due: s.due,
       address: s.address, urgent: s.urgent, when: w, late: w.late, tasks: [],
       hasOrder: true, status: s.status, next: s.next, clothes: s.clothes,
+      // 📍 Google Maps pin (services/geo.py) — Navigate button aur route bar
+      nav_url: s.nav_url || "", waypoint: s.waypoint || "", customer_ref: s.customer_ref || "",
     };
     byOrder.set(s.number, item);
     page.push(item);
@@ -752,6 +758,9 @@ async function loadWork(opts = {}) {
       // shor hai. Neeche wahi jab order ka naam upar ho.
       urgent: t.urgent, when: w, late: !!w.late, tasks: [t],
       title: t.order ? t.title : "",
+      nav_url: (t.order && t.order.nav_url) || (t.customer && t.customer.nav_url) || "",
+      customer_ref: (t.order && t.order.customer_ref) || (t.customer && t.customer.customer_ref) || "",
+      waypoint: "",
     });
   }
   // "Show more" jodta hai, badalta nahi. Ek hi number do baar na aaye —
@@ -797,11 +806,20 @@ $("chips").addEventListener("click", (e) => {
    kholna aur wapas aana sadak par mushkil tha. Maps ek link mein 9 beech
    ke padav leta hai, isliye pehle 10 (list pehle se urgent/late ke kram mein). */
 const ROUTE_MAX = 10;
+/* Naya ladka: grahak ka naam likho, ghar ka pin milega. Kaam ki list ke
+   upar hi — kisi menu mein chhupa nahi. */
+function locateBar() {
+  if (!ME.show_route || inDone() || !DELIVERY_ROLES.includes(ME.role)) return "";
+  return `<div class="routebar">
+    <span>📍 <b>Customer's house?</b> Search by name</span>
+    <button type="button" class="btn ghost sm" data-act="findloc">Find</button>
+  </div>`;
+}
 function routeBar(rows) {
   if (!ME.show_route || inDone() || !DELIVERY_ROLES.includes(ME.role)) return "";
   const seen = new Set();
-  const addrs = rows.filter((w) => ["pickup", "deliver"].includes(w.chip) && w.address)
-    .map((w) => w.address.trim())
+  const addrs = rows.filter((w) => ["pickup", "deliver"].includes(w.chip) && (w.waypoint || w.address))
+    .map((w) => (w.waypoint || w.address).trim())
     .filter((a) => (seen.has(a.toLowerCase()) ? false : seen.add(a.toLowerCase())));
   if (!addrs.length) return "";
   const stops = addrs.slice(0, ROUTE_MAX);
@@ -811,7 +829,10 @@ function routeBar(rows) {
     + (mid.length ? "&waypoints=" + encodeURIComponent(mid.join("|")) : "");
   return `<div class="routebar">
     <span>🗺 <b>${stops.length} stop${stops.length > 1 ? "s" : ""}</b>${addrs.length > ROUTE_MAX ? ` (first ${ROUTE_MAX} of ${addrs.length})` : ""} in one route</span>
-    <a class="btn go sm" href="${esc(url)}" target="_blank" rel="noopener">Open route</a>
+    <span class="rb-acts">
+      <button type="button" class="btn ghost sm" data-act="findloc" aria-label="Find a customer's house">📍 Find</button>
+      <a class="btn go sm" href="${esc(url)}" target="_blank" rel="noopener">Open route</a>
+    </span>
   </div>`;
 }
 
@@ -828,7 +849,8 @@ function renderWork() {
   }
   // "Show more" sirf tab jab chhaant lagi hi na ho — chip ke andar aadhi
   // list dikhana aur "aur hai" kehna jhooth hai.
-  $("list").innerHTML = routeBar(rows) + `<div class="reg">${rows.map(workRow).join("")}</div>`
+  const bar = routeBar(rows) || locateBar();   // ek hi patti — phone par jagah keemti hai
+  $("list").innerHTML = bar + `<div class="reg">${rows.map(workRow).join("")}</div>`
     + ((FILTER === "all" || inDone()) && MORE_LEFT
         ? `<div class="morebar"><span>${WORK.length} shown</span>
              <button class="btn ghost sm" data-act="more" data-arg="loadWork">Show more</button></div>`
@@ -937,11 +959,12 @@ function workRow(w) {
       ${ME.show_route && w.address ? `<div class="sub mt-xs">📍 ${esc(w.address)}</div>` : ""}
       ${isDeliveryBoy() ? `<div class="acts compact">
         ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}${main.to ? ` data-to="${esc(main.to)}"` : ""}>${esc(main.label)}</button>` : ""}
+        ${ME.show_route && w.nav_url ? `<button class="btn ghost sm navb" data-do="map" data-url="${esc(w.nav_url)}" aria-label="Navigate to customer">🧭</button>` : ""}
         <button class="btn ghost sm more" data-do="more" aria-label="More options">⋯</button>
       </div>` : `<div class="acts">
         ${w.hasOrder && ME.can_contact ? `<button class="btn ghost sm" data-do="call">Call</button>` : ""}
         ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}${main.to ? ` data-to="${esc(main.to)}"` : ""}>${esc(main.label)}</button>` : ""}
-        ${ME.show_route && w.address ? `<button class="btn ghost sm" data-do="map" data-addr="${esc(w.address)}">Route</button>` : ""}
+        ${ME.show_route && (w.nav_url || w.address) ? `<button class="btn ghost sm" data-do="map" data-addr="${esc(w.address || "")}" data-url="${esc(w.nav_url || "")}">${w.nav_url ? "🧭 Navigate" : "Route"}</button>` : ""}
         ${ME.can_money && ME.features.includes("cod_collection") && w.due > 0
           ? `<button class="btn money sm" data-do="pay" data-due="${w.due}">${money(w.due)} collect</button>` : ""}
         <button class="btn ghost sm" data-do="more" aria-label="More">⋯</button>
@@ -952,8 +975,9 @@ function workRow(w) {
 
 function runAction(act, num, d = {}) {
   if (act === "call") return callCustomer(num);
+  // Pin saved ho to seedha directions; warna pate ki search
   if (act === "map") return window.open(
-    "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(d.addr),
+    d.url || ("https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(d.addr)),
     "_blank", "noopener");
   if (act === "done") return askDone(d.code);
   if (act === "ask") return openThread(d.code);
@@ -1153,6 +1177,7 @@ async function orderDetailModal(number) {
   openModal(`<h3>${o.urgent ? "🔴 " : ""}${esc(o.customer)}</h3>
     <p class="said">${esc(o.number)} · ${esc(STATUS_WORD[o.status] || o.status)}${o.delivery ? ` · delivery ${esc(whenParts(o.delivery).top)}` : ""}${o.urgent ? " · ⚡ URGENT" : ""}</p>
     ${stageLine(o.tracking)}
+    ${o.nav_url ? `<a class="btn ghost mt-s" href="${esc(o.nav_url)}" target="_blank" rel="noopener">🧭 Navigate to customer</a>` : ""}
     <div class="od-block">
       <div class="od-head"><b>Clothes</b><span>${totalTxt}${c.delivered ? ` · ${c.delivered} delivered · <b class="late-t">${c.pending} pending</b>` : ""}${c.held ? ` · <b class="hold-t">${c.held} on hold</b>` : ""}</span></div>
       ${lineHtml}
@@ -1466,6 +1491,7 @@ async function deliveryMenu(number) {
     <div class="paysum" id="dm-pay"><span class="muted">Loading payment…</span></div>
     <div class="btnrow stack">
       <button class="btn ghost" data-act="detail" data-arg="${esc(number)}">👁 Full details</button>
+      ${locationButtons(w)}
       <span id="dm-collect"></span>
     </div>
     <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
@@ -1488,6 +1514,123 @@ function moreMenu(number) {
   if (isDeliveryBoy()) return deliveryMenu(number);
   return moreMenuFull(number);
 }
+
+/* 📍 Grahak ka pin — ⋯ menu mein: Navigate (pin ho to), aur "Save pin"
+   jab ladka darwaze par khada ho. Washerman ko ye dikhta hi nahi. */
+function locationButtons(w) {
+  if (!ME.can_contact || !DELIVERY_ROLES.includes(ME.role) || !w.customer_ref) return "";
+  return (ME.show_route && w.nav_url
+    ? `<a class="btn ghost" href="${esc(w.nav_url)}" target="_blank" rel="noopener">🧭 Navigate to customer</a>` : "")
+    + `<button class="btn ghost" data-act="saveloc" data-arg="${esc(w.number)}">📍 ${w.nav_url ? "Update" : "Save"} location (I'm at their door)</button>`;
+}
+
+/* Phone ka pehla GPS reading aksar 100-500 m bhatka hota hai (ghar ke
+   andar, purana fix). Isliye kuch second tak readings dekho aur sabse
+   sateek rakho: 25 m se achha milte hi ruk jao, warna 12 s mein jo best
+   mila. onUpdate se modal par "48 m" jaisa live dikhta hai. */
+const GPS_GOOD_M = 25, GPS_WAIT_MS = 12000, GPS_MAX_MS = 20000;
+function bestPosition(onUpdate) {
+  return new Promise((res, rej) => {
+    if (!navigator.geolocation) return rej(new Error("GPS is not available on this phone"));
+    let best = null, watch = null, settle = null, giveUp = null;
+    const stop = () => { if (watch !== null) navigator.geolocation.clearWatch(watch); clearTimeout(settle); clearTimeout(giveUp); };
+    const finish = () => { stop(); best ? res(best) : rej(new Error("Could not get GPS — step outside and try again")); };
+    watch = navigator.geolocation.watchPosition((pos) => {
+      if (!best || pos.coords.accuracy < best.coords.accuracy) best = pos;
+      if (onUpdate) onUpdate(best);
+      if (best.coords.accuracy <= GPS_GOOD_M) finish();
+      else if (settle === null) settle = setTimeout(finish, GPS_WAIT_MS);
+    }, (e) => {
+      if (e.code === 1) { stop(); rej(new Error("Allow location access for this app, then try again")); }
+      // timeout/unavailable: reading aate rahenge ya giveUp pakad lega
+    }, { enableHighAccuracy: true, timeout: GPS_MAX_MS, maximumAge: 0 });
+    giveUp = setTimeout(finish, GPS_MAX_MS);
+  });
+}
+
+/* Pickup/delivery par darwaze par: ek tap, phone ka GPS, grahak par pin.
+   Promise — bill ke baad share se pehle isi ka intezaar hota hai. */
+function askSaveLocation(ref, name) {
+  return new Promise((resolve) => {
+    openModal(`<h3>📍 Save ${esc(name || "customer")}'s location?</h3>
+      <p class="said">You're at their door now. Save the map pin so the next pickup or delivery finds this house in one tap — even a new delivery boy.</p>
+      <div class="loc-status" id="loc-status" hidden></div>
+      <div id="loc-linkwrap" hidden>
+        <label for="loc-link">Google Maps link</label>
+        <input id="loc-link" type="url" inputmode="url" placeholder="Paste a Google Maps share link" autocomplete="off">
+      </div>
+      <div class="err" id="loc-err"></div>
+      <div class="btnrow">
+        <button class="btn ghost" id="loc-no">Cancel</button>
+        <button class="btn go" id="loc-yes">Yes, save location</button>
+      </div>
+      <button type="button" class="linkbtn loc-alt" id="loc-alt">No GPS? Paste a Google Maps link instead</button>`);
+    const done = () => { closeModal(); resolve(); };
+    const useLink = () => { $("loc-linkwrap").hidden = false; $("loc-alt").hidden = true; $("loc-yes").textContent = "Save link"; $("loc-link").focus(); };
+    $("loc-no").onclick = done;
+    $("loc-alt").onclick = useLink;
+    $("loc-yes").onclick = async (e) => {
+      const btn = e.currentTarget, label = btn.innerHTML;
+      const link = $("loc-linkwrap").hidden ? "" : $("loc-link").value.trim();
+      btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+      $("loc-err").textContent = "";
+      try {
+        let body;
+        if (link) body = { map_url: link };
+        else {
+          const st = $("loc-status"); st.hidden = false; st.textContent = "📡 Getting GPS… hold the phone still";
+          const pos = await bestPosition((p) => { st.textContent = `📡 GPS accuracy ${Math.round(p.coords.accuracy)} m — improving…`; });
+          body = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy_m: pos.coords.accuracy };
+          st.textContent = `📡 GPS accuracy ${Math.round(pos.coords.accuracy)} m`;
+        }
+        await api(`/customers/${encodeURIComponent(ref)}/location`, { method: "POST", body });
+        toast("Location saved 📍 — Navigate will work from now on");
+        done();
+        refreshCurrent({ quiet: true });
+      } catch (err) {
+        $("loc-err").textContent = err.message;
+        $("loc-status").hidden = true;
+        btn.disabled = false; btn.innerHTML = label;
+        if (!link) useLink();   // GPS fail: link ka raasta turant saamne
+      }
+    };
+  });
+}
+
+/* Naya ladka: naam likho, ghar ka pin — ya darwaze par khade ho kar save */
+function findCustomerModal() {
+  openModal(`<h3>📍 Find a customer</h3>
+    <input id="fl-q" type="search" placeholder="Customer name or number" autocomplete="off">
+    <div id="fl-res"></div>
+    <div class="btnrow"><button class="btn ghost" data-act="close">Close</button></div>`);
+  const q = $("fl-q"), res = $("fl-res");
+  q.focus();
+  let seq = 0, timer = null;
+  q.oninput = () => {
+    clearTimeout(timer);
+    const term = q.value.trim();
+    if (term.length < 2) { res.innerHTML = ""; return; }
+    const mine = ++seq;
+    timer = setTimeout(async () => {
+      let hits = [];
+      try { hits = await api(`/customers/locate?q=${encodeURIComponent(term)}`); }
+      catch (e) { res.innerHTML = `<p class="said">${esc(e.message)}</p>`; return; }
+      if (mine !== seq) return;
+      res.innerHTML = hits.length ? hits.map((c) => `<div class="od-block">
+          <b>${esc(c.name)}</b> <span class="said inl">${esc(c.phone_masked)}</span>
+          ${c.address ? `<div class="sub mt-xs">📍 ${esc(c.address)}</div>` : ""}
+          <div class="acts">
+            ${c.nav_url ? `<a class="btn go sm" href="${esc(c.nav_url)}" target="_blank" rel="noopener">🧭 Navigate</a>`
+              : `<span class="sub">No map pin yet</span>`}
+            <button type="button" class="btn ghost sm" data-saveloc="${esc(c.ref)}" data-name="${esc(c.name)}">📍 ${c.nav_url ? "Update" : "Save"} pin</button>
+          </div>
+        </div>`).join("") : `<p class="said">No customer found with that name.</p>`;
+      res.querySelectorAll("[data-saveloc]").forEach((b) => {
+        b.onclick = () => { closeModal(); askSaveLocation(b.dataset.saveloc, b.dataset.name); };
+      });
+    }, 250);
+  };
+}
 function moreMenuFull(number) {
   const w = WORK.find((x) => x.number === number) || {};
   const t = (w.tasks || [])[0];
@@ -1495,6 +1638,7 @@ function moreMenuFull(number) {
     <p class="said">${esc(w.who || "")}</p>
     <div class="btnrow stack">
       ${w.hasOrder ? `<button class="btn ghost" data-act="detail" data-arg="${esc(number)}">👁 Full details</button>` : ""}
+      ${locationButtons(w)}
       ${t ? `<button class="btn ghost" data-act="jobdone" data-arg="${esc(t.code)}">✅ Mark job ${esc(t.code)} done</button>` : ""}
       ${t && ME.can_ask ? `<button class="btn ghost" data-act="thread" data-arg="${esc(t.code)}">❓ Ask the owner</button>` : ""}
       ${ME.can_money ? `<button class="btn ghost" data-act="share" data-arg="${esc(number)}">🧾 Send bill on WhatsApp</button>` : ""}
@@ -2840,6 +2984,8 @@ async function saveBill(btn) {
   if (!PICKED && phone.replace(/\D/g, "").length < 10) return toast("Enter the full number", true);
   if (!CART.length) return toast("Add items first", true);
   const m = billMath();
+  // Pickup par ho to bill ke baad pin poochhenge — ladka darwaze par hi hai
+  const atTheDoor = NEEDS_PICKUP || !!PICKUP_BILL_CONTEXT;
   await busy(btn, async () => {
     const r = await api("/bills", {
       method: "POST",
@@ -2884,6 +3030,12 @@ async function saveBill(btn) {
     showNewBill();
     loadToday();
     if (pickupCompleted) loadWork({ quiet: true });
+    // Pin nahi hai aur ladka grahak ke darwaze par hai: ek tap mein save.
+    // Share se PEHLE — share sheet khulte hi aadmi aage badh jaata hai.
+    if ((pickupCompleted || atTheDoor) && r.customer_ref && r.customer_has_location === false
+        && DELIVERY_ROLES.includes(ME.role) && ME.can_contact && navigator.geolocation) {
+      await askSaveLocation(r.customer_ref, r.customer_name);
+    }
     // Grahak saamne khada hai — bill turant bhej dein
     shareBill(r.order_number, r.bill_url);
   });
@@ -3183,7 +3335,7 @@ const kb = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(
    proof (grahak ko diye, deliver ke baad) */
 const PHOTO_COPY = {
   general: ["add a photo", "Proof of the item\u2019s condition — a stain, a tear, or how many pieces. If anyone later says it was not like that, this is the answer.", "e.g. 12 pieces in the bag"],
-  damage: ["mark damage", "Found a stain, tear, missing button or faded colour? Take a photo now — before washing — so nobody blames the shop later.", "e.g. stain on the collar, button missing"],
+  damage: ["mark damage", "Found a stain, tear, missing button or faded colour? Take a photo now — before washing. The customer gets this photo on WhatsApp and on their bill too, so nobody blames the shop later.", "e.g. stain on the collar, button missing"],
   proof: ["delivery photo", "A photo of the clothes handed over at the door. If the customer later says they did not get them, this is the answer.", "e.g. handed to the guard"],
 };
 function askPhoto(number, kind = "general") {
@@ -3241,7 +3393,7 @@ function askPhoto(number, kind = "general") {
         (p) => { fill.style.width = Math.max(2, Math.round(p * 100)) + "%"; },
       );
       closeModal();
-      toast(kind === "damage" ? "Damage noted — the owner has been told" : "Photo added — the owner has been told");
+      toast(kind === "damage" ? "Damage noted — owner told, photo sent to the customer" : "Photo added — the owner has been told");
     } catch (err) {
       // Fail hone par kaam khatam nahi: wahi photo, ek tap par dobara.
       bar.hidden = true;

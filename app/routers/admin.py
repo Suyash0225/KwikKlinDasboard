@@ -41,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.services import geo as _geo
 from app.models import (
     CampaignRecipient,
     Conversation,
@@ -423,6 +424,8 @@ async def customers_list(
             "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
             "opted_out": c.opted_out,
             "payment_reminders_enabled": c.payment_reminders_enabled,
+            "address": c.address,
+            "map_url": c.map_url, **_geo.payload(c),
         }
         for c, active, total, biz, pd in rows
     ]
@@ -758,6 +761,7 @@ async def customers_search(
             "phone": c.phone,
             "phone_masked": _mask_phone(c.phone),
             "address": c.address,
+            "map_url": c.map_url, **_geo.payload(c),
             "order_count": int(order_count or 0),
             "last_order_at": last_order_at.isoformat() if last_order_at else None,
             "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
@@ -770,6 +774,8 @@ class CustomerEditIn(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, min_length=6, max_length=20)
     address: str | None = Field(default=None, max_length=400)
+    # Google Maps link — "" = pin hatao (services/geo.py)
+    map_url: str | None = Field(default=None, max_length=500)
     payment_reminders_enabled: bool | None = None
 
 
@@ -796,6 +802,11 @@ async def customer_edit(
         cust.name = body.name.strip() or None
     if body.address is not None:
         cust.address = body.address.strip() or None
+    if body.map_url is not None:
+        try:
+            _geo.set_location(cust, map_url=body.map_url, by="owner")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
     if body.payment_reminders_enabled is not None:
         cust.payment_reminders_enabled = body.payment_reminders_enabled
     if body.phone is not None:

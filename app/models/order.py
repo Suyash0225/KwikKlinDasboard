@@ -65,6 +65,10 @@ class Order(Base, TenantScoped):
 
     # [{"type": "shirt", "qty": 3, "service": "wash_iron"}, ...]
     items: Mapped[list] = mapped_column(JSONB, default=list)
+    # Grahak ko DIKHNE wali photos — daag/kharabi pickup par (WhatsApp + bill
+    # page): [{"file","kind","note","at","by"}]. `notes` INTERNAL hai, isliye
+    # alag; yahan sirf wahi jo grahak ko dikhana hai.
+    customer_photos: Mapped[list | None] = mapped_column(JSONB)
 
     # --- Payments (see module docstring for the rule) ---
     # total_amount is the FINAL billable amount (after discount, incl. GST).
