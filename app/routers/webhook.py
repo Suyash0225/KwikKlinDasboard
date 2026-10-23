@@ -519,8 +519,7 @@ async def receive_waha_webhook(
                     if not handled_owner_post:
                         msg = _waha_to_meta_shape(payload, resolved_from=resolved_from)
                         await _handle_inbound_message(
-                            msg, db,
-                            profile_name=str((payload.get("_data") or {}).get("notifyName") or ""),
+                            msg, db, profile_name=_waha_profile_name(payload),
                         )
             elif event_name == "message.ack":
                 status = _waha_ack_status(payload)
@@ -688,6 +687,23 @@ async def _staff_human_handoff_waiting(db: AsyncSession, staff: Staff) -> bool:
     return (
         datetime.now(timezone.utc) - latest_human.created_at
     ) < timedelta(minutes=5)
+
+
+def _waha_profile_name(payload: dict) -> str:
+    """The sender's WhatsApp display name from a WAHA payload.
+
+    NOWEB (our engine) passes the Baileys message through, where the name is
+    _data.pushName; WEBJS calls it _data.notifyName. Read both so a new
+    sender is saved by name instead of as a bare number.
+    """
+    data = payload.get("_data") or {}
+    if not isinstance(data, dict):
+        data = {}
+    for raw in (data.get("pushName"), data.get("notifyName"),
+                payload.get("pushName"), payload.get("notifyName")):
+        if isinstance(raw, str) and raw.strip():
+            return raw
+    return ""
 
 
 def _waha_to_meta_shape(payload: dict, *, resolved_from: str | None = None) -> dict:
