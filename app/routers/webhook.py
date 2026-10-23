@@ -1265,7 +1265,20 @@ async def _handle_inbound_message(
                 text = f"[{marker}:/admin/media/{fname}]"
                 extra = " ".join(x for x in (label, caption) if x)
                 if mtype in ("audio", "voice"):
-                    said = await _transcribe(Path(media_dir) / fname, part, purpose="customer_voice")
+                    # staff ki awaaz alag ginti mein — dashboard par staff ka AI
+                    # kharcha customer ke saath na mile. AI "none" wale staff
+                    # ki awaaz padhte hi nahi (owner Inbox mein sun leta hai).
+                    staff_mode = (
+                        await db.execute(
+                            select(Staff.ai_mode).where(Staff.phone == phone, Staff.is_active).limit(1)
+                        )
+                    ).scalar_one_or_none()
+                    said = None
+                    if staff_mode != "none":
+                        said = await _transcribe(
+                            Path(media_dir) / fname, part,
+                            purpose="staff_voice" if staff_mode else "customer_voice",
+                        )
                     if said:
                         extra = said
                 elif mtype in ("image", "sticker"):
@@ -1390,6 +1403,10 @@ async def _handle_inbound_message(
         # staff-command LLM or send its generic "Samajh nahi aaya" guidance.
         # The five-minute window is measured from the latest admin message.
         if staff is not None and staff.is_active and not is_manager:
+            # Settings: AI WhatsApp "None" — message Inbox mein hai, AI chup
+            if staff.ai_mode == "none":
+                log.info("staff_ai_mode_none", phone=phone, staff_id=str(staff.id))
+                return
             if await _staff_human_handoff_waiting(db, staff):
                 log.info("staff_human_handoff_waiting", phone=phone, staff_id=str(staff.id))
                 return

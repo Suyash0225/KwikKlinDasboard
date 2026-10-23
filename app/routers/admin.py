@@ -1395,6 +1395,8 @@ class StaffUpdateIn(BaseModel):
     role: str | None = Field(default=None, pattern="^(WASHER|IRONER|DELIVERY|SUPERVISOR|MANAGER|ADMIN)$")
     is_active: bool | None = None
     ai_agent_enabled: bool | None = None
+    # full / half / none — Settings dropdown (bill_agent + webhook padhte hain)
+    ai_mode: str | None = Field(default=None, pattern="^(full|half|none)$")
     agent_enabled: bool | None = None
 
 
@@ -1491,6 +1493,7 @@ async def staff_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
                 "id": str(s.id), "name": s.name, "phone": s.phone,
                 "role": s.role.name, "is_active": s.is_active,
                 "ai_agent_enabled": s.ai_agent_enabled,
+                "ai_mode": s.ai_mode,
                 "agent_enabled": bool(agent_switches.get(str(s.id), True)),
                 # the UI needs these to explain WHY delete is blocked
                 "active_orders": await _active_order_count(db, s.id),
@@ -1577,8 +1580,17 @@ async def staff_update(staff_id: str, body: StaffUpdateIn, db: AsyncSession = De
         staff.role = StaffRole[body.role]
     if body.is_active is not None:
         staff.is_active = body.is_active
-    if body.ai_agent_enabled is not None:
-        staff.ai_agent_enabled = body.ai_agent_enabled
+    if body.ai_mode is not None:
+        staff.ai_mode = body.ai_mode
+    elif body.ai_agent_enabled is not None:
+        # purana on/off: ON par pehle wala mode (ya half), OFF = none
+        staff.ai_mode = (
+            (staff.ai_mode if staff.ai_mode != "none" else "half")
+            if body.ai_agent_enabled else "none"
+        )
+    if body.ai_mode is not None or body.ai_agent_enabled is not None:
+        # automatic messages / auto-assign wahi boolean padhte hain
+        staff.ai_agent_enabled = staff.ai_mode != "none"
     if body.agent_enabled is not None:
         from app.services import app_settings
         switches = await app_settings.get(db, "staff_agent_switches")
