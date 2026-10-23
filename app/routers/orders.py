@@ -711,6 +711,9 @@ async def edit_order(
         "expected_delivery": str(order.expected_delivery),
     }
     if body.items is not None:
+        from app.services.item_savings import stamp_list_rates
+
+        await stamp_list_rates(db, body.items, previous=order.items)
         order.items = body.items
     if body.total_amount is not None:
         order.total_amount = body.total_amount

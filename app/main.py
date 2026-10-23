@@ -630,6 +630,8 @@ async def bill_page(token: str):
         unit = " kg" if it["kg"] else ""
         detail = f"{it['qty']}{unit}" + (f" × {money(it['rate'])}" if it["rate"] is not None else "")
         pieces = ", ".join(f"{n} {q}" for n, q in it["pieces"])
+        # Kam rate par liya: rate card ka daam kata hua, bachat saaf
+        was = _was(it, money)
         dl = ""
         if partial and it.get("count"):
             if it["pending"] == 0:
@@ -640,7 +642,7 @@ async def bill_page(token: str):
                 dl = f"<span class='dl part'>{it['delivered']} of {it['count']} delivered · {it['pending']} pending</span>"
         items.append(
             f"<li><span><span class='name'>{e(it['title'])}</span><small>{e(detail)}"
-            f"{' · ' + e(pieces) if pieces else ''}</small>{dl}</span>"
+            f"{' · ' + e(pieces) if pieces else ''}</small>{was}{dl}</span>"
             f"<span class='amt'>{money(it['amount']) if it['amount'] is not None else ''}</span></li>"
         )
     clothes = r.get("clothes") or {}
@@ -668,6 +670,8 @@ async def bill_page(token: str):
             if r["gst"]:
                 rows.append(("GST", money(r["gst"])))
         rows.append(("<b class='grand'>Total</b>", f"<b class='grand'>{money(r['total'])}</b>"))
+        if r.get("saved"):
+            rows.append(("<span class='saved'>You saved</span>", f"<b class='saved'>{money(r['saved'])}</b>"))
         rows.append(("Paid", money(r["paid"])))
         rows.append(("<b>Balance due</b>", f"<b>{money(r['due']) if r['due'] > 0 else 'Paid in full ✅'}</b>"))
     totals = "".join(
@@ -843,6 +847,14 @@ async def create_order_razorpay_link(token: str):
                                 headers={"Cache-Control": "no-store"})
     return JSONResponse({"url": url}, headers={"Cache-Control": "no-store"})
 
+
+
+def _was(it: dict, money) -> str:
+    """Kam rate par liya: rate card ka daam kata hua, aur bachat saaf."""
+    if not it.get("saved"):
+        return ""
+    return (f"<span class='was'>Rate <s>{money(it['list_rate'])}</s> · "
+            f"you saved {money(it['saved'])}</span>")
 
 
 def _earlier_bills_card(prev: dict, statement_link: str) -> str:
@@ -1038,7 +1050,7 @@ async def customer_statement_page(token: str):
         def _acc(o, r, due, paid_full: bool) -> str:
             items = "".join(
                 f"<li><span><span class='name'>{e(it['title'])}</span><small>{e(str(it['qty']) + (' kg' if it['kg'] else ''))}"
-                f"{' × ' + _money(it['rate']) if it['rate'] is not None else ''}</small></span>"
+                f"{' × ' + _money(it['rate']) if it['rate'] is not None else ''}</small>{_was(it, _money)}</span>"
                 f"<span class='amt'>{_money(it['amount']) if it['amount'] is not None else ''}</span></li>"
                 for it in r["items"]
             )
@@ -1069,7 +1081,7 @@ async def customer_statement_page(token: str):
             total_due += due
             items = "".join(
                 f"<li><span><span class='name'>{e(it['title'])}</span><small>{e(str(it['qty']) + (' kg' if it['kg'] else ''))}"
-                f"{' × ' + _money(it['rate']) if it['rate'] is not None else ''}</small></span>"
+                f"{' × ' + _money(it['rate']) if it['rate'] is not None else ''}</small>{_was(it, _money)}</span>"
                 f"<span class='amt'>{_money(it['amount']) if it['amount'] is not None else ''}</span></li>"
                 for it in r["items"]
             )

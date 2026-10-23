@@ -82,6 +82,10 @@ body { font:16px/1.55 var(--font); background:var(--bg); color:var(--ink); -webk
 .dl.ok { background:#dcfce7; color:var(--ok); }
 .dl.part { background:#fef3c7; color:var(--warn); }
 .dl.wait { background:var(--bg); color:var(--ink-3); }
+/* kam rate par liya: rate card ka daam kata hua + bachat */
+.was { display:block; margin-top:3px; color:var(--ok); font-size:12.5px; font-weight:600; }
+.was s { color:var(--ink-3); font-weight:500; }
+.saved { color:var(--ok); }
 .still { list-style:none; margin:8px 0 0; padding:0; }
 .still li { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px dashed var(--line); font-size:14px; }
 .still li:last-child { border-bottom:0; }

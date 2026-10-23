@@ -214,6 +214,15 @@ async def create_order(
 
     order_number = await _next_order_number(db)
 
+    # Rate card ka daam har line ke saath — kam rate likha ho to grahak ko
+    # bill par bachat dikhe (services/item_savings.py)
+    from app.services.item_savings import stamp_list_rates
+
+    # copy: caller ki list mein list_rate na ghuse (self_order usi list se
+    # "wahi order hai?" milata hai)
+    items = [dict(it) for it in items]
+    await stamp_list_rates(db, items)
+
     order = Order(
         order_number=order_number,
         customer_id=customer.id,
@@ -273,12 +282,14 @@ async def create_order(
 
     items_text = items_summary(order)
     advance_amt = advance_hint if advance_hint is not None else (order.amount_paid or Decimal("0"))
-    total_s = f"{order.total_amount}" if order.total_amount is not None else "—"
-    if order.total_amount is not None and order.discount_amount:
+    total_s = "—"
+    if order.total_amount is not None:
         # Chhoot total ke saath hi — isse Meta ka approved template (fixed
         # 7 params), owner ka apna format aur default copy, teeno bina
-        # badle discount dikhate hain.
-        total_s += f" (₹{order.discount_amount} discount)"
+        # badle discount aur kam-rate ki bachat dikhate hain.
+        from app.services.item_savings import message_total
+
+        total_s = message_total(order.total_amount, order.discount_amount, order.items)
     advance_s = f"{advance_amt}"
     due = (order.total_amount or Decimal("0")) - advance_amt
     due_s = f"{max(due, 0)}" if order.total_amount is not None else "—"
@@ -627,12 +638,15 @@ async def send_bill_to_customer(
     o = orders[0]
     due = max((o.total_amount or Decimal("0")) - (o.amount_paid or Decimal("0")), Decimal("0"))
     link = await bill_link.url_for(db, o)
+    from app.services.item_savings import message_total
+
+    total_s = message_total(o.total_amount or 0, o.discount_amount, o.items)
     await _notify_customer(
         db, o,
         message_key="bill_requested",
         template_name="kk_bill_requested",
-        template_params=[o.order_number, str(o.total_amount or 0), str(due)],
-        total=str(o.total_amount or 0),
+        template_params=[o.order_number, total_s, str(due)],
+        total=total_s,
         due=str(due),
         bill_line=bill_link.message_line(link),
     )
