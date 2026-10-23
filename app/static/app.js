@@ -3037,6 +3037,12 @@ const PURPOSE_LABEL = {
   reply: "Customer replies", intent: "Understanding messages", extract: "Reading bills/commands",
   vision: "Bill from photo", query: "Your questions", marketing: "Writing campaigns",
   social: "Daily poster", other: "Other",
+  staff_command_extract: "Staff commands", staff_chat: "Staff chat (no longer uses AI)",
+  staff_expense_extract: "Staff expenses", staff_voice: "Staff voice notes",
+  relay_compose: "Messages relayed to staff", customer_voice: "Customer voice notes",
+  customer_image: "Customer photos", inbound_non_lead_classif: "Spam / lead check",
+  inbox_suggest: "Inbox ✨ suggestions", memory: "Customer memory", followup: "Customer follow-ups",
+  gbp_post: "Google posts",
 };
 
 /* ============================= tasks ============================= */
@@ -5140,6 +5146,17 @@ function fmtPhone(p) {
   return m ? `+91 ${m[1]} ${m[2]}` : p || "";
 }
 
+/* Staff ke WhatsApp par AI kitna — server ka ai_mode (full / half / none) */
+const STAFF_AI_MODES = {
+  full: { label: "Full — sab kuch (AI zyada)", short: "Full",
+    help: "Kaam ke commands + aam baat-cheet ka bhi AI jawab. Sabse zyada AI kharcha." },
+  half: { label: "Half — sirf kaam", short: "Half",
+    help: "Sirf kaam ke commands (status, delay, bill, task). Faltu baat par koi jawab nahi." },
+  none: { label: "None — band", short: "OFF",
+    help: "AI band: na automatic message, na auto assign, na unke message par AI. Message Inbox mein dikhega." },
+};
+const staffAiMode = (s) => s.ai_mode || (s.ai_agent_enabled ? "full" : "none");
+
 function renderStaff() {
   if (!STAFF.length) {
     $("staff-list").innerHTML =
@@ -5154,7 +5171,7 @@ function renderStaff() {
           <span class="ph">${fmtPhone(s.phone)}</span>
           <span class="badge role">${ROLE_LABEL[s.role] || esc(s.role)}</span>
           <span class="statuspill ${s.is_active ? "on" : "off"}">${s.is_active ? "Active" : "Inactive"}</span>
-          <span class="statuspill ${s.ai_agent_enabled ? "on" : "off"}">AI WhatsApp ${s.ai_agent_enabled ? "ON" : "OFF"}</span>
+          <span class="statuspill ${staffAiMode(s) === "none" ? "off" : "on"}">AI WhatsApp: ${STAFF_AI_MODES[staffAiMode(s)].short}</span>
           <span class="statuspill ${s.agent_enabled !== false ? "on" : "off"}">Auto assign ${s.agent_enabled !== false ? "ON" : "OFF"}</span>
           ${s.is_default ? `<span class="badge">Default</span>` : ""}
           ${s.also_customer ? `<span class="badge warn" title="Yeh number customer list mein bhi hai. Is number se aane wale message STAFF ke maane jayenge — customer wala AI jawab nahi milega.">Customer bhi</span>` : ""}
@@ -5165,7 +5182,11 @@ function renderStaff() {
         <button class="btn sm ghost" onclick="panelAccess('${s.id}')">${
           s.has_login ? "🔑 New password" : "🔑 Panel login"}</button>
         <button class="btn sm ghost" onclick="editStaffModal('${s.id}')">Edit</button>
-        <button class="btn sm ghost" onclick="updStaff('${s.id}', {ai_agent_enabled: ${!s.ai_agent_enabled}})">${s.ai_agent_enabled ? "Disable AI WhatsApp" : "Enable AI WhatsApp"}</button>
+        <label class="ai-mode-pick" title="${esc(STAFF_AI_MODES[staffAiMode(s)].help)}">AI WhatsApp
+          <select aria-label="AI WhatsApp for ${esc(s.name)}" onchange="updStaff('${s.id}', {ai_mode: this.value})">
+            ${Object.entries(STAFF_AI_MODES).map(([v, m]) =>
+              `<option value="${v}" ${staffAiMode(s) === v ? "selected" : ""}>${m.label}</option>`).join("")}
+          </select></label>
         <button class="btn sm ghost" onclick="updStaff('${s.id}', {agent_enabled: ${s.agent_enabled === false}})">Auto assign ${s.agent_enabled === false ? "ON" : "OFF"}</button>
         ${s.is_active
           ? `<button class="btn sm ghost" onclick="deactivateStaff('${s.id}')">Deactivate</button>`

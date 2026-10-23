@@ -25,7 +25,14 @@ class Staff(Base, TenantScoped):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     # Per-staff control for automated AI-agent WhatsApp messages.
+    # Derived from ai_mode (!= "none"); kept so assignment/standup/task
+    # senders keep their simple boolean filter.
     ai_agent_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # Staff ke WhatsApp par AI kitna (Settings dropdown):
+    #   full — commands + aam baat ka bhi AI jawab (sabse zyada AI)
+    #   half — sirf kaam ke commands; faltu baat par koi jawab nahi
+    #   none — AI band: na automatic message, na unke message par AI
+    ai_mode: Mapped[str] = mapped_column(String(5), default="half", server_default="full")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

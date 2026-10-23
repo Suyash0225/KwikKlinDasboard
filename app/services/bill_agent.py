@@ -366,9 +366,10 @@ _ORDER_BTN_RE = re.compile(r"^\s*\[button:ord:(KK-\S+?):(done|later|problem)\]",
 # Handle them before the contextual task classifier and generic extractor so
 # casual staff chat does not consume one or two model calls.
 _LOW_SIGNAL_STAFF_RE = re.compile(
-    r"^\s*(?:ok(?:ay)?(?:\s+thanks?)?|thanks?|thank\s+you|thx|welcome|good\s+morning|"
+    r"^\s*(?:(?:ok(?:ay|k+)?(?:\s+thanks?)?|thanks?|thank\s+you|thx|welcome|good\s+morning|"
     r"good\s+evening|good\s+night|hi|hello|hey|namaste|theek\s+hai|"
-    r"thik\s+hai|achha|acha)(?:\s+bhaiya)?\s*[!.?,🙏🙂👍]*\s*$",
+    r"thik\s+hai|achha|acha|ji|haan|han|ha|hmm+)(?:\s+(?:ji|bhaiya|sir))*)?"
+    r"\s*[!.?,🙏🙂😊👍👌✅]*\s*$",
     re.I,
 )
 
@@ -1404,12 +1405,19 @@ async def handle_staff_message(
     # Band kiya gaya aadmi: yahan tak pahunchna hi nahi chahiye (webhook
     # pehle hi rok deta hai), par ye doosra taala hai — bill, payment,
     # status, sab isi darwaze se guzarta hai.
+    # Staff ka AI mode (Settings dropdown): full = aam baat ka bhi AI jawab,
+    # half = sirf kaam ke commands. "none" webhook par hi ruk jaata hai.
+    ai_mode = "full"
     if sender_label != "manager":
         who = (
             await db.execute(select(Staff).where(Staff.phone == sender_phone))
         ).scalar_one_or_none()
         if who is not None and not who.is_active:
             log.info("inactive_staff_command_ignored", staff=who.name)
+            return None
+        if who is not None:
+            ai_mode = who.ai_mode or "half"
+        if ai_mode == "none":
             return None
 
     pending = _PENDING.get(sender_phone)
@@ -1715,6 +1723,10 @@ async def handle_staff_message(
         return get_message("staff_cmd_unknown")
     if pending:
         return get_message("staff_cmd_unknown")
+    if ai_mode != "full":
+        # Half: kaam nahi to jawab bhi nahi — aam baat par AI ka paisa nahi
+        log.info("staff_small_talk_skipped", staff=sender_label, ai_mode=ai_mode)
+        return None
     return await _answer_staff_general_question(text)
 
 

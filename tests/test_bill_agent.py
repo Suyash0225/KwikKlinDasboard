@@ -1306,3 +1306,79 @@ async def test_drafts_are_kept_apart_per_shop() -> None:
         assert isinstance(_PENDING.get(SENDER), PendingBill)
     finally:
         tenant_context.current_tenant_id.reset(token)
+
+
+async def _set_ai_mode(staff_id, mode: str) -> None:
+    from app.models import Staff
+
+    async with async_session_factory() as db:
+        row = await db.get(Staff, staff_id)
+        row.ai_mode = mode
+        row.ai_agent_enabled = mode != "none"
+        await db.commit()
+
+
+async def _staff_says(text: str) -> str | None:
+    async with async_session_factory() as db:
+        return await handle_staff_message(
+            db, sender_phone=TEST_WASHER_PHONE, sender_label=TEST_WASHER_NAME, text=text,
+        )
+
+
+async def test_half_mode_small_talk_gets_no_reply_and_no_second_ai_call(monkeypatch, test_washer) -> None:
+    """Half = sirf kaam: command nahi to jawab nahi, aur staff_chat LLM nahi."""
+    await _set_ai_mode(test_washer, "half")
+    _patch_extract(monkeypatch, _extract_result(action="other"))
+
+    async def no_chat(**kw):
+        raise AssertionError("half mode must not pay for small talk")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask", no_chat)
+    assert await _staff_says("bhaiya aaj bahut garmi hai") is None
+
+
+async def test_full_mode_small_talk_gets_an_ai_reply(monkeypatch, test_washer) -> None:
+    await _set_ai_mode(test_washer, "full")
+    _patch_extract(monkeypatch, _extract_result(action="other"))
+
+    async def chat(**kw):
+        return "Haan ji, paani peete rahiye!"
+
+    monkeypatch.setattr(bill_module.llm_client, "ask", chat)
+    try:
+        assert await _staff_says("bhaiya aaj bahut garmi hai") == "Haan ji, paani peete rahiye!"
+    finally:
+        await _set_ai_mode(test_washer, "half")
+
+
+async def test_none_mode_never_calls_ai(monkeypatch, test_washer) -> None:
+    await _set_ai_mode(test_washer, "none")
+
+    async def no_llm(**kw):
+        raise AssertionError("AI is off for this staff member")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+    monkeypatch.setattr(bill_module.llm_client, "ask", no_llm)
+    try:
+        assert await _staff_says("KK-20261023-01 ready") is None
+    finally:
+        await _set_ai_mode(test_washer, "half")
+
+
+@pytest.mark.parametrize("text", ["ji", "haan ji", "ok ji", "okk", "👍", "ji sir 🙏", "hmm"])
+async def test_staff_acknowledgements_skip_ai_entirely(monkeypatch, test_washer, text) -> None:
+    async def no_llm(**kw):
+        raise AssertionError(f"{text!r} must not reach the LLM")
+
+    monkeypatch.setattr(bill_module.llm_client, "ask_json", no_llm)
+    monkeypatch.setattr(bill_module.llm_client, "ask", no_llm)
+    async with async_session_factory() as db:
+        reply = await handle_staff_message(
+            db, sender_phone=TEST_WASHER_PHONE, sender_label=TEST_WASHER_NAME, text=text,
+        )
+    assert reply is None
+
+
+def test_real_staff_commands_are_not_mistaken_for_acknowledgements() -> None:
+    for text in ("KK-20261023-01 ready", "ji KK-20261023-01 ready hai", "haan 2 shirt", "ok kal delivery"):
+        assert not bill_module._LOW_SIGNAL_STAFF_RE.fullmatch(text), text

@@ -411,3 +411,32 @@ async def test_agent_assignment_toggle_is_independent_of_ai_whatsapp_toggle(clie
             switches = await app_settings.get(db, "staff_agent_switches")
             switches.pop(sid, None)
             await app_settings.set_value(db, "staff_agent_switches", switches)
+
+
+async def test_ai_mode_dropdown_keeps_the_legacy_switch_in_sync(client, test_washer) -> None:
+    """None = AI band (automatic messages/auto-assign read ai_agent_enabled)."""
+    sid = str(test_washer)
+
+    async def row():
+        staff = (await client.get("/admin/api/staff", headers=H)).json()
+        return next(s for s in staff if s["id"] == sid)
+
+    try:
+        assert (await client.put(f"/admin/api/staff/{sid}", headers=H, json={"ai_mode": "none"})).status_code == 200
+        r = await row()
+        assert r["ai_mode"] == "none" and r["ai_agent_enabled"] is False
+
+        await client.put(f"/admin/api/staff/{sid}", headers=H, json={"ai_mode": "full"})
+        r = await row()
+        assert r["ai_mode"] == "full" and r["ai_agent_enabled"] is True
+
+        # old clients: OFF -> none, ON -> back to a working mode
+        await client.put(f"/admin/api/staff/{sid}", headers=H, json={"ai_agent_enabled": False})
+        assert (await row())["ai_mode"] == "none"
+        await client.put(f"/admin/api/staff/{sid}", headers=H, json={"ai_agent_enabled": True})
+        assert (await row())["ai_mode"] == "half"
+
+        bad = await client.put(f"/admin/api/staff/{sid}", headers=H, json={"ai_mode": "max"})
+        assert bad.status_code == 422
+    finally:
+        await client.put(f"/admin/api/staff/{sid}", headers=H, json={"ai_mode": "half"})

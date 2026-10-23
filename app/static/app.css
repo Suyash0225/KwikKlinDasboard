@@ -3435,3 +3435,7 @@ body.inbox-mode #sec-inbox .pagehead .actions .btn:first-child {
   #sec-campaigns #camp-test-send-btn{width:100%;white-space:normal}
   #sec-campaigns .camp-review-card{padding:13px}
 }
+
+/* Settings → staff: AI WhatsApp dropdown (full / half / none) */
+.ai-mode-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--n600); }
+.ai-mode-pick select { min-height: 34px; padding: 4px 8px; font-size: 12.5px; border-radius: 8px; max-width: 100%; }
