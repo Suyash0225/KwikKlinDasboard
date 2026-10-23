@@ -23,7 +23,7 @@
      it wins ties; app.css keeps layout and behaviour. -->
 <link rel="stylesheet" href="/admin/static/ui-v2.css?v=3">
 <!-- defer: downloads during HTML parse, runs before DOMContentLoaded — nothing blocks -->
-<script src="/admin/static/app.js?v=ui2-14" defer></script>
+<script src="/admin/static/app.js?v=ui2-15" defer></script>
 <script src="/admin/static/gbp-poster.js?v=3" defer></script>
 </head>
 <body>
@@ -611,10 +611,11 @@
       <div class="pagehead"><div><h2>AI usage</h2><p>How much AI was used, what it cost — and the monthly run rate</p></div>
         <div class="actions"><button class="btn ghost" onclick="loadUsage()">↻ Refresh</button></div>
       </div>
+      <div class="chips" id="usage-range" role="group" aria-label="Period" style="margin-bottom:12px"></div>
       <div id="usage-budget-alert" aria-live="polite" style="margin-bottom:14px"></div>
       <div class="grid kpis" id="usage-kpis"></div>
       <div class="split2">
-        <div class="card"><b>Daily usage (30 days)</b><div id="usage-chart" style="margin-top:10px"></div></div>
+        <div class="card"><b id="usage-chart-title">Daily usage (30 days)</b><div id="usage-chart" style="margin-top:10px"></div></div>
         <div class="card"><b>By purpose</b><div id="usage-purpose" style="margin-top:10px"></div></div>
       </div>
       <div class="card" style="margin-top:14px"><b>By model</b><div id="usage-models" style="margin-top:10px"></div></div>
