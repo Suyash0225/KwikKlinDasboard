@@ -57,6 +57,8 @@ def _provider_models(provider: str) -> tuple[str, str]:
 # Better to give up fast and let the rule-based fallback answer.
 TIMEOUT_SECONDS = 20.0
 IMAGE_TIMEOUT_SECONDS = 45.0
+# deep_thinking(): high thinking on the smart model needs a longer window.
+DEEP_TIMEOUT_SECONDS = 45.0
 
 # Transient failures (429 / 5xx) get retried here with exponential backoff
 # and jitter. Jitter matters on the free tier: without it, every message
@@ -158,6 +160,7 @@ async def _record_usage(
 # What the current call is for — set by callers via track(); read by the
 # recorder. A ContextVar keeps it correct under concurrent requests.
 _purpose: ContextVar[str] = ContextVar("llm_purpose", default="other")
+_deep: ContextVar[bool] = ContextVar("llm_deep_thinking", default=False)
 _customer_id: ContextVar[object | None] = ContextVar("llm_customer_id", default=None)
 _order_id: ContextVar[object | None] = ContextVar("llm_order_id", default=None)
 _conversation_id: ContextVar[object | None] = ContextVar("llm_conversation_id", default=None)
@@ -179,6 +182,18 @@ def attribution(*, customer_id=None, order_id=None, conversation_id=None):
         _customer_id.reset(tc)
         _order_id.reset(to)
         _conversation_id.reset(tv)
+
+
+@contextmanager
+def deep_thinking():
+    """Owner-triggered, quality-first calls (e.g. inbox reply suggestion):
+    the smart model thinks at "high" instead of "low", with a longer timeout.
+    Never use this on the automatic per-message path — it costs more."""
+    token = _deep.set(True)
+    try:
+        yield
+    finally:
+        _deep.reset(token)
 
 
 @contextmanager
@@ -234,7 +249,11 @@ async def _generate_with_fallback(
     elif candidates[0] != cheap:
         candidates.append(cheap)
 
-    budget = IMAGE_TIMEOUT_SECONDS if image is not None else TIMEOUT_SECONDS
+    budget = (
+        IMAGE_TIMEOUT_SECONDS if image is not None
+        else DEEP_TIMEOUT_SECONDS if _deep.get()
+        else TIMEOUT_SECONDS
+    )
     last_exc: LLMUnavailable | None = None
     provider_failure_seen = False
     for candidate in candidates:
@@ -489,7 +508,7 @@ async def transcribe_audio(
 
 async def _gemini_post(model: str, payload: dict) -> httpx.Response:
     """One HTTP call, isolated so tests can fake it."""
-    async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(timeout=DEEP_TIMEOUT_SECONDS if _deep.get() else TIMEOUT_SECONDS) as client:
         return await client.post(
             f"{_GEMINI_BASE}/{model}:generateContent",
             headers={"x-goog-api-key": settings.GEMINI_API_KEY},
@@ -527,6 +546,8 @@ async def _gemini_generate(
     # quality/cost control; the cheap model can use minimal thinking, while
     # the smart model gets low thinking for harder turns.
     thinking_level = "minimal" if model == MODEL_CHEAP else "low"
+    if _deep.get() and model == MODEL_SMART:
+        thinking_level = "high"
     gen: dict = {
         "maxOutputTokens": max(max_tokens, 512),
         "thinkingConfig": {"thinkingLevel": thinking_level},

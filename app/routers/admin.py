@@ -2283,6 +2283,32 @@ async def inbox_send(body: InboxSendIn, db: AsyncSession = Depends(get_db)) -> d
 
 
 
+class InboxSuggestIn(BaseModel):
+    phone: str
+
+
+@router.post("/api/inbox/suggest", dependencies=[Depends(require_admin_key), Depends(require_feature("inbox"))])
+async def inbox_suggest(body: InboxSuggestIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """✨ AI reads the whole chat and suggests replies. Nothing is sent."""
+    from app.services import inbox_suggest as _suggest
+    from app.services.llm_client import LLMError
+
+    try:
+        phone = normalize_phone(body.phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    customer = (
+        await db.execute(select(Customer).where(Customer.phone == phone))
+    ).scalar_one_or_none()
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Reply suggestions are for customer chats only")
+    try:
+        return await _suggest.suggest(db, customer)
+    except LLMError as exc:
+        log.warning("inbox_suggest_failed", error=str(exc)[:150])
+        raise HTTPException(status_code=503, detail="AI is busy right now — please try again in a moment") from exc
+
+
 class InboxReactionIn(BaseModel):
     phone: str
     wamid: str = Field(min_length=1, max_length=180)

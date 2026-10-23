@@ -5857,7 +5857,54 @@ function closePickers() {
   if (pal) pal.classList.remove("open");
 }
 
+/* ✨ AI reply suggestions: Gemini reads the whole chat + the customer's
+   orders and proposes replies. A tap only fills the box — the owner
+   still reads, edits and sends. Nothing goes out from here. */
+let AI_SUGG_FOR = "";
+function aiSuggestClose() {
+  const p = $("ai-sugg");
+  if (p) { p.hidden = true; p.innerHTML = ""; }
+  AI_SUGG_FOR = "";
+}
+async function aiSuggest() {
+  const p = $("ai-sugg");
+  if (!p || !OPEN_PHONE) return;
+  if (!p.hidden && AI_SUGG_FOR === OPEN_PHONE) { aiSuggestClose(); return; }
+  const phone = OPEN_PHONE;
+  AI_SUGG_FOR = phone;
+  p.hidden = false;
+  p.innerHTML = `<div class="ai-sugg-head"><b>✨ AI suggestions</b><button class="th-ico" onclick="aiSuggestClose()" aria-label="Close suggestions">✕</button></div>
+    <div class="muted ai-sugg-wait"><span class="spin dark"></span> Reading the whole chat…</div>`;
+  const btn = $("ai-sugg-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api("/admin/api/inbox/suggest", { method: "POST", body: { phone } });
+    if (AI_SUGG_FOR !== phone || OPEN_PHONE !== phone) return;   // chat badal gayi
+    const list = r.suggestions || [];
+    p.innerHTML = `<div class="ai-sugg-head"><b>✨ AI suggestions</b><button class="th-ico" onclick="aiSuggestClose()" aria-label="Close suggestions">✕</button></div>
+      ${r.situation ? `<p class="ai-sugg-sit">${esc(r.situation)}</p>` : ""}
+      ${list.length ? list.map((s, i) => `<button type="button" class="ai-sugg-item" data-i="${i}">
+          <small>${esc(s.label || "Suggestion")}</small><span>${esc(s.text)}</span></button>`).join("")
+        : `<p class="muted">No suggestion for this chat yet.</p>`}
+      <p class="muted ai-sugg-note">Tap one to put it in the box — edit it, then send.</p>`;
+    p.querySelectorAll(".ai-sugg-item").forEach((el) => el.addEventListener("click", () => {
+      const input = $("chat-input");
+      input.value = list[Number(el.dataset.i)].text;
+      input.style.height = "44px";
+      input.style.height = Math.min(input.scrollHeight, 140) + "px";
+      aiSuggestClose();
+      input.focus();
+    }));
+  } catch (e) {
+    if (AI_SUGG_FOR === phone) aiSuggestClose();
+    toast(e.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function openThread(phone, silent = false, push = true) {
+  if (phone !== OPEN_PHONE) aiSuggestClose();
   OPEN_PHONE = phone;
   localStorage.setItem(seenKey(phone), new Date().toISOString());
   updateUnreadBadge();
