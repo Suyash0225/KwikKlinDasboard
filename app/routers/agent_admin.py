@@ -1402,6 +1402,10 @@ async def put_message_format(body: MsgFormatIn, db: AsyncSession = Depends(get_d
 async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(default=30, ge=1, le=180)) -> dict:
     """AI usage and cost: today, this month, per model, and where it's going.
 
+    `days` is the dashboard's period filter (1 = today, 7, 30): the period
+    totals, by-purpose, by-model and attribution follow it. Budget alert and
+    the monthly projection always use the calendar month.
+
     Money is derived here from the settings rate card, so correcting a rate
     re-prices the whole history instead of leaving stale numbers behind.
     """
@@ -1413,7 +1417,13 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
     now_ist = datetime.now(IST)
     day_start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     month_start = now_ist.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-    window_start = (now_ist - timedelta(days=days)).astimezone(timezone.utc)
+    # Period: 1 = aaj (IST midnight se), 7/30 = aaj samet itne din
+    period_start = day_start - timedelta(days=days - 1)
+    # Daily series + FX usse bhi peeche tak: mahine ka INR total aur
+    # simulator ka "last 7 days" chhote period par bhi poore milein
+    window_start = min(period_start, month_start, day_start - timedelta(days=6))
+    period_day = period_start.astimezone(IST).date().isoformat()
+    month_day = month_start.astimezone(IST).date().isoformat()
 
     rates = await app_settings.get(db, "llm_rates") or {}
     cap = int(await app_settings.get(db, "llm_daily_request_cap") or 0)
@@ -1456,6 +1466,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
         }
 
     today, month = await _totals(day_start), await _totals(month_start)
+    period = await _totals(period_start)
 
     # where the spend goes — useful for deciding what to trim
     # grouped by purpose AND model — cost is per-model, so collapsing the
@@ -1467,7 +1478,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
                 func.coalesce(func.sum(LlmUsage.input_tokens), 0),
                 func.coalesce(func.sum(LlmUsage.output_tokens), 0),
             )
-            .where(LlmUsage.at >= month_start)
+            .where(LlmUsage.at >= period_start)
             .group_by(LlmUsage.purpose, LlmUsage.model)
         )
     ).all()
@@ -1530,7 +1541,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
                 func.coalesce(func.sum(LlmUsage.input_tokens), 0),
                 func.coalesce(func.sum(LlmUsage.output_tokens), 0),
             )
-            .where(LlmUsage.at >= month_start)
+            .where(LlmUsage.at >= period_start)
             .group_by("d", LlmUsage.purpose, LlmUsage.model)
         )
     ).all()
@@ -1583,18 +1594,26 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
         if row["fx_usd_inr"] is not None:
             row["cost_inr"] = round(row["cost_usd"] * row["fx_usd_inr"], 4)
 
-    model_cost_inr: dict[str, float] = {}
-    for d, model, i, o in daily_model_rows:
-        day = d.date().isoformat()
-        fx = _fx_for_date(day)
-        if fx is not None:
-            model_cost_inr[model] = model_cost_inr.get(model, 0.0) + _cost(model, int(i), int(o)) * fx
-    for m in month["by_model"]:
-        m["cost_inr"] = round(model_cost_inr.get(m["model"], 0.0), 4)
+    def _model_inr(since_day: str) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for d, model, i, o in daily_model_rows:
+            day = d.date().isoformat()
+            fx = _fx_for_date(day)
+            if day >= since_day and fx is not None:
+                out[model] = out.get(model, 0.0) + _cost(model, int(i), int(o)) * fx
+        return out
 
+    for totals, since_day in ((month, month_day), (period, period_day)):
+        inr = _model_inr(since_day)
+        for m in totals["by_model"]:
+            m["cost_inr"] = round(inr.get(m["model"], 0.0), 4)
+
+    # IST dates: month_start UTC mein pichhle mahine ki aakhri shaam hai
     month_cost_inr = round(
-        sum((row["cost_inr"] or 0.0) for row in series
-            if row["date"] >= month_start.date().isoformat()), 4
+        sum((row["cost_inr"] or 0.0) for row in series if row["date"] >= month_day), 4
+    )
+    period_cost_inr = round(
+        sum((row["cost_inr"] or 0.0) for row in series if row["date"] >= period_day), 4
     )
     today_cost_inr = round(
         sum((row["cost_inr"] or 0.0) for row in series
@@ -1623,7 +1642,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
             )
             .outerjoin(_Order, _Order.id == LlmUsage.order_id)
             .outerjoin(_Customer, _Customer.id == LlmUsage.customer_id)
-            .where(LlmUsage.at >= month_start)
+            .where(LlmUsage.at >= period_start)
             .group_by("d", LlmUsage.order_id, _Order.order_number, _Order.customer_id,
                       _Customer.name, LlmUsage.model)
         )
@@ -1670,7 +1689,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
 
     priced_models = any(
         bool((rates.get(model) or {}).get("in") or (rates.get(model) or {}).get("out"))
-        for model in {m["model"] for m in month["by_model"]}
+        for model in {m["model"] for m in month["by_model"] + period["by_model"]}
     )
 
     # simple run-rate projection for the rest of the month
@@ -1684,6 +1703,7 @@ async def llm_usage(db: AsyncSession = Depends(get_db), days: int = Query(defaul
         "models": {"cheap": MODEL_CHEAP, "smart": MODEL_SMART},
         "today": {**today, "cost_inr": today_cost_inr},
         "month": {**month, "cost_inr": month_cost_inr},
+        "period": {**period, "cost_inr": period_cost_inr, "days": days, "start": period_day},
         "by_purpose": by_purpose,
         "series": series,
         "fx": {"base": "USD", "quote": "INR", "source": fx_source},

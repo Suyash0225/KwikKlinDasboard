@@ -2871,11 +2871,31 @@ const usd = (n) => "$" + Number(n || 0).toFixed(Number(n) >= 1 ? 2 : 4);
 const inrCost = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const kTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n || 0));
 
+/* Period filter: 1 = aaj, 7, 30 din. Calls/tokens/spend, purpose, model aur
+   attribution isi period ke; budget alert aur "Monthly at this rate" hamesha
+   poore mahine ke. Browser yaad rakhta hai. */
+const USAGE_RANGES = [[1, "Today"], [7, "7 days"], [30, "30 days"]];
+let USAGE_DAYS = (() => {
+  try { const v = Number(localStorage.getItem("kk_usage_days")); return [1, 7, 30].includes(v) ? v : 30; }
+  catch (_) { return 30; }
+})();
+function usageRange(days) {
+  USAGE_DAYS = days;
+  try { localStorage.setItem("kk_usage_days", String(days)); } catch (_) {}
+  loadUsage();
+}
+function renderUsageRange() {
+  $("usage-range").innerHTML = USAGE_RANGES.map(([d, label]) =>
+    `<button type="button" class="chip ${USAGE_DAYS === d ? "on" : ""}" aria-pressed="${USAGE_DAYS === d}"
+      onclick="usageRange(${d})">${label}</button>`).join("");
+}
+
 async function loadUsage() {
+  renderUsageRange();
   $("usage-kpis").innerHTML = skeleton(1);
   $("usage-models").innerHTML = skeleton(3);
   let u;
-  try { u = await api("/admin/api/usage"); window.__LLM_USAGE = u; }
+  try { u = await api(`/admin/api/usage?days=${USAGE_DAYS}`); window.__LLM_USAGE = u; }
   catch (e) { $("usage-models").innerHTML = errBox(e.message, "loadUsage"); return; }
 
   const capNote = u.daily_request_cap
@@ -2908,16 +2928,20 @@ async function loadUsage() {
     </div>` : ""}
   </div>`;
 
+  const p = u.period || { ...u.month, days: 30 };
+  const pName = p.days === 1 ? "today" : `${p.days} days`;
   $("usage-kpis").innerHTML =
-    kpi("AI calls today", u.today.calls, capNote, "", "⚡", "orange") +
-    kpi("Tokens today", kTok(u.today.input_tokens + u.today.output_tokens),
-        `in ${kTok(u.today.input_tokens)} · out ${kTok(u.today.output_tokens)}`, "", "🔤", "blue") +
-    kpi("Spend this month", u.all_free ? "₹0 (free)" : inrCost(u.month.cost_inr),
-        u.all_free ? "on the free tier" : `${budgetNote} · ${usd(u.month.cost_usd)}`, "", "💰", "green") +
+    kpi(`AI calls · ${pName}`, p.calls, p.days === 1 ? capNote : `${p.failed_calls || 0} failed`, "", "⚡", "orange") +
+    kpi(`Tokens · ${pName}`, kTok(p.input_tokens + p.output_tokens),
+        `in ${kTok(p.input_tokens)} · out ${kTok(p.output_tokens)}`, "", "🔤", "blue") +
+    kpi(`Spend · ${pName}`, u.all_free ? "₹0 (free)" : inrCost(p.cost_inr),
+        u.all_free ? "on the free tier" : `${usd(p.cost_usd)} · month ${inrCost(u.month.cost_inr)} · ${budgetNote}`, "", "💰", "green") +
     kpi("Monthly at this rate", u.all_free ? "₹0" : inrCost((u.month.cost_inr || 0) / Math.max(1, new Date().getDate()) * 30),
         `${u.month.calls} calls so far`, "", "📈", "purple");
 
-  const s = u.series || [];
+  // series mahine/7 din tak bhi aati hai (simulator ke liye) — chart sirf period
+  const s = (u.series || []).filter((d) => !p.start || d.date >= p.start);
+  $("usage-chart-title").textContent = p.days === 1 ? "Today's usage" : `Daily usage (${p.days} days)`;
   const max = Math.max(1, ...s.map((d) => d.calls));
   $("usage-chart").innerHTML = s.length
     ? `<div style="display:flex;align-items:flex-end;gap:3px;height:130px">` +
@@ -2938,18 +2962,18 @@ async function loadUsage() {
       <div style="height:5px;background:var(--n100);border-radius:3px;margin-bottom:8px">
         <div style="height:5px;width:${Math.round((r.tokens / totTok) * 100)}%;background:var(--g-orange);border-radius:3px"></div>
       </div>`).join("")
-    : `<p class="muted">Nothing this month yet.</p>`;
+    : `<p class="muted">Nothing in this period yet.</p>`;
 
-  const byModel = u.month.by_model || [];
+  const byModel = p.by_model || [];
   $("usage-models").innerHTML =
     '<p class="muted">Provider: <b>' + esc(u.provider) + '</b> · ' + esc(u.models.smart) + ' / ' + esc(u.models.cheap) + '</p>' +
     '<table class="tbl"><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Failed</th><th>Cost</th></tr></thead><tbody>' +
     (byModel.map((m) => '<tr><td><b>' + esc(m.model) + '</b></td><td>' + m.calls + '</td><td>' + kTok(m.input_tokens) + '</td><td>' +
       kTok(m.output_tokens) + '</td><td>' + (m.failed || 0) + '</td><td class="money">' + (m.priced ? inrCost(m.cost_inr) : '<span class="muted">free</span>') + '</td></tr>').join("")
-      || '<tr><td colspan="6" class="muted">No calls this month.</td></tr>') + '</tbody></table>' +
+      || '<tr><td colspan="6" class="muted">No calls in this period.</td></tr>') + '</tbody></table>' +
     '<div class="rowcards">' + (byModel.map((m) => '<div class="rowcard"><div class="r1"><b>' + esc(m.model) + '</b><span class="money">' +
       (m.priced ? inrCost(m.cost_inr) : "free") + '</span></div><div class="kv"><span>' + m.calls + ' calls · ' + (m.failed || 0) + ' failed</span><span>in ' +
-      kTok(m.input_tokens) + ' · out ' + kTok(m.output_tokens) + '</span></div></div>').join("") || '<p class="muted">No calls this month.</p>') + '</div>' +
+      kTok(m.input_tokens) + ' · out ' + kTok(m.output_tokens) + '</span></div></div>').join("") || '<p class="muted">No calls in this period.</p>') + '</div>' +
     '<p class="muted" style="margin-top:10px">Rates and limits can be changed in Settings — past usage is re-priced with the new rates too.</p>';
 
   const a = u.attribution || {};

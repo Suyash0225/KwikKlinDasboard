@@ -174,3 +174,23 @@ async def test_series_covers_past_days(client) -> None:
     u = (await client.get("/admin/api/usage?days=30", headers=H)).json()
     assert len(u["series"]) >= 2, "each day with calls should appear in the chart"
     assert all("date" in d and "calls" in d for d in u["series"])
+
+
+async def test_period_filter_follows_days_but_month_stays_whole(client) -> None:
+    """Dashboard filter: 1 = today, 7, 30 days. Period totals/by-model follow
+    it; the month (budget, projection) must not shrink with it."""
+    now = datetime.now(timezone.utc)
+    await _add(model="test-period", tin=100, tout=10, when=now - timedelta(days=3))
+    await _add(model="test-period", tin=100, tout=10)
+
+    def calls(block):
+        return sum(m["calls"] for m in block["by_model"] if m["model"] == "test-period")
+
+    today = (await client.get("/admin/api/usage?days=1", headers=H)).json()
+    week = (await client.get("/admin/api/usage?days=7", headers=H)).json()
+    assert today["period"]["days"] == 1 and week["period"]["days"] == 7
+    assert calls(today["period"]) == 1
+    assert calls(week["period"]) == 2
+    assert calls(today["month"]) == calls(week["month"]), "month must not depend on the filter"
+    # chart data still reaches back for the month/simulator, period start tells the UI where to cut
+    assert today["period"]["start"] == max(d["date"] for d in today["series"])
