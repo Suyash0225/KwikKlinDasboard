@@ -763,3 +763,15 @@ h3.mt-lg { margin-top: 20px; }
 /* find-customer modal / order detail: chhote utility (CSP: inline style nahi) */
 .modal .said.inl { display: inline; margin: 0; }
 .modal .btn.mt-s { margin-top: 8px; }
+
+/* Delivery row: gol 🧭 — ⋯ jaisa hi */
+.acts.compact .btn.navb {
+  flex: 0 0 42px; width: 42px; padding: 0; border-radius: 50%;
+  font-size: 18px; line-height: 1; display: grid; place-items: center;
+}
+/* Route patti: Find + Open route ek saath, chhote screen par wrap */
+.routebar .rb-acts { display: flex; gap: 6px; flex: none; }
+.routebar { flex-wrap: wrap; }
+/* Location modal: GPS ki live accuracy, aur "link paste karo" ka raasta */
+.modal .loc-status { font-size: 13px; color: var(--ink-2); margin: -6px 0 10px; }
+.modal .loc-alt { margin-top: 10px; font-size: 13px; }

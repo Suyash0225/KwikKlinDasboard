@@ -829,7 +829,10 @@ function routeBar(rows) {
     + (mid.length ? "&waypoints=" + encodeURIComponent(mid.join("|")) : "");
   return `<div class="routebar">
     <span>🗺 <b>${stops.length} stop${stops.length > 1 ? "s" : ""}</b>${addrs.length > ROUTE_MAX ? ` (first ${ROUTE_MAX} of ${addrs.length})` : ""} in one route</span>
-    <a class="btn go sm" href="${esc(url)}" target="_blank" rel="noopener">Open route</a>
+    <span class="rb-acts">
+      <button type="button" class="btn ghost sm" data-act="findloc" aria-label="Find a customer's house">📍 Find</button>
+      <a class="btn go sm" href="${esc(url)}" target="_blank" rel="noopener">Open route</a>
+    </span>
   </div>`;
 }
 
@@ -846,7 +849,8 @@ function renderWork() {
   }
   // "Show more" sirf tab jab chhaant lagi hi na ho — chip ke andar aadhi
   // list dikhana aur "aur hai" kehna jhooth hai.
-  $("list").innerHTML = locateBar() + routeBar(rows) + `<div class="reg">${rows.map(workRow).join("")}</div>`
+  const bar = routeBar(rows) || locateBar();   // ek hi patti — phone par jagah keemti hai
+  $("list").innerHTML = bar + `<div class="reg">${rows.map(workRow).join("")}</div>`
     + ((FILTER === "all" || inDone()) && MORE_LEFT
         ? `<div class="morebar"><span>${WORK.length} shown</span>
              <button class="btn ghost sm" data-act="more" data-arg="loadWork">Show more</button></div>`
@@ -955,7 +959,7 @@ function workRow(w) {
       ${ME.show_route && w.address ? `<div class="sub mt-xs">📍 ${esc(w.address)}</div>` : ""}
       ${isDeliveryBoy() ? `<div class="acts compact">
         ${main ? `<button class="btn go sm" data-do="${main.act}"${main.code ? ` data-code="${esc(main.code)}"` : ""}${main.to ? ` data-to="${esc(main.to)}"` : ""}>${esc(main.label)}</button>` : ""}
-        ${ME.show_route && w.nav_url ? `<button class="btn ghost sm" data-do="map" data-url="${esc(w.nav_url)}" aria-label="Navigate">🧭</button>` : ""}
+        ${ME.show_route && w.nav_url ? `<button class="btn ghost sm navb" data-do="map" data-url="${esc(w.nav_url)}" aria-label="Navigate to customer">🧭</button>` : ""}
         <button class="btn ghost sm more" data-do="more" aria-label="More options">⋯</button>
       </div>` : `<div class="acts">
         ${w.hasOrder && ME.can_contact ? `<button class="btn ghost sm" data-do="call">Call</button>` : ""}
@@ -1520,13 +1524,27 @@ function locationButtons(w) {
     + `<button class="btn ghost" data-act="saveloc" data-arg="${esc(w.number)}">📍 ${w.nav_url ? "Update" : "Save"} location (I'm at their door)</button>`;
 }
 
-function currentPosition() {
+/* Phone ka pehla GPS reading aksar 100-500 m bhatka hota hai (ghar ke
+   andar, purana fix). Isliye kuch second tak readings dekho aur sabse
+   sateek rakho: 25 m se achha milte hi ruk jao, warna 12 s mein jo best
+   mila. onUpdate se modal par "48 m" jaisa live dikhta hai. */
+const GPS_GOOD_M = 25, GPS_WAIT_MS = 12000, GPS_MAX_MS = 20000;
+function bestPosition(onUpdate) {
   return new Promise((res, rej) => {
     if (!navigator.geolocation) return rej(new Error("GPS is not available on this phone"));
-    navigator.geolocation.getCurrentPosition(res, (e) => rej(new Error(
-      e.code === 1 ? "Allow location access for this app, then try again"
-        : "Could not get GPS — step outside and try again")),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+    let best = null, watch = null, settle = null, giveUp = null;
+    const stop = () => { if (watch !== null) navigator.geolocation.clearWatch(watch); clearTimeout(settle); clearTimeout(giveUp); };
+    const finish = () => { stop(); best ? res(best) : rej(new Error("Could not get GPS — step outside and try again")); };
+    watch = navigator.geolocation.watchPosition((pos) => {
+      if (!best || pos.coords.accuracy < best.coords.accuracy) best = pos;
+      if (onUpdate) onUpdate(best);
+      if (best.coords.accuracy <= GPS_GOOD_M) finish();
+      else if (settle === null) settle = setTimeout(finish, GPS_WAIT_MS);
+    }, (e) => {
+      if (e.code === 1) { stop(); rej(new Error("Allow location access for this app, then try again")); }
+      // timeout/unavailable: reading aate rahenge ya giveUp pakad lega
+    }, { enableHighAccuracy: true, timeout: GPS_MAX_MS, maximumAge: 0 });
+    giveUp = setTimeout(finish, GPS_MAX_MS);
   });
 }
 
@@ -1536,28 +1554,44 @@ function askSaveLocation(ref, name) {
   return new Promise((resolve) => {
     openModal(`<h3>📍 Save ${esc(name || "customer")}'s location?</h3>
       <p class="said">You're at their door now. Save the map pin so the next pickup or delivery finds this house in one tap — even a new delivery boy.</p>
+      <div class="loc-status" id="loc-status" hidden></div>
+      <div id="loc-linkwrap" hidden>
+        <label for="loc-link">Google Maps link</label>
+        <input id="loc-link" type="url" inputmode="url" placeholder="Paste a Google Maps share link" autocomplete="off">
+      </div>
       <div class="err" id="loc-err"></div>
       <div class="btnrow">
         <button class="btn ghost" id="loc-no">Cancel</button>
         <button class="btn go" id="loc-yes">Yes, save location</button>
-      </div>`);
+      </div>
+      <button type="button" class="linkbtn loc-alt" id="loc-alt">No GPS? Paste a Google Maps link instead</button>`);
     const done = () => { closeModal(); resolve(); };
+    const useLink = () => { $("loc-linkwrap").hidden = false; $("loc-alt").hidden = true; $("loc-yes").textContent = "Save link"; $("loc-link").focus(); };
     $("loc-no").onclick = done;
+    $("loc-alt").onclick = useLink;
     $("loc-yes").onclick = async (e) => {
       const btn = e.currentTarget, label = btn.innerHTML;
+      const link = $("loc-linkwrap").hidden ? "" : $("loc-link").value.trim();
       btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
       $("loc-err").textContent = "";
       try {
-        const pos = await currentPosition();
-        await api(`/customers/${encodeURIComponent(ref)}/location`, { method: "POST", body: {
-          lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy_m: pos.coords.accuracy,
-        }});
+        let body;
+        if (link) body = { map_url: link };
+        else {
+          const st = $("loc-status"); st.hidden = false; st.textContent = "📡 Getting GPS… hold the phone still";
+          const pos = await bestPosition((p) => { st.textContent = `📡 GPS accuracy ${Math.round(p.coords.accuracy)} m — improving…`; });
+          body = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy_m: pos.coords.accuracy };
+          st.textContent = `📡 GPS accuracy ${Math.round(pos.coords.accuracy)} m`;
+        }
+        await api(`/customers/${encodeURIComponent(ref)}/location`, { method: "POST", body });
         toast("Location saved 📍 — Navigate will work from now on");
         done();
         refreshCurrent({ quiet: true });
       } catch (err) {
         $("loc-err").textContent = err.message;
+        $("loc-status").hidden = true;
         btn.disabled = false; btn.innerHTML = label;
+        if (!link) useLink();   // GPS fail: link ka raasta turant saamne
       }
     };
   });
