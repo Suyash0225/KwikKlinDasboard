@@ -218,6 +218,9 @@ async def create_order(
     # bill par bachat dikhe (services/item_savings.py)
     from app.services.item_savings import stamp_list_rates
 
+    # copy: caller ki list mein list_rate na ghuse (self_order usi list se
+    # "wahi order hai?" milata hai)
+    items = [dict(it) for it in items]
     await stamp_list_rates(db, items)
 
     order = Order(

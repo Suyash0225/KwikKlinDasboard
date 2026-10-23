@@ -397,7 +397,9 @@ async def place_order(
             ).order_by(Order.created_at.desc()).limit(1)
         )
     ).scalar_one_or_none()
-    if recent is not None and recent.items == items:
+    from app.services.item_savings import without_list_rate
+
+    if recent is not None and without_list_rate(recent.items) == items:
         return recent, False
 
     note = f"Customer self-order ({via}) · estimate ₹{_rupees(estimate)} · pickup {pickup_day.isoformat()}"

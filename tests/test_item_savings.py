@@ -79,3 +79,10 @@ def test_urgent_charge_line_is_never_a_saving() -> None:
     urgent_line = {"type": "Urgent charge", "service": "Urgent", "qty": 1, "rate": 50,
                    "amount": 50, "kind": "urgent_charge", "list_rate": 100}
     assert item_savings.line_saving(urgent_line) == 0
+
+
+def test_without_list_rate_lets_a_repeat_request_match_the_saved_order() -> None:
+    """Self-order ka dohra tap: save hue order mein list_rate hai, request mein nahi."""
+    request = [{k: v for k, v in SAREE.items() if k != "list_rate"}]
+    assert item_savings.without_list_rate([SAREE]) == request
+    assert "list_rate" in SAREE, "original list badalni nahi chahiye"

@@ -88,6 +88,15 @@ async def stamp_list_rates(
         structlog.get_logger().exception("list_rate_stamp_failed")
 
 
+def without_list_rate(items: list | None) -> list:
+    """Bill lines bina list_rate ke — "wahi order hai?" milane ke liye.
+    Save hue order mein list_rate hota hai, grahak ki nayi request mein nahi."""
+    return [
+        {k: v for k, v in it.items() if k != "list_rate"} if isinstance(it, dict) else it
+        for it in items or []
+    ]
+
+
 def line_saving(it: dict) -> float:
     """Rate card se kitna kam liya is line par (0 agar barabar ya zyada)."""
     if not _eligible(it) or it.get("list_rate") is None:
