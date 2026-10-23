@@ -5,7 +5,7 @@
 - orders.customer_photos — daag/kharabi ki photo jo GRAHAK ko bhi dikhti hai
   (WhatsApp + bill page). orders.notes INTERNAL hai, isliye alag column.
 
-Revision ID: 20261023_customer_location_photos
+Revision ID: 20261023_cust_location_photos
 Revises: 20261023_staff_ai_mode
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "20261023_customer_location_photos"
+revision = "20261023_cust_location_photos"
 down_revision = "20261023_staff_ai_mode"
 branch_labels = None
 depends_on = None
