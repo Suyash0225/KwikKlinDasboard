@@ -706,6 +706,33 @@ def _waha_profile_name(payload: dict) -> str:
     return ""
 
 
+def _waha_location(payload: dict) -> dict | None:
+    """WAHA payload se Meta-shaped location, ya None."""
+    data = payload.get("_data") or {}
+    if not isinstance(data, dict):
+        data = {}
+    message = data.get("message") or {}
+    baileys = message.get("locationMessage") if isinstance(message, dict) else None
+    webjs = payload.get("location")
+    lat = lng = None
+    name = address = ""
+    if isinstance(webjs, dict):
+        lat, lng = webjs.get("latitude"), webjs.get("longitude")
+        name = str(webjs.get("name") or webjs.get("description") or "")
+        address = str(webjs.get("address") or "")
+    elif isinstance(baileys, dict):
+        lat, lng = baileys.get("degreesLatitude"), baileys.get("degreesLongitude")
+        name, address = str(baileys.get("name") or ""), str(baileys.get("address") or "")
+    try:
+        lat, lng = float(lat), float(lng)
+    except (TypeError, ValueError):
+        return None
+    return {"latitude": lat, "longitude": lng, "name": name.strip(), "address": address.strip()}
+
+
+_LOCATION_RE = re.compile(r"^\[location:(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)\]\s*(.*)$", re.S)
+
+
 def _waha_to_meta_shape(payload: dict, *, resolved_from: str | None = None) -> dict:
     """Translate WAHA message payload to the existing inbound handler shape."""
     raw_from = str(resolved_from or payload.get("from") or "")
@@ -736,6 +763,13 @@ def _waha_to_meta_shape(payload: dict, *, resolved_from: str | None = None) -> d
             "filename": media.get("filename"),
             "caption": body,
         }
+    # 📍 Shared location. WEBJS: payload.location; NOWEB (Baileys):
+    # _data.message.locationMessage. Bina iske pin body ki ek khali line
+    # ban kar kho jaata tha — na AI ko, na grahak ke record ko.
+    loc = _waha_location(payload)
+    if loc is not None:
+        out["type"] = "location"
+        out["location"] = loc
     # WAHA list/button implementations may expose the selected row in
     # different engine-specific fields. Prefer a stable selected id if present.
     data = payload.get("_data") or {}
@@ -1452,6 +1486,25 @@ async def _handle_inbound_message(
             await track_reply(db, customer.id)
         except Exception:
             log.exception("campaign_reply_track_failed")
+        # 📍 Grahak ne location bheji: pin save, "mil gayi" — bina AI ke.
+        # Beech mein AI pickup likh raha ho (ai_pending_intake) to pin save
+        # karke baat AI ko hi de do — use pata chahiye, wo aage le jayega.
+        shared = _LOCATION_RE.match(text or "")
+        if shared:
+            from app.services import location_request
+
+            saved = await location_request.save_shared_pin(
+                db, customer, shared.group(1), shared.group(2), place=shared.group(3).strip()
+            )
+            if saved and not customer.ai_pending_intake:
+                try:
+                    await send_message(
+                        db, to_phone=phone, text=get_message("location_saved"),
+                        intent="transactional", outbound_kind="service_reply",
+                    )
+                except SendError:
+                    log.exception("location_saved_reply_failed", phone=phone)
+                return
         payment_action = _match_payment_action(text or "")
         if payment_action:
             order_number, action = payment_action

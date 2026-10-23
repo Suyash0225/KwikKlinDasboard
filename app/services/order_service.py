@@ -317,6 +317,12 @@ async def create_order(
             bill_line=bill_link.message_line(await bill_link.url_for(db, order)),
         )
 
+    # 📍 Kapde lene jaana hai aur pin nahi — ek baar location maang lo
+    if needs_pickup:
+        from app.services import location_request
+
+        await location_request.ask_once(db, customer, why="pickup_booked")
+
     # The owner side hears about every new order without asking — unless he
     # is the one who just booked it (no point echoing his own message back).
     try:
@@ -572,6 +578,13 @@ async def update_status(
             template_name=template_name,
             template_params=[order.order_number],
         )
+    # 📍 Kapde ready — delivery nikalne se pehle, pin nahi to ek baar maang lo
+    if new_status is OrderStatus.READY:
+        from app.services import location_request
+
+        cust = await db.get(Customer, order.customer_id)
+        if cust is not None:
+            await location_request.ask_once(db, cust, why="order_ready")
     return order
 
 

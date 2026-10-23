@@ -59,6 +59,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nKapde aate hi bill bana ke bhej denge.\nDelivery: {date}\n— {shop}",
         "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nWe'll send the bill once the clothes reach us.\nDelivery: {date}\n— {shop}",
     },
+    # 📍 Ek baar: WhatsApp location bhejne ki request (pin = delivery boy seedha ghar)
+    "location_request": {
+        "hi": "📍 Ek chhoti si madad: apni location ek baar bhej dein — WhatsApp mein 📎 (Attach) → Location → \"Send your current location\". Isse hamara delivery boy seedha aapke ghar pahunchega. — {shop}",
+        "en": "📍 One small favour: please share your location once — in WhatsApp tap 📎 (Attach) → Location → \"Send your current location\". Our delivery person will then reach your door directly. — {shop}",
+    },
+    "location_saved": {
+        "hi": "📍 Location mil gayi, save kar li 🙏 Ab pickup/delivery wala seedha aapke ghar pahunchega. — {shop}",
+        "en": "📍 Got your location, saved 🙏 Our pickup/delivery person will now reach your door directly. — {shop}",
+    },
     "order_confirmed_bill": {
         "hi": "Namaste! Aapka order {order_number} mil gaya 🧺\nKapde: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Baaki: ₹{due}\nDelivery: {date}{bill_line}\n— {shop}",
         "en": "Hello! Your order {order_number} is received 🧺\nItems: {items}\nTotal: ₹{total} | Advance: ₹{advance} | Due: ₹{due}\nDelivery: {date}{bill_line}\n— {shop}",
@@ -639,6 +648,7 @@ CUSTOMER_KEYS = frozenset({
     "rating_question_wash", "rating_question_delivery", "rating_question_overall", "rating_points_note", "rating_reward_note", "rating_points_thanks",
     "start_confirmed", "stop_confirmed", "relay_message_customer",
     "self_order_confirmed", "self_order_code_missing", "ai_offer_line",
+    "location_request", "location_saved",
 })
 
 
