@@ -27,7 +27,7 @@ def test_short_link_keeps_the_link_but_has_no_pin() -> None:
     cust = SimpleNamespace(lat=None, lng=None, map_url=None, address="Lanka", location_at=None, location_by=None)
     assert geo.set_location(cust, map_url="https://maps.app.goo.gl/AbCdEf123", by="owner")
     assert cust.lat is None and cust.map_url == "https://maps.app.goo.gl/AbCdEf123"
-    assert geo.payload(cust) == {"has_location": True, "nav_url": "https://maps.app.goo.gl/AbCdEf123"}
+    assert geo.payload(cust) == {"has_location": True, "nav_url": "https://maps.app.goo.gl/AbCdEf123", "accuracy_m": None}
     assert geo.waypoint(cust) == "Lanka", "bina pin ke route pate se"
 
 
@@ -51,4 +51,4 @@ def test_bad_or_empty_input() -> None:
     assert geo.set_location(cust) is False
     assert not geo.valid_coords(0, 0), "0,0 = GPS fail, pin nahi"
     assert not geo.valid_coords(95, 10)
-    assert geo.payload(None) == {"has_location": False, "nav_url": ""}
+    assert geo.payload(None) == {"has_location": False, "nav_url": "", "accuracy_m": None}

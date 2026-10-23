@@ -5,7 +5,7 @@ from datetime import datetime
 
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Numeric, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,6 +30,8 @@ class Customer(Base, TenantScoped):
     map_url: Mapped[str | None] = mapped_column(String(500))
     location_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     location_by: Mapped[str | None] = mapped_column(String(120))
+    # GPS ne kaha "±X m" — kamzor pin (ghar ke andar) dikhe aur dobara liya ja sake
+    location_accuracy_m: Mapped[int | None] = mapped_column(Integer)
     # Grahak se "apni location bhej dein" sirf EK baar (services/location_request.py)
     location_asked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
