@@ -1171,3 +1171,29 @@ async def test_ai_pickup_order_waits_for_pickup_before_washing() -> None:
             select(Task).where(Task.order_id == order.id, Task.kind == "wash")
         )).scalars().first()
         assert wash is None, "no wash task before the clothes are picked up"
+
+
+async def test_create_lead_is_rejected_unless_the_customer_wants_the_service(monkeypatch) -> None:
+    """A greeting or chit-chat (intent OTHER) must never land in the lead pipeline."""
+    from app.models import Lead
+
+    async def fake_ask_json(**kw):
+        return {
+            "reply": "Namaste ji! — Kwik Klin AI", "intent": "OTHER", "language": "hi",
+            "action": "CREATE_LEAD", "action_reason": "someone wrote in",
+            "escalate": False, "escalation_reason": "", "admin_note": "",
+            "intake": {"name": "", "address": "", "items_text": "", "pickup_date": "", "ready": False},
+        }
+
+    async def no_selected_tools(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(agent_module.llm_client, "ask_json", fake_ask_json)
+    monkeypatch.setattr(agent_module, "_select_customer_tools", no_selected_tools)
+    await _seed_customer()
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == PHONE))).scalar_one()
+        await build_ai_reply(db, cust, "kaise ho bhai")
+    async with async_session_factory() as db:
+        lead = (await db.execute(select(Lead).where(Lead.phone == PHONE))).scalar_one_or_none()
+    assert lead is None

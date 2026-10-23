@@ -124,6 +124,8 @@ async def note_inquiry(db: AsyncSession, customer: Customer, text: str) -> None:
             if lead.stage in ("CONTACTED", "LOST"):
                 lead.stage = "INTERESTED"
             lead.items_text = (text or lead.items_text or "")[:300]
+            if not (lead.name or "").strip() and customer.name:
+                lead.name = customer.name
             lead.last_contact_at = now
             lead.next_followup_at = now + timedelta(hours=6)
             await db.commit()

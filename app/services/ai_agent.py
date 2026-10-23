@@ -1121,7 +1121,9 @@ async def build_ai_reply(
     # unrelated message into a bill send just by returning SEND_BILL.
     allowed_action = (
         (action == "SEND_BILL" and intent == "BILL_REQUEST")
-        or (action == "CREATE_LEAD" and intent in {"NEW_ORDER", "OTHER"})
+        # A lead is someone who wants the service. "OTHER" covers greetings,
+        # chit-chat and unclear messages — those must never become leads.
+        or (action == "CREATE_LEAD" and intent == "NEW_ORDER")
         or action not in {"SEND_BILL", "CREATE_LEAD"}
     )
     if not allowed_action:

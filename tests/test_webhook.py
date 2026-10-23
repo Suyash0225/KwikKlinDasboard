@@ -1084,3 +1084,27 @@ def test_waha_webhook_subscribes_to_own_messages() -> None:
 
     src = Path("app/routers/admin.py").read_text(encoding="utf-8")
     assert '"message.any"' in src, "without message.any, phone-typed replies never reach the inbox"
+
+
+async def test_waha_noweb_sender_is_named_from_push_name(client, sent, monkeypatch) -> None:
+    """NOWEB carries the WhatsApp display name as _data.pushName, not notifyName."""
+    import uuid
+
+    phone = f"+91996{uuid.uuid4().int % 10**7:07d}"
+    r = await _post_waha(client, monkeypatch, "message", {
+        "id": f"waha-push-{uuid.uuid4().hex}", "fromMe": False,
+        "from": f"{phone[1:]}@c.us", "body": "hello",
+        "_data": {"pushName": "Gupta Ji"},
+    })
+    assert r.status_code == 200
+    async with async_session_factory() as db:
+        cust = (await db.execute(select(Customer).where(Customer.phone == phone))).scalar_one()
+    assert cust.name == "Gupta Ji"
+
+
+def test_waha_profile_name_reads_both_engines() -> None:
+    from app.routers.webhook import _waha_profile_name
+
+    assert _waha_profile_name({"_data": {"pushName": "A"}}) == "A"
+    assert _waha_profile_name({"_data": {"notifyName": "B"}}) == "B"
+    assert _waha_profile_name({"_data": None}) == ""
