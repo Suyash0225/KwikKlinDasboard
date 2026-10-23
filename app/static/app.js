@@ -2691,7 +2691,7 @@ function renderCustomers() {
   const pick = (c) => CUST_SELECT_MODE
     ? `<input class="cust-pick" aria-label="Select ${esc(c.phone)}" type="checkbox" ${CUST_SELECTED.has(c.phone) ? "checked" : ""} onchange="toggleCustomerSelected('${esc(c.phone)}', this.checked)">` : "";
   const who = (c) => `<div class="cust-who">${pick(c)}<span class="avatar">${esc(initials(c.name, c.phone))}</span>
-    <div><b>${esc(displayName(c.name, c.phone))}</b>${c.opted_out ? ' <span class="tag">opted out</span>' : ""}<span class="muted">${esc(c.phone)}</span></div></div>`;
+    <div><b>${esc(displayName(c.name, c.phone))}</b>${c.opted_out ? ' <span class="tag">opted out</span>' : ""}${c.nav_url ? ` <a href="${esc(c.nav_url)}" target="_blank" rel="noopener" title="Open location in Google Maps" onclick="event.stopPropagation()">📍</a>` : ""}<span class="muted">${esc(c.phone)}</span></div></div>`;
   const acts = (c) => `<div class="act">
     ${Number(c.outstanding) > 0 ? `<button class="btn sm" onclick="sendReminder('${c.phone}')">Remind</button>` : ""}
     <button class="btn sm ghost" onclick="jumpChat('${c.phone}')">Chat</button>
@@ -2723,6 +2723,7 @@ function customerMenu(phone) {
       ${Number(c.outstanding) > 0 ? `<button class="btn" onclick="closeModal();sendReminder('${phone}')">💰 Payment reminder (all bills)</button>` : ""}
       <button class="btn ghost" onclick="closeModal();customerMessageMenu('${phone}')">💬 Send a message</button>
       <button class="btn ghost" onclick="closeModal();jumpChat('${phone}')">📨 Open chat</button>
+      ${c.nav_url ? `<a class="btn ghost" href="${esc(c.nav_url)}" target="_blank" rel="noopener">🗺 Open location in Google Maps</a>` : ""}
       <button class="btn ghost" onclick="closeModal();editCustomerModal('${phone}')">✏️ Edit customer</button>
       <button class="btn ghost danger-ic" onclick="closeModal();deleteCustomerModal('${phone}')">🗑 Delete customer</button>
     </div>
@@ -2746,6 +2747,9 @@ function editCustomerModal(phone) {
         <small class="fielderr" id="ec-phone-err"></small></div>
       <div class="setfield"><label for="ec-addr">Address</label>
         <input id="ec-addr" value="${esc(c.address || "")}"></div>
+      <div class="setfield"><label for="ec-map">Google Maps link <span class="muted">(optional)</span></label>
+        <input id="ec-map" value="${esc(c.map_url || "")}" placeholder="Paste a Google Maps share link">
+        <small>${c.has_location ? "📍 Pin saved — delivery staff get one-tap directions." : "Delivery staff can also save the pin from their app while at the door."}</small></div>
     </div>
     <div class="btnrow">
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
@@ -2757,6 +2761,7 @@ function editCustomerModal(phone) {
     if (ph.length !== 10) { $("ec-phone-err").textContent = "Phone must be 10 digits."; return; }
     await api(`/admin/api/customers/${encodeURIComponent(phone)}`, { method: "PUT", body: {
       name: $("ec-name").value, phone: ph, address: $("ec-addr").value,
+      map_url: $("ec-map").value.trim(),
     }});
     closeModal(); toast("Customer updated"); loadCustomers();
   });

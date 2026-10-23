@@ -646,6 +646,7 @@ async def bill_page(token: str):
             f"<span class='amt'>{money(it['amount']) if it['amount'] is not None else ''}</span></li>"
         )
     clothes = r.get("clothes") or {}
+    photos_card = _condition_photos_card(order, token)
     earlier_card = _earlier_bills_card(prev, statement_link)
     rewards_card = _rewards_card(rw)
     delivery_card = ""
@@ -792,7 +793,7 @@ async def bill_page(token: str):
         "{{STATUS_CLASS}}": status_cls, "{{STATUS}}": e(status_word),
         "{{PAY_BLOCK}}": pay_block + delivery_card + earlier_card + rewards_card, "{{ITEMS}}": "".join(items), "{{TOTALS}}": totals,
         "{{TERMS}}": terms, "{{CONTACT_BTN}}": contact_btn,
-        "{{DELIVERY_ACTIONS}}": delivery_actions,
+        "{{DELIVERY_ACTIONS}}": delivery_actions, "{{PHOTOS}}": photos_card,
         "{{RAZORPAY_BUTTON}}": (
             f"<button type='button' class='contact-btn' id='razorpay-pay' data-token='{e(token)}'>"
             "🔒 Pay securely online</button><p id='razorpay-error' class='note' hidden></p>"
@@ -857,6 +858,42 @@ def _was(it: dict, money) -> str:
             f"you saved {money(it['saved'])}</span>")
 
 
+def _condition_photos_card(order, token: str) -> str:
+    """Pickup par mila daag/kharabi — grahak ko wahi photo jo staff ne li.
+    Saboot dono taraf: 'aisa pehle se tha' ka jhagda hi nahi."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    e = _esc
+    photos = [
+        ph for ph in (order.customer_photos or [])
+        if isinstance(ph, dict) and ph.get("file") and ph.get("kind") == "damage"
+    ]
+    if not photos:
+        return ""
+    items = []
+    for ph in photos:
+        when = ""
+        try:
+            when = _dt.fromisoformat(str(ph.get("at"))).astimezone(
+                _tz(_td(hours=5, minutes=30))
+            ).strftime("%d %b, %I:%M %p")
+        except (TypeError, ValueError):
+            pass
+        src = f"/b/{e(token)}/photo/{e(ph['file'])}"
+        items.append(
+            f"<figure><a href='{src}' target='_blank' rel='noopener'>"
+            f"<img src='{src}' alt='Condition at pickup' loading='lazy'></a>"
+            f"<figcaption>{e(ph.get('note') or 'Noted at pickup')}"
+            f"{(' · ' + e(when)) if when else ''}</figcaption></figure>"
+        )
+    return (
+        "<section class='card photos-card'><h2>Condition at pickup</h2>"
+        "<p class='note'>Our team noticed this before cleaning and photographed it for you. "
+        "We will do our best, but this existed when the clothes reached us.</p>"
+        f"<div class='photos'>{''.join(items)}</div></section>"
+    )
+
+
 def _earlier_bills_card(prev: dict, statement_link: str) -> str:
     """Pichhle bills ka baaki: paisa + jo kapde abhi dukaan par hain."""
     e = _esc
@@ -907,6 +944,36 @@ def _rewards_card(rw: dict) -> str:
 def _bill_live_version(order) -> str:
     """Jo badle to grahak ka khula hua bill page khud refresh ho: status, paisa."""
     return f"{order.status.name}|{order.amount_paid or 0}|{order.total_amount or 0}"
+
+
+@app.get("/b/{token}/photo/{name}", include_in_schema=False)
+async def bill_photo(token: str, name: str):
+    """Bill page ki 'condition at pickup' photo — sirf wahi file jo IS order
+    ke customer_photos mein likhi hai; media/ ka baaki kuch kabhi nahi."""
+    from pathlib import Path as _P
+
+    from fastapi.responses import FileResponse, JSONResponse
+
+    from app.models import Order
+    from app.services import bill_link, integrations
+
+    not_found = JSONResponse({"detail": "not found"}, status_code=404)
+    parsed = bill_link.parse(token)
+    if parsed is None:
+        return not_found
+    tid, oid = parsed
+    safe = _P(name).name
+    async with integrations.tenant_db(tid) as db:
+        order = await db.get(Order, oid)
+        if order is None or order.tenant_id != tid:
+            return not_found
+        if not any(isinstance(ph, dict) and ph.get("file") == safe for ph in (order.customer_photos or [])):
+            return not_found
+    path = _P(__file__).resolve().parent / "media" / safe
+    if not path.is_file():
+        return not_found
+    mime = {"png": "image/png", "webp": "image/webp"}.get(safe.rsplit(".", 1)[-1].lower(), "image/jpeg")
+    return FileResponse(path, media_type=mime, headers={"Cache-Control": "private, max-age=3600", "X-Robots-Tag": "noindex"})
 
 
 @app.get("/b/{token}/live", include_in_schema=False)

@@ -41,7 +41,7 @@ from app.models import (
     StaffRole,
     Task,
 )
-from app.services import audit, delivery, plans, receipt, service_stages
+from app.services import audit, delivery, geo, plans, receipt, service_stages
 from app.services.auth import verify_password
 from app.services.staff_auth import (
     STAFF_COOKIE,
@@ -385,7 +385,13 @@ async def _prefetch(db: AsyncSession, tasks: list[Task], p: StaffPrincipal) -> d
             srows = (await db.execute(select(Staff).where(Staff.id.in_(sids)))).scalars().all()
             staff = {st.id: st for st in srows}
     stage_cfg = await service_stages.config(db) if orders else {}
-    return {"orders": orders, "customers": customers, "staff": staff, "stage_cfg": stage_cfg}
+    from app.services import app_settings
+
+    show_route = bool(await app_settings.get(db, "staff_show_route")) if customers else False
+    return {
+        "orders": orders, "customers": customers, "staff": staff,
+        "stage_cfg": stage_cfg, "show_route": show_route,
+    }
 
 
 def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
@@ -421,6 +427,7 @@ def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
             "next": service_stages.next_name(order, pre["stage_cfg"]),
             "notes": order.notes,
             "clothes": delivery.counts(order),
+            **_task_location(cust, p, pre),
         }
         if can_money(p):
             card["order"]["total"] = float(order.total_amount or 0)
@@ -428,8 +435,21 @@ def _task_card(t: Task, p: StaffPrincipal, pre: dict) -> dict:
     elif t.customer_id:
         cust = pre["customers"].get(t.customer_id)
         if cust is not None:
-            card["customer"] = {"name": cust.name or "Customer", "phone_masked": mask_phone(cust.phone)}
+            card["customer"] = {
+                "name": cust.name or "Customer", "phone_masked": mask_phone(cust.phone),
+                **_task_location(cust, p, pre),
+            }
     return card
+
+
+def _task_location(cust, p: StaffPrincipal, pre: dict) -> dict:
+    """Task card par 📍 Navigate — wahi niyam jo /route ke pate par hai."""
+    if cust is None or not can_contact(p):
+        return {}
+    out = {"customer_ref": str(cust.id)}
+    if pre.get("show_route"):
+        out.update(geo.payload(cust))
+    return out
 
 
 @router.get("/tasks")
@@ -755,7 +775,8 @@ async def order_detail(
     out = {
         "number": order.order_number,
         "customer": (cust.name or "Customer") if cust else "?",
-        **({"phone_masked": mask_phone(cust.phone if cust else "")} if can_contact(p) else {}),
+        **({"phone_masked": mask_phone(cust.phone if cust else ""),
+            "customer_ref": str(cust.id) if cust else ""} if can_contact(p) else {}),
         "items": order.items or [],
         "items_text": items_summary(order),
         # har kapde ki line: kitne, kitne diye, kitne baaki (KG bore ke andar bhi)
@@ -784,6 +805,11 @@ async def order_detail(
     tr = (await turnaround.track_many(db, [order]))[order.id]
     out["tracking"] = {k: v for k, v in tr.items()
                        if k != "milestones" or p.has("order_timeline")}
+    if can_contact(p):
+        from app.services import app_settings
+
+        if await app_settings.get(db, "staff_show_route"):
+            out.update(geo.payload(cust))
     if p.has("order_timeline"):
         from app.models import OrderStatusHistory
 
@@ -1593,6 +1619,87 @@ class BillIn(BaseModel):
     pickup_task_code: str = Field(default="", max_length=20)
 
 
+class LocationIn(BaseModel):
+    lat: float | None = Field(default=None, ge=-90, le=90)
+    lng: float | None = Field(default=None, ge=-180, le=180)
+    accuracy_m: float | None = Field(default=None, ge=0)
+    map_url: str | None = Field(default=None, max_length=500)
+
+
+@router.post("/customers/{ref}/location")
+async def save_customer_location(
+    ref: str, body: LocationIn,
+    p: StaffPrincipal = Depends(current_staff), db: AsyncSession = Depends(get_db),
+) -> dict:
+    """📍 Grahak ka Google Maps pin — staff darwaze par khada ho kar phone
+    ke GPS se, ya Maps ka link paste karke. Agle pickup/delivery par naya
+    ladka bhi seedha pahunch jaata hai. Owner ko dashboard par wahi pin."""
+    if not can_contact(p):
+        raise HTTPException(status_code=403, detail="Saving a customer's location is not your role's job")
+    try:
+        cid = uuid_module.UUID(ref)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Pick the customer again")
+    cust = await db.get(Customer, cid)
+    if cust is None:
+        raise HTTPException(status_code=404, detail="That customer was not found")
+    if body.lat is None and body.lng is None and body.map_url is None:
+        raise HTTPException(status_code=400, detail="Location is needed — allow GPS or paste a Google Maps link")
+    # 300m se zyada bhatka hua GPS (ghar ke andar, purana phone) galat pin se
+    # bura hai — agla ladka galat gali mein ghoomta
+    if body.lat is not None and body.accuracy_m is not None and body.accuracy_m > 300:
+        raise HTTPException(status_code=400, detail="GPS is not accurate right now — step outside and try again")
+    try:
+        if not geo.set_location(cust, lat=body.lat, lng=body.lng, map_url=body.map_url, by=p.staff.name):
+            raise HTTPException(status_code=400, detail="Location is needed")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    db.add(cust)
+    await db.commit()
+    await audit.record(
+        actor_role="staff", actor=p.staff.name, action="customer_location_saved",
+        args={"customer": str(cust.id), "gps": body.lat is not None, "accuracy_m": body.accuracy_m},
+        result="ok", tenant_id=p.staff.tenant_id,
+    )
+    log.info("customer_location_saved", staff=p.staff.name, customer=str(cust.id), gps=body.lat is not None)
+    return {"ok": True, "name": cust.name or "Customer", **geo.payload(cust)}
+
+
+@router.get("/customers/locate")
+async def locate_customer(
+    q: str = Query(default="", max_length=60),
+    p: StaffPrincipal = Depends(current_staff), db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Naya ladka naam likhe aur grahak ka ghar mil jaye — pata + Navigate.
+
+    Number masked hi (panel ka usool); pata/pin wahi "Customer address &
+    Route" setting se jo /route par hai."""
+    if not can_contact(p):
+        raise HTTPException(status_code=403, detail="Customer locations are not your role's job")
+    from app.services import app_settings
+
+    if not await app_settings.get(db, "staff_show_route"):
+        raise HTTPException(status_code=403, detail="The owner has switched off addresses for staff (Settings → Customer address & Route)")
+    term = q.strip()
+    if len(term) < 2:
+        return []
+    digits = re.sub(r"\D", "", term)
+    where = Customer.phone.ilike(f"%{digits}%") if digits and len(digits) >= 3 else Customer.name.ilike(f"%{term}%")
+    rows = (
+        await db.execute(
+            select(Customer).where(where, Customer.is_active)
+            .order_by(Customer.last_message_at.desc().nulls_last()).limit(8)
+        )
+    ).scalars().all()
+    return [
+        {
+            "ref": str(c.id), "name": c.name or "Customer", "phone_masked": mask_phone(c.phone),
+            "address": (c.address or "").strip(), **geo.payload(c),
+        }
+        for c in rows
+    ]
+
+
 @router.get("/customers/{ref}/rewards", dependencies=[Depends(require_biller())])
 async def customer_rewards(ref: str, db: AsyncSession = Depends(get_db)) -> dict:
     """Bill banate waqt: is grahak ke jo reward lag sakte hain (ek tap Apply)."""
@@ -2034,6 +2141,12 @@ async def create_bill(
         "bill_url": bill_url,
         "customer_name": name or "Customer",
         "customer_phone": phone,
+        # Pickup par bill bana aur pin nahi hai -> panel "location save
+        # karein?" poochhta hai (staff darwaze par hi khada hai)
+        "customer_ref": str(order.customer_id),
+        "customer_has_location": bool(
+            geo.payload(await db.get(Customer, order.customer_id))["has_location"]
+        ),
     }
 
 
@@ -2622,6 +2735,18 @@ async def attach_photo(
     if note.strip():
         line += f" - {note.strip()[:200]}"
     order.notes = f"{order.notes}\n{line}" if order.notes else line
+    customer_phone = None
+    if kind == "damage":
+        # Daag/kharabi grahak ko bhi turant dikhe — bill page par aur
+        # WhatsApp par — taaki "aapne kharab kiya" wali baat kabhi na ho.
+        # Naya list banao: JSONB in-place badalne par SQLAlchemy nahi dekhta.
+        order.customer_photos = [
+            *(order.customer_photos or []),
+            {"file": name, "kind": kind, "note": note.strip()[:200],
+             "at": datetime.now(timezone.utc).isoformat(), "by": p.staff.name},
+        ]
+        cust = await db.get(Customer, order.customer_id)
+        customer_phone = cust.phone if cust is not None else None
     db.add(order)
     await db.commit()
 
@@ -2644,12 +2769,40 @@ async def attach_photo(
         tenant_id=p.staff.tenant_id,
         label="photo_notify",
     )
+    if kind == "damage" and customer_phone:
+        from app.services import bill_link, whatsapp
+
+        order_number, caption_note = order.order_number, note.strip()[:150]
+        _mime, _path = photo.content_type, str(media_dir / name)
+
+        async def _tell_customer(bg: AsyncSession) -> None:
+            o = (
+                await bg.execute(select(Order).where(Order.order_number == order_number))
+            ).scalar_one_or_none()
+            link = await bill_link.url_for(bg, o) if o is not None else ""
+            caption = (
+                f"Namaste! Order {order_number} ke kapde lete waqt ye pehle se mila: "
+                + (f"{caption_note}. " if caption_note else "")
+                + "Photo isliye bhej rahe hain taaki aap dekh lein — hum apni taraf se "
+                "poori koshish karenge."
+                + (f"\nBill: {link}" if link else "")
+            )
+            try:
+                await whatsapp.send_image(
+                    bg, to_phone=customer_phone, file_path=_path, mime_type=_mime,
+                    caption=caption, local_url=f"/admin/media/{name}", sent_by="bot",
+                    intent="transactional", outbound_kind="order_status",
+                )
+            except whatsapp.SendError as exc:
+                log.info("damage_photo_customer_not_sent", order=order_number, error=str(exc)[:120])
+
+        background.run_after(_tell_customer, tenant_id=p.staff.tenant_id, label="damage_photo_customer")
     await audit.record(
         actor_role="staff", actor=p.staff.name, action="job_photo_added",
         args={"order": order.order_number, "file": name, "kind": kind},
         result=note[:100] or "photo", tenant_id=p.staff.tenant_id,
     )
-    return {"ok": True, "file": name, "kind": kind}
+    return {"ok": True, "file": name, "kind": kind, "sent_to_customer": bool(kind == "damage" and customer_phone)}
 
 
 @router.get("/today")
@@ -3219,7 +3372,11 @@ async def my_route(
                 "customer": (cust.name or "Customer") if cust else "?",
                 # Number/pata sirf unhe jo grahak tak jaate hain; washerman ko nahi
                 **({"phone_masked": mask_phone(cust.phone if cust else ""),
-                    "address": (cust.address or "").strip() if cust and show_route else ""}
+                    "address": (cust.address or "").strip() if cust and show_route else "",
+                    # Google Maps pin — route bar aur Navigate button isi se
+                    **(geo.payload(cust) if show_route else {"has_location": False, "nav_url": ""}),
+                    "waypoint": geo.waypoint(cust) if show_route else "",
+                    "customer_ref": str(cust.id) if cust else ""}
                    if can_contact(p) else {"address": ""}),
                 "items": items_summary(o),
                 "status": o.status.name,

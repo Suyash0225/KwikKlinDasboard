@@ -3,7 +3,9 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String, Text, func
+from decimal import Decimal
+
+from sqlalchemy import Boolean, DateTime, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +22,14 @@ class Customer(Base, TenantScoped):
     phone: Mapped[str] = mapped_column(String(20), index=True)
     name: Mapped[str | None] = mapped_column(String(120))
     address: Mapped[str | None] = mapped_column(Text)
+    # Google Maps pin/link (services/geo.py). Pata likha hota hai, pin se
+    # naya delivery boy bhi seedha darwaze tak pahunchta hai. Staff GPS se
+    # darwaze par save karta hai; owner dashboard se link daalta hai.
+    lat: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    lng: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    map_url: Mapped[str | None] = mapped_column(String(500))
+    location_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    location_by: Mapped[str | None] = mapped_column(String(120))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
