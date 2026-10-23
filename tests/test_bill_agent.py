@@ -50,6 +50,9 @@ def _extract_result(**overrides) -> dict:
 @pytest.fixture(autouse=True)
 async def _setup_and_cleanup():
     _PENDING.clear()
+    # "pichhla order" yaad (TTL) — doosre test ka KK number agle test ke
+    # aam message ko us order ka follow-up bana deta tha
+    bill_module._STAFF_REF_CONTEXT.clear()
     from tests.conftest import purge_phones
 
     await purge_phones(CUST_PHONE)  # crashed earlier runs must not poison this one
@@ -65,6 +68,7 @@ async def _setup_and_cleanup():
         await s.commit()
     yield
     _PENDING.clear()
+    bill_module._STAFF_REF_CONTEXT.clear()
     from tests.conftest import purge_phones
 
     await purge_phones(CUST_PHONE)
