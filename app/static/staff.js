@@ -2139,6 +2139,7 @@ async function remindBill(number, btn) {
    bill par lagta hai. Do jagah do hisaab kabhi nahi. */
 
 let RATES = null, CART = [], PICKED = "", NEEDS_PICKUP = false;
+let USUAL = [], USUAL_REF = "";   // ⭐ chune hue grahak ke aam items (sirf sujhaav)
 // Chhoot: mode "amt" ya "pct", aur ek value. Do alag field rakhne par log
 // dono bhar dete hain aur phir poochte hain ki kaunsa laga.
 let DISC = { mode: "amt", value: 0 };
@@ -2170,7 +2171,8 @@ async function showNewBill() {
   }
   if (RATES === null) {
     $("list").innerHTML = `<div class="empty">Loading the rate card…</div>`;
-    try { RATES = await api("/rates"); }
+    // sabse zyada bikne wala pehle (uses = pichhle 90 din ke bills); sort stable
+    try { RATES = (await api("/rates")).sort((a, b) => (b.uses || 0) - (a.uses || 0)); }
     catch (e) { $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   }
   const services = [...new Set(RATES.map((r) => r.service))];
@@ -2199,6 +2201,7 @@ async function showNewBill() {
 
     <div class="card">
       <h3><i class="stepn">2</i>Clothes</h3>
+      <div id="b-usual" class="usual" hidden></div>
       <!-- One tap per service; the select stays for keyboards and old code paths. -->
       <div class="svcchips" id="b-svcchips" role="tablist" aria-label="Service"></div>
       <select id="b-svc" class="vh" aria-label="Service" tabindex="-1"></select>
@@ -2375,8 +2378,11 @@ async function showNewBill() {
 let PICK_SVC = "";
 function pickerServices() {
   const all = [...new Set(RATES.map((r) => r.service))];
-  // piece wali services pehle — counter par wahi zyada lagti hain
-  return all.sort((a, b) => isKgService(a) - isKgService(b));
+  const uses = {};
+  RATES.forEach((r) => { uses[r.service] = (uses[r.service] || 0) + (r.uses || 0); });
+  // piece wali services pehle — counter par wahi zyada lagti hain; phir
+  // har group mein jo dukaan mein sabse zyada bikti hai
+  return all.sort((a, b) => (isKgService(a) - isKgService(b)) || (uses[b] - uses[a]));
 }
 function renderPicker() {
   const box = $("b-items");
@@ -2820,6 +2826,7 @@ let EDIT_RATE = -1;   // kis line ka daam-khaana khula hai (-1 = koi nahi)
 function renderCart() {
   const box = $("b-cart");
   if (!box) return;
+  paintUsual();        // ⭐ chips par ✓ — kaunsa bill mein aa gaya
   // Focus wala qty/wazan ka khaana hatate hi browser uska blur/change
   // chalata hai, jo phir renderCart bulata — aadhe bane DOM par dobara
   // innerHTML ("node to be removed is no longer a child"). Ek baar mein ek.
@@ -2976,6 +2983,7 @@ function wireCustomerSearch() {
   if (!input || !box) return;
   input.oninput = () => {
     PICKED = ""; PREV_DUE = 0; PREV_BILLS = 0; REWARDS = []; REWARD_CODE = ""; paintReward();
+    USUAL = []; USUAL_REF = ""; paintUsual();
     $("b-picked").hidden = true; $("b-phone").disabled = false;
     renderCart();
     const q = input.value.trim();
@@ -3010,6 +3018,7 @@ function wireCustomerSearch() {
             : `✓ ${c.name || "Customer"} · ${c.phone_masked}`;
           renderCart();
           loadRewards(c.ref);
+          loadUsual(c.ref);
         };
       });
     }, 250);
@@ -3038,6 +3047,55 @@ function paintReward() {
     ? `<div class="rwchip on">🎁 <b>${esc(r.reward)}</b> applied · ${esc(r.code)}<button type="button" class="btn ghost sm" data-rw="">✕ Remove</button></div>`
     : `<div class="rwchip">🎁 Reward: <b>${esc(r.reward)}</b>${r.expires_at ? ` · till ${esc(r.expires_at.slice(0, 10))}` : ""}<button type="button" class="btn go sm" data-rw="${esc(r.code)}">Apply</button></div>`).join("");
   box.querySelectorAll("[data-rw]").forEach((b) => { b.onclick = () => { REWARD_CODE = b.dataset.rw; paintReward(); }; });
+}
+
+/* ⭐ Grahak ke aam items: chunte hi chips, tap = bill mein (pichhli baar wali
+   qty ke saath). Kabhi khud nahi judte — har baar kapde alag hote hain. */
+async function loadUsual(ref) {
+  USUAL = []; USUAL_REF = ref;
+  paintUsual();
+  let items = [];
+  try { items = (await api(`/customers/${encodeURIComponent(ref)}/usual-items`)).items || []; }
+  catch (e) { items = []; }
+  if (USUAL_REF !== ref) return;                         // beech mein doosra grahak
+  USUAL = items;
+  paintUsual();
+}
+const usualRate = (u) => (RATES || []).find((r) => r.service === u.service && r.garment === u.garment);
+const usualInCart = (u) => CART.some((x) => x.service === u.service && x.garment === u.garment);
+function paintUsual() {
+  const box = $("b-usual");
+  if (!box) return;
+  const list = USUAL.filter(usualRate);                  // rate card mein band ho gaya to chip nahi
+  if (!list.length) { box.hidden = true; box.innerHTML = ""; return; }
+  const left = list.filter((u) => !usualInCart(u)).length;
+  box.hidden = false;
+  box.innerHTML = `<div class="usual-head"><span>⭐ Usually gives</span>
+      ${left > 1 ? `<button type="button" class="btn ghost sm" data-usual-all>＋ Add all ${left}</button>` : ""}</div>
+    <div class="usual-chips">${list.map((u) => {
+      const on = usualInCart(u), i = USUAL.indexOf(u);
+      const qty = u.unit === "kg" ? `${u.qty} kg` : `×${u.qty}`;
+      return `<button type="button" class="usual-chip${on ? " in" : ""}" data-usual="${i}"${on ? ' aria-pressed="true"' : ""}>
+        <b>${esc(u.garment || u.service)}</b><small>${u.garment ? esc(u.service) + " · " : ""}${esc(qty)}</small>${on ? '<i aria-hidden="true">✓</i>' : ""}</button>`;
+    }).join("")}</div>`;
+  box.querySelectorAll("[data-usual]").forEach((b) => { b.onclick = () => addUsual(Number(b.dataset.usual)); });
+  const all = box.querySelector("[data-usual-all]");
+  if (all) all.onclick = () => {
+    const n = USUAL.reduce((k, _, i) => k + (addUsual(i, true) ? 1 : 0), 0);
+    renderCart();
+    if (n) toast(`Added ${n} usual item${n > 1 ? "s" : ""} — check the counts`);
+  };
+}
+// Pehle se bill mein ho to dobara nahi (likhi hui ginti na badle)
+function addUsual(i, quiet) {
+  const u = USUAL[i], r = u && usualRate(u);
+  if (!r || usualInCart(u)) return false;
+  CART.push({ service: r.service, garment: r.garment, qty: u.qty || 1, rate: r.rate, card: r.rate, unit: r.unit || "pc", pieces: [] });
+  if (!quiet) {
+    renderCart();
+    toast(`Added ${u.garment || u.service} ${u.unit === "kg" ? u.qty + " kg" : "×" + u.qty} — change the count if needed`);
+  }
+  return true;
 }
 
 async function saveBill(btn) {
@@ -3077,6 +3135,7 @@ async function saveBill(btn) {
     });
     const pickupCompleted = !!r.pickup_completed;
     CART = []; PICKED = ""; PREV_DUE = 0; PREV_BILLS = 0; BILL_STARTED = 0; REWARDS = []; REWARD_CODE = "";
+    USUAL = []; USUAL_REF = "";
     PICKUP_BILL_CONTEXT = null;
     DISC = { mode: "amt", value: 0 };
     URG = { on: false, manual: false, amt: 0 };

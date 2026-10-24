@@ -1233,6 +1233,19 @@ async def customer_rewards_for_bill(phone: str = Query(min_length=6), db: AsyncS
     return await rewards.for_bill_page(db, cust.id)
 
 
+@router.get("/api/customers/usual-items", dependencies=[Depends(require_admin_key)])
+async def customer_usual_items(phone: str = Query(min_length=6), db: AsyncSession = Depends(get_db)) -> dict:
+    """New bill: grahak chunte hi uske aam items — ek tap mein bill mein (khud nahi judte)."""
+    from app.services import bill_suggest
+
+    cust = (
+        await db.execute(select(Customer).where(Customer.phone == normalize_phone(phone.strip())))
+    ).scalar_one_or_none()
+    if cust is None:
+        return {"items": []}
+    return {"items": await bill_suggest.customer_usual(db, cust.id)}
+
+
 # ---------- Settings: Rate Card ----------
 
 class RateIn(BaseModel):
@@ -1251,14 +1264,21 @@ class RateUpdateIn(BaseModel):
 
 @router.get("/api/rates", dependencies=[Depends(require_admin_key)])
 async def rates_list(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    from app.services import bill_suggest
+    from app.services.item_savings import rate_key
+
     rows = (
         await db.execute(select(Rate).order_by(Rate.unit, Rate.service, Rate.garment))
     ).scalars().all()
+    # uses: pichhle 90 din mein kitne bills mein — New bill ka picker isi se
+    # sabse zyada bikne wale items upar rakhta hai (order yahan nahi badalta,
+    # Settings ka rate matrix waisa hi rahe)
+    uses = await bill_suggest.shop_counts(db)
     return [
         {"id": str(r.id), "service": r.service, "garment": r.garment,
          "unit": r.unit, "rate": str(r.rate),
          "cost_rate": str(r.cost_rate) if r.cost_rate is not None else None,
-         "is_active": r.is_active}
+         "is_active": r.is_active, "uses": uses.get(rate_key(r.service, r.garment), 0)}
         for r in rows
     ]
 

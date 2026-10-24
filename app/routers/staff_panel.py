@@ -1359,16 +1359,22 @@ async def rate_card(
     p: StaffPrincipal = Depends(require_biller()),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """Dukaan ka rate card — daam yahin se aate hain, kahin aur se nahi."""
+    """Dukaan ka rate card — daam yahin se aate hain, kahin aur se nahi.
+    `uses`: pichhle 90 din mein kitne bills mein — picker sabse zyada bikne
+    wale items upar rakhta hai."""
     from app.models import Rate
+    from app.services import bill_suggest
+    from app.services.item_savings import rate_key
 
     rows = (
         await db.execute(
             select(Rate).where(Rate.is_active).order_by(Rate.service, Rate.garment)
         )
     ).scalars().all()
+    uses = await bill_suggest.shop_counts(db)
     return [
-        {"service": r.service, "garment": r.garment, "unit": r.unit, "rate": float(r.rate)}
+        {"service": r.service, "garment": r.garment, "unit": r.unit, "rate": float(r.rate),
+         "uses": uses.get(rate_key(r.service, r.garment), 0)}
         for r in rows
     ]
 
@@ -1714,6 +1720,21 @@ async def customer_rewards(ref: str, db: AsyncSession = Depends(get_db)) -> dict
     if cust is None:
         raise HTTPException(status_code=404, detail="Customer not found")
     return {"available": await rewards.available(db, cid)}
+
+
+@router.get("/customers/{ref}/usual-items", dependencies=[Depends(require_biller())])
+async def customer_usual_items(ref: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Bill banate waqt: ye grahak aam taur par kya deta hai — ek tap mein
+    bill mein. Sirf sujhaav; khud nahi judta. Number/pata kuch nahi lautta."""
+    from app.services import bill_suggest
+
+    try:
+        cid = uuid_module.UUID(ref)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad ref")
+    if await db.get(Customer, cid) is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return {"items": await bill_suggest.customer_usual(db, cid)}
 
 
 @router.get("/tasks/{code}/bill-context", dependencies=[Depends(require_biller())])

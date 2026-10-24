@@ -420,6 +420,7 @@ amount=-50           → 422
 | GET | `/admin/api/dashboard` | key | — |
 | GET | `/admin/api/customers` | key | — |
 | GET | `/admin/api/customers/search` | key | — |
+| GET | `/admin/api/customers/usual-items?phone=` | key | — (New bill: grahak ke aam items, sirf sujhaav) |
 | PUT | `/admin/api/customers/{phone}` | key | — |
 | DELETE | `/admin/api/customers/{phone}` | **owner** | — |
 | POST | `/admin/api/customers/bulk` | **owner** | — |
@@ -429,7 +430,7 @@ amount=-50           → 422
 | GET/POST | `/admin/api/expenses` | **owner** | — |
 | DELETE | `/admin/api/expenses/{id}` | **owner** | — |
 | GET | `/admin/api/reports/summary` | **owner** | `reports` |
-| GET | `/admin/api/rates` | key | — |
+| GET | `/admin/api/rates` | key | — (har row par `uses` = pichhle 90 din mein kitne bills mein) |
 | POST | `/admin/api/rates` | **owner** | — |
 | PUT | `/admin/api/rates/{rate_id}` | **owner** | — |
 | GET | `/admin/api/staff` | key | — |
@@ -819,6 +820,7 @@ amount=-50           → 422
 | POST | `/staff/api/orders/{number}/photo` | — |
 | GET | `/staff/api/orders/{number}/call` | — |
 | GET | `/staff/api/rates` | — |
+| GET | `/staff/api/customers/{ref}/usual-items` | `billing` (sirf sujhaav — bill mein khud nahi judta) |
 | GET | `/staff/api/customers/search` | `billing` |
 | POST | `/staff/api/bills` | `billing` |
 | GET | `/staff/api/team` | `staff_reports` |

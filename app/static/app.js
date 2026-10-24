@@ -1483,8 +1483,16 @@ function applyPreset() {
 }
 function addLine() { LINES.push({ service: "", garment: "", qty: 1, rate: "", amount: 0, pieces: [] }); renderLines(); }
 function delLine(i) { LINES.splice(i, 1); if (!LINES.length) addLine(); renderLines(); }
-const services = () => [...new Set(RATES.filter((r) => r.is_active).map((r) => r.service))];
-const garmentsFor = (svc) => RATES.filter((r) => r.is_active && r.service === svc);
+/* Sabse zyada bikne wala pehle: `uses` = pichhle 90 din mein kitne bills mein
+   (server deta hai). sort stable hai — barabar ho to rate card ka purana kram. */
+const byUses = (a, b) => (b.uses || 0) - (a.uses || 0);
+const services = () => {
+  const active = RATES.filter((r) => r.is_active);
+  const total = {};
+  active.forEach((r) => { total[r.service] = (total[r.service] || 0) + (r.uses || 0); });
+  return [...new Set(active.map((r) => r.service))].sort((a, b) => total[b] - total[a]);
+};
+const garmentsFor = (svc) => RATES.filter((r) => r.is_active && r.service === svc).sort(byUses);
 
 function renderLines() {
   $("nb-lines").innerHTML = LINES.map((l, i) => `
@@ -1516,6 +1524,7 @@ function renderLines() {
       </div>` : ""}
     </div>`).join("");
   renderQuick();
+  nbUsualPaint();      // ⭐ chips par ✓ — kaunsa bill mein aa gaya
   calcBill();
 }
 
@@ -1962,6 +1971,7 @@ function pickCust(i) {
   const nameBox = $("nb-ac-name");
   if (nameBox) nameBox.innerHTML = "";
   nbRewards(c.phone);
+  nbUsual(c.phone);
 }
 
 /* ---- 🎁 reward on New bill: grahak chunte hi dikhe, ek tap mein lage, ✕ se hate ---- */
@@ -1984,9 +1994,61 @@ function nbRewardPaint() {
     ? `<div class="rwchip on">🎁 <b>${esc(r.reward)}</b> applied · ${esc(r.code)} <button type="button" class="btn sm ghost" data-action="nbRewardClear">✕ Remove</button></div>`
     : `<div class="rwchip">🎁 Customer has <b>${esc(r.reward)}</b> earned${r.expires_at ? ` · valid till ${esc(r.expires_at.slice(0, 10))}` : ""} <button type="button" class="btn sm" data-action="nbRewardApply" data-code="${esc(r.code)}">Apply</button></div>`).join("");
 }
+/* ---- ⭐ grahak ke aam items: chunte hi dikhe, tap = bill mein, kabhi khud nahi ---- */
+let NB_USUAL = [], NB_USUAL_PHONE = "";
+async function nbUsual(phone) {
+  phone = (phone || "").trim();
+  if (phone === NB_USUAL_PHONE) return;
+  NB_USUAL_PHONE = phone; NB_USUAL = [];
+  if (phone) {
+    try { NB_USUAL = (await api(`/admin/api/customers/usual-items?phone=${encodeURIComponent(phone)}`)).items || []; }
+    catch (e) { NB_USUAL = []; }
+    if (phone !== NB_USUAL_PHONE) return;                // beech mein doosra grahak chun liya
+  }
+  nbUsualPaint();
+}
+const nbInBill = (u) => LINES.some((l) => l.service === u.service && (l.garment || "") === (u.garment || ""));
+function nbUsualPaint() {
+  const box = $("nb-usual");
+  if (!box) return;
+  // rate card se mel na khaye (beech mein band hua) to chip nahi
+  const list = NB_USUAL.filter((u) => RATES.some((r) => r.is_active && r.service === u.service && r.garment === u.garment));
+  if (!list.length) { box.hidden = true; box.innerHTML = ""; return; }
+  const left = list.filter((u) => !nbInBill(u)).length;
+  box.hidden = false;
+  box.innerHTML = `<div class="nbu-head"><span>⭐ Usually gives</span>
+      ${left > 1 ? `<button type="button" class="btn sm ghost" data-action="nbUsualAll">＋ Add all ${left}</button>` : ""}</div>
+    <div class="nbu-chips">${list.map((u) => {
+      const i = NB_USUAL.indexOf(u), on = nbInBill(u);
+      const qty = u.unit === "kg" ? `${u.qty} kg` : `×${u.qty}`;
+      return `<button type="button" class="nbu-chip${on ? " in" : ""}" data-action="nbUsualAdd" data-index="${i}"
+        ${on ? 'aria-pressed="true"' : ""} title="${esc(`${u.times} of the last bills`)}">
+        <b>${esc(u.garment || u.service)}</b><small>${u.garment ? esc(u.service) + " · " : ""}${esc(qty)}</small>${on ? '<i aria-hidden="true">✓</i>' : ""}</button>`;
+    }).join("")}</div>`;
+}
+/* Pehle se bill mein hai to dobara nahi jodte (qty wahi rahe jo likhi hai);
+   naya ho to pichhli baar wali qty ke saath. */
+function nbUsualAdd(i, quiet) {
+  const u = NB_USUAL[i];
+  if (!u || nbInBill(u)) return false;
+  const r = RATES.find((x) => x.is_active && x.service === u.service && x.garment === u.garment);
+  if (!r) return false;
+  LINES = LINES.filter((l) => l.service);              // khaali "Service…" line hatao
+  LINES.push({ service: r.service, garment: r.garment, qty: u.qty || 1, rate: parseFloat(r.rate), amount: 0, pieces: [] });
+  $("nb-items-err").textContent = "";
+  if (!quiet) { renderLines(); toast(`Added ${u.garment || u.service} ${u.unit === "kg" ? u.qty + " kg" : "×" + u.qty} — change the count if needed`); }
+  return true;
+}
+function nbUsualAll() {
+  const n = NB_USUAL.reduce((k, _, i) => k + (nbUsualAdd(i, true) ? 1 : 0), 0);
+  renderLines();
+  if (n) toast(`Added ${n} usual item${n > 1 ? "s" : ""} — check the counts`);
+}
 function nbRewardApply(code) { $("nb-coupon").value = code; nbRewardPaint(); toast("Reward applied — discount shows on save"); }
 function nbRewardClear() { $("nb-coupon").value = ""; nbRewardPaint(); }
-document.addEventListener("change", (e) => { if (e.target && e.target.id === "nb-phone") nbRewards(e.target.value); });
+document.addEventListener("change", (e) => {
+  if (e.target && e.target.id === "nb-phone") { nbRewards(e.target.value); nbUsual(e.target.value); }
+});
 document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-action]");
   if (!el) return;
@@ -1995,6 +2057,8 @@ document.addEventListener("click", (e) => {
   if (action === "composeMessage") return composeMessage(el.dataset.num, el.dataset.kind);
   if (action === "nbRewardApply") return nbRewardApply(el.dataset.code);
   if (action === "nbRewardClear") return nbRewardClear();
+  if (action === "nbUsualAdd") return nbUsualAdd(Number(el.dataset.index));
+  if (action === "nbUsualAll") return nbUsualAll();
   if (action === "rwToggle") return rwToggle(el.dataset.id);
   if (action === "rwDelete") return rwDelete(el.dataset.id);
   if (action === "tplDelete") return tplDelete(el.dataset.name);
@@ -2127,6 +2191,9 @@ async function saveBill(btn) {
     showBillSuccess(out);
     LINES = []; addLine();
     ["nb-phone", "nb-name", "nb-disc", "nb-adv", "nb-notes", "nb-coupon", "nb-preset"].forEach((id) => ($(id).value = ""));
+    // agla bill naye grahak ka — pichhle ke reward/usual chips na dikhen
+    NB_REWARD_PHONE = ""; NB_REWARDS = []; nbRewardPaint();
+    NB_USUAL_PHONE = ""; NB_USUAL = []; nbUsualPaint();
     nbSetPickup(false);
     nbToggleUrgent(false);   // agla bill normal se shuru (date bhi normal)
     calcBill();   // re-enables the manual discount field after a preset
