@@ -394,6 +394,42 @@ async def service_worker():
     )
 
 
+# Install manifest — /admin/static/ se nahi: wahan 1 saal ka immutable cache
+# hai, aur manifest badle (naam/icon) to phone tak kabhi na pahunchta.
+# Khula hai (bina login): browser manifest aur icons bina cookie ke maangta hai.
+@app.get("/admin/manifest.webmanifest", include_in_schema=False)
+async def admin_manifest():
+    from fastapi.responses import Response as _Resp
+
+    path = Path(__file__).resolve().parent / "static" / "manifest.json"
+    return _Resp(
+        content=path.read_text(encoding="utf-8"),
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+# Owner app ke PNG icons (scripts/make_app_icons.py). Naam fixed list se.
+_ADMIN_PNGS = {
+    "icon-192": "admin-icon-192.png",
+    "icon-512": "admin-icon-512.png",
+    "icon-maskable-512": "admin-icon-maskable-512.png",
+    "apple-touch-icon": "admin-apple-touch-180.png",
+}
+
+
+@app.get("/admin/{name}.png", include_in_schema=False)
+async def admin_png(name: str):
+    from fastapi.responses import FileResponse
+
+    file = _ADMIN_PNGS.get(name)
+    if not file:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+    return FileResponse(Path(__file__).resolve().parent / "static" / file,
+                        media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
 # Public page: pricing + signup + login. Yahi wo darwaza hai jahan se ek
 # nayi laundry andar aati hai (app/static/join.html).
 _JOIN_FILE = Path(__file__).resolve().parent / "static" / "join.html"
@@ -1633,8 +1669,8 @@ async def staff_icon():
 
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">'
-        '<rect width="192" height="192" rx="42" fill="#111827"/>'
-        '<rect x="26" y="26" width="140" height="140" rx="34" fill="#f97316"/>'
+        '<rect width="192" height="192" rx="42" fill="#131820"/>'
+        '<rect x="26" y="26" width="140" height="140" rx="34" fill="#ea580c"/>'
         '<text x="96" y="124" font-family="system-ui,sans-serif" font-size="72" '
         'font-weight="800" fill="#fff" text-anchor="middle">KK</text></svg>'
     )
@@ -1642,44 +1678,40 @@ async def staff_icon():
                  headers={"Cache-Control": "public, max-age=86400"})
 
 
+# Phone par install ke PNG icons (scripts/make_app_icons.py banata hai).
+# Android ka install 192/512 PNG maangta hai, iOS apple-touch-icon — SVG
+# dono jagah bharose ka nahi. Naam fixed list se: rasta request se nahi banta.
+_STAFF_PNGS = {
+    "icon-192": "staff-icon-192.png",
+    "icon-512": "staff-icon-512.png",
+    "icon-maskable-512": "staff-icon-maskable-512.png",
+    "apple-touch-icon": "staff-apple-touch-180.png",
+    "badge-96": "staff-badge-96.png",
+}
+
+
+@app.get("/staff/{name}.png", include_in_schema=False)
+async def staff_png(name: str):
+    from fastapi.responses import FileResponse
+
+    file = _STAFF_PNGS.get(name)
+    if not file:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+    return FileResponse(Path(__file__).resolve().parent / "static" / file,
+                        media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/staff/sw.js", include_in_schema=False)
 async def staff_sw():
-    """Service worker — sirf itna ki app install ho sake aur kholte hi
-    khul jaye. Kaam ka data JAAN-BOOJH KAR cache nahi hota: purana order
-    dikhana kisi ko galat kaam par bhej sakta hai."""
+    """Service worker (app/static/staff-sw.js) — sirf itna ki app install ho
+    sake aur bina signal ke bhi khul jaye. Kaam ka data JAAN-BOOJH KAR cache
+    nahi hota: purana order dikhana kisi ko galat kaam par bhej sakta hai.
+    no-cache: naya SW agli baar khulte hi pahunche."""
     from fastapi.responses import Response as _Resp
 
-    js = (
-        "const SHELL='kkstaff-v3';\n"
-        "self.addEventListener('install',e=>{e.waitUntil(caches.open(SHELL)"
-        ".then(c=>c.addAll(['/staff','/admin/static/staff.css','/admin/static/staff.js'])))});\n"
-        "self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(k=>"
-        "Promise.all(k.filter(x=>x!==SHELL).map(x=>caches.delete(x)))))});\n"
-        "self.addEventListener('fetch',e=>{\n"
-        "  const u=new URL(e.request.url);\n"
-        "  if(e.request.method!=='GET'||u.pathname.startsWith('/staff/api')) return;\n"
-        "  e.respondWith(fetch(e.request).then(r=>{\n"
-        "    const copy=r.clone(); caches.open(SHELL).then(c=>c.put(e.request,copy)); return r;\n"
-        # ignoreSearch: shell bina ?v= ke cache hota hai, page ?v= ke saath
-        # maangta hai — bina iske offline par kuch nahi milta tha
-        "  }).catch(()=>caches.match(e.request,{ignoreSearch:true})));\n"
-        "});\n"
-        # Web Push (services/web_push.py): app band ho tab bhi notification.
-        # Tap = khula hua staff app aage lao, warna naya kholo.
-        "self.addEventListener('push',e=>{\n"
-        "  let d={}; try{d=e.data?e.data.json():{}}catch(x){d={body:e.data&&e.data.text()}}\n"
-        "  e.waitUntil(self.registration.showNotification(d.title||'Kwik Klin',{body:d.body||'',"
-        "tag:d.tag||undefined,renotify:!!d.tag,icon:'/staff/icon.svg',badge:'/staff/icon.svg',data:{url:d.url||'/staff'}}));\n"
-        "});\n"
-        "self.addEventListener('notificationclick',e=>{\n"
-        "  e.notification.close(); const url=(e.notification.data&&e.notification.data.url)||'/staff';\n"
-        "  e.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(ws=>{\n"
-        "    for(const w of ws){ if(new URL(w.url).pathname.startsWith('/staff')) return w.focus(); }\n"
-        "    return clients.openWindow(url);\n"
-        "  }));\n"
-        "});\n"
-    )
-    return _Resp(content=js, media_type="application/javascript",
+    sw = Path(__file__).resolve().parent / "static" / "staff-sw.js"
+    return _Resp(content=sw.read_text(encoding="utf-8"), media_type="application/javascript",
                  headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/staff"})
 
 

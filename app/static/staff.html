@@ -4,13 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#131820">
-<title>Kwik Klin — Staff</title>
+<title>Kwik Klin Staff</title>
 <link rel="stylesheet" href="/admin/static/tokens.css?v=s8">
 <link rel="stylesheet" href="/admin/static/staff.css?v=s20">
 <link rel="stylesheet" href="/admin/static/staff-ui2.css?v=5">
 <link rel="manifest" href="/staff/manifest.webmanifest">
+<link rel="icon" href="/staff/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/staff/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="KK Staff">
+<meta name="apple-mobile-web-app-title" content="Kwik Klin">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="mobile-web-app-capable" content="yes">
 </head>
 <body>
@@ -19,7 +22,11 @@
      koi faisla nahi dikhaya jaata — warna har refresh par login jhalakti hai -->
 <section id="boot" class="boot">
   <div class="mark"><i>KK</i><div><b>Kwik Klin</b><span>Staff</span></div></div>
-  <span class="spin"></span>
+  <span class="spin" id="boot-spin"></span>
+  <div id="boot-off" class="boot-off" hidden>
+    <p>Can't reach Kwik Klin. Check your signal — it will try again by itself.</p>
+    <button type="button" id="boot-retry" class="btn go">Try again</button>
+  </div>
 </section>
 
 <section id="login" class="login" hidden>
@@ -52,6 +59,11 @@
   <div id="installbar" class="banner blue" hidden>
     Install this on your phone like an app
     <button class="linkbtn" id="btn-install">Install</button>
+  </div>
+  <!-- iPhone par Safari install ka button nahi deta — tareeka batana padta hai -->
+  <div id="iosinstall" class="banner blue" hidden>
+    <span>Install on iPhone: tap <b>Share</b> <span aria-hidden="true">⬆</span> then <b>Add to Home Screen</b></span>
+    <button class="linkbtn" id="ios-hide">OK</button>
   </div>
   <div id="pwbanner" class="banner" hidden>
     First login — please change your password.

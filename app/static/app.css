@@ -258,7 +258,8 @@ a { color: var(--brand-600); text-decoration: none; }
    "Done" dabane par detail na khul jaye. */
 .taskgrid {
   display: grid; gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  /* min(300px, 100%): 320px phone par card 300px se patli jagah mein bhi baith jaye */
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
 }
 .taskcard {
   background: var(--n0); border: 1px solid var(--n200); border-radius: var(--radius);
@@ -2931,6 +2932,8 @@ body.inbox-mode #sec-inbox .th-search input {
   background: #f6f7f9;
   font-size: 14px;
 }
+/* phone: 16px, warna iPhone search par tap karte hi zoom karta hai */
+@media (pointer: coarse) { body.inbox-mode #sec-inbox .th-search input { font-size: 16px; } }
 body.inbox-mode #sec-inbox .th-search input:focus {
   box-shadow: inset 0 0 0 2px #ff6a1a;
 }

@@ -81,7 +81,11 @@ async function api(path, opts = {}) {
     headers["Content-Type"] = "application/json";
     opts.body = typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body);
   }
-  const r = await fetch(path, Object.assign({}, opts, { headers }));
+  let r;
+  // Network gaya to browser "Failed to fetch" deta hai — owner ko wo
+  // nahi, seedhi baat dikhe. (Koi code is error ke shabd par tika nahi.)
+  try { r = await fetch(path, Object.assign({}, opts, { headers })); }
+  catch (e) { throw new Error(navigator.onLine ? "Can't reach the server — try again" : "No internet — check your signal and try again"); }
   if (r.status === 401) { location.href = "/join#login"; throw new Error("Please sign in"); }
   if (!r.ok) {
     let d = T.errGeneric;
@@ -345,6 +349,8 @@ async function ensureSignedIn() {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const res = await fetch("/api/me", { credentials: "same-origin" });
+      // 5xx = nginx/app restart (deploy) — wo "logged out" nahi, hichki hai
+      if (res.status >= 500) throw new Error(`server ${res.status}`);
       serverAnswered = true;
       me = await res.json().catch(() => null);
       break;
@@ -700,7 +706,7 @@ async function loadGrowthAnalytics() {
       const collected = Number(item.collected_revenue || 0).toLocaleString("en-IN", {
         style: "currency", currency: "INR", maximumFractionDigits: 0,
       });
-      return `<div style="display:grid;grid-template-columns:minmax(90px,1fr) minmax(90px,1fr) auto auto;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);align-items:center">
+      return `<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto auto;gap:8px;padding:7px 0;overflow-wrap:anywhere;border-bottom:1px solid var(--border);align-items:center">
         <span>${esc(item.source || "unattributed")}</span><span class="muted">${esc(item.campaign || "—")}</span>
         <span>${Number(item.confirmed_orders || 0)} orders</span><b>${collected}</b>
       </div>`;
@@ -6053,6 +6059,46 @@ async function toggleAgentPause() {
     toast(nowPaused ? "You took over — the bot stays silent on this chat" : "Agent resumed on this chat");
   } catch (e) { toast(e.message, true); }
 }
+/* Install as an app (PWA). Chrome/Edge/Samsung fire beforeinstallprompt;
+   Safari on iPhone never does, so there the bar says which two taps to make.
+   "✕" hides the bar on this phone; the sidebar button stays for later.
+   Runs at load (not after sign-in) — the prompt event fires early. */
+const INSTALL_HIDE_KEY = "kk_install_bar_off";
+function setupInstall() {
+  const bar = $("install-bar"), side = $("side-install");
+  if (!bar || !side) return;
+  if (matchMedia("(display-mode: standalone)").matches || navigator.standalone === true) return;
+  let evt = null, barOff = false;
+  try { barOff = localStorage.getItem(INSTALL_HIDE_KEY) === "1"; } catch (e) { /* private mode */ }
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);   // iPadOS "desktop" UA
+  const IOS_STEPS = "On iPhone: tap Share ⬆ then “Add to Home Screen”";
+  const show = () => { side.hidden = false; if (!barOff) bar.hidden = false; };
+  const done = () => { evt = null; bar.hidden = true; side.hidden = true; };
+  const install = async () => {
+    if (!evt) { toast(IOS_STEPS, false, 6000); return; }
+    // A prompt can be used once. Accepted or dismissed, hide until the browser
+    // offers a fresh one (it fires beforeinstallprompt again later).
+    evt.prompt();
+    await evt.userChoice.catch(() => null);
+    done();
+  };
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); evt = e; show(); });
+  window.addEventListener("appinstalled", done);
+  if (isIOS) {
+    $("install-msg").textContent = IOS_STEPS;
+    $("install-go").hidden = true;
+    show();
+  }
+  $("install-go").addEventListener("click", install);
+  side.addEventListener("click", install);
+  $("install-x").addEventListener("click", () => {
+    bar.hidden = true; barOff = true;
+    try { localStorage.setItem(INSTALL_HIDE_KEY, "1"); } catch (e) { /* private mode */ }
+  });
+}
+setupInstall();
+
 /* offline outbox: queued locally, flushed when the connection returns */
 const outbox = () => JSON.parse(localStorage.getItem("kk_outbox") || "[]");
 const saveOutbox = (q) => localStorage.setItem("kk_outbox", JSON.stringify(q));
