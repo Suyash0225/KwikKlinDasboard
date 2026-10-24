@@ -270,6 +270,14 @@ $("lg-pass").addEventListener("keydown", (e) => { if (e.key === "Enter") $("lg-g
 /* ─── boot ──────────────────────────────────────────────────────────── */
 
 let BOOT = null;          // /boot ka jawab — pehla loadWork/loadToday/loadBell isi se, bina naye request ke
+// "online" event, 20s ka timer aur Retry button — teeno yahin aate hain;
+// jo pehle aaye wahi chale, baaki chup (boot-off chhupa = koshish chal rahi)
+function retryBoot() {
+  if ($("boot-off").hidden) return;
+  $("boot-off").hidden = true; $("boot-spin").hidden = false;
+  start();
+}
+
 async function start() {
   try {
     BOOT = await api("/boot");
@@ -277,10 +285,23 @@ async function start() {
   } catch (e) {
     // Server ne SAAF mana kiya (401/402) tabhi login. Network hichki par
     // aadmi ko bahar nahi phenkte — wo bas dobara koshish kar sake.
+    // Installed app bina signal ke khule to login form nahi: wo login
+    // bhi nahi ho payega. "Offline" dikhao, signal aate hi khud dobara.
+    const netFail = !e.status || e.status >= 500;
+    // Login form pehle se khula hai (abhi login kiya) — wahin bata do
+    if (netFail && !$("login").hidden) {
+      $("lg-err").textContent = "Network problem — check your signal, then try again.";
+      return;
+    }
+    if (netFail) {
+      $("boot-spin").hidden = true; $("boot-off").hidden = false;
+      window.addEventListener("online", retryBoot, { once: true });
+      setTimeout(retryBoot, 20000);
+      return;
+    }
     $("boot").hidden = true;
     $("login").hidden = false; $("app").hidden = true;
     if (e.status === 402) $("lg-err").textContent = e.message;
-    else if (!e.status) $("lg-err").textContent = "Network problem — check your signal, then log in.";
     return;
   }
   $("boot").hidden = true;
@@ -1882,6 +1903,25 @@ async function loadBills(opts = {}) {
       if (b.dataset.bill === "pay") return askCollect(num, parseFloat(b.dataset.due));
     };
   });
+}
+
+/* Bill card par chhota safar: Received → Washing → Ready → Delivered.
+   (e80a815 mein call aur CSS aaye, function chhoot gaya tha — Bills tab
+   har bill par ReferenceError dekar khali reh jaata tha.) Hold/cancel
+   safar ka hissa nahi, unpar seedha shabd. */
+const BILL_STAGES = [
+  ["Received", ["RECEIVED", "PICKUP_ASSIGNED", "PICKED_UP"]],
+  ["Washing", ["IN_WASH", "IN_DRY", "IN_IRON"]],
+  ["Ready", ["READY", "OUT_FOR_DELIVERY"]],
+  ["Delivered", ["DELIVERED"]],
+];
+function billProgress(status) {
+  const at = BILL_STAGES.findIndex(([, ss]) => ss.includes(status));
+  if (at < 0) return `<span class="bill-stage current">${esc(STATUS_WORD[status] || status || "—")}</span>`;
+  return BILL_STAGES.map(([word], i) => {
+    const cls = i < at || status === "DELIVERED" ? "done" : i === at ? "current" : "";
+    return `<span class="bill-stage ${cls}">${word}</span>`;
+  }).join("");
 }
 
 function billRow(b) {
@@ -3491,8 +3531,33 @@ $("btn-install").onclick = async () => {
   INSTALL_EVT = null;
   $("installbar").hidden = true;
 };
+window.addEventListener("appinstalled", () => { INSTALL_EVT = null; $("installbar").hidden = true; });
+
+// iPhone/iPad Safari "Install" ka event deta hi nahi — wahan tareeka likh
+// kar batate hain. Ek baar "OK" dabaya to us phone par dobara nahi.
+const IOS_HINT_KEY = "kk_staff_ios_hint_seen";
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);   // iPadOS "desktop" UA
+const isStandalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+let iosHintSeen = false;
+try { iosHintSeen = localStorage.getItem(IOS_HINT_KEY) === "1"; } catch (e) { /* private mode */ }
+if (isIOS && !isStandalone && !iosHintSeen) $("iosinstall").hidden = false;
+$("ios-hide").onclick = () => {
+  $("iosinstall").hidden = true;
+  try { localStorage.setItem(IOS_HINT_KEY, "1"); } catch (e) { /* private mode */ }
+};
+$("boot-retry").onclick = retryBoot;
+
+// Service worker sirf HTTPS (ya localhost) par chalta hai — wahi install
+// aur offline shell deta hai. Na chale to bhi app chalti hai.
+// scope "/staff" (bina slash): default "/staff/" hota, jo "/staff" page ko
+// hi nahi gherta — tab na offline shell chalta tha, na serviceWorker.ready
+// kabhi poora hota tha. Purana "/staff/" wala registration hata dete hain.
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/staff/sw.js").catch(() => { /* app phir bhi chalegi */ });
+  navigator.serviceWorker.register("/staff/sw.js", { scope: "/staff" }).catch(() => { /* app phir bhi chalegi */ });
+  navigator.serviceWorker.getRegistrations().then((regs) => regs.forEach((r) => {
+    if (new URL(r.scope).pathname === "/staff/") r.unregister();
+  })).catch(() => {});
 }
 
 start();

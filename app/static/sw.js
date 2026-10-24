@@ -3,7 +3,8 @@
    offline for a moment. API calls and the webhook are NEVER intercepted —
    the app's own offline outbox handles unsent messages. */
 
-const CACHE = "kk-shell-v2";
+const PREFIX = "kk-shell-";
+const CACHE = PREFIX + "v3";
 const SHELL = ["/admin/static/app.css", "/admin/static/ui-v2.css", "/admin/static/app.js"];
 
 self.addEventListener("install", (e) => {
@@ -11,9 +12,11 @@ self.addEventListener("install", (e) => {
 });
 
 self.addEventListener("activate", (e) => {
+  // Sirf APNE purane cache hatao — isi origin par /staff ka service worker
+  // apna "kkstaff-*" rakhta hai, use mitana staff ka offline tod deta tha.
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith(PREFIX) && k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });

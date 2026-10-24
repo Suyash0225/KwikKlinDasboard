@@ -19,7 +19,9 @@
   .wrap { max-width:620px; margin:0 auto;
           padding:0 max(20px, env(safe-area-inset-right)) 0 max(20px, env(safe-area-inset-left)); }
   header { background:#fff; border-bottom:1px solid var(--line); }
-  .nav { display:flex; align-items:center; gap:10px; padding:14px 0; }
+  /* padding-block: `padding:14px 0` .wrap ka side gutter mita deta tha, aur
+     Logout ka -12px margin page ko 320px par sideways scroll karwata tha */
+  .nav { display:flex; align-items:center; gap:10px; padding-block:14px; }
   .badge { width:38px; height:38px; border-radius:11px; background:var(--brand); color:#fff;
            display:grid; place-items:center; font-weight: 700; font-size:14px; }
   .nav b { font-weight: 700; }

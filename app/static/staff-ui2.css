@@ -236,6 +236,12 @@ input, select, textarea { border: 1px solid var(--rule); border-radius: 12px; }
 .today > button.tap b { display: block; }
 .today > button.alert { border-color: var(--late); }
 .today > button.alert b { color: var(--late); }
+/* 320–380px par manager ke paanch tile: "collected" kat jaata tha */
+@media (max-width: 380px) {
+  .today { gap: 6px; font-size: 10.5px; }
+  .today > div, .today > button.tap { padding: 9px 7px; font-size: 10.5px; overflow-wrap: anywhere; }
+  .today b { font-size: 17px; }
+}
 details.od-block > summary { cursor: pointer; list-style: none; }
 details.od-block > summary::-webkit-details-marker { display: none; }
 /* bina signal ke ruke kaam — late wali patti jaisi, par neeli */

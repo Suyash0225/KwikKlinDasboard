@@ -700,7 +700,7 @@ async function loadGrowthAnalytics() {
       const collected = Number(item.collected_revenue || 0).toLocaleString("en-IN", {
         style: "currency", currency: "INR", maximumFractionDigits: 0,
       });
-      return `<div style="display:grid;grid-template-columns:minmax(90px,1fr) minmax(90px,1fr) auto auto;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);align-items:center">
+      return `<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto auto;gap:8px;padding:7px 0;overflow-wrap:anywhere;border-bottom:1px solid var(--border);align-items:center">
         <span>${esc(item.source || "unattributed")}</span><span class="muted">${esc(item.campaign || "—")}</span>
         <span>${Number(item.confirmed_orders || 0)} orders</span><b>${collected}</b>
       </div>`;

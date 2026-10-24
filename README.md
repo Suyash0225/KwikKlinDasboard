@@ -4,7 +4,8 @@ WhatsApp-first laundry CRM (multi-tenant SaaS) + Kwik Klin's own public website.
 Owner dashboard `/admin`, staff PWA `/staff`, vendor Control panel `/control`,
 public site `/` (app/site). Docs: [ARCHITECTURE.md](ARCHITECTURE.md),
 [docs/ARCHITECTURE-DETAILED.md](docs/ARCHITECTURE-DETAILED.md),
-[docs/QA-TESTING-HANDBOOK.md](docs/QA-TESTING-HANDBOOK.md), [docs/PRD.md](docs/PRD.md).
+[docs/QA-TESTING-HANDBOOK.md](docs/QA-TESTING-HANDBOOK.md), [docs/PRD.md](docs/PRD.md),
+[docs/STAFF_PWA.md](docs/STAFF_PWA.md) (staff app install/offline).
 
 ## Codespaces
 

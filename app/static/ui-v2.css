@@ -428,7 +428,9 @@ label { color: var(--ink-2); font-weight: 600; letter-spacing: 0; }
 .ordercard .act:not(:has(.btn:not(.ghost))) { grid-template-columns: 1fr auto; }
 
 /* side panels: WhatsApp today + Growth */
-.dash-side { display: grid; gap: 14px; margin-top: 16px; }
+/* minmax(0, 1fr): bina iske akeli column card ke min-content (WhatsApp
+   ke 4 mini tile) jitni chaudi ho jaati thi — 320px par card 46px kat'ta tha */
+.dash-side { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-top: 16px; }
 @media (min-width: 1024px) { .dash-side { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); align-items: start; } }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .panel-head h3 { font-size: .95rem; font-weight: 650; }
@@ -681,6 +683,10 @@ label { color: var(--ink-2); font-weight: 600; letter-spacing: 0; }
   .cust-card { background: transparent; border: 0; box-shadow: none; overflow: visible; }
   .cust-card .doc-head { padding: 0 0 10px; border: 0; flex-direction: column-reverse; align-items: stretch; }
   .cust-card .searchbox { flex-basis: auto; max-width: none; }
+  /* search aur chips 408px par atke the (320/375 par kate hue) — screen se
+     chaude na hon; chips apne negative margin tak kinare chhu sakein */
+  .cust-card .doc-head > * { min-width: 0; max-width: 100%; }
+  .cust-card .doc-head > .cust-chips { max-width: calc(100% + 2 * var(--s3)); }
   .cust-card .cust-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 calc(-1 * var(--s3)); padding: 2px var(--s3) 2px; }
   .cust-card .listcard .rowcards { padding: 0; }
   .cust-selectbar { border-radius: 12px; border: 1px solid #fed7aa; margin-bottom: 10px; }

@@ -2907,6 +2907,10 @@ async def dashboard_page(
     v = int(max(
         (static_dir / "app.js").stat().st_mtime,
         (static_dir / "app.css").stat().st_mtime,
+        # ui-v2.css bhi — pehle ?v=3 par atka tha, aur 1 saal ke immutable
+        # cache ki wajah se uski nayi CSS deploy ke baad phone tak nahi
+        # pahunchti thi (staff-ui2.css wali wahi galti, main.py dekho).
+        (static_dir / "ui-v2.css").stat().st_mtime,
         # tokens.css teenon surface ka source of truth hai. Isko version
         # mein na ginne par ek brand-rang badalne par bhi browser purani
         # file pakde rehta — aur dikkat "kabhi-kabhi purana orange" jaisi
@@ -2918,7 +2922,7 @@ async def dashboard_page(
     ))
     import re as _re
 
-    html = _re.sub(r"((?:app|tokens)\.(?:js|css)|icons\.svg)\?v=[\w]+", rf"\1?v={v}", html)
+    html = _re.sub(r"((?:app|ui-v2|tokens)\.(?:js|css)|icons\.svg)\?v=[\w]+", rf"\1?v={v}", html)
     return Response(
         content=html, media_type="text/html",
         headers={
