@@ -1882,3 +1882,78 @@ async def test_bill_picker_knows_popular_and_usual_items(client, two_shops, sent
             async with tenant_context.system_context(db):
                 await db.execute(sqltext("DELETE FROM rate_card WHERE service = 'UsualSvc'"))
                 await db.commit()
+
+
+async def test_temp_password_blocks_work_until_changed(client, two_shops, sent) -> None:
+    """Owner ka diya temp password sirf apna password badalne ke kaam aaye.
+    Pehle ye sirf banner tha — aadmi use ignore karke saal bhar usi
+    password par kaam kar sakta tha."""
+    from app.services import tenant_context
+
+    async with async_session_factory() as db:
+        async with tenant_context.system_context(db):
+            await db.execute(
+                sqltext("UPDATE staff SET must_change_password = true WHERE phone = :p"), {"p": A_DEL_PHONE}
+            )
+            await db.commit()
+
+    lg = await client.post("/staff/api/login", json={"phone": A_DEL_PHONE, "password": PW})
+    assert lg.status_code == 200 and lg.json()["must_change_password"] is True
+
+    # kaam ka data aur action: band
+    r = await client.get("/staff/api/rates")
+    assert r.status_code == 403 and r.json()["detail"].startswith("Change your password first")
+    assert (await client.get("/staff/api/route")).status_code == 403
+    assert (await client.get("/staff/api/events")).status_code == 403
+    assert (await client.post("/staff/api/orders/KK-NOPE/ready")).status_code == 403
+    # pehchan aur boot: khule, par boot mein kaam ki list nahi
+    assert (await client.get("/staff/api/me")).status_code == 200
+    boot = await client.get("/staff/api/boot")
+    assert boot.status_code == 200
+    assert boot.json()["me"]["must_change_password"] is True
+    assert boot.json()["route"] is None and boot.json()["tasks"] is None
+
+    # galat purana password -> nahi badalta, rok waisi hi
+    bad = await client.post("/staff/api/password", json={"old_password": "galat", "new_password": "naya-pass-1"})
+    assert bad.status_code == 403
+    assert (await client.get("/staff/api/rates")).status_code == 403
+
+    ok = await client.post("/staff/api/password", json={"old_password": PW, "new_password": "naya-pass-1"})
+    assert ok.status_code == 200
+    assert (await client.get("/staff/api/rates")).status_code == 200
+    assert (await client.get("/staff/api/boot")).json()["route"] is not None
+    assert (await client.get("/staff/api/me")).json()["must_change_password"] is False
+
+
+async def test_login_is_throttled_per_phone_not_only_per_ip(client, two_shops, monkeypatch) -> None:
+    """Ek number par 8 galat koshish -> wo number ruke, baaki numbers (usi
+    IP/WiFi se) nahi. Sahi login par ginti saaf. IP wala throttle yahan
+    band hai taaki sirf number wala naapa jaye (aur doosre tests ke liye
+    IP ki ginti na badhe)."""
+    from app.services import staff_auth
+
+    monkeypatch.setattr(staff_auth, "throttled", lambda ip: False)
+    monkeypatch.setattr(staff_auth, "note_failure", lambda ip: None)
+    try:
+        for _ in range(staff_auth.PHONE_FAIL_MAX):
+            r = await client.post("/staff/api/login", json={"phone": A_DEL_PHONE, "password": "galat"})
+            assert r.status_code == 401
+        # 9th: sahi password bhi 429 — number ruka hua hai
+        r = await client.post("/staff/api/login", json={"phone": A_DEL_PHONE, "password": PW})
+        assert r.status_code == 429
+        # doosra number, wahi IP: khula
+        r = await client.post("/staff/api/login", json={"phone": B_PHONE, "password": PW})
+        assert r.status_code == 200, r.text
+        await client.post("/staff/api/logout")
+
+        # ruka hua number khulte hi sahi login -> ginti saaf
+        staff_auth._phone_throttle.clear(A_DEL_PHONE)
+        for _ in range(3):
+            wrong = await client.post("/staff/api/login", json={"phone": A_DEL_PHONE, "password": "galat"})
+            assert wrong.status_code == 401
+        right = await client.post("/staff/api/login", json={"phone": A_DEL_PHONE, "password": PW})
+        assert right.status_code == 200
+        assert not staff_auth._phone_throttle.throttled(A_DEL_PHONE)
+        assert not staff_auth._phone_throttle._failed.get(A_DEL_PHONE)
+    finally:
+        staff_auth._phone_throttle.clear(A_DEL_PHONE)

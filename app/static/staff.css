@@ -779,3 +779,6 @@ h3.mt-lg { margin-top: 20px; }
 .modal .loc-status { font-size: 13px; color: var(--ink-2); margin: -6px 0 10px; }
 .modal .loc-alt { margin-top: 10px; font-size: 13px; }
 .modal .loc-tip { font-size: 12.5px; margin: 0 0 10px; }
+
+/* empty-state ke neeche ek button (jaise: pehle apna password rakho) */
+.empty .empty-cta { margin-top: 12px; }

@@ -37,6 +37,11 @@ async function api(path, opts = {}) {
     if (Array.isArray(detail)) detail = (detail[0] && detail[0].msg || "").replace(/^Value error, /, "");
     const err = new Error(detail || `Error ${res.status}`);
     err.status = res.status;
+    // Temp password par server har kaam 403 se rokta hai — popup wahin khule
+    if (res.status === 403 && /^Change your password first/.test(String(detail || "")) && ME) {
+      ME.must_change_password = true;
+      if (!modalOpen()) changePw(true);
+    }
     throw err;
   }
   return data;
@@ -312,6 +317,17 @@ async function start() {
   $("whoRole").textContent = `${roleLabel(ME.role)} · ${ME.shop || ""}`;
   $("pwbanner").hidden = !ME.must_change_password;
   renderNav();
+  if (ME.must_change_password) {
+    // Owner ka diya temp password: server kaam ka data/action nahi deta jab
+    // tak apna password na rakh lo. Yahan list/live/push shuru hi nahi karte
+    // — sab 403 hote; password badalte hi start() dobara chalta hai.
+    $("list").innerHTML = `<div class="empty"><b>Set your own password first</b>
+      The owner gave you a temporary one. Your work shows up right after.
+      <button type="button" class="btn go empty-cta" id="pw-now">Change password</button></div>`;
+    $("pw-now").onclick = () => changePw(true);
+    changePw(true);
+    return;
+  }
   setTasksBadge((BOOT.tasks && BOOT.tasks.total) || 0);   // /boot mein pehle se — alag request nahi
   go("work");
   loadToday();
@@ -3350,9 +3366,10 @@ function showMe() {
   };
 }
 
-function changePw() {
-  openModal(`<h3>Change password</h3>
-    <label for="p-old">Current password</label>
+function changePw(forced = false) {
+  openModal(`<h3>${forced ? "Set your own password" : "Change password"}</h3>
+    ${forced ? `<p class="hint">The owner gave you a temporary password. Choose your own to start work.</p>` : ""}
+    <label for="p-old">${forced ? "Temporary password" : "Current password"}</label>
     <div class="pwrap">
       <input id="p-old" type="password" autocomplete="current-password">
       <button type="button" class="eye" data-eye="p-old" aria-label="Show password">👁</button>
@@ -3364,7 +3381,7 @@ function changePw() {
     </div>
     <div class="err" id="p-err"></div>
     <div class="btnrow">
-      <button class="btn ghost" data-act="close">Not now</button>
+      ${forced ? "" : `<button class="btn ghost" data-act="close">Not now</button>`}
       <button class="btn go" id="m-ok">Save</button>
     </div>`);
   document.querySelectorAll("[data-eye]").forEach((b) => {
@@ -3380,7 +3397,9 @@ function changePw() {
     try {
       await api("/password", { method: "POST", body: { old_password: oldp, new_password: newp } });
       closeModal(); toast("Password changed ✅");
+      const wasForced = ME.must_change_password;
       ME.must_change_password = false; $("pwbanner").hidden = true;
+      if (wasForced) { BOOT = null; await start(); }      // ab asli boot: kaam, live, push
     } catch (e) { $("p-err").textContent = e.message; }
   };
 }
