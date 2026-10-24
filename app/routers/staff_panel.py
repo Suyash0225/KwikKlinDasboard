@@ -1650,7 +1650,8 @@ async def save_customer_location(
     if body.lat is not None and body.accuracy_m is not None and body.accuracy_m > 300:
         raise HTTPException(status_code=400, detail="GPS is not accurate right now — step outside and try again")
     try:
-        if not geo.set_location(cust, lat=body.lat, lng=body.lng, map_url=body.map_url, by=p.staff.name):
+        if not geo.set_location(cust, lat=body.lat, lng=body.lng, map_url=body.map_url, by=p.staff.name,
+                                accuracy_m=body.accuracy_m):
             raise HTTPException(status_code=400, detail="Location is needed")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

@@ -2749,7 +2749,9 @@ function editCustomerModal(phone) {
         <input id="ec-addr" value="${esc(c.address || "")}"></div>
       <div class="setfield"><label for="ec-map">Google Maps link <span class="muted">(optional)</span></label>
         <input id="ec-map" value="${esc(c.map_url || "")}" placeholder="Paste a Google Maps share link">
-        <small>${c.has_location ? "📍 Pin saved — delivery staff get one-tap directions." : "Delivery staff can also save the pin from their app while at the door."}</small></div>
+        <small>${c.has_location
+          ? `📍 Pin saved${c.accuracy_m ? ` (GPS ±${c.accuracy_m} m${c.accuracy_m > 60 ? " — weak; ask staff to re-save at the gate, or paste an exact link" : ""})` : ""} — delivery staff get one-tap directions.`
+          : "Delivery staff can also save the pin from their app while at the door."}</small></div>
     </div>
     <div class="btnrow">
       <button class="btn ghost" onclick="closeModal()">Cancel</button>

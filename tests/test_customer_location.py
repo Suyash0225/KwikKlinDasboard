@@ -51,6 +51,7 @@ async def test_delivery_boy_saves_pin_and_everyone_can_navigate(client, two_shop
     r = await client.post(f"/staff/api/customers/{ref}/location", json={"lat": LAT, "lng": LNG, "accuracy_m": 12})
     assert r.status_code == 200, r.text
     assert r.json()["has_location"] and "destination=25.317600,82.973900" in r.json()["nav_url"]
+    assert r.json()["accuracy_m"] == 12, "±m saath mein — kamzor pin dikhe"
 
     stop = next(s for s in (await client.get("/staff/api/route")).json()["stops"] if s["number"] == number)
     assert stop["has_location"] and stop["waypoint"] == "25.317600,82.973900"
@@ -68,6 +69,7 @@ async def test_delivery_boy_saves_pin_and_everyone_can_navigate(client, two_shop
         async with async_session_factory() as db:
             cust = (await db.execute(select(Customer).where(Customer.phone == CUST))).scalar_one()
             assert cust.location_by == "Adel" and cust.location_at is not None
+            assert cust.location_accuracy_m == 12
 
 
 async def test_bad_gps_and_wrong_roles_are_refused(client, two_shops, sent) -> None:

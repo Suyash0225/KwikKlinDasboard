@@ -1528,7 +1528,7 @@ function locationButtons(w) {
    andar, purana fix). Isliye kuch second tak readings dekho aur sabse
    sateek rakho: 25 m se achha milte hi ruk jao, warna 12 s mein jo best
    mila. onUpdate se modal par "48 m" jaisa live dikhta hai. */
-const GPS_GOOD_M = 25, GPS_WAIT_MS = 12000, GPS_MAX_MS = 20000;
+const GPS_GOOD_M = 20, GPS_WAIT_MS = 15000, GPS_MAX_MS = 25000, GPS_WEAK_M = 50;
 function bestPosition(onUpdate) {
   return new Promise((res, rej) => {
     if (!navigator.geolocation) return rej(new Error("GPS is not available on this phone"));
@@ -1560,6 +1560,7 @@ function askSaveLocation(ref, name) {
         <input id="loc-link" type="url" inputmode="url" placeholder="Paste a Google Maps share link" autocomplete="off">
       </div>
       <div class="err" id="loc-err"></div>
+      <p class="said loc-tip">Best result: stand at the gate / outside the door, phone in hand, sky visible.</p>
       <div class="btnrow">
         <button class="btn ghost" id="loc-no">Cancel</button>
         <button class="btn go" id="loc-yes">Yes, save location</button>
@@ -1569,24 +1570,44 @@ function askSaveLocation(ref, name) {
     const useLink = () => { $("loc-linkwrap").hidden = false; $("loc-alt").hidden = true; $("loc-yes").textContent = "Save link"; $("loc-link").focus(); };
     $("loc-no").onclick = done;
     $("loc-alt").onclick = useLink;
+    let weak = null;   // kamzor GPS ka reading — "Save anyway" isi ko bhejta hai
+    const save = async (body) => {
+      await api(`/customers/${encodeURIComponent(ref)}/location`, { method: "POST", body });
+      toast(body.accuracy_m ? `Location saved 📍 (GPS ±${Math.round(body.accuracy_m)} m)` : "Location saved 📍 — Navigate will work from now on");
+      done();
+      refreshCurrent({ quiet: true });
+    };
     $("loc-yes").onclick = async (e) => {
       const btn = e.currentTarget, label = btn.innerHTML;
       const link = $("loc-linkwrap").hidden ? "" : $("loc-link").value.trim();
       btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
       $("loc-err").textContent = "";
       try {
-        let body;
-        if (link) body = { map_url: link };
-        else {
-          const st = $("loc-status"); st.hidden = false; st.textContent = "📡 Getting GPS… hold the phone still";
-          const pos = await bestPosition((p) => { st.textContent = `📡 GPS accuracy ${Math.round(p.coords.accuracy)} m — improving…`; });
-          body = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy_m: pos.coords.accuracy };
-          st.textContent = `📡 GPS accuracy ${Math.round(pos.coords.accuracy)} m`;
+        if (link) return await save({ map_url: link });
+        if (weak && btn.dataset.anyway) return await save(weak);
+        const st = $("loc-status"); st.hidden = false; st.textContent = "📡 Getting GPS… hold the phone still";
+        const pos = await bestPosition((p) => { st.textContent = `📡 GPS accuracy ${Math.round(p.coords.accuracy)} m — improving…`; });
+        const body = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy_m: pos.coords.accuracy };
+        const acc = Math.round(pos.coords.accuracy);
+        if (acc > GPS_WEAK_M) {
+          // Ghar ke andar / "approximate location" permission: pin galat gali
+          // mein ja sakta hai. Bahar jaakar dobara, ya jaan-boojh kar save.
+          weak = body;
+          st.textContent = `⚠️ GPS weak: ±${acc} m. Step outside near the gate and retry.`
+            + (acc > 150 ? " On Android also check: phone Settings → Apps → Chrome → Location → Precise location ON." : "");
+          btn.disabled = false; btn.innerHTML = "🔄 Retry GPS";
+          let anyway = $("loc-anyway");
+          if (!anyway) {
+            anyway = document.createElement("button");
+            anyway.type = "button"; anyway.id = "loc-anyway"; anyway.className = "linkbtn loc-alt";
+            btn.parentNode.insertAdjacentElement("afterend", anyway);
+            anyway.onclick = () => { btn.dataset.anyway = "1"; btn.click(); };
+          }
+          anyway.textContent = `Save anyway (±${acc} m)`;
+          return;
         }
-        await api(`/customers/${encodeURIComponent(ref)}/location`, { method: "POST", body });
-        toast("Location saved 📍 — Navigate will work from now on");
-        done();
-        refreshCurrent({ quiet: true });
+        st.textContent = `📡 GPS accuracy ${acc} m`;
+        await save(body);
       } catch (err) {
         $("loc-err").textContent = err.message;
         $("loc-status").hidden = true;
@@ -1620,7 +1641,7 @@ function findCustomerModal() {
           <b>${esc(c.name)}</b> <span class="said inl">${esc(c.phone_masked)}</span>
           ${c.address ? `<div class="sub mt-xs">📍 ${esc(c.address)}</div>` : ""}
           <div class="acts">
-            ${c.nav_url ? `<a class="btn go sm" href="${esc(c.nav_url)}" target="_blank" rel="noopener">🧭 Navigate</a>`
+            ${c.nav_url ? `<a class="btn go sm" href="${esc(c.nav_url)}" target="_blank" rel="noopener">🧭 Navigate</a>${c.accuracy_m ? `<span class="sub">±${c.accuracy_m} m${c.accuracy_m > GPS_WEAK_M ? " ⚠️ weak" : ""}</span>` : ""}`
               : `<span class="sub">No map pin yet</span>`}
             <button type="button" class="btn ghost sm" data-saveloc="${esc(c.ref)}" data-name="${esc(c.name)}">📍 ${c.nav_url ? "Update" : "Save"} pin</button>
           </div>

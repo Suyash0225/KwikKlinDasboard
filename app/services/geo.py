@@ -68,12 +68,14 @@ def waypoint(cust) -> str:
 def payload(cust) -> dict:
     """API ke liye: {"has_location", "nav_url"} — har jagah ek hi shakal."""
     if cust is None:
-        return {"has_location": False, "nav_url": ""}
+        return {"has_location": False, "nav_url": "", "accuracy_m": None}
     url = nav_url(cust.lat, cust.lng, cust.map_url)
-    return {"has_location": bool(url), "nav_url": url}
+    acc = getattr(cust, "location_accuracy_m", None)
+    return {"has_location": bool(url), "nav_url": url, "accuracy_m": int(acc) if acc is not None else None}
 
 
-def set_location(cust, *, lat=None, lng=None, map_url: str | None = None, by: str = "") -> bool:
+def set_location(cust, *, lat=None, lng=None, map_url: str | None = None, by: str = "",
+                 accuracy_m=None) -> bool:
     """Grahak par pin/link likho. Kuch mila to True.
 
     GPS (lat/lng) aaya to wahi sach hai; link aaya to usse coordinates
@@ -86,17 +88,22 @@ def set_location(cust, *, lat=None, lng=None, map_url: str | None = None, by: st
         cust.lng = Decimal(str(float(lng))).quantize(Decimal("0.000001"))
         if map_url is not None:
             cust.map_url = map_url.strip()[:500] or None
+        try:
+            cust.location_accuracy_m = int(round(float(accuracy_m))) if accuracy_m is not None else None
+        except (TypeError, ValueError):
+            cust.location_accuracy_m = None
     elif map_url is not None:
         link = map_url.strip()[:500]
         if not link:
             cust.lat = cust.lng = cust.map_url = None
-            cust.location_at = cust.location_by = None
+            cust.location_at = cust.location_by = cust.location_accuracy_m = None
             return True
         if not valid_map_link(link):
             raise ValueError("Google Maps ka link daaliye (https://... ya geo:)")
         parsed = parse_map_link(link)
         cust.map_url = link
         cust.lat, cust.lng = parsed if parsed else (None, None)
+        cust.location_accuracy_m = None   # link ki accuracy pata nahi
     else:
         return False
     cust.location_at = datetime.now(timezone.utc)
