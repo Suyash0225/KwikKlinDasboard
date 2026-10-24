@@ -6,7 +6,12 @@
 <title>Kwik Klin — Laundry Pro</title>
 <meta name="description" content="Kwik Klin Laundry Pro — WhatsApp-first admin panel: orders, bills, customers, campaigns and an AI agent for the shop.">
 <meta name="theme-color" content="#0d1526">
-<link rel="manifest" href="/admin/static/manifest.json">
+<link rel="manifest" href="/admin/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/admin/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="KK Owner">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%BA%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -61,6 +66,7 @@
       <div data-s="settings" onclick="go('settings')"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-settings"/></svg>Settings</div>
     </nav>
     <div class="side-foot">
+      <button type="button" class="side-install" id="side-install" hidden>📲 Install app on this phone</button>
       <div class="sysline"><span class="dot"></span>Postgres · WhatsApp bot active</div>
       <div class="logout" onclick="kkLogout()"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-logout"/></svg>Log out admin</div>
     </div>
@@ -71,6 +77,14 @@
     <div class="topbar">
       <button class="burger" aria-label="Open menu" onclick="toggleSidebar()"><svg class="ic" aria-hidden="true"><use href="/admin/static/icons.svg?v=ui2#i-menu"/></svg></button>
       <h2 id="mob-title">Dashboard</h2>
+    </div>
+
+    <!-- Phone par app ki tarah install. Android: browser ka install prompt;
+         iPhone Safari prompt deta hi nahi, wahan tareeka likh kar. -->
+    <div id="install-bar" class="install-bar" hidden>
+      <span id="install-msg">Install Kwik Klin on this phone — opens like an app</span>
+      <button type="button" class="btn sm" id="install-go">Install</button>
+      <button type="button" class="install-x" id="install-x" aria-label="Hide">✕</button>
     </div>
 
     <!-- Dashboard -->

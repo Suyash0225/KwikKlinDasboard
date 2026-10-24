@@ -394,6 +394,42 @@ async def service_worker():
     )
 
 
+# Install manifest — /admin/static/ se nahi: wahan 1 saal ka immutable cache
+# hai, aur manifest badle (naam/icon) to phone tak kabhi na pahunchta.
+# Khula hai (bina login): browser manifest aur icons bina cookie ke maangta hai.
+@app.get("/admin/manifest.webmanifest", include_in_schema=False)
+async def admin_manifest():
+    from fastapi.responses import Response as _Resp
+
+    path = Path(__file__).resolve().parent / "static" / "manifest.json"
+    return _Resp(
+        content=path.read_text(encoding="utf-8"),
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+# Owner app ke PNG icons (scripts/make_app_icons.py). Naam fixed list se.
+_ADMIN_PNGS = {
+    "icon-192": "admin-icon-192.png",
+    "icon-512": "admin-icon-512.png",
+    "icon-maskable-512": "admin-icon-maskable-512.png",
+    "apple-touch-icon": "admin-apple-touch-180.png",
+}
+
+
+@app.get("/admin/{name}.png", include_in_schema=False)
+async def admin_png(name: str):
+    from fastapi.responses import FileResponse
+
+    file = _ADMIN_PNGS.get(name)
+    if not file:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+    return FileResponse(Path(__file__).resolve().parent / "static" / file,
+                        media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
 # Public page: pricing + signup + login. Yahi wo darwaza hai jahan se ek
 # nayi laundry andar aati hai (app/static/join.html).
 _JOIN_FILE = Path(__file__).resolve().parent / "static" / "join.html"
@@ -1642,7 +1678,7 @@ async def staff_icon():
                  headers={"Cache-Control": "public, max-age=86400"})
 
 
-# Phone par install ke PNG icons (scripts/make_staff_icons.py banata hai).
+# Phone par install ke PNG icons (scripts/make_app_icons.py banata hai).
 # Android ka install 192/512 PNG maangta hai, iOS apple-touch-icon — SVG
 # dono jagah bharose ka nahi. Naam fixed list se: rasta request se nahi banta.
 _STAFF_PNGS = {

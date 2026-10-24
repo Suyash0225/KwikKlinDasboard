@@ -49,6 +49,7 @@
     .gp-btn{border:1px solid #e2e8f0;background:#fff;border-radius:10px;padding:7px 12px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;color:#334155}
     .gp-text{width:100%;box-sizing:border-box;font:inherit;font-size:14.5px;border:1px solid #e2e8f0;border-radius:12px;padding:11px 12px;min-height:96px;resize:vertical;color:inherit}
     .gp-text:focus{outline:none;border-color:#ea580c;box-shadow:0 0 0 3px rgba(234,88,12,.15)}
+    @media (pointer:coarse){.gp-text{font-size:16px}}
     .gp-count{text-align:right;font-size:11.5px;color:#94a3b8;margin-top:4px}
     .gp-cta{display:grid;grid-template-columns:1fr 1fr;gap:8px}
     .gp-cta label{display:flex;gap:10px;align-items:flex-start;border:1px solid #e2e8f0;border-radius:14px;padding:11px 12px;cursor:pointer;font-size:13px;color:#475569}

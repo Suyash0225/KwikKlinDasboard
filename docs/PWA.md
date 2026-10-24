@@ -1,4 +1,12 @@
-# Kwik Klin Staff — installable app (PWA)
+# Kwik Klin — installable apps (PWA)
+
+Two apps install on a phone: the **staff app** (`/staff`, "Kwik Klin") and
+the **owner dashboard** (`/admin`, "KK Owner"). They have different icons
+(staff: dark frame, owner: solid orange), so both can sit on one phone without
+being mixed up. Most of this page covers the staff app; the owner dashboard
+has its own section below.
+
+## Staff app
 
 The staff panel at `/staff` installs on a phone like an app ("Kwik Klin
 Staff"). There is no build step: it is plain HTML/JS/CSS served by FastAPI,
@@ -12,7 +20,7 @@ same as the owner dashboard.
 | App code | `app/static/staff.js`, `staff.css`, `staff-ui2.css`, `tokens.css` | `/admin/static/…` |
 | Manifest | `app/static/staff-manifest.json` | `/staff/manifest.webmanifest` |
 | Service worker | `app/static/staff-sw.js` | `/staff/sw.js` (`no-cache`, `Service-Worker-Allowed: /staff`) |
-| Icons | `app/static/staff-*.png` (made by `scripts/make_staff_icons.py`) | `/staff/icon-192.png`, `/staff/icon-512.png`, `/staff/icon-maskable-512.png`, `/staff/apple-touch-icon.png`, `/staff/badge-96.png`, `/staff/icon.svg` |
+| Icons | `app/static/staff-*.png` (made by `scripts/make_app_icons.py`) | `/staff/icon-192.png`, `/staff/icon-512.png`, `/staff/icon-maskable-512.png`, `/staff/apple-touch-icon.png`, `/staff/badge-96.png`, `/staff/icon.svg` |
 | Staff API | `app/routers/staff_panel.py` | `/staff/api/*` (httpOnly `kk_staff` cookie) |
 
 Access control is entirely server-side: tenant comes from the staff
@@ -71,7 +79,7 @@ HTTPS is required (service workers only run on HTTPS or `localhost`).
 node --check app/static/staff.js && node --check app/static/staff-sw.js && node --check app/static/sw.js
 
 # PWA tests + staff panel tests (needs TEST_DATABASE_URL, see README "Run tests")
-python -m pytest tests/test_staff_pwa.py tests/test_staff_panel.py -q
+python -m pytest tests/test_staff_pwa.py tests/test_admin_pwa.py tests/test_staff_panel.py -q
 
 # Run the app and open http://localhost:8000/staff
 # (localhost counts as secure, so the service worker registers)
@@ -88,20 +96,43 @@ In Chrome DevTools → **Application**:
 ## Deploying
 
 No new services, env vars or secrets. Deploy as usual (`scripts/deploy.sh`).
-The nginx config in `DEPLOY.md` needs no change: `/staff/*` (manifest, icons, SW)
+The nginx config in `DEPLOY.md` needs no change: `/staff/*` and the `/admin` manifest, icons and SW
 goes through the app, and the SW precaches with `cache: "reload"`, so the
 1-year `immutable` cache on `/admin/static/` can't feed it stale files.
 
 After deploy, already-installed phones pick up the new worker on their next
-visit (`no-cache` on `/staff/sw.js`, `skipWaiting` + `clients.claim`).
+visit (`no-cache` on both `sw.js`, `skipWaiting` + `clients.claim`).
 
-To change the icon: edit `scripts/make_staff_icons.py`, run
-`python -m scripts.make_staff_icons`, commit the PNGs.
+To change the icon: edit `scripts/make_app_icons.py`, run
+`python -m scripts.make_app_icons`, commit the PNGs.
+
+## Owner dashboard (`/admin`)
+
+| Piece | File | Served at |
+|---|---|---|
+| Page | `app/static/dashboard.html` | `/admin` (`?v=<mtime>` on app.js, app.css, ui-v2.css, tokens.css, gbp-poster.js, icons.svg) |
+| Manifest | `app/static/manifest.json` | `/admin/manifest.webmanifest` (1 h cache, **not** `/admin/static/`, which is immutable for a year) |
+| Service worker | `app/static/sw.js` | `/admin/sw.js` (`no-cache`, `Service-Worker-Allowed: /admin`), cache `kk-shell-v4` |
+| Icons | `app/static/admin-*.png` | `/admin/icon-192.png`, `/admin/icon-512.png`, `/admin/icon-maskable-512.png`, `/admin/apple-touch-icon.png` |
+
+The rules are the same as the staff worker: a fixed allowlist of shell files,
+`/admin/api` and `/admin/media` are never intercepted, only complete
+same-origin 200s are cached (never the 303 to `/welcome` for a closed
+account), and there's a built-in "No internet" page if nothing is cached.
+
+- **Install:** an "Install Kwik Klin on this phone" bar appears at the top
+  when the browser offers it (Chrome/Edge/Samsung). On iPhone it shows the
+  Share → Add to Home Screen steps instead. ✕ hides the bar on that phone;
+  the sidebar keeps a "📲 Install app on this phone" button.
+- **Offline:** the shell opens, the "No internet" strip shows, and the owner
+  stays signed in (no jump to the login page). A 5xx from `/api/me`, which happens
+  while nginx/uvicorn restarts during a deploy, also counts as "no signal"
+  now, not as "logged out". WhatsApp messages typed offline go to the
+  existing outbox (`kk_outbox`) and send when the signal returns.
+- **Phone inputs:** on touch screens every input is 16px (`ui-v2.css`),
+  because iPhone Safari zooms the page when you tap a smaller one.
 
 ## Known limitations
-
-- Only the staff panel is an installable app. The owner dashboard (`/admin`)
-  keeps its own separate worker and manifest.
 - No offline viewing of orders and no offline cash entry (see above).
 - iOS gives no install event, so the hint is static text. The browser cannot
   tell whether it was followed, except that the hint hides inside the installed app.

@@ -2932,6 +2932,8 @@ body.inbox-mode #sec-inbox .th-search input {
   background: #f6f7f9;
   font-size: 14px;
 }
+/* phone: 16px, warna iPhone search par tap karte hi zoom karta hai */
+@media (pointer: coarse) { body.inbox-mode #sec-inbox .th-search input { font-size: 16px; } }
 body.inbox-mode #sec-inbox .th-search input:focus {
   box-shadow: inset 0 0 0 2px #ff6a1a;
 }
