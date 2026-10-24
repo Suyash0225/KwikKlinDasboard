@@ -106,7 +106,9 @@ async def test_biller_adds_a_new_item_from_the_bill_screen(client, two_shops) ->
         r = await client.post("/staff/api/rates", json=body)
         assert r.status_code == 201, r.text
         rates = (await client.get("/staff/api/rates")).json()
-        assert {"service": "Dry Clean", "garment": "Blazer", "unit": "pc", "rate": 180.0} in rates
+        # sirf rate card wale fields — `uses` (kitne bills mein) alag se aata hai
+        assert {"service": "Dry Clean", "garment": "Blazer", "unit": "pc", "rate": 180.0} in [
+            {k: r[k] for k in ("service", "garment", "unit", "rate")} for r in rates]
         assert (await client.post("/staff/api/rates", json=body)).status_code == 409
         # jo item joda wahi bill par chalna chahiye
         bill = await client.post("/staff/api/bills", json={

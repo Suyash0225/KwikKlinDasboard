@@ -1823,3 +1823,62 @@ async def test_only_a_manager_can_send_a_payment_reminder(
             assert "pending" in (payload["text"] or "").lower(), payload["text"]
     finally:
         await _drop_rate()
+
+
+async def test_bill_picker_knows_popular_and_usual_items(client, two_shops, sent) -> None:
+    """Bill par: dukaan ka sabse zyada bikne wala item upar (`uses`), aur chune
+    hue grahak ke aam items — sirf sujhaav, aur sirf bill banane walon ko.
+    Doosri dukaan ke bill kabhi nahi gine jaate."""
+    from decimal import Decimal
+
+    from app.models import Rate
+    from app.services import tenant_context
+
+    for shop in ("a", "b"):
+        token = tenant_context.current_tenant_id.set(two_shops[shop])
+        try:
+            async with async_session_factory() as db:
+                for g in ("Kurta", "Saree"):
+                    db.add(Rate(service="UsualSvc", garment=g, unit="pc", rate=Decimal("50")))
+                await db.commit()
+        finally:
+            tenant_context.current_tenant_id.reset(token)
+    try:
+        await _login(client, A_DEL_PHONE)
+        for items in ([{"garment": "Kurta", "qty": 2}], [{"garment": "Kurta", "qty": 4}, {"garment": "Saree", "qty": 1}]):
+            r = await client.post("/staff/api/bills", json={
+                "customer_phone": CUST_A, "customer_name": "Usual Grahak",
+                "items": [dict(it, service="UsualSvc") for it in items],
+            })
+            assert r.status_code == 201, r.text
+
+        rates = {r["garment"]: r for r in (await client.get("/staff/api/rates")).json() if r["service"] == "UsualSvc"}
+        assert rates["Kurta"]["uses"] == 2 and rates["Saree"]["uses"] == 1
+
+        ref = (await client.get("/staff/api/customers/search?q=Usual")).json()[0]["ref"]
+        usual = (await client.get(f"/staff/api/customers/{ref}/usual-items")).json()["items"]
+        mine = [u for u in usual if u["service"] == "UsualSvc"]
+        # Kurta do baar, pichhli qty 4 (naya bill) — Saree ek baar
+        assert [(u["garment"], u["times"], u["qty"]) for u in mine] == [("Kurta", 2, 4), ("Saree", 1, 1)]
+        assert "phone" not in str(usual)                      # number staff tak nahi jaata
+
+        # dukaan B mein in bills ka koi asar nahi
+        token = tenant_context.current_tenant_id.set(two_shops["b"])
+        try:
+            from app.services import bill_suggest
+            async with async_session_factory() as db:
+                counts = await bill_suggest.shop_counts(db)
+            assert counts.get(("usualsvc", "kurta"), 0) == 0
+        finally:
+            tenant_context.current_tenant_id.reset(token)
+
+        # washerman bill nahi banata — sujhaav bhi nahi milta
+        await client.post("/staff/api/logout")
+        await _login(client, A_PHONE)
+        assert (await client.get(f"/staff/api/customers/{ref}/usual-items")).status_code == 403
+        assert (await client.get("/staff/api/customers/not-a-uuid/usual-items")).status_code in (400, 403)
+    finally:
+        async with async_session_factory() as db:
+            async with tenant_context.system_context(db):
+                await db.execute(sqltext("DELETE FROM rate_card WHERE service = 'UsualSvc'"))
+                await db.commit()
