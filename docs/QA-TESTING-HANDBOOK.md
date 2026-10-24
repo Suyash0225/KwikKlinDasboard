@@ -129,6 +129,9 @@ Do rastey: `X-API-Key` header **ya** `kk_vendor` httpOnly cookie (8 ghante).
 
 Alag cookie, alag login (`POST /staff/api/login` — phone + password). Staff **kabhi bhi** owner ka data na dekh paaye — yeh test karo.
 
+- **Throttle do jagah:** 8 galat / 10 min IP par (sab login routes) **aur** usi number par (sirf staff login). Test: ek number par 8 galat → 9th sahi bhi `429`; doosra number usi IP se → `200`. Sahi login par us number ki ginti saaf.
+- **Temp password (`must_change_password = true`):** sirf `/me`, `/boot` (kaam ki list `null`), `/password`, `/logout` chalte hain; baaki sab (`/events` bhi) → `403 "Change your password first…"`. Password badalte hi sab khul jaata hai. Test: temp password se `/rates` → 403, `POST /password` → 200, phir `/rates` → 200.
+
 ### 🎯 Auth ka test matrix (yeh table bana ke rakho)
 
 | Endpoint | No auth | Wrong key | Staff role | Owner role | Vendor read | Vendor danger |

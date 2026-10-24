@@ -44,6 +44,7 @@ from app.models import (
 from app.services import audit, delivery, geo, plans, receipt, service_stages
 from app.services.auth import verify_password
 from app.services.staff_auth import (
+    PASSWORD_CHANGE_REQUIRED,
     STAFF_COOKIE,
     SESSION_HOURS,
     StaffPrincipal,
@@ -249,6 +250,10 @@ async def boot(
     Ab ek. Koi ek hissa fail ho to baaki phir bhi aaye (panel khali na rahe).
     """
     out: dict = {"me": await me(p, db)}
+    if p.staff.must_change_password:
+        # Temp password: sirf "tum kaun ho" — kaam ki list password ke baad
+        # (UI isi se password wala popup kholta hai, baaki khali rehta hai)
+        return out | {"route": None, "tasks": None, "today": None, "notifications": None}
     for key, fn in (
         ("route", lambda: my_route(limit=30, offset=0, tab="todo", p=p, db=db)),
         ("tasks", lambda: my_tasks(tab="mine", limit=30, offset=0, p=p, db=db)),
@@ -282,6 +287,8 @@ async def staff_events(request: Request, kk_staff: str = Cookie(default="")):
         staff = await staff_for_token(db, kk_staff)
         if staff is None:
             raise HTTPException(status_code=401, detail="Please log in")
+        if staff.must_change_password:
+            raise HTTPException(status_code=403, detail=PASSWORD_CHANGE_REQUIRED)
         tid = staff.tenant_id
     # session yahan band — ab connection ghanton khula rahe to bhi koi
     # DB resource nahi rukta

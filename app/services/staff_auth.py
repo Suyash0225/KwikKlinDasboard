@@ -27,11 +27,28 @@ from app.models import Staff, StaffRole, StaffSession
 from app.models.tenant import Tenant
 from app.services import plans
 from app.services.auth import hash_password, note_failure, throttled, verify_password
+from app.utils.throttle import IPThrottle
 
 log = structlog.get_logger()
 
 STAFF_COOKIE = "kk_staff"
 SESSION_HOURS = 12          # ek shift; roz login = kho gaye phone ka ilaaj
+
+# Login ka doosra pehra — NUMBER par (IP wala auth.py mein hai). Akela IP
+# kaafi nahi tha: dukaan ke sab phone ek hi WiFi par hon to ek aadmi ki
+# galat koshishein sabko rok deti thin; aur IP badal-badal kar ek number
+# par koshish karne wale ko IP wala pakadta hi nahi tha.
+PHONE_FAIL_MAX, PHONE_FAIL_WINDOW = 8, 600          # 8 galat / 10 min, auth.py jaisa
+_phone_throttle = IPThrottle(
+    max_failures=PHONE_FAIL_MAX, window_secs=PHONE_FAIL_WINDOW, name="staff_login_phone"
+)
+
+# Temp password (owner ka diya) se sirf itna: apna password badalna, apni
+# pehchan dekhna, bahar nikalna. Kaam ka data aur action — pehle badlo.
+PASSWORD_CHANGE_OPEN_PATHS = frozenset({
+    "/staff/api/password", "/staff/api/logout", "/staff/api/me", "/staff/api/boot",
+})
+PASSWORD_CHANGE_REQUIRED = "Change your password first — the owner gave you a temporary one"
 
 # Kaunsa role kya dekhta hai. Ye ek hi jagah likha hai — API aur UI dono
 # yahi padhte hain, isliye "panel par dikh raha tha par API ne mana kar
@@ -59,7 +76,7 @@ async def login(
 ) -> tuple[str, Staff]:
     """Phone+password se login. Galat par hamesha ek jaisa 401 — kaunsa
     number maujood hai ye batana bhi ek leak hai."""
-    if throttled(ip):
+    if throttled(ip) or _phone_throttle.throttled(phone):
         raise HTTPException(status_code=429, detail="Too many attempts — try again shortly")
     from app.services import tenant_context
 
@@ -78,9 +95,11 @@ async def login(
 
     if staff is None:
         note_failure(ip)
+        _phone_throttle.note_failure(phone)
         log.info("staff_login_failed", phone=phone[-4:])
         raise HTTPException(status_code=401, detail="Wrong number or password")
 
+    _phone_throttle.clear(phone)        # sahi login = pichhli galtiyan maaf
     token = secrets.token_urlsafe(32)
     # The read transaction is committed above. Create the session and update
     # last_login under the matched tenant, not under the system grant.
@@ -194,6 +213,11 @@ async def current_staff(
     # Band/locked account: panel bhi band. Kaam ka data phir bhi safe hai.
     if tenant is not None and tenant.status in ("locked", "suspended", "cancelled"):
         raise HTTPException(status_code=402, detail="This account is closed — please speak to the owner")
+    # Temp password par kaam nahi — pehle apna password. Banner kaafi nahi
+    # tha: aadmi use hamesha ke liye ignore kar sakta tha, aur owner ka
+    # WhatsApp par bheja password hi uska asli password ban jaata tha.
+    if staff.must_change_password and request.url.path not in PASSWORD_CHANGE_OPEN_PATHS:
+        raise HTTPException(status_code=403, detail=PASSWORD_CHANGE_REQUIRED)
     request.state.staff_id = str(staff.id)
     return StaffPrincipal(staff, tenant)
 
